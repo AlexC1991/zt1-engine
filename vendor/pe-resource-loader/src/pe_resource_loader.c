@@ -208,6 +208,11 @@ void PeResourceLoader_Close(PeResourceLoader * loader) {
 
 PRL_ResourceDirectoryEntry * PeResourceLoader_GetDirectoryIdEntries(PeResourceLoader * loader, uint32_t offset, uint16_t * entry_count) {
     if (!loader) return NULL; // [PATCH] Fix crash if file load failed
+    if (!loader) return NULL; // [PATCH] Fix crash if file load failed
+    if (!loader) return NULL; // [PATCH] Fix crash if file load failed
+    if (!loader) return NULL; // [PATCH] Fix crash if file load failed
+    if (!loader) return NULL; // [PATCH] Fix crash if file load failed
+    if (!loader) return NULL; // [PATCH] Fix crash if file load failed
   offset = loader->resource_offset + offset;
 
   PRL_ResourceDirectoryTable resource_directory_table;
