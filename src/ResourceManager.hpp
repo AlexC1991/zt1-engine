@@ -6,7 +6,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include <SDL2/SDL_ttf.h>
+#include "SDL_ttf.h"
 
 #include "Config.hpp"
 #include "ZtdFile.hpp"

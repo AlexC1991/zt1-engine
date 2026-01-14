@@ -38,24 +38,9 @@ add_subdirectory(vendor/pe-resource-loader)
 
 # 6. GATHER SOURCE CODE
 file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.c")
-
-# 7. FIX LINKER PATHS FOR MSVC
-if(MSVC)
-    link_directories(
-        "${CMAKE_BINARY_DIR}/vendor/SDL/Release"
-        "${CMAKE_BINARY_DIR}/vendor/SDL_image/Release"
-        "${CMAKE_BINARY_DIR}/vendor/SDL_mixer/Release"
-        "${CMAKE_BINARY_DIR}/vendor/SDL_ttf/Release"
-        "${CMAKE_BINARY_DIR}/vendor/zlib/Release"
-        "${CMAKE_BINARY_DIR}/vendor/libzip/lib/Release"
-        "${CMAKE_BINARY_DIR}/vendor/pe-resource-loader/lib/Release"
-    )
-endif()
-
-# 8. CREATE EXECUTABLE
 add_executable(zt1-engine ${SOURCES})
 
-# 9. FIX INCLUDE PATHS
+# 7. FIX INCLUDE PATHS (Fixes 'Cannot open include file')
 target_include_directories(zt1-engine PRIVATE
     src
     vendor/SDL/include
@@ -75,37 +60,15 @@ target_include_directories(zt1-engine PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/vendor/libzip
 )
 
-# 10. LINK EVERYTHING TOGETHER (Single unified call with PRIVATE keyword)
-target_link_libraries(zt1-engine PRIVATE
-    # SDL Libraries
+# 8. LINK EVERYTHING TOGETHER
+target_link_libraries(zt1-engine
     SDL2-static
     SDL2_image-static
     SDL2_mixer-static
     SDL2_ttf
-    # Archive/Compression
     zip
-    zlibstatic
-    # PE Resource Loader
     pe_resource_loader_static
+    zlibstatic
+    # Windows System Libraries
+    user32 gdi32 winmm imm32 ole32 oleaut32 version uuid advapi32 setupapi shell32 dinput8 shlwapi bcrypt crypt32
 )
-
-# 11. WINDOWS SYSTEM LIBRARIES
-if(WIN32)
-    target_link_libraries(zt1-engine PRIVATE
-        user32
-        gdi32
-        winmm
-        imm32
-        ole32
-        oleaut32
-        version
-        uuid
-        advapi32
-        setupapi
-        shell32
-        dinput8
-        shlwapi
-        bcrypt
-        crypt32
-    )
-endif()

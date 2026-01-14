@@ -47,10 +47,20 @@ std::string AniFile::getAnimationDirectory(IniReader * ini_reader) {
 }
 
 AnimationData * AniFile::loadAnimationData(PalletManager * pallet_manager, const std::string &ztd_file, const std::string &directory) {
-    SDL_RWops * rw = ZtdFile::getFile(ztd_file, directory);
-    if (rw == NULL) return NULL;
+    // 1. Get File Content from ZTD
+    int raw_size = 0;
+    void * file_data = ZtdFile::getFileContent(ztd_file, directory, &raw_size);
+    
+    if (file_data == NULL) return NULL;
 
-    Sint64 file_size = SDL_RWsize(rw);
+    // 2. Wrap in RWops so we can read it like a file
+    SDL_RWops * rw = SDL_RWFromMem(file_data, raw_size);
+    if (rw == NULL) {
+        free(file_data);
+        return NULL;
+    }
+
+    Sint64 file_size = raw_size;
     AnimationData * animation_data = new AnimationData;
     animation_data->frame_count = 0;
     animation_data->frames = nullptr;
@@ -129,5 +139,6 @@ AnimationData * AniFile::loadAnimationData(PalletManager * pallet_manager, const
     }
 
     SDL_RWclose(rw);
+    free(file_data); // Free the raw memory
     return animation_data;
 }
