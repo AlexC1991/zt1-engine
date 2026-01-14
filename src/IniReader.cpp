@@ -23,6 +23,7 @@ IniReader::IniReader(const std::string &filename) {
   FILE * fd = fopen(filename.c_str(), "r");
   if (fd == NULL) {
     SDL_Log("Could not open ini file %s", filename.c_str());
+        return;
   }
   fseek(fd, 0L, SEEK_END);
   size_t size = ftell(fd) + 1;
