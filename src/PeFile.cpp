@@ -3,7 +3,7 @@
 #define LOAD_SCREEN_ID 502
 #define LANGUAGE_ID PRL_LANG_EN_US
 
-#include <SDL2/SDL_image.h>
+#include "SDL_image.h"
 
 #include "Utils.hpp"
 

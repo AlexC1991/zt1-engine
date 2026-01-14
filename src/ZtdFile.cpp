@@ -3,7 +3,7 @@
 #include <zip.h>
 #include <stdlib.h>
 
-#include <SDL2/SDL_image.h>
+#include "SDL_image.h"
 
 #include "Utils.hpp"
 

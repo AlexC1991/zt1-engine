@@ -1,3 +1,5 @@
+#define SDL_MAIN_HANDLED  // Tell SDL we handle our own main()
+
 #include <SDL2/SDL.h>
 
 #include "Config.hpp"
@@ -15,6 +17,8 @@
 
 
 int main(int argc, char *argv[]) {
+  SDL_SetMainReady();  // Required when using SDL_MAIN_HANDLED
+
   Config config;
   ResourceManager resource_manager(&config);
 

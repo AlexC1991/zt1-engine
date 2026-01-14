@@ -1,0 +1,14 @@
+INFO: Opening file zoo.ini
+INFO: Value of UI:progressRed not found, returning default
+INFO: Value of UI:progressGreen not found, returning default
+INFO: Value of UI:progressBlue not found, returning default
+INFO: Value of UI:progressLeft not found, returning default
+INFO: Value of UI:progressTop not found, returning default
+INFO: Value of UI:progressRight not found, returning default
+INFO: Value of UI:progressBottom not found, returning default
+INFO: Loading resource map...
+INFO: Value of resource:path not found, returning default
+INFO: Found resource path 
+INFO: Loading resource map done
+INFO: Value of ui:noMenuMusic not found, returning default
+INFO: Loading strings from C:\Users\batty\OneDrive\Desktop\Lua\zt1-engine\build\Release\lang.dll
