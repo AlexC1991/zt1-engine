@@ -6,18 +6,42 @@
 #include "ZtdFile.hpp"
 #include "Utils.hpp"
 
+// PATCHED: NULL safety checks
 Animation * AniFile::getAnimation(PalletManager * pallet_manager, const std::string &ztd_file, const std::string &file_name) {
+  // Safety check - if ztd_file is empty, we can't load anything
+  if (ztd_file.empty()) {
+    SDL_Log("Warning: Empty ZTD file path for animation: %s", file_name.c_str());
+    return nullptr;
+  }
+
   IniReader * ini_reader = ZtdFile::getIniReader(ztd_file, file_name);
+  if (ini_reader == nullptr) {
+    SDL_Log("Warning: Could not read ini for animation: %s", file_name.c_str());
+    return nullptr;
+  }
 
   int width = ini_reader->getInt("animation", "x1") - ini_reader->getInt("animation", "x0");
   int height = ini_reader->getInt("animation", "y1") - ini_reader->getInt("animation", "y0");
 
   std::unordered_map<std::string, AnimationData *> * animations = new std::unordered_map<std::string, AnimationData *>;
   std::string directory = AniFile::getAnimationDirectory(ini_reader);
+  bool has_valid_animation = false;
   for (std::string direction : ini_reader->getList("animation", "animation")) {
-    (*animations)[direction] = AniFile::loadAnimationData(pallet_manager, ztd_file, directory + "/" + direction);
-    (*animations)[direction]->width = width;
-    (*animations)[direction]->height = height;
+    AnimationData* anim_data = AniFile::loadAnimationData(pallet_manager, ztd_file, directory + "/" + direction);
+    if (anim_data != nullptr) {
+      (*animations)[direction] = anim_data;
+      (*animations)[direction]->width = width;
+      (*animations)[direction]->height = height;
+      has_valid_animation = true;
+    } else {
+      SDL_Log("Warning: Could not load animation direction %s from %s", direction.c_str(), directory.c_str());
+    }
+  }
+
+  // If no animations loaded successfully, clean up and return nullptr
+  if (!has_valid_animation) {
+    delete animations;
+    return nullptr;
   }
 
   return new Animation(animations);

@@ -1,264 +1,239 @@
+"""
+ZT1-Engine Patch Script
+Patches ResourceManager.cpp and AniFile.cpp to fix animation loading crashes
+"""
+
 import os
 import shutil
 
-# --- CONFIG ---
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-CMAKE_FILE = os.path.join(ROOT_DIR, "CMakeLists.txt")
-MAIN_CPP = os.path.join(ROOT_DIR, "src", "main.cpp")
-UTILS_HPP = os.path.join(ROOT_DIR, "src", "Utils.hpp")
+# Path to the source directory
+SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
 
-def fix_main_cpp():
-    """Fix the SDL main entry point issue for Windows."""
-    print(f"[MAIN.CPP] Fixing SDL_MAIN_HANDLED...")
+def backup_file(filepath):
+    """Create a backup of the file if one doesn't exist"""
+    backup_path = filepath + ".backup"
+    if not os.path.exists(backup_path):
+        shutil.copy2(filepath, backup_path)
+        print(f"  Created backup: {backup_path}")
+    return backup_path
+
+def patch_resource_manager():
+    """Patch ResourceManager.cpp to handle missing animations gracefully"""
+    filepath = os.path.join(SRC_DIR, "ResourceManager.cpp")
     
-    if not os.path.exists(MAIN_CPP):
-        print("   -> Error: main.cpp not found.")
+    if not os.path.exists(filepath):
+        print(f"  ERROR: {filepath} not found!")
         return False
     
-    with open(MAIN_CPP, "r", encoding="utf-8") as f:
+    backup_file(filepath)
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
     
     # Check if already patched
-    if "SDL_MAIN_HANDLED" in content:
-        print("   -> Already patched.")
+    if "// PATCHED: Animation loading crash fix" in content:
+        print("  Already patched!")
         return True
     
-    # Create backup
-    shutil.copy(MAIN_CPP, MAIN_CPP + ".bak")
-    print(f"   -> Backup created: main.cpp.bak")
-    
-    # Add SDL_MAIN_HANDLED at the very top, before any includes
-    new_content = '#define SDL_MAIN_HANDLED  // Tell SDL we handle our own main()\n\n' + content
-    
-    # Also add SDL_SetMainReady() after main() opening
-    old_main = 'int main(int argc, char *argv[]) {'
-    new_main = '''int main(int argc, char *argv[]) {
-  SDL_SetMainReady();  // Required when using SDL_MAIN_HANDLED
-'''
-    
-    if old_main in new_content:
-        new_content = new_content.replace(old_main, new_main)
-    
-    with open(MAIN_CPP, "w", encoding="utf-8") as f:
-        f.write(new_content)
-    
-    print("   -> Success: Added SDL_MAIN_HANDLED and SDL_SetMainReady().")
-    return True
+    # Old function to find and replace
+    old_function = '''Animation *ResourceManager::getAnimation(const std::string &file_name) {
+  std::string resource_location = getResourceLocation(file_name);
+  if (!resource_location.empty()) {
+    return AniFile::getAnimation(&this->pallet_manager, resource_location, file_name);
+  } else {
+    std::string full_file_name = file_name + ".ani";
+    resource_location = getResourceLocation(full_file_name);
+    return AniFile::getAnimation(&this->pallet_manager, resource_location, full_file_name);
+  }
+}'''
 
-def fix_cmake():
-    """Check and optionally fix CMakeLists.txt."""
-    print(f"[CMAKE] Checking CMakeLists.txt...")
-    
-    if not os.path.exists(CMAKE_FILE):
-        print("   -> Error: CMakeLists.txt not found.")
-        return False
-
-    with open(CMAKE_FILE, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    issues = []
-    
-    # Check for mixed target_link_libraries signatures (FATAL ERROR)
-    # Count plain vs PRIVATE calls for zt1-engine
-    lines = content.split('\n')
-    plain_calls = 0
-    private_calls = 0
-    
-    for i, line in enumerate(lines):
-        if 'target_link_libraries' in line:
-            # Look at this line and next few lines
-            block = '\n'.join(lines[i:i+5])
-            if 'zt1-engine' in block or '${PROJECT_NAME}' in block:
-                if 'PRIVATE' in block or 'PUBLIC' in block or 'INTERFACE' in block:
-                    private_calls += 1
-                else:
-                    plain_calls += 1
-    
-    if plain_calls > 0 and private_calls > 0:
-        issues.append("FATAL: Mixed plain/keyword target_link_libraries signatures!")
-        print(f"   -> ERROR: Found {plain_calls} plain and {private_calls} keyword link calls")
-        print("   -> This WILL cause CMake to fail!")
-        print("   -> Replace CMakeLists.txt with the fixed version.")
-        return False
-    
-    # Check for C++20
-    if "CMAKE_CXX_STANDARD 20" not in content:
-        issues.append("C++20 standard not set")
-    else:
-        print("   -> C++20 standard: OK")
-    
-    # Check for MSVC runtime
-    if "MultiThreadedDLL" not in content and "/MD" not in content:
-        issues.append("Dynamic runtime (/MD) not enforced")
-    else:
-        print("   -> Dynamic runtime (/MD): OK")
-    
-    # Check for Windows libraries
-    win_libs = ['shlwapi', 'bcrypt', 'winmm', 'setupapi']
-    missing_libs = [lib for lib in win_libs if lib not in content]
-    if missing_libs:
-        issues.append(f"Missing Windows libs: {', '.join(missing_libs)}")
-    else:
-        print("   -> Windows system libraries: OK")
-    
-    # Check for link_directories (MSVC)
-    if "link_directories" not in content:
-        issues.append("MSVC link_directories not set")
-    else:
-        print("   -> MSVC link directories: OK")
-    
-    if issues:
-        print(f"   -> Found {len(issues)} issue(s):")
-        for issue in issues:
-            print(f"      - {issue}")
-        return False
-    
-    print("   -> CMakeLists.txt looks good!")
-    return True
-
-def fix_utils_hpp():
-    """Fix the missing return value warning in Utils.hpp."""
-    print(f"[UTILS.HPP] Checking for missing return value...")
-    
-    if not os.path.exists(UTILS_HPP):
-        print("   -> File not found, skipping.")
-        return True
-    
-    with open(UTILS_HPP, "r", encoding="utf-8") as f:
-        content = f.read()
-    
-    # Check if the function exists and needs fixing
-    if "getExpansionLangDllPath" not in content:
-        print("   -> Function not found, skipping.")
-        return True
-    
-    # Check if already fixed
-    if 'return "";  // Default fallback' in content:
-        print("   -> Already fixed.")
-        return True
-    
-    # Look for the pattern where switch doesn't have a default return
-    # The function ends with a switch statement that might not return
-    
-    # Find the function
-    func_start = content.find("getExpansionLangDllPath")
-    if func_start == -1:
-        print("   -> Could not locate function.")
-        return True
-    
-    # Look for common patterns that indicate missing return
-    # Pattern 1: Function ends with just closing braces after switch
-    patterns_to_fix = [
-        # Pattern: default case with break, then closing braces
-        ('default:\n      break;\n    }\n  }\n}', 
-         'default:\n      break;\n    }\n  }\n  return "";  // Default fallback\n}'),
-        # Pattern with different spacing
-        ('default:\n            break;\n        }\n    }\n}',
-         'default:\n            break;\n        }\n    }\n    return "";  // Default fallback\n}'),
-    ]
-    
-    fixed = False
-    for old_pattern, new_pattern in patterns_to_fix:
-        if old_pattern in content:
-            shutil.copy(UTILS_HPP, UTILS_HPP + ".bak")
-            content = content.replace(old_pattern, new_pattern)
-            with open(UTILS_HPP, "w", encoding="utf-8") as f:
-                f.write(content)
-            print("   -> Fixed missing return value.")
-            fixed = True
-            break
-    
-    if not fixed:
-        # Try a more generic approach - add return before final }
-        # This is riskier so we just warn
-        print("   -> WARNING: Could not auto-fix. You may see a compiler warning.")
-        print("   -> Add 'return \"\";' before the final } in getExpansionLangDllPath()")
-    
-    return True
-
-def nuke_build():
-    """Delete the build folder for a clean rebuild."""
-    build_dir = os.path.join(ROOT_DIR, "build")
-    if os.path.exists(build_dir):
-        print("[CLEAN] Deleting build folder...")
-        try:
-            shutil.rmtree(build_dir)
-            print("   -> Build folder deleted.")
-        except Exception as e:
-            print(f"   -> Warning: Could not delete build folder: {e}")
-            print("   -> Try closing Visual Studio or any programs using those files.")
-    else:
-        print("[CLEAN] Build folder doesn't exist, nothing to clean.")
-
-def check_fixed_cmake_available():
-    """Check if we have a fixed CMakeLists.txt to offer."""
-    # This would check for a known-good CMakeLists.txt
-    fixed_cmake = os.path.join(ROOT_DIR, "CMakeLists_FIXED.txt")
-    if os.path.exists(fixed_cmake):
-        return fixed_cmake
-    return None
-
-def print_summary(results):
-    """Print a summary of what was done."""
-    print("\n" + "=" * 60)
-    print("                    FIX SUMMARY")
-    print("=" * 60)
-    
-    all_good = all(results.values())
-    
-    for name, success in results.items():
-        status = "OK" if success else "NEEDS ATTENTION"
-        symbol = "[+]" if success else "[!]"
-        print(f"  {symbol} {name}: {status}")
-    
-    print()
-    
-    if all_good:
-        print("""
-All checks passed! Next steps:
-  1. Run 'build_engine.py' to compile
-  2. If build succeeds, run 'import_assets.py' to copy game files  
-  3. Launch zt1-engine.exe from the build/Release folder
-""")
-    else:
-        print("""
-Some issues need manual attention:
-
-If CMakeLists.txt has issues:
-  -> Download the fixed CMakeLists.txt and replace yours
-
-If other files have issues:
-  -> Check the specific error messages above
+    # New patched function
+    new_function = '''// PATCHED: Animation loading crash fix
+Animation *ResourceManager::getAnimation(const std::string &file_name) {
+  // First try the exact path
+  std::string resource_location = getResourceLocation(file_name);
+  if (!resource_location.empty()) {
+    Animation* anim = AniFile::getAnimation(&this->pallet_manager, resource_location, file_name);
+    if (anim != nullptr) {
+      return anim;
+    }
+  }
   
-After fixing, run this script again to verify.
-""")
-    
-    print("=" * 60)
+  // Try with .ani extension
+  std::string full_file_name = file_name + ".ani";
+  resource_location = getResourceLocation(full_file_name);
+  if (!resource_location.empty()) {
+    Animation* anim = AniFile::getAnimation(&this->pallet_manager, resource_location, full_file_name);
+    if (anim != nullptr) {
+      return anim;
+    }
+  }
+  
+  // Animation not found - return nullptr instead of crashing
+  SDL_Log("Warning: Could not load animation: %s", file_name.c_str());
+  return nullptr;
+}'''
 
-if __name__ == "__main__":
+    if old_function in content:
+        content = content.replace(old_function, new_function)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print("  Patched successfully!")
+        return True
+    else:
+        print("  WARNING: Could not find exact function to patch.")
+        print("  Attempting alternative patch method...")
+        
+        # Try to find the function with different whitespace
+        import re
+        pattern = r'Animation \*ResourceManager::getAnimation\(const std::string &file_name\) \{[^}]+\{[^}]+\}[^}]+\}'
+        
+        if re.search(pattern, content):
+            content = re.sub(pattern, new_function, content)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print("  Patched successfully (alternative method)!")
+            return True
+        else:
+            print("  ERROR: Could not patch ResourceManager.cpp")
+            print("  Please apply the patch manually.")
+            return False
+
+def patch_anifile():
+    """Patch AniFile.cpp to handle NULL cases"""
+    filepath = os.path.join(SRC_DIR, "AniFile.cpp")
+    
+    if not os.path.exists(filepath):
+        print(f"  ERROR: {filepath} not found!")
+        return False
+    
+    backup_file(filepath)
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Check if already patched
+    if "// PATCHED: NULL safety checks" in content:
+        print("  Already patched!")
+        return True
+    
+    # Old function start
+    old_start = '''Animation * AniFile::getAnimation(PalletManager * pallet_manager, const std::string &ztd_file, const std::string &file_name) {
+  IniReader * ini_reader = ZtdFile::getIniReader(ztd_file, file_name);'''
+
+    # New function start with safety checks
+    new_start = '''// PATCHED: NULL safety checks
+Animation * AniFile::getAnimation(PalletManager * pallet_manager, const std::string &ztd_file, const std::string &file_name) {
+  // Safety check - if ztd_file is empty, we can't load anything
+  if (ztd_file.empty()) {
+    SDL_Log("Warning: Empty ZTD file path for animation: %s", file_name.c_str());
+    return nullptr;
+  }
+
+  IniReader * ini_reader = ZtdFile::getIniReader(ztd_file, file_name);
+  if (ini_reader == nullptr) {
+    SDL_Log("Warning: Could not read ini for animation: %s", file_name.c_str());
+    return nullptr;
+  }'''
+
+    if old_start in content:
+        content = content.replace(old_start, new_start)
+    else:
+        print("  WARNING: Could not find exact function start to patch.")
+        print("  Trying alternative approach...")
+        
+        # Try finding just the function signature
+        old_sig = "Animation * AniFile::getAnimation(PalletManager * pallet_manager, const std::string &ztd_file, const std::string &file_name) {"
+        if old_sig in content:
+            # Insert safety checks after the opening brace
+            insert_code = '''
+  // PATCHED: NULL safety checks
+  // Safety check - if ztd_file is empty, we can't load anything
+  if (ztd_file.empty()) {
+    SDL_Log("Warning: Empty ZTD file path for animation: %s", file_name.c_str());
+    return nullptr;
+  }
+'''
+            content = content.replace(old_sig, old_sig + insert_code)
+        else:
+            print("  ERROR: Could not patch AniFile.cpp")
+            return False
+    
+    # Also patch the animation loading loop to handle NULL
+    old_loop = '''  for (std::string direction : ini_reader->getList("animation", "animation")) {
+    (*animations)[direction] = AniFile::loadAnimationData(pallet_manager, ztd_file, directory + "/" + direction);
+    (*animations)[direction]->width = width;
+    (*animations)[direction]->height = height;
+  }
+
+  return new Animation(animations);
+}'''
+
+    new_loop = '''  bool has_valid_animation = false;
+  for (std::string direction : ini_reader->getList("animation", "animation")) {
+    AnimationData* anim_data = AniFile::loadAnimationData(pallet_manager, ztd_file, directory + "/" + direction);
+    if (anim_data != nullptr) {
+      (*animations)[direction] = anim_data;
+      (*animations)[direction]->width = width;
+      (*animations)[direction]->height = height;
+      has_valid_animation = true;
+    } else {
+      SDL_Log("Warning: Could not load animation direction %s from %s", direction.c_str(), directory.c_str());
+    }
+  }
+
+  // If no animations loaded successfully, clean up and return nullptr
+  if (!has_valid_animation) {
+    delete animations;
+    return nullptr;
+  }
+
+  return new Animation(animations);
+}'''
+
+    if old_loop in content:
+        content = content.replace(old_loop, new_loop)
+    else:
+        print("  WARNING: Could not patch animation loop (may already be different)")
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(content)
+    
+    print("  Patched successfully!")
+    return True
+
+def main():
     print("=" * 60)
-    print("     ZT1-ENGINE ULTIMATE FIXER FOR WINDOWS")  
+    print("  ZT1-Engine Animation Crash Fix Patcher")
     print("=" * 60)
     print()
     
-    results = {}
+    if not os.path.exists(SRC_DIR):
+        print(f"ERROR: Source directory not found: {SRC_DIR}")
+        print("Make sure this script is in the zt1-engine root folder.")
+        input("\nPress Enter to exit...")
+        return
     
-    # Fix main.cpp (SDL_MAIN_HANDLED)
-    results['main.cpp'] = fix_main_cpp()
+    print("[1/2] Patching ResourceManager.cpp...")
+    rm_success = patch_resource_manager()
+    
     print()
+    print("[2/2] Patching AniFile.cpp...")
+    ani_success = patch_anifile()
     
-    # Check/fix CMakeLists.txt
-    results['CMakeLists.txt'] = fix_cmake()
     print()
-    
-    # Fix Utils.hpp
-    results['Utils.hpp'] = fix_utils_hpp()
-    print()
-    
-    # Clean build folder
-    nuke_build()
-    
-    # Print summary
-    print_summary(results)
+    print("=" * 60)
+    if rm_success and ani_success:
+        print("  All patches applied successfully!")
+        print()
+        print("  Now rebuild the engine:")
+        print("    cd build")
+        print("    cmake --build . --config Release")
+    else:
+        print("  Some patches failed. Please check the errors above.")
+    print("=" * 60)
     
     input("\nPress Enter to exit...")
+
+if __name__ == "__main__":
+    main()
