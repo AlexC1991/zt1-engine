@@ -1,42 +1,105 @@
 # ZT1-Engine
 
-ZT1-Engine is an open source engine for Zoo Tycoon 1 that is still very much work in progress.
+ZT1-Engine is an open source engine for Zoo Tycoon 1 that is still very much a work in progress.
 
-Currently it has the following features:
-- Read `zoo.ini`.
-- Display the loading screen.
-- Map the resources found in ztd files.
-- Map the strings found in lang*.dll files.
-- Load the intro music.
-- Display the main menu.
-- Load and display animations.
+## Current Features
 
-Please do not use this unless you want to help make an open source engine for Zoo Tycoon a reality. This is very far from playable.
+- ✅ Read `zoo.ini` configuration
+- ✅ Display the loading screen
+- ✅ Map resources from ZTD files
+- ✅ Map strings from lang*.dll files
+- ✅ Load and play intro music
+- ✅ Display the main menu with animations
+- ✅ Scenario selection screen with list population
+- ✅ Freeform map selection screen with list population
+- ✅ Dynamic scenario/map descriptions loaded from game files
+- ✅ Scrollable list boxes with mouse wheel support
+- ✅ Credits screen
+
+## Platforms
+
+Currently supported:
+- **Windows** (x64) - Primary development platform
+
+Future planned support:
+- Linux
+- macOS
 
 ## Building
 
-To build ZT1-Engine can be build with the following command:
+### Prerequisites
 
-```
-git clone --recurse-submodules --remote-submodules https://github.com/sharkwouter/zt1-engine.git
+- **Windows 10/11** (64-bit)
+- **Python 3.8+** (for build scripts)
+- **Visual Studio 2022** with C++ Desktop Development workload
+- **CMake 3.16+**
+- **Zoo Tycoon 1** game files (original game required)
+
+### Quick Build (Windows)
+
+1. Clone the repository:
+```bash
+git clone --recurse-submodules --remote-submodules https://github.com/openztcc/zt1-engine.git
 cd zt1-engine
+```
+
+2. Run the build script:
+```bash
+BUILD_ENGINE.bat
+```
+
+The build script will:
+- Apply source code patches automatically
+- Configure and build with CMake/MSBuild
+- Copy Zoo Tycoon assets from your installation
+- Set up the runtime environment
+
+3. The compiled engine will be in `build/Release/`
+
+### Manual Build
+
+If you prefer to build manually:
+
+```bash
 mkdir build
 cd build
-cmake ..
-make
+cmake .. -G "Visual Studio 17 2022" -A x64
+cmake --build . --config Release
 ```
 
-Now copy all the Zoo Tycoon files into the `zt1-engine/build` directory.
+Then copy your Zoo Tycoon game files into the `build/Release` directory.
 
-The engine can be started by double clicking zt1-engine or running it like this from the terminal:
+### Running
+
+Launch the engine:
+```bash
+cd build/Release
+zt1-engine.exe
+```
+
+## Project Structure
 
 ```
-./zt1-engine
+zt1-engine/
+├── src/                    # C++ source code
+├── platform/               # Platform-specific code
+├── vendor/                 # Third-party libraries
+├── engine-build-resources/ # Build system and patches
+│   ├── patches/           # Modular source patches
+│   └── build_all.py       # Main build orchestrator
+├── fonts/                  # Font files
+└── BUILD_ENGINE.bat        # Windows build launcher
 ```
+
+## Contributing
+
+Please do not use this unless you want to help make an open source engine for Zoo Tycoon a reality. This is very far from playable.
+
+Contributions welcome! The patch system in `engine-build-resources/patches/` makes it easy to add new features modularly.
 
 ## License
 
-ZT1-Engine is available under the following MIT license:
+ZT1-Engine is available under the MIT license:
 
 ```
 Copyright (c) 2025 Wouter (sharkwouter) Wijsman
@@ -60,9 +123,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-# Third Party Licenses
+## Third Party Licenses
 
-zt1-engine uses external libraries:
+ZT1-Engine uses external libraries:
 - SDL2
 - SDL2_image
 - SDL2_mixer
@@ -74,7 +137,7 @@ zt1-engine uses external libraries:
 
 The icon was made using [a picture from Magda Ehlers from Pexels](https://www.pexels.com/photo/zebra-s-eye-760958/).
 
-Freetype2 has the following license:
+### FreeType License
 
 ```
                     The FreeType Project LICENSE
@@ -243,7 +306,6 @@ Legal Terms
   Our home page can be found at
 
     https://www.freetype.org
-
 ```
 
-The licenses for the other libraries can be found on their respective websites and in the source tree of zt1-engine at: https://github.com/sharkwouter/zt1-engine
+The licenses for the other libraries can be found on their respective websites and in the source tree of zt1-engine at: https://github.com/openztcc/zt1-engine
