@@ -1,4 +1,14 @@
-#include "ResourceManager.hpp"
+import os
+
+def apply(src_dir, root_dir):
+    filename = "ResourceManager.cpp"
+    filepath = os.path.join(src_dir, filename)
+    
+    # -------------------------------------------------------------------------
+    # RESOURCE MANAGER - SMART PATH FIXER + EXTENSION GUESSER v4
+    # -------------------------------------------------------------------------
+    
+    new_code = '''#include "ResourceManager.hpp"
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -18,7 +28,7 @@ ResourceManager::~ResourceManager() {
 // Helper to normalize paths: lowercase + forward slashes
 std::string normalizePath(const std::string& input) {
     std::string path = Utils::string_to_lower(input);
-    std::replace(path.begin(), path.end(), '\\', '/');
+    std::replace(path.begin(), path.end(), '\\\\', '/');
     
     // Remove leading/trailing slashes
     while (!path.empty() && path[0] == '/') path = path.substr(1);
@@ -277,3 +287,13 @@ std::string ResourceManager::getString(uint32_t id) {
   if (string_map.count(id)) return string_map[id];
   return "";
 }
+'''
+    if os.path.exists(filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            if f.read().replace('\r\n', '\n').strip() == new_code.replace('\r\n', '\n').strip():
+                return False
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(new_code)
+    print("    -> Updated ResourceManager.cpp (v4 - fix C2665)")
+    return True

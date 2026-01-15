@@ -1,4 +1,22 @@
-#define SDL_MAIN_HANDLED  // Tell SDL we handle our own main()
+import os
+
+def apply(src_dir, root_dir):
+    """Update main.cpp to use ScenarioManager, populate lists, and handle selection"""
+    
+    filepath = os.path.join(src_dir, "main.cpp")
+    
+    if not os.path.exists(filepath):
+        print("    ! main.cpp not found")
+        return False
+    
+    with open(filepath, "r", encoding="utf-8") as f:
+        old_content = f.read()
+    
+    # Check if already updated with full implementation
+    if "updateScenarioDetails" in old_content:
+        return False
+    
+    new_main = '''#define SDL_MAIN_HANDLED  // Tell SDL we handle our own main()
 
 #include <SDL2/SDL.h>
 
@@ -260,3 +278,10 @@ int main(int argc, char *argv[]) {
 
   return 0;
 }
+'''
+    
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(new_main)
+    
+    print("    -> Updated main.cpp with selection handling and description updates")
+    return True

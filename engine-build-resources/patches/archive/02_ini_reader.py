@@ -1,4 +1,10 @@
-#include "IniReader.hpp"
+import os
+
+def apply(src_dir, root_dir):
+    filename = "IniReader.cpp"
+    filepath = os.path.join(src_dir, filename)
+    
+    new_code = """#include "IniReader.hpp"
 #include <sstream>
 #include <SDL2/SDL.h>
 #include "Utils.hpp"
@@ -78,8 +84,8 @@ void IniReader::load(std::string file_content) {
   std::string line;
   
   while (std::getline(ss, line)) {
-    line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
-    size_t first = line.find_first_not_of(" \t");
+    line.erase(std::remove(line.begin(), line.end(), '\\r'), line.end());
+    size_t first = line.find_first_not_of(" \\t");
     if (first == std::string::npos) continue;
     line = line.substr(first);
     if (line[0] == ';' || line[0] == '#') continue;
@@ -95,12 +101,12 @@ void IniReader::load(std::string file_content) {
       std::string key = line.substr(0, eq);
       std::string val = line.substr(eq + 1);
       
-      size_t k_end = key.find_last_not_of(" \t");
+      size_t k_end = key.find_last_not_of(" \\t");
       if (k_end != std::string::npos) key = key.substr(0, k_end + 1);
       
-      size_t v_start = val.find_first_not_of(" \t");
+      size_t v_start = val.find_first_not_of(" \\t");
       if (v_start != std::string::npos) val = val.substr(v_start);
-      size_t v_end = val.find_last_not_of(" \t");
+      size_t v_end = val.find_last_not_of(" \\t");
       if (v_end != std::string::npos) val = val.substr(0, v_end + 1);
       
       if (!current_section.empty() && !key.empty()) {
@@ -111,3 +117,11 @@ void IniReader::load(std::string file_content) {
     }
   }
 }
+"""
+    if os.path.exists(filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            if f.read().replace('\r\n', '\n').strip() == new_code.replace('\r\n', '\n').strip(): return False
+
+    with open(filepath, "w", encoding="utf-8") as f: f.write(new_code)
+    print("    -> Updated IniReader.cpp")
+    return True

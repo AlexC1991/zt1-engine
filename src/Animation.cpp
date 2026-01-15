@@ -404,6 +404,7 @@ void Animation::loadSurfaces(std::string direction_string, AnimationData * data)
         for(int p = 0; p < data->frames[i].lines[y].instructions[instruction].color_count; p++, x++) {
           if (x < 0 || x >= data->width || y < 0 || y >= data->height) {
               SDL_Log("Failure to draw within the bounds. %i,%i does not fit in a %i,%i rectangle", x, y, data->width, data->height);
+    return; // [PATCH] Prevent crash on invalid bounds
               break;
             }
             if (data->frames[i].is_shadow) {

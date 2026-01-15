@@ -1,4 +1,62 @@
-#include "InputManager.hpp"
+import os
+
+def apply(src_dir, root_dir):
+    """Add scroll wheel support and fix Input struct to include x,y coordinates"""
+    
+    modified = False
+    
+    # 1. Update Input.hpp
+    input_hpp = os.path.join(src_dir, "Input.hpp")
+    if os.path.exists(input_hpp):
+        with open(input_hpp, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        if "SCROLL_UP" not in content:
+            new_input_hpp = '''#ifndef INPUT_HPP
+#define INPUT_HPP
+#include <SDL2/SDL.h>
+
+enum class InputType {
+  NONE,
+  POSITIONED,
+  BUTTON,
+};
+
+enum class InputEvent {
+  NONE,
+  LEFT_CLICK,
+  RIGHT_CLICK,
+  CURSOR_MOVE,
+  MOUSE_MOVE,      // [PATCH] Alias for CURSOR_MOVE
+  SCROLL_UP,       // [PATCH] Mouse wheel up
+  SCROLL_DOWN,     // [PATCH] Mouse wheel down
+  QUIT
+};
+
+// [PATCH] Updated Input struct with direct x,y access
+typedef struct {
+  InputType type;
+  InputEvent event;
+  SDL_Point position;
+  int x;  // [PATCH] Direct x coordinate
+  int y;  // [PATCH] Direct y coordinate
+} Input;
+
+#endif // INPUT_HPP
+'''
+            with open(input_hpp, "w", encoding="utf-8") as f:
+                f.write(new_input_hpp)
+            print("    -> Updated Input.hpp with scroll events and x,y fields")
+            modified = True
+    
+    # 2. Update InputManager.cpp
+    input_cpp = os.path.join(src_dir, "InputManager.cpp")
+    if os.path.exists(input_cpp):
+        with open(input_cpp, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        if "SDL_MOUSEWHEEL" not in content:
+            new_input_cpp = '''#include "InputManager.hpp"
 
 InputManager::InputManager() {
 }
@@ -86,3 +144,10 @@ InputEvent InputManager::getEventFromMouseButton(Uint8 button) {
     }
     return event;
 }
+'''
+            with open(input_cpp, "w", encoding="utf-8") as f:
+                f.write(new_input_cpp)
+            print("    -> Updated InputManager.cpp with scroll wheel support")
+            modified = True
+    
+    return modified
