@@ -20,6 +20,7 @@ public:
   ~UiLayout();
 
   UiAction handleInputs(std::vector<Input> &inputs);
+  UiElement* getElementById(int id);  // [PATCH] Find element by ID
   void draw(SDL_Renderer * renderer, SDL_Rect * layout_rect);
 
 private:
