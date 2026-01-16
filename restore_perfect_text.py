@@ -1,4 +1,62 @@
-#include "UiText.hpp"
+import os
+
+def main():
+    print("=== RESTORING PERFECT SCROLLABLE TEXT BOX ===")
+    
+    src_dir = os.path.join("src", "ui")
+    os.makedirs(src_dir, exist_ok=True)
+    
+    # ---------------------------------------------------------
+    # 1. WRITE UiText.hpp (The Definition)
+    # ---------------------------------------------------------
+    header_code = """#ifndef UI_TEXT_HPP
+#define UI_TEXT_HPP
+
+#include <string>
+#include <vector>
+#include <SDL2/SDL.h>
+#include "UiElement.hpp"
+#include "../IniReader.hpp"
+#include "../ResourceManager.hpp"
+
+class UiText : public UiElement {
+public:
+  UiText(IniReader * ini_reader, ResourceManager * resource_manager, std::string name);
+  ~UiText();
+  
+  UiAction handleInputs(std::vector<Input> &inputs);
+  void draw(SDL_Renderer * renderer, SDL_Rect * layout_rect);
+  
+  void setText(const std::string& newText);
+  std::string getText() const { return text_string; }
+  
+private:
+  std::string text_string = "";
+  SDL_Texture * text = nullptr;
+  SDL_Texture * shadow = nullptr;
+  int font = 0;
+  SDL_Rect dest_rect = {0, 0, 0, 0};
+  
+  // Cache for scrollable lines
+  std::vector<std::string> cached_lines;
+};
+
+#endif // UI_TEXT_HPP
+"""
+    with open(os.path.join(src_dir, "UiText.hpp"), "w", encoding="utf-8") as f:
+        f.write(header_code)
+    print("✓ Restored UiText.hpp")
+
+    # ---------------------------------------------------------
+    # 2. WRITE UiText.cpp (The "Gold Standard" Implementation)
+    # ---------------------------------------------------------
+    # Features:
+    # - Patch 09 Input Compatibility (SCROLL_UP/DOWN)
+    # - Smart Backgrounds (Only for multiline)
+    # - Gold Scrollbar (Zoo Tycoon Style)
+    # - Bottom Padding Fix (+15px)
+    
+    cpp_code = """#include "UiText.hpp"
 #include <sstream>
 #include <vector>
 #include <algorithm>
@@ -188,3 +246,10 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
       SDL_RenderFillRect(renderer, &thumb);
   }
 }
+"""
+    with open(os.path.join(src_dir, "UiText.cpp"), "w", encoding="utf-8") as f:
+        f.write(cpp_code)
+    print("✓ Restored UiText.cpp (Gold Scrollbar + Padding + Crash Protection)")
+
+if __name__ == "__main__":
+    main()
