@@ -1,13 +1,4 @@
-# Build artifacts 
-build/ 
-build_report.txt 
-__pycache__/ 
-*.pyc 
-*.pyo 
-.vscode/ 
-.idea/ 
-.DS_Store 
-Thumbs.db 
-*.tmp 
-*.bak 
-remove_git.py 
+.vscode/
+build/
+build_log.txt
+runtime_log.txt
