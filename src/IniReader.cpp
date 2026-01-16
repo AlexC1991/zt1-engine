@@ -1,241 +1,113 @@
 #include "IniReader.hpp"
-
 #include <sstream>
-
 #include <SDL2/SDL.h>
-
 #include "Utils.hpp"
+#include <algorithm>
 
-void IniReader::printContent() {
-  std::string section = "";
-  for (auto section_key : this->content) {
-    section = section_key.first;
-    printf("[%s]\n", section.c_str());
-    for (auto key_value : section_key.second) {
-      printf("%s = %s\n", key_value.first.c_str(), key_value.second.c_str());
-    }
-    printf("\n");
-  }
-}
+void IniReader::printContent() {} 
 
 IniReader::IniReader(const std::string &filename) {
-  SDL_Log("Opening file %s", filename.c_str());
   FILE * fd = fopen(filename.c_str(), "r");
-  if (fd == NULL) {
-    SDL_Log("Could not open ini file %s", filename.c_str());
-  }
+  if (fd == NULL) return;
   fseek(fd, 0L, SEEK_END);
   size_t size = ftell(fd) + 1;
   fseek(fd, 0, SEEK_SET);
   void * buffer = malloc(size);
+  if (!buffer) { fclose(fd); return; }
   fread(buffer, sizeof(char), size, fd);
-  if (buffer == nullptr) {
-    SDL_Log("Could not load content of ini file %s", filename.c_str());  
-    return;
-  }
+  fclose(fd);
   load(std::string((char *) buffer, size));
-
-  #ifdef DEBUG
-    // this->printContent();
-  #endif
+  free(buffer);
 }
 
-IniReader::IniReader(void *buffer, size_t size) {
-  load(std::string((char *) buffer, size));
-
-  #ifdef DEBUG
-    // this->printContent();
-  #endif
-}
-
-IniReader::~IniReader() {
-
-}
+IniReader::IniReader(void *buffer, size_t size) { load(std::string((char *) buffer, size)); }
+IniReader::~IniReader() {}
 
 std::string IniReader::get(const std::string &section, const std::string &key, const std::string &default_value) {
-  std::string section_lower = Utils::string_to_lower(section);
-  std::string key_lower = Utils::string_to_lower(key);
-  if (content.count(section_lower) != 0 && content[section_lower].count(key_lower) != 0) {
-    return content[section_lower][key_lower];
-  }
-  SDL_Log("Value of %s:%s not found, returning default", section.c_str(), key.c_str());
+  std::string s_lower = Utils::string_to_lower(section);
+  std::string k_lower = Utils::string_to_lower(key);
+  if (content.count(s_lower) && content[s_lower].count(k_lower)) return content[s_lower][k_lower];
   return default_value;
 }
 
-std::vector<std::string> IniReader::getList(const std::string &section, const std::string &key, const std::vector<std::string> &default_value)
-{
-  std::vector<std::string> list = {};
-  std::string value = get(section, key, "");
-  if (value.empty()) {
-    return list;
-  }
-
-  std::stringstream stream(value);
+std::vector<std::string> IniReader::getList(const std::string &section, const std::string &key, const std::vector<std::string> &default_value) {
+  std::string val = get(section, key, "");
+  if (val.empty()) return {};
+  std::vector<std::string> list;
+  std::stringstream stream(val);
   std::string entry;
-  while(std::getline(stream, entry, ';')) {
-      list.push_back(entry);
-  }
+  while(std::getline(stream, entry, ';')) list.push_back(entry);
   return list;
 }
 
 int IniReader::getInt(const std::string &section, const std::string &key, const int &default_value) {
-  int result = default_value;
-  std::string string_value = get(section, key);
-  if (!string_value.empty()) {
-    result = std::stoi(string_value, NULL, 10);
-  }
-  return result;
+  std::string val = get(section, key);
+  return val.empty() ? default_value : std::stoi(val);
 }
 
 uint32_t IniReader::getUnsignedInt(const std::string &section, const std::string &key, const uint32_t default_value) {
-  uint32_t result = default_value;
-  std::string string_value = get(section, key);
-  if (!string_value.empty()) {
-    result = std::stoul(string_value, NULL, 10);
-  }
-  return result;
+  std::string val = get(section, key);
+  return val.empty() ? default_value : std::stoul(val);
 }
 
-std::vector<int> IniReader::getIntList(const std::string &key, const std::string &value, const std::vector<int> &default_value)
-{
-  std::vector<int> list = {};
-  std::vector<std::string> strings = this->getList(key, value);
-
-  for(std::string string : strings) {
-    if (!string.empty()) {
-      list.push_back(std::stoi(string, NULL, 10));
-    }
-  }
+std::vector<int> IniReader::getIntList(const std::string &key, const std::string &value, const std::vector<int> &default_value) {
+  std::vector<int> list;
+  for(std::string s : getList(key, value)) if(!s.empty()) list.push_back(std::stoi(s));
   return list;
 }
 
 std::map<std::string, std::string> IniReader::getSection(const std::string &section) {
-  if (!this->content.contains(section)) {
-    SDL_Log("Failed to get section %s", section.c_str());
-    return std::map<std::string, std::string>();
-  }
+  if (!this->content.contains(section)) return {};
   return this->content[section];
 }
 
 std::vector<std::string> IniReader::getSections() {
   std::vector<std::string> sections;
-  for (auto entry: this->content) {
-    sections.push_back(entry.first);
-  }
+  for (auto entry: this->content) sections.push_back(entry.first);
   return sections;
 }
 
 bool IniReader::isList(const std::string &section, const std::string &key) {
-  std::string value = get(section, key);
-  if (value.empty()) {
-    return false;
-  }
-  if (value.find(";") != std::string::npos) {
-    return true;
-  } else {
-    return false;
-  }
+  return !get(section, key).empty() && get(section, key).find(";") != std::string::npos;
 }
 
 void IniReader::load(std::string file_content) {
-  if (file_content.empty()) {
-    return;
-  }
-
-  size_t character_number = 0;
-  bool skip_to_end_of_line = false;
-  bool skip_to_value = false;
+  if (file_content.empty()) return;
   std::string current_section = "";
-  std::string current_key = "";
-  std::string current_value = "";
-
-  typedef enum {
-    SECTION,
-    KEY,
-    VALUE
-  } process_mode;
-  process_mode current_mode = process_mode::SECTION;
-
+  std::stringstream ss(file_content);
+  std::string line;
   
-  for (char character : file_content) {
-    // We don't need to read comments
-    if (skip_to_end_of_line && character != '\n') {
+  while (std::getline(ss, line)) {
+    line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+    size_t first = line.find_first_not_of(" \t");
+    if (first == std::string::npos) continue;
+    line = line.substr(first);
+    if (line[0] == ';' || line[0] == '#') continue;
+    
+    if (line[0] == '[') {
+      size_t end = line.find(']');
+      if (end != std::string::npos) current_section = Utils::string_to_lower(line.substr(1, end - 1));
       continue;
     }
-    // In between the key and the value we can ignore spaces and the equals
-    if (skip_to_value && (character == ' ' || character == '=')) {
-      continue;
-    }
-    // We don't want windows newline characters in our map
-    if (character == '\r') {
-      continue;
-    }
-    // On newline save the data if we're in value mode, otherwise just reset the character number
-    if (character == '\n') {
-      if (current_mode == process_mode::VALUE && skip_to_end_of_line == false) {
-        if (!current_section.empty() && !current_key.empty() && !current_value.empty()) {
-          if (!content[current_section].contains(current_key)) {
-          content[current_section][current_key] = current_value;
-          } else {
-            content[current_section][current_key] +=  ";" + current_value;
-          }
-        }
-        current_key = "";
-        current_value = "";
-      }
-      skip_to_end_of_line = false;
-      skip_to_value = false;
-      character_number = 0;
-      continue;
-    }
-    // Set the mode at the beginning of the line
-    if (character_number == 0) {
-      switch (character) {
-        case '[':
-          current_mode = process_mode::SECTION;
-          current_section = "";
-          character_number++;
-          continue;
-          break;
-        case ';':
-          skip_to_end_of_line = true;
-          continue;
-          break;
-        case ' ':
-          //I feel it is risky to assume that a line starting with a space is empty, but we do it anyway 
-          skip_to_end_of_line = true;
-          continue;
-          break;
-      default:
-        // By default we assume we're dealing with a line with a key and value. This might not always apply, but I've not seen it.
-        current_mode = process_mode::KEY;
-        current_key = "";
-        break;
+    
+    size_t eq = line.find('=');
+    if (eq != std::string::npos) {
+      std::string key = line.substr(0, eq);
+      std::string val = line.substr(eq + 1);
+      
+      size_t k_end = key.find_last_not_of(" \t");
+      if (k_end != std::string::npos) key = key.substr(0, k_end + 1);
+      
+      size_t v_start = val.find_first_not_of(" \t");
+      if (v_start != std::string::npos) val = val.substr(v_start);
+      size_t v_end = val.find_last_not_of(" \t");
+      if (v_end != std::string::npos) val = val.substr(0, v_end + 1);
+      
+      if (!current_section.empty() && !key.empty()) {
+        key = Utils::string_to_lower(key);
+        if (!content[current_section].count(key)) content[current_section][key] = val;
+        else content[current_section][key] += ";" + val;
       }
     }
-    switch (current_mode) {
-      case process_mode::SECTION:
-        if (character == ']') {
-          content[current_section] = std::map<std::string, std::string>();
-          continue;
-        }
-        current_section += std::tolower(character);
-        break;
-      case process_mode::KEY:
-        if (character == ' ' || character == '=') {
-          current_mode = process_mode::VALUE;
-          skip_to_value = true;
-          continue;
-        }
-        current_key += std::tolower(character);
-        break;
-      case process_mode::VALUE:
-        if (skip_to_value) {
-          skip_to_value = false;
-        }
-        current_value += character;
-        break;
-    }
-    character_number++;
   }
 }

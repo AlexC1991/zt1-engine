@@ -3,7 +3,7 @@
 #include <zip.h>
 #include <stdlib.h>
 
-#include <SDL2/SDL_image.h>
+#include "SDL_image.h"
 
 #include "Utils.hpp"
 
@@ -63,6 +63,7 @@ SDL_Surface * ZtdFile::getImageSurfaceBmp(const std::string &ztd_file, const std
     free(file_content);
   } else {
     SDL_Log("Could not load content of file %s in %s", file_name.c_str(), ztd_file.c_str());
+    return nullptr; // [PATCH] Don't crash on missing files
   }
 
   return surface;
@@ -79,6 +80,7 @@ SDL_Surface * ZtdFile::getImageSurfaceTga(const std::string &ztd_file, const std
     free(file_content);
   } else {
     SDL_Log("Could not load content of file %s in %s", file_name.c_str(), ztd_file.c_str());
+    return nullptr; // [PATCH] Don't crash on missing files
   }
 
   return surface;
@@ -95,6 +97,7 @@ SDL_Surface * ZtdFile::getImageSurfaceZt1(const std::string &ztd_file, const std
     free(file_content);
   } else {
     SDL_Log("Could not load content of file %s in %s", file_name.c_str(), ztd_file.empty() ? "unknown ztd file" : ztd_file.c_str());
+    return nullptr; // [PATCH] Don't crash on missing files
   }
 
   return surface;
@@ -129,6 +132,7 @@ Mix_Music * ZtdFile::getMusic(const std::string &ztd_file, const std::string &fi
     music = Mix_LoadMUSType_RW(rw, MUS_WAV, 1);
   } else {
     SDL_Log("Could not load content of file %s in %s", file_name.c_str(), ztd_file.c_str());
+    return nullptr; // [PATCH] Don't crash on missing files
   }
 
   return music;
@@ -142,6 +146,7 @@ IniReader * ZtdFile::getIniReader(const std::string &ztd_file, const std::string
     return new IniReader(file_content, file_size);
   } else {
     SDL_Log("Could not load content of file %s in %s", file_name.c_str(), ztd_file.c_str());
+    return nullptr; // [PATCH] Don't crash on missing files
   }
 
   SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Could not load ini file %s", file_name.c_str());

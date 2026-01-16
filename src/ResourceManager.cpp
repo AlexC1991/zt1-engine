@@ -1,232 +1,279 @@
 #include "ResourceManager.hpp"
-
 #include <filesystem>
 #include <string>
 #include <vector>
 #include <algorithm>
-
 #include <SDL2/SDL.h>
-
 #include "ZtdFile.hpp"
 #include "Utils.hpp"
 #include "FontManager.hpp"
 #include "Expansion.hpp"
 
-ResourceManager::ResourceManager(Config * config) : config(config) {
-
-}
-
+ResourceManager::ResourceManager(Config * config) : config(config) {}
 ResourceManager::~ResourceManager() {
   Mix_HaltMusic();
-  if (this->intro_music != nullptr){
-    Mix_FreeMusic(this->intro_music);
-  }
+  if (this->intro_music != nullptr){ Mix_FreeMusic(this->intro_music); }
 }
 
-std::string ResourceManager::getResourceLocation(const std::string &resource_name) {
-  if (this->resource_map.count(resource_name) == 0) {
-    std::string resource_name_with_slash = resource_name + "/";
-    if(this->resource_map.count(resource_name_with_slash) == 0) {
-      SDL_Log("Could not find resource %s", resource_name.c_str());
-      return "";
+// Helper to normalize paths: lowercase + forward slashes
+std::string normalizePath(const std::string& input) {
+    std::string path = Utils::string_to_lower(input);
+    std::replace(path.begin(), path.end(), '\\', '/');
+    
+    // Remove leading/trailing slashes
+    while (!path.empty() && path[0] == '/') path = path.substr(1);
+    while (!path.empty() && path.back() == '/') path.pop_back();
+    
+    return path;
+}
+
+// Helper to fix the "Double Name" bug (e.g. "textbck/textbck" -> "textbck")
+std::string fixDoubleName(const std::string& input) {
+    std::string path = normalizePath(input);
+    
+    size_t last = path.find_last_of('/');
+    if (last != std::string::npos) {
+        std::string file = path.substr(last + 1);
+        std::string parent = path.substr(0, last);
+        
+        size_t parent_last = parent.find_last_of('/');
+        std::string parent_name = (parent_last != std::string::npos) ? 
+                                   parent.substr(parent_last + 1) : parent;
+        
+        if (parent_name == file) {
+            return parent;
+        }
     }
-    return this->resource_map[resource_name_with_slash];
+    return path;
+}
+
+// Check if a path is a directory (ends with / in the resource map)
+bool ResourceManager::isDirectory(const std::string& path) {
+    std::string with_slash = path + "/";
+    return resource_map.count(with_slash) > 0;
+}
+
+std::string ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
+  std::string base_name = fixDoubleName(resource_name_raw);
+
+  std::vector<std::string> extensions = { "", ".ini", ".lyt", ".uca", ".ucb", ".ai", ".txt", ".ani", ".tga", ".bmp", ".png", ".pal", ".wav" };
+
+  for (const auto& ext : extensions) {
+      std::string try_name = base_name + ext;
+      if (this->resource_map.count(try_name)) {
+          return this->resource_map[try_name];
+      }
   }
 
-  return this->resource_map[resource_name];
+  std::string with_slash = base_name + "/";
+  if (this->resource_map.count(with_slash)) {
+      return this->resource_map[with_slash];
+  }
+
+  bool suppress = (base_name.find("textbck") != std::string::npos) ||
+                  (base_name.find("bkgnd") != std::string::npos) ||
+                  (base_name.find("backdrop") != std::string::npos);
+  
+  if (!suppress) {
+      SDL_Log("Resource not found: %s", base_name.c_str());
+  }
+  
+  return "";
+}
+
+std::string ResourceManager::findActualResourceKey(const std::string &base_name) {
+  std::vector<std::string> extensions = { "", ".ini", ".lyt", ".uca", ".ucb", ".ai", ".txt", ".ani", ".tga", ".bmp", ".png", ".pal", ".wav" };
+  
+  for (const auto& ext : extensions) {
+      std::string try_name = base_name + ext;
+      if (this->resource_map.count(try_name)) {
+          return try_name;
+      }
+  }
+  return base_name;
 }
 
 void ResourceManager::load_resource_map(std::atomic<float> * progress, float progress_goal) {
-  if (resource_map_loaded) {
-    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,"Resource maps was already loaded");
-    return;
-  }
-  std::string current_archive = "";
-
+  if (resource_map_loaded) return;
   SDL_Log("Loading resource map...");
-
   std::vector<std::string> resource_paths = config->getResourcePaths();
-  float progress_per_resource_path_load = (progress_goal - *progress) / (float) resource_paths.size();
+  float step = (progress_goal - *progress) / (float) resource_paths.size();
+  
   for (std::string path : resource_paths) {
     path = Utils::fixPath(path);
-    if (path.empty())
-      continue;
-    for (std::filesystem::directory_entry archive : std::filesystem::directory_iterator(path)) {
-      current_archive = archive.path().string();
-      if (Utils::getFileExtension(current_archive) != "ZTD") {
-        continue;
-      }
-      // SDL_Log("Adding resources from %s", archive.path().c_str());
-      for (std::string file : ZtdFile::getFileList(current_archive)) {
-        if (resource_map.count(file) == 0) {
-          resource_map[file] = current_archive;
+    if (path.empty()) continue;
+    
+    try {
+      for (std::filesystem::directory_entry archive : std::filesystem::directory_iterator(path)) {
+        if (Utils::getFileExtension(archive.path().string()) != "ZTD") continue;
+        
+        for (std::string file_raw : ZtdFile::getFileList(archive.path().string())) {
+          std::string file = normalizePath(file_raw);
+          if (resource_map.count(file) == 0) {
+            resource_map[file] = archive.path().string();
+          }
         }
       }
+    } catch (std::exception& e) {
+      SDL_Log("Warning: Could not scan path %s: %s", path.c_str(), e.what());
     }
-
-    // Increase progress bar position
-    if (*progress + progress_per_resource_path_load < progress_goal) {
-      *progress = *progress + progress_per_resource_path_load;
-    } else {
-      *progress = progress_goal;
-    }
+    *progress = (*progress + step < progress_goal) ? *progress + step : progress_goal;
   }
+  
   resource_map_loaded = true;
-  SDL_Log("Loading resource map done");
+  SDL_Log("Loading resource map done. Total files indexed: %zu", resource_map.size());
 }
 
 void ResourceManager::load_string_map(std::atomic<float> * progress, float progress_goal) {
   std::vector<std::string> lang_dlls;
-  for (std::filesystem::directory_entry lang_dll : std::filesystem::directory_iterator(Utils::getExecutableDirectory())) {
-    std::string current_dll = lang_dll.path().filename().string();
-    if (!Utils::string_to_lower(current_dll).starts_with("lang") || Utils::getFileExtension(current_dll) != "DLL") {
-      continue;
+  try {
+    for (std::filesystem::directory_entry lang_dll : std::filesystem::directory_iterator(Utils::getExecutableDirectory())) {
+      std::string current = lang_dll.path().filename().string();
+      if (Utils::string_to_lower(current).starts_with("lang") && Utils::getFileExtension(current) == "DLL") 
+          lang_dlls.push_back(lang_dll.path().string());
     }
-    lang_dlls.push_back(lang_dll.path().string());
-  }
+  } catch (...) {}
+  
   std::sort(lang_dlls.begin(), lang_dlls.end());
-
-  float progress_per_dll_load = (progress_goal - *progress) / (float) lang_dlls.size();
-  for (std::string lang_dll : lang_dlls) {
-    SDL_Log("Loading strings from %s", lang_dll.c_str());
-    PeFile pe_file(lang_dll);
-    for (uint32_t string_id : pe_file.getStringIds()) {
-      std::string string = pe_file.getString(string_id);
-      if (!string.empty()) {
-        this->string_map[string_id] = string;
+  float step = lang_dlls.empty() ? 0 : (progress_goal - *progress) / (float) lang_dlls.size();
+  
+  for (std::string dll : lang_dlls) {
+    SDL_Log("Loading strings from %s", dll.c_str());
+    try {
+      PeFile pe(dll);
+      for (uint32_t id : pe.getStringIds()) {
+        std::string s = pe.getString(id);
+        if (!s.empty()) string_map[id] = s;
       }
+    } catch (...) {
+      SDL_Log("Warning: Could not load strings from %s", dll.c_str());
     }
-
-    // Increase progress bar position
-    if (*progress + progress_per_dll_load < progress_goal) {
-      *progress = *progress + progress_per_dll_load;
-    } else {
-      *progress = progress_goal;
-    }
-  }
-}
-
-void ResourceManager::load_animation_map(std::atomic<float> * progress, float progress_goal) {
-  std::vector<std::string> ani_files;
-  for (auto file : this->resource_map) {
-    std::string file_name = file.first;
-    if(file_name.ends_with(".ani")) {
-      ani_files.push_back(file_name);
-    }
-  }
-
-  float progress_per_animation_load = (progress_goal - *progress) / (float) ani_files.size();
-  for (int i = 0; i < ani_files.size(); i++) {
-    SDL_Log("Loading animation from %s", ani_files[i].c_str());
-    this->animation_map[ani_files[i]] = this->getAnimation(ani_files[i]);
-
-    // Increase progress bar position
-    if (*progress + progress_per_animation_load < progress_goal) {
-      *progress = *progress + progress_per_animation_load;
-    } else {
-      *progress = progress_goal;
-    }
+    *progress = (*progress + step < progress_goal) ? *progress + step : progress_goal;
   }
 }
 
 void ResourceManager::load_pallet_map(std::atomic<float> * progress, float progress_goal) {
-  for (auto file : this->resource_map) {
-    std::string pal_file = file.first;
-    if(Utils::getFileExtension(pal_file) == "PAL") {
-      std::string ztd_file = file.second;
-
-      this->pallet_manager.addPalletFileToMap(pal_file, ztd_file);
+  for (auto file : resource_map) {
+    if(Utils::getFileExtension(file.first) == "PAL") {
+      pallet_manager.addPalletFileToMap(file.first, file.second);
     }
   }
-
-  this->pallet_manager.loadPalletMap(progress, progress_goal);
+  pallet_manager.loadPalletMap(progress, progress_goal);
 }
 
 void ResourceManager::load_all(std::atomic<float> * progress, std::atomic<bool> * is_done) {
-  std::vector<void(ResourceManager::*)(std::atomic<float> *, float)> load_functions = {
-    &ResourceManager::load_resource_map,
-    &ResourceManager::load_string_map,
-    &ResourceManager::load_pallet_map,
-    // &ResourceManager::load_animation_map,
-  };
-
-  for (size_t i = 0; i < load_functions.size(); i++) {
-    float progress_goal = 100.0 / load_functions.size() * (i + 1);
-    (this->*load_functions[i])(progress, progress_goal);
-    if (this->resource_map_loaded && this->intro_music == nullptr && this->config->getPlayMenuMusic()) {
-      this->intro_music = this->getMusic(this->config->getMenuMusic());
-      Mix_PlayMusic(this->intro_music, -1);
-    }
+  load_resource_map(progress, 33.0f);
+  load_string_map(progress, 66.0f);
+  load_pallet_map(progress, 100.0f);
+  if (intro_music == nullptr && config->getPlayMenuMusic()) {
+      intro_music = getMusic(config->getMenuMusic());
+      if (intro_music) Mix_PlayMusic(intro_music, -1);
   }
-
   *is_done = true;
 }
 
-void * ResourceManager::getFileContent(const std::string &file_name, int *size) {
-  return ZtdFile::getFileContent(getResourceLocation(file_name), file_name, size);
+void * ResourceManager::getFileContent(const std::string &name_raw, int *size) { 
+    std::string name = fixDoubleName(name_raw);
+    std::string actual_key = findActualResourceKey(name);
+    std::string loc = getResourceLocation(name);
+    if (loc.empty()) return nullptr;
+    return ZtdFile::getFileContent(loc, actual_key, size);
 }
 
-SDL_Texture * ResourceManager::getTexture(SDL_Renderer * renderer, const std::string &file_name) {
-  SDL_Texture * texture = nullptr;
-  SDL_Surface * surface = ZtdFile::getImageSurface(getResourceLocation(file_name), file_name);
-  if (surface != nullptr) {
-    texture = SDL_CreateTextureFromSurface(renderer, surface);
-    SDL_FreeSurface(surface);
+SDL_Texture * ResourceManager::getTexture(SDL_Renderer * r, const std::string &name_raw) {
+  std::string name = fixDoubleName(name_raw);
+  std::string actual_key = findActualResourceKey(name);
+  std::string loc = getResourceLocation(name);
+  if (loc.empty()) return nullptr;
+  
+  SDL_Surface * s = ZtdFile::getImageSurface(loc, actual_key);
+  if (!s) return nullptr;
+  SDL_Texture * t = SDL_CreateTextureFromSurface(r, s);
+  SDL_FreeSurface(s);
+  return t;
+}
+
+Mix_Music * ResourceManager::getMusic(const std::string &name_raw) { 
+    std::string name = fixDoubleName(name_raw);
+    std::string actual_key = findActualResourceKey(name);
+    std::string loc = getResourceLocation(name);
+    if (loc.empty()) return nullptr;
+    return ZtdFile::getMusic(loc, actual_key); 
+}
+
+IniReader * ResourceManager::getIniReader(const std::string &name_raw) { 
+    std::string name = fixDoubleName(name_raw);
+    
+    // [FIX] Check if directory, return empty reader if so
+    // Using (void*)"" cast to fix C2665 error
+    if (isDirectory(name)) return new IniReader((void*)"", 0);
+    
+    std::string actual_key = findActualResourceKey(name);
+    std::string loc = getResourceLocation(name);
+    
+    if (loc.empty() || actual_key.back() == '/') return new IniReader((void*)"", 0);
+    
+    return ZtdFile::getIniReader(loc, actual_key); 
+}
+
+Animation *ResourceManager::getAnimation(const std::string &name_raw) {
+  std::string name = fixDoubleName(name_raw);
+  std::string loc = getResourceLocation(name);
+  
+  if (!loc.empty()) { 
+      std::string actual_key = findActualResourceKey(name);
+      Animation* a = AniFile::getAnimation(&pallet_manager, loc, actual_key); 
+      if(a) return a; 
   }
-  return texture;
-}
-
-SDL_Cursor * ResourceManager::getCursor(uint32_t cursor_id) {
-  PeFile pe_file(this->config->getResDllName());
-
-  SDL_Surface * surface = pe_file.getCursor(cursor_id);
-  SDL_Cursor * cursor = SDL_CreateColorCursor(surface, 0, 0);
-  SDL_FreeSurface(surface);
-
-  return cursor;
-}
-
-Mix_Music * ResourceManager::getMusic(const std::string &file_name) {
-  return ZtdFile::getMusic(getResourceLocation(file_name), file_name);
-}
-
-IniReader * ResourceManager::getIniReader(const std::string &file_name) {
-  return ZtdFile::getIniReader(getResourceLocation(file_name), file_name);
-}
-
-Animation *ResourceManager::getAnimation(const std::string &file_name) {
-  std::string resource_location = getResourceLocation(file_name);
-  if (!resource_location.empty()) {
-    return AniFile::getAnimation(&this->pallet_manager, resource_location, file_name);
-  } else {
-    std::string full_file_name = file_name + ".ani";
-    resource_location = getResourceLocation(full_file_name);
-    return AniFile::getAnimation(&this->pallet_manager, resource_location, full_file_name);
+  
+  std::string name_ani = name + ".ani";
+  loc = getResourceLocation(name_ani);
+  if (!loc.empty()) { 
+      Animation* a = AniFile::getAnimation(&pallet_manager, loc, name_ani); 
+      if(a) return a; 
   }
-}
-
-SDL_Texture * ResourceManager::getLoadTexture(SDL_Renderer *renderer) {
-  Expansion expansion = Utils::getExpansion();
-  uint32_t loading_screen_id = 502;
-  std::string lang_dll_path = Utils::getExpansionLangDllPath(expansion);
-
-  if (expansion == Expansion::ALL) {
-    loading_screen_id = 505;
-  } else if (expansion == Expansion::MARINE_MANIA) {
-    loading_screen_id = 504;
+  
+  // Try looking inside if it's a directory
+  std::string dir_ani = name + "/" + name.substr(name.find_last_of('/') + 1) + ".ani";
+  loc = getResourceLocation(dir_ani);
+  if (!loc.empty()) {
+      Animation* a = AniFile::getAnimation(&pallet_manager, loc, dir_ani);
+      if (a) return a;
   }
-
-  PeFile pe_file(lang_dll_path);
-  SDL_Surface * surface = pe_file.getLoadScreenSurface(loading_screen_id);
-  SDL_Texture * texture = SDL_CreateTextureFromSurface(renderer, surface);
-  SDL_FreeSurface(surface);
-  return texture;
+  return nullptr;
 }
 
-SDL_Texture *ResourceManager::getStringTexture(SDL_Renderer * renderer, const int font, const std::string &string, SDL_Color color) {
-  return this->font_manager.getStringTexture(renderer, font, string, color);
+SDL_Cursor * ResourceManager::getCursor(uint32_t id) {
+  try {
+    PeFile pe(config->getResDllName());
+    SDL_Surface * s = pe.getCursor(id);
+    if (!s) return nullptr;
+    SDL_Cursor * c = SDL_CreateColorCursor(s, 0, 0);
+    SDL_FreeSurface(s);
+    return c;
+  } catch (...) { return nullptr; }
 }
 
-std::string ResourceManager::getString(uint32_t string_id) {
-  return this->string_map[string_id];
+void ResourceManager::load_animation_map(std::atomic<float>*, float) {}
+
+SDL_Texture * ResourceManager::getLoadTexture(SDL_Renderer *r) {
+  try {
+    uint32_t id = (Utils::getExpansion() == Expansion::ALL) ? 505 : 
+                  (Utils::getExpansion() == Expansion::MARINE_MANIA ? 504 : 502);
+    PeFile pe(Utils::getExpansionLangDllPath(Utils::getExpansion()));
+    SDL_Surface * s = pe.getLoadScreenSurface(id);
+    if (!s) return nullptr;
+    SDL_Texture * t = SDL_CreateTextureFromSurface(r, s);
+    SDL_FreeSurface(s);
+    return t;
+  } catch (...) { return nullptr; }
+}
+
+SDL_Texture *ResourceManager::getStringTexture(SDL_Renderer * r, const int f, const std::string &s, SDL_Color c) {
+  return font_manager.getStringTexture(r, f, s, c);
+}
+
+std::string ResourceManager::getString(uint32_t id) { 
+  if (string_map.count(id)) return string_map[id];
+  return "";
 }
