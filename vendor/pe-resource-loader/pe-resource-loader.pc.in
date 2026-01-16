@@ -1,0 +1,9 @@
+libdir=@CMAKE_INSTALL_FULL_LIBDIR@
+includedir=@CMAKE_INSTALL_FULL_INCLUDEDIR@
+
+Name: pe-resource-loader
+Version: @PROJECT_VERSION@
+Description:  Load resources from Windows exe and dll files in a cross platform way
+URL: https://github.com/sharkwouter/pe-resource-loader
+Libs: -L${libdir} -lpe-resource-loader
+Cflags: -I${includedir}
