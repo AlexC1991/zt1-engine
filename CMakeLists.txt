@@ -1,123 +1,111 @@
-cmake_minimum_required(VERSION 3.10)
-
+cmake_minimum_required(VERSION 3.12)
 project(zt1-engine)
 
+# 1. UPGRADE TO C++20 (Fixes 'contains' and 'designated initializer' errors)
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -pedantic")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-set(CMAKE_CXX_FLAGS_DEBUG "-DDEBUG=1 -g3")
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-file(GLOB_RECURSE SRC src/*.cpp)
-
-if (WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Release")
-    add_executable(${PROJECT_NAME} WIN32 ${SRC} ${CMAKE_CURRENT_SOURCE_DIR}/platform/windows/appicon.rc)
-else()
-    add_executable(${PROJECT_NAME} ${SRC})
+# 2. FORCE DYNAMIC RUNTIME /MD (Fixes Linker/MSVCRT errors)
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+    add_compile_options(/MD)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
-set(BUILD_SHARED_LIBS OFF CACHE INTERNAL "" FORCE)
+# 3. DISABLE LIBRARY BLOAT & INSTALLS (Fixes NASM and Export errors)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libs" FORCE)
+set(LIBZIP_DO_INSTALL OFF CACHE BOOL "No install" FORCE)
+set(SDL2IMAGE_AVIF OFF CACHE BOOL "Disable AVIF" FORCE)
+set(SDL2IMAGE_WEBP OFF CACHE BOOL "Disable WEBP" FORCE)
+set(SDL2IMAGE_JXL OFF CACHE BOOL "Disable JXL" FORCE)
+set(SDL2IMAGE_TIF OFF CACHE BOOL "Disable TIF" FORCE)
+set(SDL2IMAGE_VENDORED OFF CACHE BOOL "Disable downloading extra stuff" FORCE)
+set(SDL2IMAGE_BACKEND_STB ON CACHE BOOL "Use lightweight STB decoder" FORCE)
 
-set(BUILD_SHARED_LIBS OFF CACHE INTERNAL "Prevent pe-resource-loader from building shared library" FORCE)
-set(PE_BITMAP_LOADER OFF CACHE INTERNAL "Prevent pe-resource-loader from building the pe_bitmap_loader binary" FORCE)
-set(PE_STRING_LOADER OFF CACHE INTERNAL "Prevent pe-resource-loader from building the pe_string_loader binary" FORCE)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vendor/pe-resource-loader)
+# 4. ZLIB SETUP
+set(ZLIB_FOUND TRUE CACHE BOOL "ZLIB Found" FORCE)
+set(ZLIB_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/vendor/zlib" "${CMAKE_BINARY_DIR}/vendor/zlib" CACHE PATH "ZLIB Include" FORCE)
+set(ZLIB_LIBRARY zlibstatic CACHE FILEPATH "ZLIB Library" FORCE)
 
-set(SDL_SHARED OFF CACHE INTERNAL "" FORCE)
-set(SDL_STATIC ON CACHE INTERNAL "" FORCE)
-set(SDL2_DISABLE_INSTALL ON CACHE INTERNAL "" FORCE)
-set(SDL_TEST OFF CACHE INTERNAL "" FORCE)
+# 5. ADD LIBRARIES
 add_subdirectory(vendor/SDL)
-
-set(SDL2IMAGE_SAMPLES OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_AVIF OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_BMP ON CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_GIF OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_JPG OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_JXL OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_LBM OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_PCX OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_PNG OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_PNM OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_QOI OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_SVG OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_TGA ON CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_TIF OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_WEBP OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_XCF OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_XPM OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_XV OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_DEPS_SHARED OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_VENDORED ON CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_BACKEND_IMAGEIO OFF CACHE INTERNAL "" FORCE)
-set(SDL2IMAGE_BACKEND_STB OFF CACHE INTERNAL "" FORCE)
 add_subdirectory(vendor/SDL_image)
-
-set(SDL2MIXER_DEPS_SHARED OFF CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_VENDORED ON CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_SAMPLES OFF CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_CMD OFF CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_FLAC OFF CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_OPUS OFF CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_VORBIS OFF CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_MOD OFF CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_WAVPACK OFF CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_MIDI OFF CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_MP3 OFF CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_MP3_MINIMP3 OFF CACHE INTERNAL "" FORCE)
-set(SDL2MIXER_WAVE ON CACHE INTERNAL "" FORCE)
 add_subdirectory(vendor/SDL_mixer)
-
-set(SDL2TTF_BUILD_SHARED_LIBS OFF CACHE INTERNAL "" FORCE)
-set(SDL2TTF_VENDORED ON CACHE INTERNAL "" FORCE)
-set(SDL2TTF_SAMPLES OFF CACHE INTERNAL "" FORCE)
-set(SDL2TTF_FREETYPE ON CACHE INTERNAL "" FORCE)
-set(SDL2TTF_HARFBUZZ OFF CACHE INTERNAL "" FORCE)
 add_subdirectory(vendor/SDL_ttf)
-
-set(ENABLE_COMMONCRYPTO OFF CACHE INTERNAL "" FORCE)
-set(ENABLE_GNUTLS OFF CACHE INTERNAL "" FORCE)
-set(ENABLE_MBEDTLS OFF CACHE INTERNAL "" FORCE)
-set(ENABLE_OPENSSL OFF CACHE INTERNAL "" FORCE)
-set(ENABLE_WINDOWS_CRYPTO OFF CACHE INTERNAL "" FORCE)
-set(ENABLE_FDOPEN OFF CACHE INTERNAL "" FORCE)
-set(BUILD_TOOLS OFF CACHE INTERNAL "" FORCE)
-set(BUILD_REGRESS OFF CACHE INTERNAL "" FORCE)
-set(BUILD_OSSFUZZ OFF CACHE INTERNAL "" FORCE)
-set(BUILD_EXAMPLES OFF CACHE INTERNAL "" FORCE)
-set(BUILD_DOC OFF CACHE INTERNAL "" FORCE)
-set(LIBZIP_DO_INSTALL OFF CACHE INTERNAL "" FORCE)
-set(SHARED_LIB_VERSIONNING OFF CACHE INTERNAL "" FORCE)
-set(ENABLE_BZIP2 OFF CACHE INTERNAL "" FORCE)
-set(ENABLE_LZMA OFF CACHE INTERNAL "" FORCE)
-set(ENABLE_ZSTD OFF CACHE INTERNAL "" FORCE)
+add_subdirectory(vendor/zlib)
 add_subdirectory(vendor/libzip)
+add_subdirectory(vendor/pe-resource-loader)
 
-target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/pe-resource-loader/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/SDL/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/SDL_image/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/SDL_ttf/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/SDL_mixer/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/libzip/include
-)
+# 6. GATHER SOURCE CODE
+file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.c")
 
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    pe_resource_loader_static
-    SDL2::SDL2-static
-    SDL2_image
-    SDL2_ttf
-    SDL2_mixer
-    libzip::zip
-)
-
-if(WIN32)
-    set(CMAKE_CXX_FLAGS "-static ${CMAKE_CXX_FLAGS}")
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        SDL2::SDL2main
+# 7. FIX LINKER PATHS FOR MSVC
+if(MSVC)
+    link_directories(
+        "${CMAKE_BINARY_DIR}/vendor/SDL/Release"
+        "${CMAKE_BINARY_DIR}/vendor/SDL_image/Release"
+        "${CMAKE_BINARY_DIR}/vendor/SDL_mixer/Release"
+        "${CMAKE_BINARY_DIR}/vendor/SDL_ttf/Release"
+        "${CMAKE_BINARY_DIR}/vendor/zlib/Release"
+        "${CMAKE_BINARY_DIR}/vendor/libzip/lib/Release"
+        "${CMAKE_BINARY_DIR}/vendor/pe-resource-loader/lib/Release"
     )
 endif()
 
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${CMAKE_CURRENT_SOURCE_DIR}/font ${CMAKE_CURRENT_BINARY_DIR}/font)
+# 8. CREATE EXECUTABLE
+add_executable(zt1-engine ${SOURCES})
+
+# 9. FIX INCLUDE PATHS
+target_include_directories(zt1-engine PRIVATE
+    src
+    vendor/SDL/include
+    vendor/SDL_image
+    vendor/SDL_image/include
+    vendor/SDL_mixer
+    vendor/SDL_mixer/include
+    vendor/SDL_ttf
+    vendor/SDL_ttf/include
+    vendor/libzip/lib
+    vendor/libzip/include
+    vendor/pe-resource-loader
+    vendor/pe-resource-loader/src
+    vendor/pe-resource-loader/include
+    vendor/zlib
+    ${CMAKE_CURRENT_BINARY_DIR}/vendor/zlib
+    ${CMAKE_CURRENT_BINARY_DIR}/vendor/libzip
+)
+
+# 10. LINK EVERYTHING TOGETHER (Single unified call with PRIVATE keyword)
+target_link_libraries(zt1-engine PRIVATE
+    # SDL Libraries
+    SDL2-static
+    SDL2_image-static
+    SDL2_mixer-static
+    SDL2_ttf
+    # Archive/Compression
+    zip
+    zlibstatic
+    # PE Resource Loader
+    pe_resource_loader_static
+)
+
+# 11. WINDOWS SYSTEM LIBRARIES
+if(WIN32)
+    target_link_libraries(zt1-engine PRIVATE
+        user32
+        gdi32
+        winmm
+        imm32
+        ole32
+        oleaut32
+        version
+        uuid
+        advapi32
+        setupapi
+        shell32
+        dinput8
+        shlwapi
+        bcrypt
+        crypt32
+    )
+endif()

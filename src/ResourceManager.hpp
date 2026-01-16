@@ -6,7 +6,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include <SDL2/SDL_ttf.h>
+#include "SDL_ttf.h"
 
 #include "Config.hpp"
 #include "ZtdFile.hpp"
@@ -55,6 +55,10 @@ private:
   Config * config;
   FontManager font_manager;
   PalletManager pallet_manager;
+
+  // [PATCH] New helper methods for handling missing files/directories
+  std::string findActualResourceKey(const std::string &base_name);
+  bool isDirectory(const std::string& path);
 };
 
 #endif // RESOURCE_MANAGER_HPP

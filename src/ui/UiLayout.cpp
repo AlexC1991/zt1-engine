@@ -3,6 +3,7 @@
 #include "UiImage.hpp"
 #include "UiText.hpp"
 #include "UiButton.hpp"
+#include "UiListBox.hpp"
 
 UiLayout::UiLayout(IniReader * ini_reader, ResourceManager * resource_manager) {
   this->name = "layoutinfo";
@@ -62,6 +63,8 @@ void UiLayout::process_sections(IniReader *ini_reader, ResourceManager *resource
       new_element = (UiElement *) new UiButton(ini_reader, resource_manager, section);
     } else if (element_type == "UIText") {
       new_element = (UiElement *) new UiText(ini_reader, resource_manager, section);
+    } else if (element_type == "UIListBox") {
+      new_element = (UiElement *) new UiListBox(ini_reader, resource_manager, section);
     } else if (element_type == "UILayout") {
       new_element = (UiElement *) new UiLayout(ini_reader, resource_manager, section);
     }
@@ -92,4 +95,27 @@ void UiLayout::process_layout(ResourceManager *resource_manager, std::string lay
 
 UiAction UiLayout::handleInputs(std::vector<Input> &inputs) {
   return handleInputChildren(inputs);
+}
+
+
+// [PATCH] Find element by ID recursively
+UiElement* UiLayout::getElementById(int targetId) {
+  // First check direct children
+  for (UiElement* child : this->children) {
+    if (child->getId() == targetId) {
+      return child;
+    }
+  }
+  
+  // Then check recursively (for nested layouts)
+  for (UiElement* child : this->children) {
+    // Try to cast to UiLayout and search its children
+    UiLayout* childLayout = dynamic_cast<UiLayout*>(child);
+    if (childLayout) {
+      UiElement* found = childLayout->getElementById(targetId);
+      if (found) return found;
+    }
+  }
+  
+  return nullptr;
 }

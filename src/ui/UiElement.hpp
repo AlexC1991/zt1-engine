@@ -24,6 +24,7 @@ public:
 
   std::string getName() {return this->name;};
   int getLayer() {return this->layer;};
+  int getId() {return this->id;};  // [PATCH] Get element ID
   int getAnchor() {return this->anchor;};
 
   bool hasId(int id) {
