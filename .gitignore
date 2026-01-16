@@ -1,4 +1,6 @@
 .vscode/
 build/
 build_log.txt
-runtime_log.txt
+runtime_log.txt__pycache__/ 
+*.pyc 
+build_report.txt 
