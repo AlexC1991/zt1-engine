@@ -6,24 +6,30 @@
 #include <SDL2/SDL.h>
 
 #include "UiElement.hpp"
-#include "../IniReader.hpp"
-#include "../Animation.hpp"
-#include "../ResourceManager.hpp"
 
-class UiButton : UiElement {
+// Forward declarations to avoid include cycles.
+class IniReader;
+class ResourceManager;
+class Animation;
+
+class UiButton : public UiElement {
 public:
-  UiButton(IniReader * ini_reader, ResourceManager * resource_manager, std::string name);
+  UiButton(
+    IniReader *ini_reader,
+    ResourceManager *resource_manager,
+    std::string name
+  );
   ~UiButton();
 
   UiAction handleInputs(std::vector<Input> &inputs);
-  void draw(SDL_Renderer * renderer, SDL_Rect * layout_rect);
+  void draw(SDL_Renderer *renderer, SDL_Rect *layout_rect);
 
 private:
   std::string text_string = "";
-  SDL_Texture * text = nullptr;
-  SDL_Texture * shadow = nullptr;
+  SDL_Texture *text = nullptr;
+  SDL_Texture *shadow = nullptr;
   int font = 0;
-  Animation * animation = nullptr;
+  Animation *animation = nullptr;
   bool selected = false;
   bool selected_updated = false;
   bool has_select_color = false;
