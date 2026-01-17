@@ -1,8 +1,9 @@
 #include "ScenarioManager.hpp"
 #include <SDL2/SDL.h>
 #include <algorithm>
-#include <sstream> // Added for parsing
+#include <sstream>
 #include <vector>
+#include <cstdio> // Required for snprintf
 
 // --- HELPER FUNCTIONS ---
 
@@ -13,13 +14,7 @@ static std::string trim(const std::string& str) {
     return str.substr(first, (last - first) + 1);
 }
 
-static bool startsWithIgnoreCase(const std::string& str, const std::string& prefix) {
-    if (str.size() < prefix.size()) return false;
-    return std::equal(prefix.begin(), prefix.end(), str.begin(), 
-        [](char a, char b) { return tolower(a) == tolower(b); });
-}
-
-// Helper to load text WITHOUT wrapping (for parsing data like goals)
+// Helper to load RAW text (preserves newlines for parsing)
 static std::string loadRawText(ResourceManager* rm, const std::string& path) {
     int size = 0;
     void* content = rm->getFileContent(path, &size);
@@ -28,7 +23,7 @@ static std::string loadRawText(ResourceManager* rm, const std::string& path) {
     std::string text((char*)content, size);
     free(content);
     
-    // Clean up CR
+    // Clean up Windows CR characters
     text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
     return text;
 }
@@ -70,10 +65,10 @@ void ScenarioManager::loadFreeformMaps() {
 }
 
 void ScenarioManager::parseScenarioConfig(IniReader* reader) {
-    // RESTORED ORIGINAL LOGIC
     for (const std::string& section : reader->getSections()) {
         if (section.empty()) continue;
         
+        // Use "scenario" key as per your original file
         std::string scenarioPath = reader->get(section, "scenario");
         if (scenarioPath.empty()) continue;
         
@@ -81,6 +76,7 @@ void ScenarioManager::parseScenarioConfig(IniReader* reader) {
         info.id = section;
         info.scenarioPath = scenarioPath;
         
+        // Get name ID and resolve it
         info.nameId = reader->getUnsignedInt(section, "name", 0);
         if (info.nameId > 0) {
             info.name = resource_manager->getString(info.nameId);
@@ -89,6 +85,7 @@ void ScenarioManager::parseScenarioConfig(IniReader* reader) {
             info.name = "Scenario: " + section;
         }
         
+        // Get locks/unlocks
         info.locks = reader->getList(section, "locks");
         info.unlocks = reader->getList(section, "unlocks");
         info.isLocked = false;
@@ -98,7 +95,6 @@ void ScenarioManager::parseScenarioConfig(IniReader* reader) {
 }
 
 void ScenarioManager::parseFreeformConfig(IniReader* reader) {
-    // RESTORED ORIGINAL LOGIC
     std::vector<std::string> mapPaths = reader->getList("freeform", "freeform");
     
     for (const std::string& path : mapPaths) {
@@ -217,56 +213,94 @@ std::string ScenarioManager::loadScenarioDescription(const std::string& scenario
     return "No description available.";
 }
 
-// UPDATED: Now actually parses goals!
+// --- Helper to fill %d and %s templates ---
+static std::string formatObjectiveText(ResourceManager* rm, const std::string& fmt, int val, int arga) {
+    char buffer[512];
+    
+    // Check what placeholders are present
+    bool hasString = fmt.find("%s") != std::string::npos;
+    int intCount = 0;
+    size_t pos = 0;
+    while ((pos = fmt.find("%d", pos)) != std::string::npos) { intCount++; pos += 2; }
+
+    if (hasString && intCount == 1) {
+        // Example: "Adopt 1 %s" -> val, string(arga)
+        std::string s = rm->getString(arga);
+        snprintf(buffer, sizeof(buffer), fmt.c_str(), val, s.c_str());
+    } 
+    else if (hasString) {
+        // Example: "%s" -> string(arga)
+        std::string s = rm->getString(arga);
+        if (s.empty()) s = rm->getString(val);
+        snprintf(buffer, sizeof(buffer), fmt.c_str(), s.c_str());
+    }
+    else if (intCount == 2) {
+        // Example: "Rating of %d for %d exhibits" -> usually (arga, val) or (val, arga)
+        // ZT1 heuristic: arga is often the quality/ID, value is quantity
+        snprintf(buffer, sizeof(buffer), fmt.c_str(), arga, val);
+    } 
+    else if (intCount == 1) {
+        // Example: "Have %d guests" -> val
+        snprintf(buffer, sizeof(buffer), fmt.c_str(), val);
+    } 
+    else {
+        // No formatting needed
+        return fmt;
+    }
+    return std::string(buffer);
+}
+
 std::vector<std::string> ScenarioManager::loadScenarioObjectives(const std::string& scenarioPath) {
     std::vector<std::string> objectives;
-    
-    size_t lastSlash = scenarioPath.find_last_of('/');
-    std::string folder = (lastSlash == std::string::npos) ? "" : scenarioPath.substr(0, lastSlash + 1);
-    
-    std::vector<std::string> tryFiles = {
-        folder + "goals.txt",
-        folder + "start.txt",
-        folder + "p01.txt"
-    };
 
-    bool foundAny = false;
-
-    for (const std::string& file : tryFiles) {
-        // Use loadRawText to avoid wrapping issues when parsing keys
-        std::string content = loadRawText(this->resource_manager, file);
-        if (content.empty()) continue;
-
-        std::stringstream ss(content);
-        std::string line;
-        bool inGoalsSection = false;
-
-        while (std::getline(ss, line)) {
-            line = trim(line);
-            if (line.empty() || line[0] == ';') continue;
-
-            if (line.find("[Goals]") != std::string::npos) {
-                inGoalsSection = true;
-                continue;
-            }
-            if (line.find("[") == 0 && line.find("[Goals]") == std::string::npos) {
-                inGoalsSection = false;
-            }
-
-            if (startsWithIgnoreCase(line, "goal=")) {
-                objectives.push_back(line.substr(5));
-                foundAny = true;
-            }
-            else if (inGoalsSection) {
-                size_t eqPos = line.find('=');
-                if (eqPos != std::string::npos) {
-                    objectives.push_back(line.substr(eqPos + 1));
-                    foundAny = true;
+    // STRATEGY 1: Parse [goals] section for 'text=' IDs (Standard Scenarios)
+    IniReader* reader = resource_manager->getIniReader(scenarioPath);
+    if (reader) {
+        std::vector<std::string> goalKeys = reader->getList("goals", "goal");
+        for (const std::string& sectionName : goalKeys) {
+            
+            // 1. Get the raw text ID
+            int textId = reader->getInt(sectionName, "text", 0);
+            
+            if (textId > 0) {
+                std::string objText = resource_manager->getString(textId);
+                
+                if (!objText.empty()) {
+                    // 2. Get the parameters for formatting
+                    int val = reader->getInt(sectionName, "value", 0);
+                    int arga = reader->getInt(sectionName, "arga", 0);
+                    
+                    // 3. Format the string (replace %d with numbers)
+                    std::string finalStr = formatObjectiveText(resource_manager, objText, val, arga);
+                    objectives.push_back(finalStr);
                 }
             }
         }
+        delete reader;
+    }
 
-        if (foundAny) break; 
+    // STRATEGY 2: Fallback to scanning comments (Tutorial 1 Style)
+    if (objectives.empty()) {
+        std::string scnContent = loadRawText(this->resource_manager, scenarioPath);
+        if (!scnContent.empty()) {
+            std::stringstream ss(scnContent);
+            std::string line;
+            
+            while (std::getline(ss, line)) {
+                std::string clean = trim(line);
+                if (!clean.empty() && clean[0] == ';') {
+                    std::string text = trim(clean.substr(1));
+                    if (text.empty() || text.find("$Id") != std::string::npos || text.length() < 5) continue; 
+                    
+                    if (isupper(text[0]) || text[0] == '"') {
+                         if (text.front() == '"' && text.back() == '"') {
+                            text = text.substr(1, text.length() - 2);
+                        }
+                        objectives.push_back(text);
+                    }
+                }
+            }
+        }
     }
 
     return objectives;
