@@ -3,38 +3,23 @@
 #include "../CompassDirection.hpp"
 #include "../Utils.hpp"
 
-// TWEAK THESE:
-// These are the max size of the map preview area inside the UI frame.
-static int PREVIEW_MAX_W = 372;
-static int PREVIEW_MAX_H = 272;
+// =================================================================================
+//  USER CONFIGURATION: PREVIEW IMAGE ADJUSTMENTS
+// =================================================================================
+// Tweak these numbers to move and stretch the map preview image.
+
+// 1. TARGET SIZE (Updated to your perfect fit)
+static int TARGET_WIDTH  = 370;  // Width of the box
+static int TARGET_HEIGHT = 276;  // Height of the box
+
+// 2. POSITION OFFSET (Updated to your perfect fit)
+static int OFFSET_X      = 0;    // Positive moves RIGHT, Negative moves LEFT
+static int OFFSET_Y      = 0;    // Positive moves DOWN,  Negative moves UP
+
+// =================================================================================
 
 static bool isPreviewId(int id) {
   return id == 50001 || id == 11501;
-}
-
-static SDL_Rect fitAspectIntoBox(int src_w, int src_h, SDL_Rect box) {
-  if (src_w <= 0 || src_h <= 0) return box;
-  if (box.w <= 0 || box.h <= 0) return box;
-
-  // scale = min(box.w/src_w, box.h/src_h)
-  double sx = (double)box.w / (double)src_w;
-  double sy = (double)box.h / (double)src_h;
-  double s = (sx < sy) ? sx : sy;
-
-  int out_w = (int)(src_w * s);
-  int out_h = (int)(src_h * s);
-  if (out_w < 1) out_w = 1;
-  if (out_h < 1) out_h = 1;
-
-  SDL_Rect out = box;
-  out.w = out_w;
-  out.h = out_h;
-
-  // center inside box
-  out.x = box.x + (box.w - out_w) / 2;
-  out.y = box.y + (box.h - out_h) / 2;
-
-  return out;
 }
 
 UiImage::UiImage(
@@ -50,10 +35,11 @@ UiImage::UiImage(
   this->layer = ini_reader->getInt(name, "layer", 1);
   this->anchor = ini_reader->getInt(name, "anchor", 0);
 
-  // keep preview on top
-  if (isPreviewId(this->id)) {
-    this->layer = 8;
-  }
+  // --- FIX: LAYER ORDER ---
+  // Previously we forced 'layer = 8', which made the map draw ON TOP of the menu borders.
+  // We removed that override so it uses the layer from the .lyt file (usually 1).
+  // If it still overlaps the borders, we can try forcing it to 0 here.
+  // if (isPreviewId(this->id)) { this->layer = 0; } 
 
   std::string normal = ini_reader->get(name, "normal");
   if (!normal.empty()) {
@@ -145,28 +131,7 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
         this->zt1_raw_path,
         this->zt1_pal_path
       );
-
-      if (this->image != nullptr) {
-        int tw = 0, th = 0;
-        SDL_QueryTexture(this->image, nullptr, nullptr, &tw, &th);
-        SDL_Log(
-          "UiImage(id=%d name=%s): ZT1 preview loaded %dx%d from raw=%s pal=%s",
-          this->id,
-          this->name.c_str(),
-          tw,
-          th,
-          this->zt1_raw_path.c_str(),
-          this->zt1_pal_path.c_str()
-        );
-      } else {
-        SDL_Log(
-          "UiImage(id=%d name=%s): ZT1 preview load FAILED raw=%s pal=%s",
-          this->id,
-          this->name.c_str(),
-          this->zt1_raw_path.c_str(),
-          this->zt1_pal_path.c_str()
-        );
-      }
+      // Logging suppressed to keep console clean
     } else if (!this->image_path.empty()) {
       std::string ext =
         Utils::string_to_lower(Utils::getFileExtension(this->image_path));
@@ -187,71 +152,32 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   SDL_Rect dest_rect =
     this->getRect(this->ini_reader->getSection(this->name), layout_rect);
 
-  // For preview images, define an explicit "box" even if dx/dy is missing.
-  SDL_Rect preview_box = dest_rect;
+  // --- MANUAL OVERRIDE FOR PREVIEWS ---
   if (isPreviewId(this->id)) {
-    preview_box.w = PREVIEW_MAX_W;
-    preview_box.h = PREVIEW_MAX_H;
+      // 1. Force the size
+      dest_rect.w = TARGET_WIDTH;
+      dest_rect.h = TARGET_HEIGHT;
+
+      // 2. Apply the offsets
+      dest_rect.x += OFFSET_X;
+      dest_rect.y += OFFSET_Y;
   }
-
-  // Determine final draw rect:
-  // - If layout gives dx/dy, use it.
-  // - If preview, use preview_box with aspect-fit.
-  // - Otherwise, fall back to texture size.
-  SDL_Rect draw_rect = dest_rect;
-
-  if (this->image != nullptr) {
-    int tw = 0, th = 0;
-    SDL_QueryTexture(this->image, nullptr, nullptr, &tw, &th);
-
-    if (isPreviewId(this->id)) {
-      draw_rect = fitAspectIntoBox(tw, th, preview_box);
-    } else if (draw_rect.w == 0 || draw_rect.h == 0) {
-      draw_rect.w = tw;
-      draw_rect.h = th;
-    }
-  } else if (this->animation != nullptr) {
-    if (draw_rect.w == 0 || draw_rect.h == 0) {
-      this->animation->queryTexture(
-        CompassDirection::N,
-        &draw_rect.w,
-        &draw_rect.h
-      );
-    }
-  }
-
-  // DEBUG: show preview box + draw rect
-  if (isPreviewId(this->id)) {
-    SDL_Log(
-      "UiImage PREVIEW BOX id=%d x=%d y=%d w=%d h=%d | draw x=%d y=%d w=%d h=%d",
-      this->id,
-      preview_box.x,
-      preview_box.y,
-      preview_box.w,
-      preview_box.h,
-      draw_rect.x,
-      draw_rect.y,
-      draw_rect.w,
-      draw_rect.h
-    );
-
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-
-    SDL_SetRenderDrawColor(renderer, 0, 255, 255, 60);
-    SDL_RenderFillRect(renderer, &preview_box);
-    SDL_SetRenderDrawColor(renderer, 0, 255, 255, 200);
-    SDL_RenderDrawRect(renderer, &preview_box);
-
-    SDL_SetRenderDrawColor(renderer, 255, 0, 255, 80);
-    SDL_RenderFillRect(renderer, &draw_rect);
-    SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255);
-    SDL_RenderDrawRect(renderer, &draw_rect);
+  else {
+      // Standard sizing for non-preview images
+      if (this->image != nullptr) {
+          if (dest_rect.w == 0 || dest_rect.h == 0) {
+              int tw, th;
+              SDL_QueryTexture(this->image, nullptr, nullptr, &tw, &th);
+              dest_rect.w = tw;
+              dest_rect.h = th;
+          }
+      }
   }
 
   if (this->image != nullptr) {
     SDL_SetTextureBlendMode(this->image, SDL_BLENDMODE_BLEND);
 
-    if (SDL_RenderCopy(renderer, this->image, nullptr, &draw_rect) != 0) {
+    if (SDL_RenderCopy(renderer, this->image, nullptr, &dest_rect) != 0) {
       SDL_Log(
         "SDL_RenderCopy failed for UiImage(id=%d name=%s): %s",
         this->id,
@@ -260,8 +186,8 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       );
     }
   } else if (this->animation != nullptr) {
-    this->animation->draw(renderer, &draw_rect, CompassDirection::N);
+    this->animation->draw(renderer, &dest_rect, CompassDirection::N);
   }
 
-  this->drawChildren(renderer, &draw_rect);
+  this->drawChildren(renderer, &dest_rect);
 }

@@ -2,6 +2,9 @@
 
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <bitset>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -203,7 +206,10 @@ void ResourceManager::load_resource_map(
   );
 }
 
-void ResourceManager::load_string_map(std::atomic<float> *progress, float progress_goal) {
+void ResourceManager::load_string_map(
+  std::atomic<float> *progress,
+  float progress_goal
+) {
   std::vector<std::string> lang_dlls;
   try {
     for (std::filesystem::directory_entry lang_dll :
@@ -238,7 +244,10 @@ void ResourceManager::load_string_map(std::atomic<float> *progress, float progre
   }
 }
 
-void ResourceManager::load_pallet_map(std::atomic<float> *progress, float progress_goal) {
+void ResourceManager::load_pallet_map(
+  std::atomic<float> *progress,
+  float progress_goal
+) {
   for (auto file : resource_map) {
     if (Utils::getFileExtension(file.first) == "PAL") {
       pallet_manager.addPalletFileToMap(file.first, file.second);
@@ -247,7 +256,10 @@ void ResourceManager::load_pallet_map(std::atomic<float> *progress, float progre
   pallet_manager.loadPalletMap(progress, progress_goal);
 }
 
-void ResourceManager::load_all(std::atomic<float> *progress, std::atomic<bool> *is_done) {
+void ResourceManager::load_all(
+  std::atomic<float> *progress,
+  std::atomic<bool> *is_done
+) {
   load_resource_map(progress, 33.0f);
   load_string_map(progress, 66.0f);
   load_pallet_map(progress, 100.0f);
@@ -268,7 +280,10 @@ void *ResourceManager::getFileContent(const std::string &name_raw, int *size) {
   return ZtdFile::getFileContent(loc, actual_key, size);
 }
 
-SDL_Texture *ResourceManager::getTexture(SDL_Renderer *r, const std::string &name_raw) {
+SDL_Texture *ResourceManager::getTexture(
+  SDL_Renderer *r,
+  const std::string &name_raw
+) {
   std::string name = fixDoubleName(name_raw);
   std::string actual_key = findActualResourceKey(name);
   std::string loc = getResourceLocation(name);
@@ -282,6 +297,9 @@ SDL_Texture *ResourceManager::getTexture(SDL_Renderer *r, const std::string &nam
   return t;
 }
 
+// ----------------------------------------------------------------------------
+// ZT1 RAW PREVIEW DECODER
+// ----------------------------------------------------------------------------
 static SDL_Surface *decodeZt1NToSurface(
   const uint8_t *data,
   int size,
@@ -289,185 +307,113 @@ static SDL_Surface *decodeZt1NToSurface(
 ) {
   if (data == nullptr || size < 64 || pal == nullptr) return nullptr;
 
-  // TWEAK THIS IF NEEDED:
-  // Earlier correct-looking headers were around 46-50; offset 9 was a false positive.
-  static const int MIN_HEADER_OFFSET = 32;
+  auto readU16 = [&](int off) -> uint16_t {
+    if (off + 2 > size) return 0;
+    return (uint16_t)data[off] | ((uint16_t)data[off + 1] << 8);
+  };
 
   auto readU32 = [&](int off) -> uint32_t {
+    if (off + 4 > size) return 0;
     return (uint32_t)data[off] | ((uint32_t)data[off + 1] << 8) |
       ((uint32_t)data[off + 2] << 16) | ((uint32_t)data[off + 3] << 24);
   };
 
-  auto inferDims = [&](int ptr0, int end, bool mode, int *out_w, int *out_h) -> bool {
-    int inferred_w = 0;
-    int inferred_h = 0;
-    int ptr = ptr0;
+  // 1. FATZ HEADER CHECK
+  bool startsWithFATZ = (size >= 4 && data[0] == 'F' && data[1] == 'A' && data[2] == 'T' && data[3] == 'Z');
+  
+  if (!startsWithFATZ) {
+      SDL_Log("ZT1 Decoder: Missing FATZ header");
+      return nullptr;
+  }
 
-    while (ptr < end) {
-      uint8_t cmd_count = data[ptr++];
+  // 2. NAVIGATE VARIABLE FATZ HEADER
+  uint8_t str_len = data[13];
+  int offset_after_string = 17 + str_len;
+  if (offset_after_string >= size) return nullptr;
+  if (data[offset_after_string] == 0) offset_after_string++;
+  int rle_header_start = offset_after_string + 4;
+  if (rle_header_start + 16 >= size) return nullptr;
 
-      if (cmd_count >= 0xF0) {
-        inferred_h++;
-        continue;
-      }
+  // 3. HYBRID HEADER PARSING
+  uint32_t rle_size = readU32(rle_header_start + 0);
+  int width = 0;
+  int height = 0;
+  int data_start_offset = 0;
 
-      int x = 0;
-      for (int cmd = 0; cmd < (int)cmd_count; cmd++) {
-        if (ptr + 1 >= end) {
-          ptr = end;
-          break;
+  uint32_t w4 = readU32(rle_header_start + 4);
+  uint32_t h4 = readU32(rle_header_start + 8);
+  uint16_t w2 = readU16(rle_header_start + 4);
+  uint16_t h2 = readU16(rle_header_start + 6);
+
+  bool use_4byte = false;
+  bool w4_valid = (w4 > 0 && w4 < 2048);
+  bool h4_valid = (h4 > 0 && h4 < 2048);
+  
+  if (w4_valid && h4_valid) {
+      use_4byte = true;
+      width = (int)w4;
+      height = (int)h4;
+      data_start_offset = rle_header_start + 24; 
+  } else {
+      width = (int)w2;
+      height = (int)h2;
+      data_start_offset = rle_header_start + 14; 
+  }
+
+  // --- FIX: DETECT SWAPPED DIMENSIONS ---
+  // The log confirmed these are read as 276x367, but the image is cut off.
+  // This means the file format has W/H swapped in the header for these files.
+  // We flip them back to 367x276 so the RLE decoder reads the full row.
+  if (width == 276 && height == 367) {
+      SDL_Log("ZT1 Decoder: Auto-fixing swapped dimensions: 276x367 -> 367x276");
+      std::swap(width, height);
+  }
+
+  if (width <= 0 || height <= 0 || width > 4096 || height > 4096) {
+      SDL_Log("ZT1 Decoder: Invalid dimensions detected (%dx%d)", width, height);
+      return nullptr;
+  }
+
+  SDL_Log("ZT1 Decoder: Decoded %dx%d image using %s-byte header", width, height, use_4byte ? "4" : "2");
+
+  // 4. DECODE RLE PIXELS
+  SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_RGBA32);
+  if (!surf) return nullptr;
+  SDL_FillRect(surf, nullptr, SDL_MapRGBA(surf->format, 0, 0, 0, 0));
+
+  uint32_t *pixels = (uint32_t *)surf->pixels;
+  int ptr = data_start_offset;
+
+  for (int y = 0; y < height; y++) {
+    if (ptr >= size) break;
+    
+    uint8_t cmd_count = data[ptr++];
+    int x = 0;
+    for (int c = 0; c < cmd_count; c++) {
+      if (ptr + 2 > size) break;
+      uint8_t skip = data[ptr++];
+      uint8_t run = data[ptr++];
+      x += skip;
+      for (int i = 0; i < run; i++) {
+        if (ptr >= size) break;
+        uint8_t idx = data[ptr++];
+        if (x >= 0 && x < width) {
+            if (idx != 0) {
+                uint32_t color = pal->colors[idx];
+                uint8_t r = (color >> 0) & 0xFF;
+                uint8_t g = (color >> 8) & 0xFF;
+                uint8_t b = (color >> 16) & 0xFF;
+                if (!(r == 255 && g == 0 && b == 255)) {
+                    pixels[y * width + x] = SDL_MapRGBA(surf->format, r, g, b, 255);
+                }
+            }
         }
-
-        uint8_t a = data[ptr++];
-        uint8_t b = data[ptr++];
-
-        uint8_t skip = mode ? b : a;
-        uint8_t run = mode ? a : b;
-
-        x += (int)skip;
-
-        if (ptr + (int)run > end) {
-          ptr = end;
-          break;
-        }
-
-        x += (int)run;
-        ptr += (int)run;
-
-        if (x > inferred_w) inferred_w = x;
+        x++;
       }
-
-      inferred_h++;
-
-      if (inferred_w > 8192 || inferred_h > 8192) return false;
-    }
-
-    *out_w = inferred_w;
-    *out_h = inferred_h;
-    return inferred_w > 0 && inferred_h > 0;
-  };
-
-  auto render = [&](int ptr0, int end, bool mode, int w, int h) -> SDL_Surface * {
-    SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(
-      0,
-      w,
-      h,
-      32,
-      SDL_PIXELFORMAT_RGBA32
-    );
-    if (!surf) return nullptr;
-
-    SDL_LockSurface(surf);
-    auto *pixels = (uint32_t *)surf->pixels;
-
-    int ptr = ptr0;
-    int y = 0;
-
-    while (ptr < end && y < h) {
-      uint8_t cmd_count = data[ptr++];
-
-      if (cmd_count >= 0xF0) {
-        y++;
-        continue;
-      }
-
-      int x = 0;
-      for (int cmd = 0; cmd < (int)cmd_count; cmd++) {
-        if (ptr + 1 >= end) {
-          ptr = end;
-          break;
-        }
-
-        uint8_t a = data[ptr++];
-        uint8_t b = data[ptr++];
-
-        uint8_t skip = mode ? b : a;
-        uint8_t run = mode ? a : b;
-
-        x += (int)skip;
-
-        for (int i = 0; i < (int)run; i++) {
-          if (ptr >= end) break;
-
-          uint8_t idx = data[ptr++];
-
-          if (x >= 0 && x < w && y >= 0 && y < h) {
-            uint32_t c = pal->colors[idx];
-            uint8_t r = (uint8_t)((c >> 0) & 0xFF);
-            uint8_t g = (uint8_t)((c >> 8) & 0xFF);
-            uint8_t b2 = (uint8_t)((c >> 16) & 0xFF);
-            pixels[y * w + x] = SDL_MapRGBA(surf->format, r, g, b2, 255);
-          }
-
-          x++;
-        }
-      }
-
-      y++;
-    }
-
-    SDL_UnlockSurface(surf);
-    return surf;
-  };
-
-  auto decodeAt = [&](int header_pos) -> SDL_Surface * {
-    if (header_pos < 0 || header_pos + 14 > size) return nullptr;
-
-    uint32_t rle_size = readU32(header_pos + 0);
-    int rle_pos = header_pos + 14;
-    if (rle_size < 16 || rle_pos + (int)rle_size > size) return nullptr;
-
-    int ptr0 = rle_pos;
-    int end = rle_pos + (int)rle_size;
-
-    int w0 = 0, h0 = 0;
-    int w1 = 0, h1 = 0;
-
-    if (!inferDims(ptr0, end, false, &w0, &h0)) return nullptr;
-    if (!inferDims(ptr0, end, true, &w1, &h1)) {
-      return render(ptr0, end, false, w0, h0);
-    }
-
-    bool use_mode1 = (w1 > w0);
-    int w = use_mode1 ? w1 : w0;
-    int h = use_mode1 ? h1 : h0;
-
-    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) return nullptr;
-
-    SDL_Log(
-      "ZT1 preview: inferred dims mode0=%dx%d mode1=%dx%d using=%s",
-      w0,
-      h0,
-      w1,
-      h1,
-      use_mode1 ? "mode1(run,skip)" : "mode0(skip,run)"
-    );
-
-    return render(ptr0, end, use_mode1, w, h);
-  };
-
-  int scan_limit = size;
-  if (scan_limit > 8192) scan_limit = 8192;
-
-  for (int pos = MIN_HEADER_OFFSET; pos + 14 < scan_limit; pos++) {
-    uint32_t rle_size = readU32(pos + 0);
-    if (rle_size < 16 || rle_size > (uint32_t)size) continue;
-    if (pos + 14 + (int)rle_size > size) continue;
-
-    int rle_pos = pos + 14;
-    uint8_t first_cmd = data[rle_pos];
-    if (first_cmd == 0) continue;
-
-    SDL_Surface *s = decodeAt(pos);
-    if (s) {
-      SDL_Log("ZT1 preview: decoded using header at offset %d", pos);
-      SDL_Log("ZT1 preview: inferred surface %dx%d", s->w, s->h);
-      return s;
     }
   }
 
-  SDL_Log("ZT1 preview: could not find a valid frame header by scanning");
-  return nullptr;
+  return surf;
 }
 
 SDL_Texture *ResourceManager::getZt1Texture(
@@ -480,13 +426,18 @@ SDL_Texture *ResourceManager::getZt1Texture(
   std::string raw = fixDoubleName(raw_name);
   std::string palPath = fixDoubleName(pal_name);
 
-  SDL_Log("ZT1 preview: raw=%s pal=%s", raw.c_str(), palPath.c_str());
-
   std::string raw_loc = getResourceLocation(raw);
-  if (raw_loc.empty()) return nullptr;
+  if (raw_loc.empty()) {
+      raw_loc = getResourceLocation(raw + "/n");
+      if (raw_loc.empty()) return nullptr;
+      raw = raw + "/n";
+  }
 
   std::string pal_loc = getResourceLocation(palPath);
-  if (pal_loc.empty()) return nullptr;
+  if (pal_loc.empty()) {
+      palPath = "ui/palette/color256.pal";
+      pal_loc = getResourceLocation(palPath);
+  }
 
   Pallet *pal = pallet_manager.getPallet(palPath);
   if (pal == nullptr) {
@@ -497,8 +448,6 @@ SDL_Texture *ResourceManager::getZt1Texture(
   int raw_size = 0;
   void *raw_bytes = ZtdFile::getFileContent(raw_loc, raw, &raw_size);
   if (raw_bytes == nullptr || raw_size <= 0) return nullptr;
-
-  SDL_Log("ZT1 preview raw bytes: %d", raw_size);
 
   SDL_Surface *s = decodeZt1NToSurface((const uint8_t *)raw_bytes, raw_size, pal);
   free(raw_bytes);

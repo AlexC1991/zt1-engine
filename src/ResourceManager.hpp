@@ -55,6 +55,11 @@ private:
   std::unordered_map<uint32_t, std::string> string_map;
   std::unordered_map<std::string, Animation *> animation_map;
   std::unordered_map<std::string, Pallet *> pallet_map;
+
+  // Cache ZT1 preview textures to avoid repeated decode/scans when switching
+  // selections/menus. Ownership stays with ResourceManager.
+  std::unordered_map<std::string, SDL_Texture *> zt1_preview_texture_cache;
+
   bool resource_map_loaded = false;
 
   std::string getResourceLocation(const std::string &resoure_name);

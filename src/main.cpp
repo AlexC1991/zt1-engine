@@ -61,13 +61,8 @@ static void setScenarioPreview(
 ) {
   if (img == nullptr || rm == nullptr) return;
 
-  // Example:
-  // scenario/scn03/scn03.scn
-  // preview files exist at:
-  // scenario/scn03/scn03/N
-  // scenario/scn03/scn03/scn03.pal
-  std::string folder = getFolderFromPath(scnPath); // scenario/scn03
-  std::string stem = getFileStem(scnPath);         // scn03
+  std::string folder = getFolderFromPath(scnPath); 
+  std::string stem = getFileStem(scnPath);         
 
   std::string raw = folder + "/" + stem + "/N";
   std::string pal = folder + "/" + stem + "/" + stem + ".pal";
@@ -75,7 +70,7 @@ static void setScenarioPreview(
   if (rm->hasResource(raw) && rm->hasResource(pal)) {
     img->setZt1Image(raw, pal);
   } else {
-    SDL_Log("Scenario preview missing raw/pal: %s | %s", raw.c_str(), pal.c_str());
+    // SDL_Log("Scenario preview missing raw/pal: %s | %s", raw.c_str(), pal.c_str());
   }
 }
 
@@ -86,13 +81,8 @@ static void setFreeformPreview(
 ) {
   if (img == nullptr || rm == nullptr) return;
 
-  // Example:
-  // freeform/lagoon.scn
-  // preview files exist at:
-  // freeform/lagoon/N
-  // freeform/lagoon/lagoon.pal
-  std::string baseFolder = getFolderFromPath(freeformScnPath); // freeform
-  std::string stem = getFileStem(freeformScnPath);             // lagoon
+  std::string baseFolder = getFolderFromPath(freeformScnPath); 
+  std::string stem = getFileStem(freeformScnPath);             
 
   std::string raw = baseFolder + "/" + stem + "/N";
   std::string pal = baseFolder + "/" + stem + "/" + stem + ".pal";
@@ -100,7 +90,7 @@ static void setFreeformPreview(
   if (rm->hasResource(raw) && rm->hasResource(pal)) {
     img->setZt1Image(raw, pal);
   } else {
-    SDL_Log("Freeform preview missing raw/pal: %s | %s", raw.c_str(), pal.c_str());
+    // SDL_Log("Freeform preview missing raw/pal: %s | %s", raw.c_str(), pal.c_str());
   }
 }
 
@@ -136,11 +126,19 @@ static void updateScenarioDetails(
   }
   if (g_scenarioMap) {
     setScenarioPreview(g_scenarioMap, resourceManager, scenario->scenarioPath);
-  } else {
-    SDL_Log(
-      "Scenario preview UiImage (id=%d) not found in layout.",
-      SCENARIO_PREVIEW_IMAGE_ID
-    );
+  }
+
+  // --- NEW: UPDATE OBJECTIVES ---
+  UiElement* objEl = layout->getElementById(50006); // ID 50006 from scenario.lyt
+  if (objEl) {
+      UiListBox* objList = dynamic_cast<UiListBox*>(objEl);
+      if (objList) {
+          objList->clear();
+          std::vector<std::string> goals = scenarioManager->loadScenarioObjectives(scenario->scenarioPath);
+          for (const auto& goal : goals) {
+              objList->addItem(goal);
+          }
+      }
   }
 }
 
@@ -175,11 +173,6 @@ static void updateFreeformDetails(
   }
   if (g_freeformMap) {
     setFreeformPreview(g_freeformMap, resourceManager, map->path);
-  } else {
-    SDL_Log(
-      "Freeform preview UiImage (id=%d) not found in layout.",
-      FREEFORM_PREVIEW_IMAGE_ID
-    );
   }
 }
 
