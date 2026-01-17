@@ -55,7 +55,7 @@ endif()
 # 8. CREATE EXECUTABLE
 add_executable(zt1-engine ${SOURCES}
         src/UserProfile.cpp
-        src/UserProfile.h)
+        src/UserProfile.hpp)
 
 # 9. FIX INCLUDE PATHS
 target_include_directories(zt1-engine PRIVATE

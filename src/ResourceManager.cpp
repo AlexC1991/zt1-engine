@@ -1,6 +1,7 @@
 #include "ResourceManager.hpp"
 
 #include <SDL2/SDL.h>
+#include "SDL_image.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -69,10 +70,10 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
       ".ani", ".tga", ".bmp", ".png", ".pal", ".wav",
   };
 
-  // [PATCH] Allow loose files to override ZTD content
+  // [PATCH] Allow loose files to override ZTD content (files only, not directories)
   for (const auto &ext : extensions) {
     std::string try_path = base_name + ext;
-    if (std::filesystem::exists(try_path)) {
+    if (std::filesystem::exists(try_path) && std::filesystem::is_regular_file(try_path)) {
       SDL_Log("ResourceManager: Loading loose file override: %s",
               try_path.c_str());
       return try_path;
@@ -286,7 +287,21 @@ SDL_Texture *ResourceManager::getTexture(SDL_Renderer *r,
   if (loc.empty())
     return nullptr;
 
-  SDL_Surface *s = ZtdFile::getImageSurface(loc, actual_key);
+  SDL_Surface *s = nullptr;
+
+  // [PATCH] Handle loose files (non-ZTD) - load directly with SDL_image
+  if (loc.find(".ztd") == std::string::npos &&
+      loc.find(".ZTD") == std::string::npos) {
+    s = IMG_Load(loc.c_str());
+    if (!s) {
+      SDL_Log("ResourceManager: Failed to load loose image %s: %s", 
+              loc.c_str(), IMG_GetError());
+      return nullptr;
+    }
+  } else {
+    s = ZtdFile::getImageSurface(loc, actual_key);
+  }
+  
   if (!s)
     return nullptr;
 
