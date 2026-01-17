@@ -7,7 +7,6 @@
 
 #include "Utils.hpp"
 
-
 PeFile::PeFile(const std::string &pe_file) {
   std::string fixed_path = Utils::fixPath(pe_file);
   this->loader = PeResourceLoader_Open(fixed_path.c_str());
@@ -19,14 +18,14 @@ PeFile::~PeFile() {
   }
 }
 
-SDL_Surface *PeFile::getLoadScreenSurface(uint32_t loading_screen_id)
-{
-  SDL_Surface * surface = NULL;
+SDL_Surface *PeFile::getLoadScreenSurface(uint32_t loading_screen_id) {
+  SDL_Surface *surface = NULL;
   uint32_t size = 0;
 
-  void * data = PeResourceLoader_GetResource(this->loader, PRL_TYPE_BITMAP, LANGUAGE_ID, loading_screen_id, &size);
+  void *data = PeResourceLoader_GetResource(
+      this->loader, PRL_TYPE_BITMAP, LANGUAGE_ID, loading_screen_id, &size);
   if (data) {
-    SDL_RWops * rw = SDL_RWFromMem(data, size);
+    SDL_RWops *rw = SDL_RWFromMem(data, size);
     surface = IMG_LoadTyped_RW(rw, 1, "BMP");
     free(data);
   } else {
@@ -36,12 +35,13 @@ SDL_Surface *PeFile::getLoadScreenSurface(uint32_t loading_screen_id)
 }
 
 SDL_Surface *PeFile::getCursor(uint32_t cursor_id) {
-  SDL_Surface * surface = NULL;
+  SDL_Surface *surface = NULL;
   uint32_t size = 0;
 
-  void * data = PeResourceLoader_GetResource(this->loader, PRL_TYPE_CURSOR, 0, cursor_id, &size);
+  void *data = PeResourceLoader_GetResource(this->loader, PRL_TYPE_CURSOR, 0,
+                                            cursor_id, &size);
   if (data) {
-    SDL_RWops * rw = SDL_RWFromMem(data, size);
+    SDL_RWops *rw = SDL_RWFromMem(data, size);
     surface = IMG_LoadTyped_RW(rw, 1, "CUR");
     free(data);
   } else {
@@ -55,8 +55,9 @@ std::vector<uint32_t> PeFile::getStringIds() {
 
   if (this->loader) {
     uint32_t string_count;
-    uint32_t * string_ids_c = PeResourceLoader_GetResourceIds(this->loader, PRL_TYPE_STRING, &string_count);
-    string_ids.reserve((size_t) string_count);
+    uint32_t *string_ids_c = PeResourceLoader_GetResourceIds(
+        this->loader, PRL_TYPE_STRING, &string_count);
+    string_ids.reserve((size_t)string_count);
     for (uint32_t i = 0; i < string_count; i++) {
       string_ids.push_back(string_ids_c[i]);
     }
@@ -70,12 +71,12 @@ std::string PeFile::getString(uint32_t string_id) {
   if (!this->loader) {
     return "";
   }
-  uint32_t string_length;
-  char * c_string = (char *) PeResourceLoader_GetResource(this->loader, PRL_TYPE_STRING, LANGUAGE_ID, string_id, NULL);
+  char *c_string = (char *)PeResourceLoader_GetResource(
+      this->loader, PRL_TYPE_STRING, LANGUAGE_ID, string_id, NULL);
   if (!c_string) {
     return "";
   }
-  std::string result = std::string((char *) c_string);
+  std::string result = std::string((char *)c_string);
   free(c_string);
 
   return result;

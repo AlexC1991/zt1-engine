@@ -29,23 +29,18 @@ public:
   SDL_Texture *getTexture(SDL_Renderer *renderer, const std::string &file_name);
 
   // NEW: ZT1 raw preview decode (N + .pal)
-  SDL_Texture *getZt1Texture(
-    SDL_Renderer *renderer,
-    const std::string &raw_name,
-    const std::string &pal_name
-  );
+  SDL_Texture *getZt1Texture(SDL_Renderer *renderer,
+                             const std::string &raw_name,
+                             const std::string &pal_name);
 
   SDL_Cursor *getCursor(uint32_t cursor_id);
   Mix_Music *getMusic(const std::string &file_name);
   IniReader *getIniReader(const std::string &file_name);
   Animation *getAnimation(const std::string &file_name);
+  Pallet *getPallet(const std::string &file_name);
   SDL_Texture *getLoadTexture(SDL_Renderer *renderer);
-  SDL_Texture *getStringTexture(
-    SDL_Renderer *renderer,
-    const int font,
-    const std::string &string,
-    SDL_Color color
-  );
+  SDL_Texture *getStringTexture(SDL_Renderer *renderer, const int font,
+                                const std::string &string, SDL_Color color);
   std::string getString(uint32_t string_id);
 
   bool hasResource(const std::string &resource_name_raw);

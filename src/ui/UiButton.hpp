@@ -14,11 +14,8 @@ class Animation;
 
 class UiButton : public UiElement {
 public:
-  UiButton(
-    IniReader *ini_reader,
-    ResourceManager *resource_manager,
-    std::string name
-  );
+  UiButton(IniReader *ini_reader, ResourceManager *resource_manager,
+           std::string name);
   ~UiButton();
 
   UiAction handleInputs(std::vector<Input> &inputs);
@@ -33,6 +30,7 @@ private:
   bool selected = false;
   bool selected_updated = false;
   bool has_select_color = false;
+  bool transparent = false;
   SDL_Rect dest_rect = {0, 0, 0, 0};
   SDL_Rect shadow_rect = {0, 0, 0, 0};
 

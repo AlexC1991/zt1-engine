@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CLionExternalBuildManager">
+    <target id="ae520b8a-96dc-4fde-ad50-9482bd6dc156" name="Run Build Engine" defaultType="TOOL">
+      <configuration id="2f6648ed-30cc-43c5-86d1-6c9e2f61c363" name="Run Build Engine">
+        <build type="TOOL">
+          <tool actionId="Tool_External Tools_Run Build Engine" />
+        </build>
+      </configuration>
+    </target>
+  </component>
+</project>

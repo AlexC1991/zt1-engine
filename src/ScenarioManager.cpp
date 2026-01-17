@@ -3,18 +3,42 @@
 #include <algorithm>
 #include <sstream>
 #include <vector>
-#include <cstdio> // Required for snprintf
+#include <set>
 
-// --- HELPER FUNCTIONS ---
+// --- ENCODING FIX: Convert Windows-1252 to UTF-8 ---
+static std::string cp1252_to_utf8(const std::string& str) {
+    std::string out;
+    for (unsigned char c : str) {
+        if (c < 128) {
+            out += c;
+        } else {
+            switch(c) {
+                case 0x91: out += "\xE2\x80\x98"; break; // Left Single Quote
+                case 0x92: out += "\xE2\x80\x99"; break; // Right Single Quote
+                case 0x93: out += "\xE2\x80\x9C"; break; // Left Double Quote
+                case 0x94: out += "\xE2\x80\x9D"; break; // Right Double Quote
+                case 0x96: out += "\xE2\x80\x93"; break; // En Dash
+                case 0x97: out += "\xE2\x80\x94"; break; // Em Dash
+                case 0xA0: out += " "; break;            // NBSP -> Space
+                default:
+                    out += (char)(0xC0 | (c >> 6));
+                    out += (char)(0x80 | (c & 0x3F));
+                    break;
+            }
+        }
+    }
+    return out;
+}
 
 static std::string trim(const std::string& str) {
+    if (str.empty()) return "";
     size_t first = str.find_first_not_of(" \t\r\n");
     if (std::string::npos == first) return "";
     size_t last = str.find_last_not_of(" \t\r\n");
     return str.substr(first, (last - first) + 1);
 }
 
-// Helper to load RAW text (preserves newlines for parsing)
+// FIX: Sanitize that PRESERVES blank lines (Double Newlines)
 static std::string loadRawText(ResourceManager* rm, const std::string& path) {
     int size = 0;
     void* content = rm->getFileContent(path, &size);
@@ -23,9 +47,51 @@ static std::string loadRawText(ResourceManager* rm, const std::string& path) {
     std::string text((char*)content, size);
     free(content);
     
-    // Clean up Windows CR characters
-    text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
-    return text;
+    // 1. Normalize Line Endings (\r\n -> \n)
+    std::string clean;
+    for(char c : text) {
+        if(c == '\r') continue; // Skip CR, keep LF
+        clean += c;
+    }
+    
+    // 2. Fix Encoding (Boxes)
+    return cp1252_to_utf8(clean);
+}
+
+// --- STRING FORMATTER ---
+static std::string formatGoalString(const std::string& raw, IniReader* ini, const std::string& section, ResourceManager* rm) {
+    std::string result = raw;
+    
+    int val = ini->getInt(section, "value", 0);
+    int arga = ini->getInt(section, "arga", 0);
+    if (arga == 0) arga = ini->getInt(section, "targa", 0); 
+    
+    // Replace %d (Numbers)
+    size_t pos = result.find("%d");
+    if (pos != std::string::npos) result.replace(pos, 2, std::to_string(val));
+    
+    pos = result.find("%d");
+    if (pos != std::string::npos) result.replace(pos, 2, std::to_string(arga));
+
+    // Replace %s OR %r (Strings/Resources)
+    size_t posS = result.find("%s");
+    size_t posR = result.find("%r"); 
+    size_t targetPos = std::string::npos;
+    
+    if (posS != std::string::npos) targetPos = posS;
+    if (posR != std::string::npos) {
+        if (targetPos == std::string::npos || posR < targetPos) targetPos = posR;
+    }
+
+    if (targetPos != std::string::npos) {
+        if (arga > 0) {
+            std::string name = rm->getString(arga);
+            name = cp1252_to_utf8(name); 
+            if (name.empty()) name = std::to_string(arga); 
+            result.replace(targetPos, 2, name);
+        }
+    }
+    return result;
 }
 
 // --- CLASS IMPLEMENTATION ---
@@ -68,7 +134,6 @@ void ScenarioManager::parseScenarioConfig(IniReader* reader) {
     for (const std::string& section : reader->getSections()) {
         if (section.empty()) continue;
         
-        // Use "scenario" key as per your original file
         std::string scenarioPath = reader->get(section, "scenario");
         if (scenarioPath.empty()) continue;
         
@@ -76,30 +141,23 @@ void ScenarioManager::parseScenarioConfig(IniReader* reader) {
         info.id = section;
         info.scenarioPath = scenarioPath;
         
-        // Get name ID and resolve it
         info.nameId = reader->getUnsignedInt(section, "name", 0);
         if (info.nameId > 0) {
-            info.name = resource_manager->getString(info.nameId);
+            info.name = cp1252_to_utf8(resource_manager->getString(info.nameId));
         }
-        if (info.name.empty()) {
-            info.name = "Scenario: " + section;
-        }
+        if (info.name.empty()) info.name = "Scenario: " + section;
         
-        // Get locks/unlocks
         info.locks = reader->getList(section, "locks");
         info.unlocks = reader->getList(section, "unlocks");
         info.isLocked = false;
-        
         scenarios.push_back(info);
     }
 }
 
 void ScenarioManager::parseFreeformConfig(IniReader* reader) {
     std::vector<std::string> mapPaths = reader->getList("freeform", "freeform");
-    
     for (const std::string& path : mapPaths) {
         if (path.empty()) continue;
-        
         FreeformMap map;
         map.path = path;
         
@@ -112,17 +170,23 @@ void ScenarioManager::parseFreeformConfig(IniReader* reader) {
         }
         
         std::string txtPath = path;
-        if (txtPath.size() > 4) {
-            txtPath = txtPath.substr(0, txtPath.size() - 4) + ".txt";
+        if (txtPath.size() > 4) txtPath = txtPath.substr(0, txtPath.size() - 4) + ".txt";
+        
+        // Load map name
+        int size=0;
+        void* data = resource_manager->getFileContent(txtPath, &size);
+        if(data) {
+            std::string raw((char*)data, size);
+            free(data);
+            map.name = cp1252_to_utf8(raw);
+            // Clean up newlines for the list name
+            map.name.erase(std::remove(map.name.begin(), map.name.end(), '\r'), map.name.end());
+            map.name.erase(std::remove(map.name.begin(), map.name.end(), '\n'), map.name.end());
         }
-        std::string displayName = loadTextFile(txtPath);
-        if (!displayName.empty()) {
-            map.name = displayName;
-        }
+        if(map.name.empty()) map.name = "Map: " + map.path;
         
         map.startingCash = 50000;
         map.description = ""; 
-        
         freeform_maps.push_back(map);
     }
 }
@@ -137,166 +201,80 @@ const FreeformMap* ScenarioManager::getFreeformMap(int index) const {
     return nullptr;
 }
 
-std::string ScenarioManager::wrapText(const std::string& text, int charsPerLine) {
-    if (text.empty() || charsPerLine <= 0) return text;
-    std::string result;
-    std::string currentLine;
-    std::string word;
-    
-    for (size_t i = 0; i <= text.length(); i++) {
-        char c = (i < text.length()) ? text[i] : ' ';
-        if (c == ' ' || c == '\n' || i == text.length()) {
-            if (!word.empty()) {
-                if (currentLine.empty()) {
-                    currentLine = word;
-                } else if ((int)(currentLine.length() + 1 + word.length()) <= charsPerLine) {
-                    currentLine += " " + word;
-                } else {
-                    if (!result.empty()) result += "\n";
-                    result += currentLine;
-                    currentLine = word;
-                }
-                word.clear();
-            }
-            if (c == '\n') {
-                if (!result.empty()) result += "\n";
-                result += currentLine;
-                currentLine.clear();
-            }
-        } else {
-            word += c;
-        }
-    }
-    if (!currentLine.empty()) {
-        if (!result.empty()) result += "\n";
-        result += currentLine;
-    }
-    return result;
-}
-
-std::string ScenarioManager::loadTextFile(const std::string& path) {
-    int size = 0;
-    void* content = resource_manager->getFileContent(path, &size);
-    if (!content || size <= 0) return "";
-    
-    std::string text((char*)content, size);
-    free(content);
-    text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
-    
-    size_t start = text.find_first_not_of(" \t\n");
-    size_t end = text.find_last_not_of(" \t\n");
-    if (start != std::string::npos && end != std::string::npos) {
-        text = text.substr(start, end - start + 1);
-    }
-    text = wrapText(text, 50);
-    return text;
-}
-
+// FIX: Just return the sanitized string. Don't wrap it here.
+// Let UiText.cpp handle the wrapping dynamically.
 std::string ScenarioManager::loadScenarioDescription(const std::string& scenarioPath) {
     size_t lastSlash = scenarioPath.find_last_of('/');
     if (lastSlash == std::string::npos) return "No description available.";
     std::string folder = scenarioPath.substr(0, lastSlash + 1);
     
+    // Priority: start.txt (Tutorials) > p01.txt > desc.txt
     std::vector<std::string> tryFiles = {
-        folder + "start.txt",
-        folder + "p01.txt",
-        folder + "exstart.txt",
+        folder + "start.txt", 
+        folder + "p01.txt", 
+        folder + "exstart.txt", 
         folder + "desc.txt"
     };
     
     for (const std::string& file : tryFiles) {
-        std::string desc = loadTextFile(file);
-        if (!desc.empty()) {
-            return desc;
-        }
+        // Use loadRawText to get UTF-8 string with newlines intact (including blank lines)
+        std::string desc = loadRawText(this->resource_manager, file);
+        if (!desc.empty()) return desc; 
     }
     return "No description available.";
 }
 
-// --- Helper to fill %d and %s templates ---
-static std::string formatObjectiveText(ResourceManager* rm, const std::string& fmt, int val, int arga) {
-    char buffer[512];
-    
-    // Check what placeholders are present
-    bool hasString = fmt.find("%s") != std::string::npos;
-    int intCount = 0;
-    size_t pos = 0;
-    while ((pos = fmt.find("%d", pos)) != std::string::npos) { intCount++; pos += 2; }
-
-    if (hasString && intCount == 1) {
-        // Example: "Adopt 1 %s" -> val, string(arga)
-        std::string s = rm->getString(arga);
-        snprintf(buffer, sizeof(buffer), fmt.c_str(), val, s.c_str());
-    } 
-    else if (hasString) {
-        // Example: "%s" -> string(arga)
-        std::string s = rm->getString(arga);
-        if (s.empty()) s = rm->getString(val);
-        snprintf(buffer, sizeof(buffer), fmt.c_str(), s.c_str());
-    }
-    else if (intCount == 2) {
-        // Example: "Rating of %d for %d exhibits" -> usually (arga, val) or (val, arga)
-        // ZT1 heuristic: arga is often the quality/ID, value is quantity
-        snprintf(buffer, sizeof(buffer), fmt.c_str(), arga, val);
-    } 
-    else if (intCount == 1) {
-        // Example: "Have %d guests" -> val
-        snprintf(buffer, sizeof(buffer), fmt.c_str(), val);
-    } 
-    else {
-        // No formatting needed
-        return fmt;
-    }
-    return std::string(buffer);
-}
-
 std::vector<std::string> ScenarioManager::loadScenarioObjectives(const std::string& scenarioPath) {
     std::vector<std::string> objectives;
+    std::set<std::string> uniqueObjectives; 
 
-    // STRATEGY 1: Parse [goals] section for 'text=' IDs (Standard Scenarios)
     IniReader* reader = resource_manager->getIniReader(scenarioPath);
     if (reader) {
         std::vector<std::string> goalKeys = reader->getList("goals", "goal");
         for (const std::string& sectionName : goalKeys) {
             
-            // 1. Get the raw text ID
+            bool isHidden = reader->getInt(sectionName, "hidden", 0) == 1;
+            if (isHidden) continue;
+
             int textId = reader->getInt(sectionName, "text", 0);
             
             if (textId > 0) {
                 std::string objText = resource_manager->getString(textId);
+                objText = cp1252_to_utf8(objText); // Fix boxes
                 
                 if (!objText.empty()) {
-                    // 2. Get the parameters for formatting
-                    int val = reader->getInt(sectionName, "value", 0);
-                    int arga = reader->getInt(sectionName, "arga", 0);
+                    objText = formatGoalString(objText, reader, sectionName, resource_manager);
                     
-                    // 3. Format the string (replace %d with numbers)
-                    std::string finalStr = formatObjectiveText(resource_manager, objText, val, arga);
-                    objectives.push_back(finalStr);
+                    if (uniqueObjectives.find(objText) == uniqueObjectives.end()) {
+                        objectives.push_back(" - " + objText);
+                        uniqueObjectives.insert(objText);
+                    }
                 }
             }
         }
         delete reader;
     }
 
-    // STRATEGY 2: Fallback to scanning comments (Tutorial 1 Style)
+    // Fallback: Comments (Tutorial 1)
     if (objectives.empty()) {
         std::string scnContent = loadRawText(this->resource_manager, scenarioPath);
         if (!scnContent.empty()) {
             std::stringstream ss(scnContent);
             std::string line;
-            
             while (std::getline(ss, line)) {
                 std::string clean = trim(line);
                 if (!clean.empty() && clean[0] == ';') {
                     std::string text = trim(clean.substr(1));
-                    if (text.empty() || text.find("$Id") != std::string::npos || text.length() < 5) continue; 
+                    if (text.empty() || text.find("$Id") != std::string::npos || text.length() < 5) continue;
                     
                     if (isupper(text[0]) || text[0] == '"') {
-                         if (text.front() == '"' && text.back() == '"') {
-                            text = text.substr(1, text.length() - 2);
+                         if (text.front() == '"' && text.back() == '"') text = text.substr(1, text.length() - 2);
+                         text = cp1252_to_utf8(text); 
+                         
+                         if (uniqueObjectives.find(text) == uniqueObjectives.end()) {
+                            objectives.push_back(" - " + text);
+                            uniqueObjectives.insert(text);
                         }
-                        objectives.push_back(text);
                     }
                 }
             }

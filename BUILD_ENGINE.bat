@@ -1,6 +1,11 @@
 @echo off
 cd /d "%~dp0"
 
+:: --- CLION / AUTOMATION SUPPORT ---
+:: If an argument is passed (e.g. "BUILD_ENGINE.bat Q"), skip the menu.
+if /i "%1"=="Q" goto QUICK
+if /i "%1"=="F" goto FULL
+
 :MENU
 echo ==========================================
 echo      Zoo Tycoon 1 Engine Build Tool
