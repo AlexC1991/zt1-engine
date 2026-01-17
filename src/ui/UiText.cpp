@@ -32,23 +32,38 @@ UiText::~UiText() {
   if (text) SDL_DestroyTexture(text);
 }
 
-// [HELPER] Word Wrap
+// [HELPER] Word Wrap - PARAGRAPH AWARE
 static std::vector<std::string> splitToLines(std::string text, size_t max_chars) {
     std::vector<std::string> lines;
-    std::istringstream words(text);
-    std::string word;
-    std::string line;
-    
-    while (words >> word) {
-        if (line.length() + word.length() + 1 > max_chars) {
-            lines.push_back(line);
-            line = word;
-        } else {
-            if (!line.empty()) line += " ";
-            line += word;
+    std::stringstream ss(text);
+    std::string segment;
+
+    // 1. Split by Newline First (Respects explicit line breaks)
+    while (std::getline(ss, segment, '\n')) {
+        
+        // FIX: If the segment is empty, it means we hit a blank line (\n\n)
+        // We must push an empty string to force a visual line break.
+        if (segment.empty()) {
+            lines.push_back(""); 
+            continue;
         }
+
+        // 2. Wrap words WITHIN this paragraph
+        std::istringstream words(segment);
+        std::string word;
+        std::string current_line;
+        
+        while (words >> word) {
+            if (current_line.length() + word.length() + 1 > max_chars) {
+                lines.push_back(current_line);
+                current_line = word;
+            } else {
+                if (!current_line.empty()) current_line += " ";
+                current_line += word;
+            }
+        }
+        if (!current_line.empty()) lines.push_back(current_line);
     }
-    if (!line.empty()) lines.push_back(line);
     return lines;
 }
 
@@ -133,6 +148,12 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
       if (is_multiline) {
           if (y_pos + 20 < dest_rect.y) { y_pos += 14; continue; }
           if (y_pos > dest_rect.y + dest_rect.h) break;
+      }
+      
+      // If the line is empty (blank space), just skip drawing but ADVANCE Y
+      if (line.empty()) {
+          y_pos += 14; 
+          continue; 
       }
 
       SDL_Texture* t = resource_manager->getStringTexture(renderer, font, line, color);

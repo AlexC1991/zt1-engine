@@ -1,6 +1,8 @@
-#define SDL_MAIN_HANDLED // Tell SDL we handle our own main()
+#define SDL_MAIN_HANDLED
 
 #include <SDL2/SDL.h>
+#include <algorithm>
+#include <string>
 
 #include "Config.hpp"
 #include "IniReader.hpp"
@@ -10,13 +12,21 @@
 #include "ResourceManager.hpp"
 #include "ScenarioManager.hpp"
 #include "Window.hpp"
+#include "UserProfile.hpp" // Use the extension matching your file
 
 #include "ui/UiImage.hpp"
 #include "ui/UiLayout.hpp"
 #include "ui/UiListBox.hpp"
 #include "ui/UiText.hpp"
 
+// --- FORWARD DECLARATIONS ---
+static void updateScenarioDetails(UiLayout *layout, ScenarioManager *scenarioManager, ResourceManager *resourceManager);
+static void updateFreeformDetails(UiLayout *layout, ScenarioManager *scenarioManager, ResourceManager *resourceManager);
+static void populateScenarioList(UiLayout *layout, ScenarioManager *scenarioManager);
+static void populateFreeformList(UiLayout *layout, ScenarioManager *scenarioManager);
+
 ScenarioManager *g_scenarioManager = nullptr;
+UserProfile *g_userProfile = nullptr;
 
 enum class LayoutState {
   MAIN_MENU,
@@ -34,9 +44,29 @@ UiText *g_freeformDescText = nullptr;
 UiImage *g_scenarioMap = nullptr;
 UiImage *g_freeformMap = nullptr;
 
-// Real IDs from .lyt files
-static constexpr int SCENARIO_PREVIEW_IMAGE_ID = 50001; // ui/scenario.lyt
-static constexpr int FREEFORM_PREVIEW_IMAGE_ID = 11501; // ui/mapselec.lyt
+// These IDs trigger the TARGET_WIDTH/HEIGHT resize in UiImage.cpp
+static constexpr int SCENARIO_PREVIEW_IMAGE_ID = 50001;
+static constexpr int FREEFORM_PREVIEW_IMAGE_ID = 11501;
+
+// --- HELPER: GET DIFFICULTY LEVEL ---
+static std::string getDifficultyLevel(const std::string& name) {
+    std::string lower = name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    if (lower.find("very advanced") != std::string::npos) return "Very Advanced";
+    if (lower.find("advanced") != std::string::npos) return "Advanced";
+    if (lower.find("intermediate") != std::string::npos) return "Intermediate";
+    if (lower.find("beginner") != std::string::npos) return "Beginner";
+    return "Beginner";
+}
+
+// --- HELPER: GET LABEL FOR LIST DISPLAY ---
+static std::string getDifficultyLabel(const std::string& name) {
+    std::string lower = name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    if (lower.find("tutorial") != std::string::npos) return "";
+    return "(" + getDifficultyLevel(name) + ")";
+}
 
 static std::string getFolderFromPath(const std::string &path) {
   size_t lastSlash = path.find_last_of("/\\");
@@ -54,23 +84,37 @@ static std::string getFileStem(const std::string &path) {
   return file.substr(0, dot);
 }
 
+// --- ROUTE THROUGH UIIMAGE SCRIPT FOR RESIZING ---
 static void setScenarioPreview(
   UiImage *img,
   ResourceManager *rm,
-  const std::string &scnPath
+  const std::string &scnPath,
+  bool isLocked
 ) {
   if (img == nullptr || rm == nullptr) return;
 
-  std::string folder = getFolderFromPath(scnPath); 
-  std::string stem = getFileStem(scnPath);         
+  if (isLocked) {
+      // Routing the crate through setZt1Image on an object with ID 50001
+      // triggers the manual override scaling in UiImage::draw
+      std::string lockRaw = "ui/scenario/lock/N";
+      std::string lockPal = "ui/scenario/lock/lock.pal";
 
+      if (rm->hasResource(lockRaw)) {
+          img->setZt1Image(lockRaw, lockPal);
+      } else {
+          img->setZt1Image("", "");
+      }
+      return;
+  }
+
+  // Standard Unlocked Routing
+  std::string folder = getFolderFromPath(scnPath);
+  std::string stem = getFileStem(scnPath);
   std::string raw = folder + "/" + stem + "/N";
   std::string pal = folder + "/" + stem + "/" + stem + ".pal";
 
   if (rm->hasResource(raw) && rm->hasResource(pal)) {
     img->setZt1Image(raw, pal);
-  } else {
-    // SDL_Log("Scenario preview missing raw/pal: %s | %s", raw.c_str(), pal.c_str());
   }
 }
 
@@ -81,16 +125,14 @@ static void setFreeformPreview(
 ) {
   if (img == nullptr || rm == nullptr) return;
 
-  std::string baseFolder = getFolderFromPath(freeformScnPath); 
-  std::string stem = getFileStem(freeformScnPath);             
+  std::string baseFolder = getFolderFromPath(freeformScnPath);
+  std::string stem = getFileStem(freeformScnPath);
 
   std::string raw = baseFolder + "/" + stem + "/N";
   std::string pal = baseFolder + "/" + stem + "/" + stem + ".pal";
 
   if (rm->hasResource(raw) && rm->hasResource(pal)) {
     img->setZt1Image(raw, pal);
-  } else {
-    // SDL_Log("Freeform preview missing raw/pal: %s | %s", raw.c_str(), pal.c_str());
   }
 }
 
@@ -108,16 +150,28 @@ static void updateScenarioDetails(
   const ScenarioInfo *scenario = scenarioManager->getScenario(selectedIdx);
   if (!scenario) return;
 
-  SDL_Log("Updating scenario details for: %s", scenario->name.c_str());
+  bool isLocked = !g_userProfile->isScenarioUnlocked(scenario->name);
 
   if (!g_scenarioDescText) {
     UiElement *elem = layout->getElementById(50004);
     if (elem) g_scenarioDescText = dynamic_cast<UiText *>(elem);
   }
   if (g_scenarioDescText) {
-    std::string desc =
-      scenarioManager->loadScenarioDescription(scenario->scenarioPath);
-    g_scenarioDescText->setText(desc);
+    if (isLocked) {
+        std::string diff = getDifficultyLevel(scenario->name);
+        std::string required = "beginner";
+
+        if (diff == "Very Advanced") required = "advanced";
+        else if (diff == "Advanced") required = "intermediate";
+        else if (diff == "Intermediate") required = "beginner";
+
+        std::string msg = "You must complete all of the Zoo Tycoon " + required +
+                          " scenarios to unlock this scenario.";
+        g_scenarioDescText->setText(msg);
+    } else {
+        std::string desc = scenarioManager->loadScenarioDescription(scenario->scenarioPath);
+        g_scenarioDescText->setText(desc);
+    }
   }
 
   if (!g_scenarioMap) {
@@ -125,18 +179,21 @@ static void updateScenarioDetails(
     if (elem) g_scenarioMap = dynamic_cast<UiImage *>(elem);
   }
   if (g_scenarioMap) {
-    setScenarioPreview(g_scenarioMap, resourceManager, scenario->scenarioPath);
+    setScenarioPreview(g_scenarioMap, resourceManager, scenario->scenarioPath, isLocked);
   }
 
-  // --- NEW: UPDATE OBJECTIVES ---
-  UiElement* objEl = layout->getElementById(50006); // ID 50006 from scenario.lyt
+  UiElement* objEl = layout->getElementById(50006);
   if (objEl) {
       UiListBox* objList = dynamic_cast<UiListBox*>(objEl);
       if (objList) {
           objList->clear();
-          std::vector<std::string> goals = scenarioManager->loadScenarioObjectives(scenario->scenarioPath);
-          for (const auto& goal : goals) {
-              objList->addItem(goal);
+          if (!isLocked) {
+              std::vector<std::string> goals = scenarioManager->loadScenarioObjectives(scenario->scenarioPath);
+              for (const auto& goal : goals) {
+                  objList->addItem(goal);
+              }
+          } else {
+              objList->addItem("");
           }
       }
   }
@@ -155,8 +212,6 @@ static void updateFreeformDetails(
 
   const FreeformMap *map = scenarioManager->getFreeformMap(selectedIdx);
   if (!map) return;
-
-  SDL_Log("Updating freeform details for: %s", map->name.c_str());
 
   if (!g_freeformDescText) {
     UiElement *elem = layout->getElementById(11507);
@@ -177,10 +232,7 @@ static void updateFreeformDetails(
 }
 
 static void populateScenarioList(UiLayout *layout, ScenarioManager *scenarioManager) {
-  SDL_Log(
-    "Populating scenario list with %zu scenarios",
-    scenarioManager->getScenarios().size()
-  );
+  SDL_Log("Populating scenario list...");
 
   g_scenarioListBox = nullptr;
   g_scenarioDescText = nullptr;
@@ -194,18 +246,33 @@ static void populateScenarioList(UiLayout *layout, ScenarioManager *scenarioMana
       g_scenarioListBox->setSelectionAction(UiAction::SCENARIO_LIST_SELECTION);
 
       for (const auto &scenario : scenarioManager->getScenarios()) {
-        g_scenarioListBox->addItem(scenario.name, scenario.scenarioPath);
+        std::string iconPath;
+        ScenarioStatus status = g_userProfile->getScenarioStatus(scenario.name);
+
+        if (status == ScenarioStatus::COMPLETED) {
+            iconPath = "ui/scenario/iconc/iconc";
+        }
+        else if (status == ScenarioStatus::UNLOCKED) {
+            iconPath = "ui/scenario/iconp/iconp";
+        }
+        else {
+            iconPath = "ui/scenario/iconf/iconf";
+        }
+
+        std::string displayName = scenario.name;
+        std::string diffLabel = getDifficultyLabel(displayName);
+
+        if (!diffLabel.empty() && displayName.find("(") == std::string::npos) {
+            displayName += " " + diffLabel;
+        }
+
+        g_scenarioListBox->addItem(displayName, scenario.scenarioPath, iconPath);
       }
     }
   }
 }
 
 static void populateFreeformList(UiLayout *layout, ScenarioManager *scenarioManager) {
-  SDL_Log(
-    "Populating freeform list with %zu maps",
-    scenarioManager->getFreeformMaps().size()
-  );
-
   g_freeformListBox = nullptr;
   g_freeformDescText = nullptr;
   g_freeformMap = nullptr;
@@ -233,11 +300,17 @@ int main(int argc, char *argv[]) {
   Window window("ZT1-Engine", config.getScreenWidth(), config.getScreenHeight(), 60.0f);
   window.set_cursor(resource_manager.getCursor(9));
 
+  g_userProfile = new UserProfile("../../src/Saved Game/user.json");
+
   LoadScreen::run(&window, &config, &resource_manager);
 
   g_scenarioManager = new ScenarioManager(&resource_manager);
   g_scenarioManager->loadScenarios();
   g_scenarioManager->loadFreeformMaps();
+
+  std::vector<std::string> allNames;
+  for(const auto& s : g_scenarioManager->getScenarios()) allNames.push_back(s.name);
+  g_userProfile->initializeDefaults(allNames);
 
   IniReader *lyt_reader = resource_manager.getIniReader("ui/startup.lyt");
   UiLayout *layout = new UiLayout(lyt_reader, &resource_manager);
@@ -320,6 +393,7 @@ int main(int argc, char *argv[]) {
   }
 
   delete g_scenarioManager;
+  delete g_userProfile;
   delete layout;
 
   return 0;
