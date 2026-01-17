@@ -165,6 +165,69 @@ def verify_build():
     print(f"  {C.GREEN}✓{C.RESET} zt1-engine.exe found")
     return True
 
+def setup_ui_files():
+    """Extract UI layout files and set up button assets."""
+    import zipfile
+    import subprocess
+    
+    ui_ztd = os.path.join(REL_DIR, "ui.ztd")
+    ui_dir = os.path.join(REL_DIR, "ui")
+    tools_dir = os.path.join(ROOT_DIR, "tools")
+    
+    if not os.path.exists(ui_ztd):
+        print(f"  {C.YELLOW}⚠{C.RESET} ui.ztd not found - skipping UI setup")
+        print(f"  {C.DIM}Copy Zoo Tycoon game files to: {REL_DIR}{C.RESET}")
+        return True
+    
+    # 1. Extract only .lyt files from ui.ztd (layout files for UI positioning)
+    try:
+        os.makedirs(ui_dir, exist_ok=True)
+        with zipfile.ZipFile(ui_ztd, 'r') as z:
+            lyt_files = [f for f in z.namelist() if f.endswith('.lyt') or f.endswith('.cfg')]
+            for f in lyt_files:
+                # Extract just the file, preserving path
+                z.extract(f, REL_DIR)
+        print(f"  {C.GREEN}✓{C.RESET} UI layout files extracted ({len(lyt_files)} files)")
+    except Exception as e:
+        print(f"  {C.RED}✗{C.RESET} Failed to extract UI files: {e}")
+        return False
+    
+    # 2. Run button background decoder
+    decoder_script = os.path.join(tools_dir, "decode_button_animation.py")
+    if os.path.exists(decoder_script):
+        try:
+            result = subprocess.run(
+                [sys.executable, decoder_script],
+                cwd=REL_DIR,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                print(f"  {C.GREEN}✓{C.RESET} Button backgrounds decoded")
+            else:
+                print(f"  {C.YELLOW}⚠{C.RESET} Button decoder had issues: {result.stderr[:100] if result.stderr else 'unknown'}")
+        except Exception as e:
+            print(f"  {C.YELLOW}⚠{C.RESET} Could not run button decoder: {e}")
+    
+    # 3. Run menu position script
+    menu_script = os.path.join(tools_dir, "set_menu_x.py")
+    if os.path.exists(menu_script):
+        try:
+            result = subprocess.run(
+                [sys.executable, menu_script],
+                cwd=ROOT_DIR,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                print(f"  {C.GREEN}✓{C.RESET} Menu positions configured")
+            else:
+                print(f"  {C.YELLOW}⚠{C.RESET} Menu script had issues")
+        except Exception as e:
+            print(f"  {C.YELLOW}⚠{C.RESET} Could not run menu script: {e}")
+    
+    return True
+
 def main():
     enable_ansi()
     print(f"""
@@ -193,6 +256,7 @@ def main():
     setup_zoo_ini()
     setup_folders()
     setup_dlls()
+    setup_ui_files()
     
     # Final summary
     print()

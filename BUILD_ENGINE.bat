@@ -10,7 +10,7 @@ if /i "%1"=="F" goto FULL
 echo ==========================================
 echo      Zoo Tycoon 1 Engine Build Tool
 echo ==========================================
-echo [Q] Quick Build (Compile Changes & Run)
+echo [Q] Quick Build (Compile Changes ^& Run)
 echo [F] Full Build  (Clean Rebuild via Python)
 echo [E] Exit
 echo ==========================================
