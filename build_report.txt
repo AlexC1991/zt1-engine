@@ -1,6 +1,6 @@
 ZOO TYCOON ENGINE BUILD REPORT
 ==================================================
-Time: 197.3 seconds
+Time: 414.4 seconds
 
 COMPLETED STEPS:
   ✓ Step 1: CLEAN WORKSPACE
@@ -13,18 +13,6 @@ ERRORS:
 
 ──────────────────────────────────────────────────
 Step 3: BUILD ENGINE
-Type: AttributeError
+Type: StepFailed
 Message:
-type object 'C' has no attribute 'DIM'
-Traceback:
-Traceback (most recent call last):
-  File "C:\Users\batty\OneDrive\Documents\GitHub\zt1-engine\engine-build-resources\build_all.py", line 127, in run_step
-    result = module.main()
-             ^^^^^^^^^^^^^
-  File "C:\Users\batty\OneDrive\Documents\GitHub\zt1-engine\engine-build-resources\step3_build.py", line 115, in main
-    print_error_box(log)
-  File "C:\Users\batty\OneDrive\Documents\GitHub\zt1-engine\engine-build-resources\step3_build.py", line 97, in print_error_box
-    print(f"  {C.DIM}... (and {len(error_lines)-20} more lines) ...{C.RESET}")
-               ^^^^^
-AttributeError: type object 'C' has no attribute 'DIM'
-
+Step returned exit code 1
