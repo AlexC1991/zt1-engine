@@ -29,6 +29,31 @@ def enable_ansi():
     if os.name == 'nt':
         os.system('')
 
+def setup_pc_sync_files():
+    """Copy custom files from pc-sync folder to Release."""
+    pc_sync_dir = os.path.join(ROOT_DIR, "pc-sync")
+    
+    if not os.path.exists(pc_sync_dir):
+        print(f"  {C.DIM}No pc-sync folder found - skipping{C.RESET}")
+        return True
+    
+    file_count = 0
+    # Recursively copy all files maintaining structure
+    for root, dirs, files in os.walk(pc_sync_dir):
+        rel_path = os.path.relpath(root, pc_sync_dir)
+        dest_base = REL_DIR if rel_path == "." else os.path.join(REL_DIR, rel_path)
+        
+        os.makedirs(dest_base, exist_ok=True)
+        
+        for f in files:
+            src = os.path.join(root, f)
+            dst = os.path.join(dest_base, f)
+            shutil.copy2(src, dst)
+            file_count += 1
+    
+    print(f"  {C.GREEN}✓{C.RESET} Custom files installed ({file_count} files from pc-sync)")
+    return True
+
 def setup_fonts():
     """Copy fonts from root fonts folder to Release."""
     fonts_src = os.path.join(ROOT_DIR, "fonts")
@@ -249,6 +274,8 @@ def main():
     
     if not verify_build():
         all_ok = False
+    
+    setup_pc_sync_files()
     
     if not setup_fonts():
         all_ok = False
