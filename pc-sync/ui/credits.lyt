@@ -1,0 +1,63 @@
+[LayoutInfo]
+x=center
+y=center
+dx=800
+dy=600
+id=40
+layer=5
+state=1
+
+
+[CreditsPage1]
+type=UILayout
+layout=ui/credit1.lyt
+
+[CreditsPage2]
+type=UILayout
+layout=ui/credit2.lyt
+
+[CreditsPage3]
+type=UILayout
+layout=ui/credit3.lyt
+
+[CreditsPage4]
+type=UILayout
+layout=ui/credit4.lyt
+
+[CreditsPage5]
+type=UILayout
+layout=ui/credit5.lyt
+
+[CreditsPage6]
+type=UILayout
+layout=ui/credit6.lyt
+
+[CreditsPage7]
+type=UILayout
+layout=ui/credit7.lyt
+
+
+
+
+
+[Exit]
+type = UIButton
+id = 12111
+textid=7150
+helpid=7151
+x = 350
+y = 575
+dx = 100
+dy = fitfont
+font=3270
+fontsize=3271
+forecolor=255
+forecolor=218
+forecolor=90
+backcolor=59
+backcolor=71
+backcolor=45
+justify = center
+layer = 8
+action=2
+target=-1
