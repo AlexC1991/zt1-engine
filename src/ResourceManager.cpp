@@ -93,7 +93,11 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
   }
 
   bool suppress = (base_name.find("bkgnd") != std::string::npos) ||
-                  (base_name.find("backdrop") != std::string::npos);
+                  (base_name.find("backdrop") != std::string::npos) ||
+                  (base_name.find("_N") != std::string::npos) ||
+                  (base_name.find("_H") != std::string::npos) ||
+                  (base_name.find("_S") != std::string::npos) ||
+                  (base_name.find("_G") != std::string::npos);
 
   if (!suppress) {
     SDL_Log("Resource not found: %s", base_name.c_str());
