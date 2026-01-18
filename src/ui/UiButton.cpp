@@ -1,4 +1,5 @@
 #include "UiButton.hpp"
+#include <set>
 
 #include "../Animation.hpp"
 #include "../CompassDirection.hpp"
@@ -149,7 +150,11 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   // [PATCH 1] Lazy Load STATIC Assets (e.g. Back_N.png) if loose files exist
   // Skip spinner buttons - they are handled by PATCH 3
   bool is_spinner = (this->name == "up_spinner" || this->name == "down_spinner");
-  if (this->tex_normal == nullptr && !this->is_static && !is_spinner) {
+  
+  // [PATCH] Suppress repeated log warnings for missing resources
+  static std::set<std::string> known_missing;
+
+  if (this->tex_normal == nullptr && !this->is_static && !is_spinner && !known_missing.contains(this->name)) {
       this->tex_normal = this->resource_manager->getTexture(renderer, this->name + "_N");
       this->tex_hover = this->resource_manager->getTexture(renderer, this->name + "_H");
       this->tex_selected = this->resource_manager->getTexture(renderer, this->name + "_S");
@@ -157,6 +162,9 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
 
       if (this->tex_normal) {
           this->is_static = true;
+      } else {
+          // If failed, mark as missing so we don't try (and log) again
+          known_missing.insert(this->name);
       }
   }
 
