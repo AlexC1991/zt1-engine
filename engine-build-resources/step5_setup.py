@@ -275,7 +275,7 @@ def main():
     if not verify_build():
         all_ok = False
     
-    setup_pc_sync_files()
+    
     
     if not setup_fonts():
         all_ok = False
@@ -284,6 +284,8 @@ def main():
     setup_folders()
     setup_dlls()
     setup_ui_files()
+    
+    setup_pc_sync_files()
     
     # Final summary
     print()
