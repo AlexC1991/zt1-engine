@@ -23,6 +23,7 @@ struct FreeformMap {
     std::string path;         // Path to .scn file (e.g., "freeform/ff01.scn")
     std::string name;         // Map name
     std::string description;  // Map description
+    std::string size;         // Size category: "Small", "Medium", "Large"
     int startingCash = 50000; // Default starting cash
 };
 

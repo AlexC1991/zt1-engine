@@ -27,6 +27,13 @@ private:
   SDL_Texture *shadow = nullptr;
   int font = 0;
   Animation *animation = nullptr;
+  
+  // Static Image Fallback
+  SDL_Texture *tex_normal = nullptr;
+  SDL_Texture *tex_hover = nullptr;
+  SDL_Texture *tex_selected = nullptr;
+  SDL_Texture *tex_disabled = nullptr;
+  bool is_static = false;
   bool selected = false;
   bool selected_updated = false;
   bool has_select_color = false;

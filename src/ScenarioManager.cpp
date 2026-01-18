@@ -155,11 +155,74 @@ void ScenarioManager::parseScenarioConfig(IniReader* reader) {
 }
 
 void ScenarioManager::parseFreeformConfig(IniReader* reader) {
+    // First, load raw freeform.cfg to parse comments for size categories
+    std::map<std::string, std::string> sizeCategories;
+    
+    int cfgSize = 0;
+    void* cfgData = resource_manager->getFileContent("freeform.cfg", &cfgSize);
+    if (cfgData && cfgSize > 0) {
+        std::string cfgContent((char*)cfgData, cfgSize);
+        free(cfgData);
+        
+        // Parse comments to find size categories
+        std::string currentSize = "Medium"; // Default
+        std::stringstream ss(cfgContent);
+        std::string line;
+        
+        while (std::getline(ss, line)) {
+            // Remove CR if present
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            
+            // Check for size category comments
+            if (!line.empty() && line[0] == ';') {
+                std::string comment = line.substr(1);
+                // Convert to uppercase for comparison
+                std::string upper;
+                for (char c : comment) upper += toupper(c);
+                
+                if (upper.find("SMALL") != std::string::npos) {
+                    currentSize = "Small";
+                } else if (upper.find("MEDIUM") != std::string::npos) {
+                    currentSize = "Medium";
+                } else if (upper.find("LARGE") != std::string::npos) {
+                    currentSize = "Large";
+                }
+                continue;
+            }
+            
+            // Check for freeform= lines
+            if (line.find("freeform=") != std::string::npos || 
+                line.find("Freeform=") != std::string::npos) {
+                size_t eqPos = line.find('=');
+                if (eqPos != std::string::npos) {
+                    std::string path = trim(line.substr(eqPos + 1));
+                    // Convert to lowercase for lookup
+                    std::string lowerPath;
+                    for (char c : path) lowerPath += tolower(c);
+                    sizeCategories[lowerPath] = currentSize;
+                }
+            }
+        }
+    }
+    
+    // Now parse the maps using IniReader
     std::vector<std::string> mapPaths = reader->getList("freeform", "freeform");
     for (const std::string& path : mapPaths) {
         if (path.empty()) continue;
         FreeformMap map;
         map.path = path;
+        
+        // Look up size category
+        std::string lowerPath;
+        for (char c : path) lowerPath += tolower(c);
+        auto it = sizeCategories.find(lowerPath);
+        if (it != sizeCategories.end()) {
+            map.size = it->second;
+        } else {
+            map.size = "Medium"; // Default
+        }
         
         size_t lastSlash = path.find_last_of('/');
         size_t lastDot = path.find_last_of('.');

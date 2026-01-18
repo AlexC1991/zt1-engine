@@ -13,5 +13,9 @@ enum class UiAction {
     // [PATCH] List selection actions
     SCENARIO_LIST_SELECTION=100,    // Scenario was selected in list
     FREEFORM_LIST_SELECTION=101,    // Freeform map was selected in list
+    
+    // [PATCH] Starting cash spinner buttons (using button IDs)
+    CASH_SPINNER_UP=11511,          // Increase starting cash
+    CASH_SPINNER_DOWN=11512,        // Decrease starting cash
 };
 #endif // UI_ACTION_HPP

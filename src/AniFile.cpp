@@ -101,6 +101,8 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   AnimationData *animation_data = new AnimationData;
   animation_data->frame_count = 0;
   animation_data->frames = nullptr;
+  animation_data->has_background = false;
+  animation_data->frame_time_in_ms = 100;
 
   // --- HEADER PARSING ---
   // File format:
@@ -115,8 +117,24 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
       SDL_ReadLE32(rw); // Not used - dimensions come from .ani
   uint32_t str_len = SDL_ReadLE32(rw);
 
-  // Skip Palette String
-  SDL_RWseek(rw, str_len, RW_SEEK_CUR);
+  // Read Palette String
+  char *pal_str = (char *)calloc(1, str_len + 1);
+  SDL_RWread(rw, pal_str, 1, str_len);
+  
+  std::string palette_path = pal_str;
+  free(pal_str);
+  
+  // Sanitize path (remove nulls if embedded)
+  size_t null_pos = palette_path.find('\0');
+  if (null_pos != std::string::npos) {
+    palette_path.resize(null_pos);
+  }
+  
+  SDL_Log("AniFile: Loading palette '%s' for animation", palette_path.c_str());
+  animation_data->pallet = pallet_manager->getPallet(palette_path);
+  if (!animation_data->pallet) {
+       SDL_Log("AniFile: Warning - Palette %s not found/loaded!", palette_path.c_str());
+  }
 
   // Skip the 4-byte field after palette (frame count or other metadata)
   // This field was incorrectly being read as "width" causing offset issues

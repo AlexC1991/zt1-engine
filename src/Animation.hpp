@@ -15,8 +15,15 @@
 
 class Animation {
 public:
+  Animation() = default;
   Animation(std::unordered_map<std::string, AnimationData *> *data);
   ~Animation();
+
+  // Rule of Five: Delete Copy, Implement Move
+  Animation(const Animation &) = delete;
+  Animation &operator=(const Animation &) = delete;
+  Animation(Animation &&other) noexcept;
+  Animation &operator=(Animation &&other) noexcept;
 
   void draw(SDL_Renderer *renderer, int x, int y,
             CompassDirection direction = CompassDirection::N);

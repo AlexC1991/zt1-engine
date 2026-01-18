@@ -30,13 +30,6 @@ UiButton::UiButton(IniReader *ini_reader, ResourceManager *resource_manager,
 }
 
 UiButton::~UiButton() {
-  // IMPORTANT: Do not SDL_DestroyTexture(text/shadow) here unless UiButton
-  // *uniquely owns* them.
-  //
-  // In this project, getStringTexture(...) is very likely cached/owned by
-  // ResourceManager, so destroying here can break other UI elements or cause
-  // “text disappears after a second” issues.
-
   for (UiElement *child : this->children) {
     delete child;
   }
@@ -95,7 +88,17 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     return;
   }
 
-  // (Re)build text textures when needed. Null-safe for icon-only buttons.
+  // DEBUG: Log ALL button names to find spinners
+  static bool first_frame_logged = false;
+  if (!first_frame_logged && (this->name.find("spin") != std::string::npos || 
+                               this->name.find("Spin") != std::string::npos ||
+                               this->name.find("cash") != std::string::npos ||
+                               this->name.find("Cash") != std::string::npos)) {
+      SDL_Log("BUTTON DRAW: name='%s' is_static=%d animation=%p", 
+              this->name.c_str(), this->is_static, (void*)this->animation);
+  }
+
+  // (Re)build text textures when needed.
   if (!this->text_string.empty() &&
       (this->text == nullptr ||
        (this->selected_updated && this->has_select_color))) {
@@ -118,13 +121,11 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       };
     }
 
-    // Do NOT destroy old textures here unless UiButton owns them.
     this->text = this->resource_manager->getStringTexture(
         renderer, this->font, this->text_string, color);
     this->shadow = this->resource_manager->getStringTexture(
         renderer, this->font, this->text_string, {0, 0, 0, 255});
 
-    // We processed the update.
     this->selected_updated = false;
   }
 
@@ -133,153 +134,112 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
 
   SDL_Rect text_rect = {dest_rect.x, dest_rect.y, 0, 0};
 
-  // DEBUG: Force fallback to verify BMP rendering
-  bool has_valid_animation = false;
-  // this->animation != nullptr &&
-  //                           this->animation->isValid() &&
-  //                           this->animation->hasFrames(CompassDirection::N);
+  // Check if we already have a valid animation from the INI
+  bool has_valid_animation = this->animation != nullptr &&
+                             this->animation->isValid() &&
+                             this->animation->hasFrames(CompassDirection::N);
 
-  if (has_valid_animation) {
+  bool is_nav_button = (this->name == "Back" || this->name == "Play" || 
+                        this->name == "Play Map" || this->name == "Back to main menu" ||
+                        this->name == "back" || this->name == "play" ||
+                        this->name == "back to main menu" || 
+                        this->text_string == "Back" || this->text_string == "Play" ||
+                        this->text_string == "back" || this->text_string == "play");
+
+  // [PATCH 1] Lazy Load STATIC Assets (e.g. Back_N.png) if loose files exist
+  // Skip spinner buttons - they are handled by PATCH 3
+  bool is_spinner = (this->name == "up_spinner" || this->name == "down_spinner");
+  if (this->tex_normal == nullptr && !this->is_static && !is_spinner) {
+      this->tex_normal = this->resource_manager->getTexture(renderer, this->name + "_N");
+      this->tex_hover = this->resource_manager->getTexture(renderer, this->name + "_H");
+      this->tex_selected = this->resource_manager->getTexture(renderer, this->name + "_S");
+      this->tex_disabled = this->resource_manager->getTexture(renderer, this->name + "_G");
+
+      if (this->tex_normal) {
+          this->is_static = true;
+      }
+  }
+
+  // [PATCH 2] Broken "Play" Button Fix
+  // "Play" buttons don't have their own assets - use Back's static PNG instead.
+  if (!has_valid_animation && !this->is_static) {
+       if (this->name == "Play" || this->name == "play" || this->name == "Play Map" ||
+           this->name == "startscenario") {
+            
+            // Load the Back button's static textures for this Play button
+            this->tex_normal = this->resource_manager->getTexture(renderer, "Back_N");
+            this->tex_hover = this->resource_manager->getTexture(renderer, "Back_H");
+            
+            if (this->tex_normal) {
+                this->is_static = true;
+            }
+       }
+  }
+
+  // [PATCH 3] Spinner Button Fix (UNCONDITIONAL)
+  // Force spinners to use static BMP textures instead of animation.
+  // This runs regardless of whether animation exists.
+  // NOTE: Runtime names are lowercase: "up_spinner" and "down_spinner"
+  if (!this->is_static) {
+       // Debug: trace PATCH 3 entry
+       if (this->name.find("spinner") != std::string::npos) {
+           SDL_Log("PATCH3 CHECK: name='%s' comparing...", this->name.c_str());
+       }
+       if (this->name == "up_spinner") {
+            SDL_Log("SPINNER PATCH3: Loading up_spinner textures...");
+            this->tex_normal = this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_N");
+            this->tex_hover = this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_H");
+            this->tex_selected = this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_S");
+            this->tex_disabled = this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_G");
+            SDL_Log("SPINNER PATCH3: up_spinner tex_normal=%p", (void*)this->tex_normal);
+            if (this->tex_normal) {
+                this->is_static = true;
+                this->animation = nullptr;  // Bypass animation rendering
+                has_valid_animation = false;
+            }
+       } else if (this->name == "down_spinner") {
+            SDL_Log("SPINNER PATCH3: Loading down_spinner textures...");
+            this->tex_normal = this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_N");
+            this->tex_hover = this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_H");
+            this->tex_selected = this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_S");
+            this->tex_disabled = this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_G");
+            SDL_Log("SPINNER PATCH3: down_spinner tex_normal=%p", (void*)this->tex_normal);
+            if (this->tex_normal) {
+                this->is_static = true;
+                this->animation = nullptr;  // Bypass animation rendering
+                has_valid_animation = false;
+            }
+       }
+  }
+
+  // DRAWING LOGIC
+  // DEBUG: Log spinner drawing
+  if (this->name.find("Spinner") != std::string::npos || this->name.find("spinner") != std::string::npos) {
+      SDL_Log("SPINNER DRAW: name='%s' is_static=%d has_anim=%d dest=(%d,%d,%d,%d)",
+              this->name.c_str(), this->is_static, has_valid_animation,
+              dest_rect.x, dest_rect.y, dest_rect.w, dest_rect.h);
+  }
+  
+  if (this->is_static && is_nav_button) {
+      // Defer drawing until size is calculated
+  } else if (has_valid_animation) {
     this->animation->draw(renderer, &dest_rect, CompassDirection::N);
-  } else if (!this->transparent) {
-    // Fallback: Try to use extracted BMPs first
-    static SDL_Texture *s_texNormal = nullptr;
-    static SDL_Texture *s_texSelected = nullptr;
-    static bool s_triedLoading = false;
-    static bool s_loggedFallback = false;
-
-    if (!s_loggedFallback) {
-      SDL_Log("UiButton: Entering FALLBACK logic for %s", this->name.c_str());
-      s_loggedFallback = true;
+  } else if (this->is_static) {
+    SDL_Texture* target = this->tex_normal;
+    if (this->selected && this->tex_hover) target = this->tex_hover;
+    
+    // For spinners (and other static buttons with no size), get dimensions from texture
+    SDL_Rect render_rect = this->dest_rect;
+    if ((render_rect.w <= 0 || render_rect.h <= 0) && target != nullptr) {
+        int tw, th;
+        SDL_QueryTexture(target, nullptr, nullptr, &tw, &th);
+        render_rect.w = tw;
+        render_rect.h = th;
+        // Update the member dest_rect for hit testing
+        this->dest_rect.w = tw;
+        this->dest_rect.h = th;
     }
-
-    if (!s_triedLoading && (!s_texNormal || !s_texSelected)) {
-      auto applyPalette = [&](SDL_Surface *surf) {
-        if (!surf || surf->format->BitsPerPixel != 8) {
-          SDL_Log("UiButton: Surface is not 8-bit, skipping palette apply");
-          return;
-        }
-
-        // HARDCODED FALLBACK PALETTE
-        // Global palette is missing, and internal palette is wrong
-        // (Red/Blue/Rainbow). We construct a Gold/Green palette based on index
-        // analysis.
-        SDL_Color colors[256];
-
-        // TARGET COLORS: Gradient + Border (Safe Version)
-        // User requested: "10% darker gradient... thin outter ring 30% darker"
-        SDL_Color cBase = {75, 105, 45, 255};    // Base Army Green
-        SDL_Color cBodyDark = {68, 95, 41, 255}; // 10% Darker
-        SDL_Color cBorder = {53, 74, 32, 255};   // 30% Darker
-
-        // 1. Initialize Transparency
-        colors[0] = {0, 0, 0, 0};
-
-        // 2. Initialize default (background/outliers) to BodyDark
-        for (int i = 1; i < 256; ++i) {
-          colors[i] = cBodyDark;
-        }
-
-        // 3. Apply Border (1-5) and Gradient (6-32)
-        for (int i = 1; i < 33; ++i) {
-          if (i <= 5) {
-            colors[i] = cBorder;
-          } else {
-            float t = (float)(i - 6) / 26.0f;
-            colors[i].r =
-                (unsigned char)(cBase.r + (cBodyDark.r - cBase.r) * t);
-            colors[i].g =
-                (unsigned char)(cBase.g + (cBodyDark.g - cBase.g) * t);
-            colors[i].b =
-                (unsigned char)(cBase.b + (cBodyDark.b - cBase.b) * t);
-            colors[i].a = 255;
-          }
-        }
-
-        // by SDL_LoadBMP usually but we force opaque.
-        // Force Opaque for all
-        for (int i = 1; i < 256; ++i)
-          colors[i].a = 255;
-
-        SDL_SetPaletteColors(surf->format->palette, colors, 0, 256);
-        SDL_SetColorKey(surf, SDL_TRUE, 0);
-        SDL_Log("UiButton: Applied REFINED Gradient Palette");
-      };
-
-      // Try loading from current directory (where we extracted them)
-      SDL_Surface *surfN = SDL_LoadBMP("button_background_N.bmp");
-      if (surfN) {
-        SDL_Log("UiButton: Loaded button_background_N.bmp SUCCESS (8-bit)");
-        applyPalette(surfN);
-        SDL_SetSurfaceBlendMode(surfN, SDL_BLENDMODE_BLEND);
-        s_texNormal = SDL_CreateTextureFromSurface(renderer, surfN);
-        SDL_FreeSurface(surfN);
-      } else {
-        SDL_Log("UiButton: Failed to load button_background_N.bmp: %s",
-                SDL_GetError());
-      }
-
-      SDL_Surface *surfS = SDL_LoadBMP("button_background_S.bmp");
-      if (surfS) {
-        SDL_Log("UiButton: Loaded button_background_S.bmp SUCCESS (8-bit)");
-        applyPalette(surfS);
-        SDL_SetSurfaceBlendMode(surfS, SDL_BLENDMODE_BLEND);
-        s_texSelected = SDL_CreateTextureFromSurface(renderer, surfS);
-        SDL_FreeSurface(surfS);
-      } else {
-        SDL_Log("UiButton: Failed to load button_background_S.bmp: %s",
-                SDL_GetError());
-      }
-
-      s_triedLoading = true;
-    }
-
-    // Fallback: Use texture dimensions if rect is empty (Match UiImage logic)
-    SDL_Texture *tex = s_texNormal; // Just for size query
-    if (tex && (dest_rect.w == 0 || dest_rect.h == 0)) {
-      int tw, th;
-      SDL_QueryTexture(tex, nullptr, nullptr, &tw, &th);
-      dest_rect.w = tw;
-      dest_rect.h = th;
-    }
-
-    // Old logic removed: text_rect.x += ... was causing drift/misalignment.
-    // We will calculate exact center at the end.
-
-    SDL_Texture *texToDraw =
-        (this->selected && s_texSelected) ? s_texSelected : s_texNormal;
-
-    if (texToDraw) {
-      SDL_RenderCopy(renderer, texToDraw, nullptr, &dest_rect);
-
-      // (Legacy logic removed - see end of function for centering)
-    } else {
-      // Final Fallback: Draw a simple styled button background (Gradient)
-
-      // Draw outer border (dark)
-      SDL_SetRenderDrawColor(renderer, 40, 50, 40, 255);
-      SDL_RenderFillRect(renderer, &dest_rect);
-
-      // Draw inner fill (gradient simulation - lighter middle)
-      SDL_Rect inner = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4,
-                        dest_rect.h - 4};
-      SDL_SetRenderDrawColor(renderer, 70, 85, 60, 255);
-      SDL_RenderFillRect(renderer, &inner);
-
-      // Draw highlight line at top
-      SDL_Rect highlight = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4,
-                            2};
-      SDL_SetRenderDrawColor(renderer, 100, 115, 85, 255);
-      SDL_RenderFillRect(renderer, &highlight);
-
-      // Draw shadow line at bottom
-      SDL_Rect shadow_line = {dest_rect.x + 2, dest_rect.y + dest_rect.h - 4,
-                              dest_rect.w - 4, 2};
-      SDL_SetRenderDrawColor(renderer, 50, 60, 45, 255);
-      SDL_RenderFillRect(renderer, &shadow_line);
-
-      // (Legacy logic removed - see end of function for centering)
-    }
+    SDL_RenderCopy(renderer, target, nullptr, &render_rect);
   }
 
   if (this->text != nullptr) {
@@ -289,26 +249,87 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     text_rect.h = th;
 
     if (this->ini_reader->get(this->name, "justify") == "center") {
-      // ROBUST CENTERING: Center of dest_rect minus half text size
       text_rect.x = dest_rect.x + (dest_rect.w - tw) / 2;
-      // Adjust Y slightly up for visual balance (often text looks better
-      // slightly high)
       text_rect.y = dest_rect.y + (dest_rect.h - th) / 2 - 1;
     } else {
-      // Default top-left or whatever original relative pos was
-      text_rect.x = dest_rect.x + 5; // Padding
+      text_rect.x = dest_rect.x + 5; 
       text_rect.y = dest_rect.y + 5;
     }
   }
 
-  // Ensure hitbox exists even if animation/text missing.
-  if (dest_rect.w == 0 || dest_rect.h == 0) {
+  // --- AUTO-SIZING LOGIC ---
+  if (dest_rect.w <= 1 || dest_rect.h <= 1) {
     if (text_rect.w != 0 && text_rect.h != 0) {
-      dest_rect = text_rect;
+      
+      // USER UI CONTROLS
+      int offset_x = -4;
+      int offset_y = -14; 
+
+      int padding_x = 5; 
+      int padding_y = 10; 
+      
+      // REDUCED MIN SIZES
+      int min_width = 130; 
+      int min_height = 55; 
+
+      if (is_nav_button) {
+          dest_rect.x += offset_x;
+          dest_rect.y += offset_y;
+          
+          dest_rect.w = (text_rect.w + padding_x > min_width) ? text_rect.w + padding_x : min_width;
+          dest_rect.h = (text_rect.h + padding_y > min_height) ? text_rect.h + padding_y : min_height;
+      } else {
+          dest_rect.w = (text_rect.w + padding_x > 1) ? text_rect.w + padding_x : 1;
+          dest_rect.h = (text_rect.h + padding_y > 1) ? text_rect.h + padding_y : 1;
+      }
+
+      // Re-Center Text
+      text_rect.x = dest_rect.x + (dest_rect.w - text_rect.w) / 2;
+      text_rect.y = dest_rect.y + (dest_rect.h - text_rect.h) / 2;
     } else {
-      dest_rect.w = 1;
+      dest_rect.w = 1; 
       dest_rect.h = 1;
     }
+  }
+
+  // Draw Static Nav Button (now that size is set)
+  if (this->is_static) {
+      SDL_Texture *t = this->tex_normal;
+      if (this->selected && this->tex_hover) {
+          t = this->tex_hover;
+      }
+      if (t) {
+          SDL_RenderCopy(renderer, t, NULL, &dest_rect);
+      }
+  }
+
+  // Fallback Gradient (Only if NO animation and NO image found)
+  if (!has_valid_animation && !this->is_static) {
+      bool force_bg = (this->name == "Back" || this->name == "Play" || 
+                       this->name == "back" || this->name == "play" ||
+                       this->name == "back to main menu" ||
+                       this->text_string == "Back" || this->text_string == "Play" ||
+                       this->text_string == "back" || this->text_string == "play");
+
+      if (!this->transparent || force_bg) {
+        SDL_SetRenderDrawColor(renderer, 40, 50, 40, 255);
+        SDL_RenderFillRect(renderer, &dest_rect);
+
+        SDL_Rect inner = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4,
+                          dest_rect.h - 4};
+        SDL_SetRenderDrawColor(renderer, 70, 85, 60, 255);
+        SDL_RenderFillRect(renderer, &inner);
+
+        SDL_Rect highlight = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4,
+                              2};
+        SDL_SetRenderDrawColor(renderer, 100, 115, 85, 255);
+        SDL_RenderFillRect(renderer, &highlight);
+
+        SDL_Rect shadow_line = {dest_rect.x + 2, dest_rect.y + dest_rect.h - 4,
+                                dest_rect.w - 4, 2};
+        SDL_SetRenderDrawColor(renderer, 50, 60, 45, 255);
+        SDL_RenderFillRect(renderer, &shadow_line);
+      }
   }
 
   if (this->shadow != nullptr && text_rect.w > 0 && text_rect.h > 0) {
@@ -330,7 +351,9 @@ UiAction UiButton::getActionBasedOnName() {
   } else if (this->name == "back to main menu") {
     action = UiAction::SCENARIO_BACK_TO_MAIN_MENU;
   } else {
-    action = UiAction::NONE;
+    if (this->id == 11511 || this->id == 11512) {
+      action = static_cast<UiAction>(this->id);
+    }
   }
   return action;
 }
