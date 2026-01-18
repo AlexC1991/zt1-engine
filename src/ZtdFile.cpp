@@ -2,6 +2,7 @@
 
 #include <zip.h>
 #include <stdlib.h>
+#include <cstdio>
 
 #include "SDL_image.h"
 
@@ -26,6 +27,25 @@ std::vector<std::string> ZtdFile::getFileList(const std::string &ztd_file) {
 void * ZtdFile::getFileContent(const std::string &ztd_file, const std::string &file_name, int * size) {
   void * content = NULL;
   int error = 0;
+
+  // [PATCH] Check for loose file first
+  FILE *loose_f = fopen(file_name.c_str(), "rb");
+  if (loose_f) {
+      fseek(loose_f, 0, SEEK_END);
+      long fsize = ftell(loose_f);
+      fseek(loose_f, 0, SEEK_SET);
+      
+      content = calloc(fsize + 1, 1);
+      if (content) {
+          fread(content, 1, fsize, loose_f);
+          if (size) *size = (int)fsize;
+          fclose(loose_f);
+          SDL_Log("ZtdFile: Loaded loose file override: %s", file_name.c_str());
+          return content;
+      }
+      fclose(loose_f);
+  }
+
   if(zip_t * file = zip_open(ztd_file.c_str(), 0, &error)) {
     int index = 0;
     struct zip_stat finfo;

@@ -44,6 +44,14 @@ UiText *g_freeformDescText = nullptr;
 UiImage *g_scenarioMap = nullptr;
 UiImage *g_freeformMap = nullptr;
 
+// [PATCH] Starting Cash UI
+UiText *g_startingCashText = nullptr;
+UiText *g_difficultyText = nullptr;
+int g_currentStartingCash = 100000;  // Default $100,000
+const int CASH_VALUES[] = {25000, 50000, 75000, 100000, 150000, 200000, 250000, 500000};
+const int NUM_CASH_VALUES = 8;
+int g_cashIndex = 3;  // Index into CASH_VALUES (starts at $100,000)
+
 // These IDs trigger the TARGET_WIDTH/HEIGHT resize in UiImage.cpp
 static constexpr int SCENARIO_PREVIEW_IMAGE_ID = 50001;
 static constexpr int FREEFORM_PREVIEW_IMAGE_ID = 11501;
@@ -276,6 +284,8 @@ static void populateFreeformList(UiLayout *layout, ScenarioManager *scenarioMana
   g_freeformListBox = nullptr;
   g_freeformDescText = nullptr;
   g_freeformMap = nullptr;
+  g_startingCashText = nullptr;
+  g_difficultyText = nullptr;
 
   UiElement *element = layout->getElementById(11504);
   if (element) {
@@ -285,8 +295,34 @@ static void populateFreeformList(UiLayout *layout, ScenarioManager *scenarioMana
       g_freeformListBox->setSelectionAction(UiAction::FREEFORM_LIST_SELECTION);
 
       for (const auto &map : scenarioManager->getFreeformMaps()) {
-        g_freeformListBox->addItem(map.name, map.path);
+        // Build display name with size indicator
+        std::string displayName = map.name;
+        if (!map.size.empty()) {
+          displayName += " (" + map.size + ")";
+        }
+        g_freeformListBox->addItem(displayName, map.path);
       }
+    }
+  }
+  
+  // Initialize Starting Cash text (ID 11510)
+  element = layout->getElementById(11510);
+  if (element) {
+    g_startingCashText = dynamic_cast<UiText *>(element);
+    if (g_startingCashText) {
+      // Format cash with $ and commas
+      char buf[32];
+      snprintf(buf, sizeof(buf), "$%d,000", g_currentStartingCash / 1000);
+      g_startingCashText->setText(buf);
+    }
+  }
+  
+  // Initialize Difficulty text (ID 11531)
+  element = layout->getElementById(11531);
+  if (element) {
+    g_difficultyText = dynamic_cast<UiText *>(element);
+    if (g_difficultyText) {
+      g_difficultyText->setText("Intermediate");
     }
   }
 }
@@ -382,6 +418,32 @@ int main(int argc, char *argv[]) {
 
       case UiAction::FREEFORM_LIST_SELECTION:
         updateFreeformDetails(layout, g_scenarioManager, &resource_manager);
+        break;
+
+      case UiAction::CASH_SPINNER_UP:
+        // Increase starting cash
+        if (g_cashIndex < NUM_CASH_VALUES - 1) {
+          g_cashIndex++;
+          g_currentStartingCash = CASH_VALUES[g_cashIndex];
+          if (g_startingCashText) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "$%d,000", g_currentStartingCash / 1000);
+            g_startingCashText->setText(buf);
+          }
+        }
+        break;
+        
+      case UiAction::CASH_SPINNER_DOWN:
+        // Decrease starting cash
+        if (g_cashIndex > 0) {
+          g_cashIndex--;
+          g_currentStartingCash = CASH_VALUES[g_cashIndex];
+          if (g_startingCashText) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "$%d,000", g_currentStartingCash / 1000);
+            g_startingCashText->setText(buf);
+          }
+        }
         break;
 
       default:

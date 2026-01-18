@@ -7,6 +7,48 @@ Animation::Animation(std::unordered_map<std::string, AnimationData *> *data) {
     this->loadSurfaces(map_entry.first, map_entry.second);
   }
 }
+// [PATCH] Move Semantics to prevent double-free of surfaces
+Animation::Animation(Animation &&other) noexcept {
+  *this = std::move(other);
+}
+
+Animation &Animation::operator=(Animation &&other) noexcept {
+  if (this != &other) {
+    // 1. Destroy current resources (Destructor Logic)
+    for (auto surface_list : this->surfaces) {
+      for (SDL_Surface *surface : surface_list.second) {
+        SDL_FreeSurface(surface);
+      }
+      surface_list.second.clear();
+    }
+    this->surfaces.clear();
+
+    for (auto texture_list : this->textures) {
+      for (SDL_Texture *texture : texture_list.second) {
+        SDL_DestroyTexture(texture);
+      }
+      texture_list.second.clear();
+    }
+    this->textures.clear();
+
+    // 2. Move Resources
+    this->surfaces = std::move(other.surfaces);
+    this->textures = std::move(other.textures);
+    
+    // 3. Move Properties
+    this->current_frame = other.current_frame;
+    this->last_direction = other.last_direction;
+    this->renderer_flip = other.renderer_flip;
+    this->frame_start_time = other.frame_start_time;
+    this->frame_time_in_ms = other.frame_time_in_ms;
+    this->has_background = other.has_background;
+
+    // 4. Reset Other (Make safe for destruction)
+    other.surfaces.clear();
+    other.textures.clear();
+  }
+  return *this;
+}
 
 Animation::~Animation() {
   for (auto surface_list : this->surfaces) {
@@ -450,8 +492,14 @@ void Animation::loadSurfaces(std::string direction_string,
   this->surfaces[direction_string] = std::vector<SDL_Surface *>();
   for (int i = 0; i < ((int)data->frame_count + (int)data->has_background);
        i++) {
-    this->surfaces[direction_string].push_back(SDL_CreateRGBSurfaceWithFormat(
-        0, data->width, data->height, 0, SDL_PIXELFORMAT_RGBA32));
+    SDL_Surface *new_surface = SDL_CreateRGBSurfaceWithFormat(
+        0, data->width, data->height, 0, SDL_PIXELFORMAT_RGBA32);
+    if (!new_surface) {
+        SDL_Log("Critical: Failed to create surface %dx%d: %s", data->width, data->height, SDL_GetError());
+        continue;
+    }
+    this->surfaces[direction_string].push_back(new_surface);
+
     for (int y = 0; y < data->frames[i].height; y++) {
       int x = offset_x - data->frames[i].offset_x;
       for (int instruction = 0;
@@ -478,12 +526,22 @@ void Animation::loadSurfaces(std::string direction_string,
                 [data->width * (y + offset_y - data->frames[i].offset_y) + x] =
                     0xFF000000;
           } else {
-            ((uint32_t *)this->surfaces[direction_string][i]->pixels)
-                [data->width * (y + offset_y - data->frames[i].offset_y) + x] =
-                    data->pallet->colors[data->frames[i]
-                                             .lines[y]
-                                             .instructions[instruction]
-                                             .colors[p]];
+            if (data->pallet && data->pallet->colors) {
+              uint32_t color = data->pallet->colors[data->frames[i]
+                                               .lines[y]
+                                               .instructions[instruction]
+                                               .colors[p]];
+              // Force Alpha Opaque (High Byte FF)
+              color |= 0xFF000000;
+              
+              ((uint32_t *)this->surfaces[direction_string][i]->pixels)
+                  [data->width * (y + offset_y - data->frames[i].offset_y) + x] = color;
+            } else {
+               // Fallback / Error prevention
+               ((uint32_t *)this->surfaces[direction_string][i]->pixels)
+                  [data->width * (y + offset_y - data->frames[i].offset_y) + x] =
+                      0xFFFF00FF; 
+            }
           }
         }
       }
