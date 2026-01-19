@@ -1,18 +1,16 @@
 ZOO TYCOON ENGINE BUILD REPORT
 ==================================================
-Time: 414.4 seconds
+Time: 0.0 seconds
 
 COMPLETED STEPS:
-  ✓ Step 1: CLEAN WORKSPACE
-  ✓ Step 2: PATCH SOURCE CODE
 
 FAILED AT:
-  ✗ Step 3: BUILD ENGINE
+  ✗ Step 1: CLEAN WORKSPACE
 
 ERRORS:
 
 ──────────────────────────────────────────────────
-Step 3: BUILD ENGINE
+Step 1: CLEAN WORKSPACE
 Type: StepFailed
 Message:
 Step returned exit code 1
