@@ -89,16 +89,6 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     return;
   }
 
-  // DEBUG: Log ALL button names to find spinners
-  static bool first_frame_logged = false;
-  if (!first_frame_logged && (this->name.find("spin") != std::string::npos || 
-                               this->name.find("Spin") != std::string::npos ||
-                               this->name.find("cash") != std::string::npos ||
-                               this->name.find("Cash") != std::string::npos)) {
-      SDL_Log("BUTTON DRAW: name='%s' is_static=%d animation=%p", 
-              this->name.c_str(), this->is_static, (void*)this->animation);
-  }
-
   // (Re)build text textures when needed.
   if (!this->text_string.empty() &&
       (this->text == nullptr ||
@@ -140,48 +130,55 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
                              this->animation->isValid() &&
                              this->animation->hasFrames(CompassDirection::N);
 
-  bool is_nav_button = (this->name == "Back" || this->name == "Play" || 
-                        this->name == "Play Map" || this->name == "Back to main menu" ||
-                        this->name == "back" || this->name == "play" ||
-                        this->name == "back to main menu" || 
-                        this->text_string == "Back" || this->text_string == "Play" ||
-                        this->text_string == "back" || this->text_string == "play");
+  bool is_nav_button =
+      (this->name == "Back" || this->name == "Play" ||
+       this->name == "Play Map" || this->name == "Back to main menu" ||
+       this->name == "back" || this->name == "play" ||
+       this->name == "back to main menu" || this->text_string == "Back" ||
+       this->text_string == "Play" || this->text_string == "back" ||
+       this->text_string == "play");
 
   // [PATCH 1] Lazy Load STATIC Assets (e.g. Back_N.png) if loose files exist
   // Skip spinner buttons - they are handled by PATCH 3
-  bool is_spinner = (this->name == "up_spinner" || this->name == "down_spinner");
-  
+  bool is_spinner =
+      (this->name == "up_spinner" || this->name == "down_spinner");
+
   // [PATCH] Suppress repeated log warnings for missing resources
   static std::set<std::string> known_missing;
 
-  if (this->tex_normal == nullptr && !this->is_static && !is_spinner && !known_missing.contains(this->name)) {
-      this->tex_normal = this->resource_manager->getTexture(renderer, this->name + "_N");
-      this->tex_hover = this->resource_manager->getTexture(renderer, this->name + "_H");
-      this->tex_selected = this->resource_manager->getTexture(renderer, this->name + "_S");
-      this->tex_disabled = this->resource_manager->getTexture(renderer, this->name + "_G");
+  if (this->tex_normal == nullptr && !this->is_static && !is_spinner &&
+      !known_missing.contains(this->name)) {
+    this->tex_normal =
+        this->resource_manager->getTexture(renderer, this->name + "_N");
+    this->tex_hover =
+        this->resource_manager->getTexture(renderer, this->name + "_H");
+    this->tex_selected =
+        this->resource_manager->getTexture(renderer, this->name + "_S");
+    this->tex_disabled =
+        this->resource_manager->getTexture(renderer, this->name + "_G");
 
-      if (this->tex_normal) {
-          this->is_static = true;
-      } else {
-          // If failed, mark as missing so we don't try (and log) again
-          known_missing.insert(this->name);
-      }
+    if (this->tex_normal) {
+      this->is_static = true;
+    } else {
+      // If failed, mark as missing so we don't try (and log) again
+      known_missing.insert(this->name);
+    }
   }
 
   // [PATCH 2] Broken "Play" Button Fix
   // "Play" buttons don't have their own assets - use Back's static PNG instead.
   if (!has_valid_animation && !this->is_static) {
-       if (this->name == "Play" || this->name == "play" || this->name == "Play Map" ||
-           this->name == "startscenario") {
-            
-            // Load the Back button's static textures for this Play button
-            this->tex_normal = this->resource_manager->getTexture(renderer, "Back_N");
-            this->tex_hover = this->resource_manager->getTexture(renderer, "Back_H");
-            
-            if (this->tex_normal) {
-                this->is_static = true;
-            }
-       }
+    if (this->name == "Play" || this->name == "play" ||
+        this->name == "Play Map" || this->name == "startscenario") {
+
+      // Load the Back button's static textures for this Play button
+      this->tex_normal = this->resource_manager->getTexture(renderer, "Back_N");
+      this->tex_hover = this->resource_manager->getTexture(renderer, "Back_H");
+
+      if (this->tex_normal) {
+        this->is_static = true;
+      }
+    }
   }
 
   // [PATCH 3] Spinner Button Fix (UNCONDITIONAL)
@@ -189,63 +186,64 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   // This runs regardless of whether animation exists.
   // NOTE: Runtime names are lowercase: "up_spinner" and "down_spinner"
   if (!this->is_static) {
-       // Debug: trace PATCH 3 entry
-       if (this->name.find("spinner") != std::string::npos) {
-           SDL_Log("PATCH3 CHECK: name='%s' comparing...", this->name.c_str());
-       }
-       if (this->name == "up_spinner") {
-            SDL_Log("SPINNER PATCH3: Loading up_spinner textures...");
-            this->tex_normal = this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_N");
-            this->tex_hover = this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_H");
-            this->tex_selected = this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_S");
-            this->tex_disabled = this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_G");
-            SDL_Log("SPINNER PATCH3: up_spinner tex_normal=%p", (void*)this->tex_normal);
-            if (this->tex_normal) {
-                this->is_static = true;
-                this->animation = nullptr;  // Bypass animation rendering
-                has_valid_animation = false;
-            }
-       } else if (this->name == "down_spinner") {
-            SDL_Log("SPINNER PATCH3: Loading down_spinner textures...");
-            this->tex_normal = this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_N");
-            this->tex_hover = this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_H");
-            this->tex_selected = this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_S");
-            this->tex_disabled = this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_G");
-            SDL_Log("SPINNER PATCH3: down_spinner tex_normal=%p", (void*)this->tex_normal);
-            if (this->tex_normal) {
-                this->is_static = true;
-                this->animation = nullptr;  // Bypass animation rendering
-                has_valid_animation = false;
-            }
-       }
+
+    if (this->name == "up_spinner") {
+
+      this->tex_normal =
+          this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_N");
+      this->tex_hover =
+          this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_H");
+      this->tex_selected =
+          this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_S");
+      this->tex_disabled =
+          this->resource_manager->getTexture(renderer, "ui/sharedui/spinup_G");
+
+      if (this->tex_normal) {
+        this->is_static = true;
+        this->animation = nullptr; // Bypass animation rendering
+        has_valid_animation = false;
+      }
+    } else if (this->name == "down_spinner") {
+
+      this->tex_normal =
+          this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_N");
+      this->tex_hover =
+          this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_H");
+      this->tex_selected =
+          this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_S");
+      this->tex_disabled =
+          this->resource_manager->getTexture(renderer, "ui/sharedui/spindwn_G");
+
+      if (this->tex_normal) {
+        this->is_static = true;
+        this->animation = nullptr; // Bypass animation rendering
+        has_valid_animation = false;
+      }
+    }
   }
 
   // DRAWING LOGIC
-  // DEBUG: Log spinner drawing
-  if (this->name.find("Spinner") != std::string::npos || this->name.find("spinner") != std::string::npos) {
-      SDL_Log("SPINNER DRAW: name='%s' is_static=%d has_anim=%d dest=(%d,%d,%d,%d)",
-              this->name.c_str(), this->is_static, has_valid_animation,
-              dest_rect.x, dest_rect.y, dest_rect.w, dest_rect.h);
-  }
-  
+
   if (this->is_static && is_nav_button) {
-      // Defer drawing until size is calculated
+    // Defer drawing until size is calculated
   } else if (has_valid_animation) {
     this->animation->draw(renderer, &dest_rect, CompassDirection::N);
   } else if (this->is_static) {
-    SDL_Texture* target = this->tex_normal;
-    if (this->selected && this->tex_hover) target = this->tex_hover;
-    
-    // For spinners (and other static buttons with no size), get dimensions from texture
+    SDL_Texture *target = this->tex_normal;
+    if (this->selected && this->tex_hover)
+      target = this->tex_hover;
+
+    // For spinners (and other static buttons with no size), get dimensions from
+    // texture
     SDL_Rect render_rect = this->dest_rect;
     if ((render_rect.w <= 0 || render_rect.h <= 0) && target != nullptr) {
-        int tw, th;
-        SDL_QueryTexture(target, nullptr, nullptr, &tw, &th);
-        render_rect.w = tw;
-        render_rect.h = th;
-        // Update the member dest_rect for hit testing
-        this->dest_rect.w = tw;
-        this->dest_rect.h = th;
+      int tw, th;
+      SDL_QueryTexture(target, nullptr, nullptr, &tw, &th);
+      render_rect.w = tw;
+      render_rect.h = th;
+      // Update the member dest_rect for hit testing
+      this->dest_rect.w = tw;
+      this->dest_rect.h = th;
     }
     SDL_RenderCopy(renderer, target, nullptr, &render_rect);
   }
@@ -260,7 +258,7 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       text_rect.x = dest_rect.x + (dest_rect.w - tw) / 2;
       text_rect.y = dest_rect.y + (dest_rect.h - th) / 2 - 1;
     } else {
-      text_rect.x = dest_rect.x + 5; 
+      text_rect.x = dest_rect.x + 5;
       text_rect.y = dest_rect.y + 5;
     }
   }
@@ -268,76 +266,82 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   // --- AUTO-SIZING LOGIC ---
   if (dest_rect.w <= 1 || dest_rect.h <= 1) {
     if (text_rect.w != 0 && text_rect.h != 0) {
-      
+
       // USER UI CONTROLS
       int offset_x = -4;
-      int offset_y = -14; 
+      int offset_y = -14;
 
-      int padding_x = 5; 
-      int padding_y = 10; 
-      
+      int padding_x = 5;
+      int padding_y = 10;
+
       // REDUCED MIN SIZES
-      int min_width = 130; 
-      int min_height = 55; 
+      int min_width = 130;
+      int min_height = 55;
 
       if (is_nav_button) {
-          dest_rect.x += offset_x;
-          dest_rect.y += offset_y;
-          
-          dest_rect.w = (text_rect.w + padding_x > min_width) ? text_rect.w + padding_x : min_width;
-          dest_rect.h = (text_rect.h + padding_y > min_height) ? text_rect.h + padding_y : min_height;
+        dest_rect.x += offset_x;
+        dest_rect.y += offset_y;
+
+        dest_rect.w = (text_rect.w + padding_x > min_width)
+                          ? text_rect.w + padding_x
+                          : min_width;
+        dest_rect.h = (text_rect.h + padding_y > min_height)
+                          ? text_rect.h + padding_y
+                          : min_height;
       } else {
-          dest_rect.w = (text_rect.w + padding_x > 1) ? text_rect.w + padding_x : 1;
-          dest_rect.h = (text_rect.h + padding_y > 1) ? text_rect.h + padding_y : 1;
+        dest_rect.w =
+            (text_rect.w + padding_x > 1) ? text_rect.w + padding_x : 1;
+        dest_rect.h =
+            (text_rect.h + padding_y > 1) ? text_rect.h + padding_y : 1;
       }
 
       // Re-Center Text
       text_rect.x = dest_rect.x + (dest_rect.w - text_rect.w) / 2;
       text_rect.y = dest_rect.y + (dest_rect.h - text_rect.h) / 2;
     } else {
-      dest_rect.w = 1; 
+      dest_rect.w = 1;
       dest_rect.h = 1;
     }
   }
 
   // Draw Static Nav Button (now that size is set)
   if (this->is_static) {
-      SDL_Texture *t = this->tex_normal;
-      if (this->selected && this->tex_hover) {
-          t = this->tex_hover;
-      }
-      if (t) {
-          SDL_RenderCopy(renderer, t, NULL, &dest_rect);
-      }
+    SDL_Texture *t = this->tex_normal;
+    if (this->selected && this->tex_hover) {
+      t = this->tex_hover;
+    }
+    if (t) {
+      SDL_RenderCopy(renderer, t, NULL, &dest_rect);
+    }
   }
 
   // Fallback Gradient (Only if NO animation and NO image found)
   if (!has_valid_animation && !this->is_static) {
-      bool force_bg = (this->name == "Back" || this->name == "Play" || 
-                       this->name == "back" || this->name == "play" ||
-                       this->name == "back to main menu" ||
-                       this->text_string == "Back" || this->text_string == "Play" ||
-                       this->text_string == "back" || this->text_string == "play");
+    bool force_bg =
+        (this->name == "Back" || this->name == "Play" || this->name == "back" ||
+         this->name == "play" || this->name == "back to main menu" ||
+         this->text_string == "Back" || this->text_string == "Play" ||
+         this->text_string == "back" || this->text_string == "play");
 
-      if (!this->transparent || force_bg) {
-        SDL_SetRenderDrawColor(renderer, 40, 50, 40, 255);
-        SDL_RenderFillRect(renderer, &dest_rect);
+    if (!this->transparent || force_bg) {
+      SDL_SetRenderDrawColor(renderer, 40, 50, 40, 255);
+      SDL_RenderFillRect(renderer, &dest_rect);
 
-        SDL_Rect inner = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4,
-                          dest_rect.h - 4};
-        SDL_SetRenderDrawColor(renderer, 70, 85, 60, 255);
-        SDL_RenderFillRect(renderer, &inner);
+      SDL_Rect inner = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4,
+                        dest_rect.h - 4};
+      SDL_SetRenderDrawColor(renderer, 70, 85, 60, 255);
+      SDL_RenderFillRect(renderer, &inner);
 
-        SDL_Rect highlight = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4,
-                              2};
-        SDL_SetRenderDrawColor(renderer, 100, 115, 85, 255);
-        SDL_RenderFillRect(renderer, &highlight);
+      SDL_Rect highlight = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4,
+                            2};
+      SDL_SetRenderDrawColor(renderer, 100, 115, 85, 255);
+      SDL_RenderFillRect(renderer, &highlight);
 
-        SDL_Rect shadow_line = {dest_rect.x + 2, dest_rect.y + dest_rect.h - 4,
-                                dest_rect.w - 4, 2};
-        SDL_SetRenderDrawColor(renderer, 50, 60, 45, 255);
-        SDL_RenderFillRect(renderer, &shadow_line);
-      }
+      SDL_Rect shadow_line = {dest_rect.x + 2, dest_rect.y + dest_rect.h - 4,
+                              dest_rect.w - 4, 2};
+      SDL_SetRenderDrawColor(renderer, 50, 60, 45, 255);
+      SDL_RenderFillRect(renderer, &shadow_line);
+    }
   }
 
   if (this->shadow != nullptr && text_rect.w > 0 && text_rect.h > 0) {

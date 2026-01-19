@@ -58,11 +58,14 @@ def main():
             item_path = os.path.join(BUILD_DIR, item)
             
             if item == "Release" and os.path.isdir(item_path):
-                # Inside Release, preserve fonts folder
+                # Inside Release, preserve fonts and saves folders
                 for sub_item in os.listdir(item_path):
                     sub_path = os.path.join(item_path, sub_item)
                     if sub_item == "fonts":
                         preserved.append("Release/fonts")
+                        continue
+                    if sub_item == "saves":
+                        preserved.append("Release/saves")
                         continue
                     
                     if os.path.isdir(sub_path):

@@ -1,0 +1,2 @@
+# This file ensures the saves directory is tracked by git
+# User save files (*.json) are generated at runtime

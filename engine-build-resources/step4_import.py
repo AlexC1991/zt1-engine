@@ -36,33 +36,60 @@ def check_assets_present():
     return present >= 2  # At least 2 of 3 required files
 
 def import_from_folder(source_dir):
-    """Import game files from source directory."""
-    extensions = ['.ztd', '.dll', '.ini', '.wav', '.avi']
+    """Import ALL game files and folders from source directory."""
     files_copied = 0
+    dirs_copied = 0
     
-    print(f"  {C.CYAN}Scanning source folder...{C.RESET}")
+    # Files/folders to skip (engine-specific, not needed)
+    skip_names = {'desktop.ini', 'thumbs.db', '.ds_store'}
     
-    for filename in os.listdir(source_dir):
-        lower_name = filename.lower()
-        
-        if any(lower_name.endswith(ext) for ext in extensions):
-            src_path = os.path.join(source_dir, filename)
-            dst_path = os.path.join(REL_DIR, filename)
+    print(f"  {C.CYAN}Importing from: {source_dir}{C.RESET}")
+    
+    for item in os.listdir(source_dir):
+        if item.lower() in skip_names:
+            continue
             
-            try:
-                if os.path.isfile(src_path):
-                    # Skip if file already exists and is same size
-                    if os.path.exists(dst_path):
-                        if os.path.getsize(src_path) == os.path.getsize(dst_path):
-                            continue
+        src_path = os.path.join(source_dir, item)
+        dst_path = os.path.join(REL_DIR, item)
+        
+        try:
+            if os.path.isfile(src_path):
+                # Skip if file already exists and is same size
+                if os.path.exists(dst_path):
+                    if os.path.getsize(src_path) == os.path.getsize(dst_path):
+                        continue
+                
+                print(f"    {C.DIM}Copying file: {item}{C.RESET}")
+                shutil.copy2(src_path, dst_path)
+                files_copied += 1
+                
+            elif os.path.isdir(src_path):
+                # Copy entire directory tree
+                if os.path.exists(dst_path):
+                    # Merge: copy contents into existing dir
+                    for root, dirs, files in os.walk(src_path):
+                        rel_path = os.path.relpath(root, src_path)
+                        dst_root = os.path.join(dst_path, rel_path) if rel_path != '.' else dst_path
+                        os.makedirs(dst_root, exist_ok=True)
+                        
+                        for file in files:
+                            if file.lower() in skip_names:
+                                continue
+                            src_file = os.path.join(root, file)
+                            dst_file = os.path.join(dst_root, file)
+                            if not os.path.exists(dst_file):
+                                shutil.copy2(src_file, dst_file)
+                                files_copied += 1
+                else:
+                    print(f"    {C.DIM}Copying folder: {item}{C.RESET}")
+                    shutil.copytree(src_path, dst_path)
+                    dirs_copied += 1
                     
-                    print(f"    {C.DIM}Copying: {filename}{C.RESET}")
-                    shutil.copy2(src_path, dst_path)
-                    files_copied += 1
-            except Exception as e:
-                print(f"    {C.RED}Failed: {filename} - {e}{C.RESET}")
+        except Exception as e:
+            print(f"    {C.RED}Failed: {item} - {e}{C.RESET}")
     
-    return files_copied
+    print(f"  {C.GREEN}✓ Copied {files_copied} files, {dirs_copied} folders{C.RESET}")
+    return files_copied + dirs_copied
 
 def main():
     enable_ansi()
@@ -77,6 +104,9 @@ def main():
     
     # Create Release folder if needed
     os.makedirs(REL_DIR, exist_ok=True)
+    
+    # [PATCH] Check pc-sync first
+    check_pc_sync_assets()
     
     # Check if assets already present
     if check_assets_present():
@@ -133,6 +163,114 @@ def main():
         print(f"  {C.YELLOW}No new files to import{C.RESET}")
     
     return 0
+
+def copy_folder(src, dst):
+    """Copy a folder if it exists."""
+    if os.path.exists(src):
+        # Remove destination if it exists
+        if os.path.exists(dst):
+            try:
+                shutil.rmtree(dst)
+            except Exception as e:
+                print(f"    {C.RED}Failed to remove existing {dst}: {e}{C.RESET}")
+                return False
+        
+        try:
+            print(f"    {C.DIM}Copying folder: {os.path.basename(src)}{C.RESET}")
+            shutil.copytree(src, dst)
+            return True
+        except Exception as e:
+            print(f"    {C.RED}Failed to copy {src}: {e}{C.RESET}")
+            return False
+    return False
+
+def check_pc_sync_assets():
+    """Copy assets from pc-sync if present."""
+    pc_sync_dir = os.path.join(ROOT_DIR, "pc-sync")
+    if not os.path.exists(pc_sync_dir):
+        return 0
+    
+    print(f"  {C.CYAN}Checking pc-sync for assets...{C.RESET}")
+    
+    folders = ["xpack1", "xpack2", "startup", "freeroam", "scenario", "ui"]
+    copied = 0
+    
+    for folder in folders:
+        src = os.path.join(pc_sync_dir, folder)
+        if not os.path.exists(src):
+            # Check if it's inside ui/ folder
+            src_ui = os.path.join(pc_sync_dir, "ui", folder)
+            if os.path.exists(src_ui):
+                src = src_ui
+                
+        dst = os.path.join(REL_DIR, folder)
+        if copy_folder(src, dst):
+            copied += 1
+    
+    # [PATCH] Extract Marine Mania UI from XPACK2
+    extract_marine_mania_ui()
+    
+    return copied
+
+
+def extract_marine_mania_ui():
+    """Extract Marine Mania themed UI from XPACK2/ui6.ztd."""
+    import zipfile
+    
+    ui6_path = os.path.join(REL_DIR, "XPACK2", "ui6.ztd")
+    
+    # Also check uppercase path
+    if not os.path.exists(ui6_path):
+        ui6_path = os.path.join(REL_DIR, "xpack2", "ui6.ztd")
+    
+    if not os.path.exists(ui6_path):
+        return
+    
+    print(f"  {C.CYAN}Extracting Marine Mania UI from ui6.ztd...{C.RESET}")
+    
+    # Files to extract from ui6.ztd
+    files_to_extract = [
+        "ui/scenario.lyt",
+        "ui/mapselec.lyt",
+        "ui/scenario/aquascen.tga",
+        "ui/freeform/aquaffrm.tga",
+    ]
+    
+    try:
+        z = zipfile.ZipFile(ui6_path, 'r')
+        extracted = 0
+        
+        for file_path in z.namelist():
+            # Check if file is in interesting folders
+            lower_path = file_path.lower()
+            if (lower_path.startswith("ui/startup/") or 
+                lower_path.startswith("ui/scenario/") or
+                lower_path.startswith("ui/freeform/") or
+                lower_path.endswith(".lyt")):
+                
+                try:
+                    # Create output path
+                    out_path = os.path.join(REL_DIR, file_path.replace('/', os.sep))
+                    out_dir = os.path.dirname(out_path)
+                    os.makedirs(out_dir, exist_ok=True)
+                    
+                    # Extract file
+                    data = z.read(file_path)
+                    with open(out_path, 'wb') as f:
+                        f.write(data)
+                    
+                    extracted += 1
+                except Exception as e:
+                    print(f"    {C.RED}Failed to extract {file_path}: {e}{C.RESET}")
+        
+        z.close()
+
+        
+        if extracted > 0:
+            print(f"  {C.GREEN}✓ Extracted {extracted} Marine Mania UI files{C.RESET}")
+            
+    except Exception as e:
+        print(f"  {C.RED}Failed to open ui6.ztd: {e}{C.RESET}")
 
 if __name__ == "__main__":
     try:

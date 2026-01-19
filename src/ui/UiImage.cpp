@@ -153,6 +153,12 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       if (ext == "png" || ext == "bmp" || ext == "tga") {
         this->image =
             this->resource_manager->getTexture(renderer, this->image_path);
+        // Debug: log background loading
+        if (this->name == "Background" || this->name == "background") {
+          SDL_Log("UiImage DEBUG: name='%s' path='%s' image=%p",
+                  this->name.c_str(), this->image_path.c_str(),
+                  (void *)this->image);
+        }
       } else if (ext.empty() || ext == "ani") {
         this->animation =
             this->resource_manager->getAnimation(this->image_path);
@@ -210,7 +216,13 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   }
 
   if (this->image != nullptr) {
-    SDL_SetTextureBlendMode(this->image, SDL_BLENDMODE_BLEND);
+    // Use BLENDMODE_NONE for background images to ignore alpha channel
+    // (fixes 32-bit TGAs like aquascen.tga appearing black)
+    if (this->name == "background" || this->name == "Background") {
+      SDL_SetTextureBlendMode(this->image, SDL_BLENDMODE_NONE);
+    } else {
+      SDL_SetTextureBlendMode(this->image, SDL_BLENDMODE_BLEND);
+    }
 
     if (SDL_RenderCopy(renderer, this->image, nullptr, &dest_rect) != 0) {
       SDL_Log("SDL_RenderCopy failed for UiImage(id=%d name=%s): %s", this->id,
