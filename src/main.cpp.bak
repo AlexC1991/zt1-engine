@@ -21,10 +21,6 @@
 #include "ui/UiListBox.hpp"
 #include "ui/UiText.hpp"
 
-// Memory tracking system
-#include "MemoryDumpLog.hpp"
-#include "MemoryTracker.hpp"
-
 // --- FORWARD DECLARATIONS ---
 static void updateScenarioDetails(UiLayout *layout,
                                   ScenarioManager *scenarioManager,
@@ -425,12 +421,6 @@ static void populateFreeformList(UiLayout *layout,
 int main(int argc, char *argv[]) {
   SDL_SetMainReady();
 
-  // Initialize memory tracking and crash dump system
-  // ZT_MEMORY_DUMP_INIT();
-  // Auto-dump every 60 seconds (helps catch state before crash)
-  // MemoryDumpLog::get().setAutoDumpInterval(60);
-  SDL_Log("Memory tracking initialized");
-
   Config config;
   ResourceManager resource_manager(&config);
 
@@ -466,45 +456,13 @@ int main(int argc, char *argv[]) {
   UiLayout *layout = new UiLayout(lyt_reader, &resource_manager);
   g_currentState = LayoutState::MAIN_MENU;
 
-  // [VERIFICATION HACK] Auto-load Tundra map to verify crash fix
-  SDL_Log("[VERIFICATION] Searching for Tundra map...");
-  for (int i = 0;; i++) {
-    const FreeformMap *map = g_scenarioManager->getFreeformMap(i);
-    if (!map)
-      break; // End of list
-
-    std::string lower = map->name;
-    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-
-    if (lower.find("tundra") != std::string::npos) {
-      SDL_Log("[VERIFICATION] Auto-loading map: %s (Path: %s)",
-              map->name.c_str(), map->path.c_str());
-      g_world->loadFreeform(map->path);
-
-      // Transition to game loop immediately
-      delete layout;
-      layout = nullptr;
-      g_currentState = LayoutState::GAME_LOOP;
-      break;
-    }
-  }
-
   InputManager input_manager;
   std::vector<Input> inputs;
 
   int running = 1;
   UiAction action = UiAction::NONE;
 
-  // Delta time tracking
-  Uint32 lastFrameTime = SDL_GetTicks();
-  float deltaTime = 0.0f;
-
   while (running > 0) {
-    // Calculate delta time
-    Uint32 currentTime = SDL_GetTicks();
-    deltaTime = (currentTime - lastFrameTime) / 1000.0f; // Convert to seconds
-    lastFrameTime = currentTime;
-
     window.clear();
     inputs = input_manager.getInputs();
 
@@ -514,19 +472,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    if (layout) {
-      action = layout->handleInputs(inputs);
-    } else {
-      // No layout means we are likely in game loop, so no UI actions
-      // Define a safe no-op action if explicit NONE isn't available,
-      // relying on default case of switch.
-      // Assuming cast to UiAction is possible or using a known safe value.
-      // Since I don't know the Enum for NONE, I'll just skip the switch logic
-      // by hacking the flow or I'll just use the last value? No, that's bad.
-      // Let's assume 9999 is safe for default case.
-      action = (UiAction)9999;
-    }
-
+    action = layout->handleInputs(inputs);
     switch (action) {
     case UiAction::STARTUP_EXIT:
       running = false;
@@ -615,7 +561,7 @@ int main(int argc, char *argv[]) {
         if (info && !info->isLocked) {
           SDL_Log("Starting Scenario: %s", info->name.c_str());
           g_world->loadScenario(info->scenarioPath);
-
+          
           delete layout;
           layout = nullptr; // UI is gone in game mode
           g_currentState = LayoutState::GAME_LOOP;
@@ -642,52 +588,22 @@ int main(int argc, char *argv[]) {
       break;
     }
 
-    // START OF LOOP LOGGING
-    if (g_currentState == LayoutState::GAME_LOOP) {
-      // SDL_Log("MainLoop: Loop Heartbeat");
-    }
 
-    // UPDATE LOGGING
-    if (g_currentState == LayoutState::GAME_LOOP) {
-      // SDL_Log("MainLoop: Pre-Update");
-      const Uint8 *state = SDL_GetKeyboardState(nullptr);
-      g_world->update(state, deltaTime);
-      // SDL_Log("MainLoop: Post-Update");
 
-      // SDL_Log("MainLoop: Pre-Draw");
-      g_world->draw(window.renderer);
-      // SDL_Log("MainLoop: Post-Draw");
+
+    if (g_currentState == LayoutState::GAME_LOOP) {
+        const Uint8 *state = SDL_GetKeyboardState(nullptr);
+        g_world->update(state);
+        g_world->draw(window.renderer);
     } else if (layout) {
-      layout->draw(window.renderer, nullptr);
-    }
-
-    if (g_currentState == LayoutState::GAME_LOOP) {
-      SDL_Log("MainLoop: Pre-Present");
+        layout->draw(window.renderer, nullptr);
     }
     window.present();
-    if (g_currentState == LayoutState::GAME_LOOP) {
-      SDL_Log("MainLoop: Post-Present");
-    }
-
-    // Trace loop restart
-    if (g_currentState == LayoutState::GAME_LOOP) {
-      SDL_Log("MainLoop: Loop Restart");
-    }
-
-    // Check if it's time for periodic memory dump
-    // ZT_MEMORY_DUMP_CHECK();
   }
 
-  // Write final memory report before cleanup
-  SDL_Log("Writing final memory report...");
-  ZT_MEMORY_REPORT();
-
   delete g_scenarioManager;
-  delete g_world;
-  delete layout;
 
-  // Shutdown memory tracking (writes exit dump to logs/)
-  ZT_MEMORY_DUMP_SHUTDOWN();
+  delete layout;
 
   return 0;
 }

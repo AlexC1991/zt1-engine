@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-╔══════════════════════════════════════════════════════════════════╗
-║          ZOO TYCOON 1 ENGINE - STEP 5: SETUP RUNTIME             ║
-╚══════════════════════════════════════════════════════════════════╝
++==================================================================+
+|          ZOO TYCOON 1 ENGINE - STEP 5: SETUP RUNTIME             |
++==================================================================+
 """
 
 import os
@@ -51,7 +51,7 @@ def setup_pc_sync_files():
             shutil.copy2(src, dst)
             file_count += 1
     
-    print(f"  {C.GREEN}✓{C.RESET} Custom files installed ({file_count} files from pc-sync)")
+    print(f"  {C.GREEN}[OK]{C.RESET} Custom files installed ({file_count} files from pc-sync)")
     return True
 
 def setup_fonts():
@@ -70,9 +70,9 @@ def setup_fonts():
     fonts_missing = [f for f in required_fonts if f not in fonts_present]
     
     if fonts_missing:
-        print(f"  {C.YELLOW}⚠ Missing fonts in {fonts_src}:{C.RESET}")
+        print(f"  {C.YELLOW}[!] Missing fonts in {fonts_src}:{C.RESET}")
         for f in fonts_missing:
-            print(f"    {C.RED}✗{C.RESET} {f}")
+            print(f"    {C.RED}[X]{C.RESET} {f}")
         print(f"  {C.DIM}Download from: https://www.fontsquirrel.com/fonts/aileron{C.RESET}")
         return False
     
@@ -83,7 +83,7 @@ def setup_fonts():
         dst = os.path.join(fonts_dst, font)
         shutil.copy2(src, dst)
     
-    print(f"  {C.GREEN}✓{C.RESET} Fonts installed")
+    print(f"  {C.GREEN}[OK]{C.RESET} Fonts installed")
     return True
 
 def setup_zoo_ini():
@@ -127,7 +127,7 @@ msaa=0
     with open(ini_path, "w", encoding="utf-8") as f:
         f.write(ini_content)
     
-    print(f"  {C.GREEN}✓{C.RESET} zoo.ini created")
+    print(f"  {C.GREEN}[OK]{C.RESET} zoo.ini created")
     return True
 
 def setup_folders():
@@ -142,7 +142,7 @@ def setup_folders():
     for folder in folders:
         os.makedirs(os.path.join(REL_DIR, folder), exist_ok=True)
     
-    print(f"  {C.GREEN}✓{C.RESET} Game folders created")
+    print(f"  {C.GREEN}[OK]{C.RESET} Game folders created")
     return True
 
 def setup_dlls():
@@ -176,18 +176,18 @@ def setup_dlls():
         if os.path.exists(src) and not os.path.exists(dst):
             shutil.copy2(src, dst)
     
-    print(f"  {C.GREEN}✓{C.RESET} DLLs configured")
+    print(f"  {C.GREEN}[OK]{C.RESET} DLLs configured")
     return True
 
 def verify_build():
     """Check if the build was successful."""
     exe_path = os.path.join(REL_DIR, "zt1-engine.exe")
     if not os.path.exists(exe_path):
-        print(f"  {C.RED}✗{C.RESET} zt1-engine.exe not found!")
+        print(f"  {C.RED}[X]{C.RESET} zt1-engine.exe not found!")
         print(f"  {C.YELLOW}Did Step 3 (Build) complete successfully?{C.RESET}")
         return False
     
-    print(f"  {C.GREEN}✓{C.RESET} zt1-engine.exe found")
+    print(f"  {C.GREEN}[OK]{C.RESET} zt1-engine.exe found")
     return True
 
 def setup_ui_files():
@@ -200,7 +200,7 @@ def setup_ui_files():
     tools_dir = os.path.join(ROOT_DIR, "tools")
     
     if not os.path.exists(ui_ztd):
-        print(f"  {C.YELLOW}⚠{C.RESET} ui.ztd not found - skipping UI setup")
+        print(f"  {C.YELLOW}[!]{C.RESET} ui.ztd not found - skipping UI setup")
         print(f"  {C.DIM}Copy Zoo Tycoon game files to: {REL_DIR}{C.RESET}")
         return True
     
@@ -212,9 +212,9 @@ def setup_ui_files():
             for f in lyt_files:
                 # Extract just the file, preserving path
                 z.extract(f, REL_DIR)
-        print(f"  {C.GREEN}✓{C.RESET} UI layout files extracted ({len(lyt_files)} files)")
+        print(f"  {C.GREEN}[OK]{C.RESET} UI layout files extracted ({len(lyt_files)} files)")
     except Exception as e:
-        print(f"  {C.RED}✗{C.RESET} Failed to extract UI files: {e}")
+        print(f"  {C.RED}[X]{C.RESET} Failed to extract UI files: {e}")
         return False
     
     # 2. Run button background decoder
@@ -228,11 +228,11 @@ def setup_ui_files():
                 text=True
             )
             if result.returncode == 0:
-                print(f"  {C.GREEN}✓{C.RESET} Button backgrounds decoded")
+                print(f"  {C.GREEN}[OK]{C.RESET} Button backgrounds decoded")
             else:
-                print(f"  {C.YELLOW}⚠{C.RESET} Button decoder had issues: {result.stderr[:100] if result.stderr else 'unknown'}")
+                print(f"  {C.YELLOW}[!]{C.RESET} Button decoder had issues: {result.stderr[:100] if result.stderr else 'unknown'}")
         except Exception as e:
-            print(f"  {C.YELLOW}⚠{C.RESET} Could not run button decoder: {e}")
+            print(f"  {C.YELLOW}[!]{C.RESET} Could not run button decoder: {e}")
     
     # 3. Run menu position script
     menu_script = os.path.join(tools_dir, "set_menu_x.py")
@@ -245,20 +245,20 @@ def setup_ui_files():
                 text=True
             )
             if result.returncode == 0:
-                print(f"  {C.GREEN}✓{C.RESET} Menu positions configured")
+                print(f"  {C.GREEN}[OK]{C.RESET} Menu positions configured")
             else:
-                print(f"  {C.YELLOW}⚠{C.RESET} Menu script had issues")
+                print(f"  {C.YELLOW}[!]{C.RESET} Menu script had issues")
         except Exception as e:
-            print(f"  {C.YELLOW}⚠{C.RESET} Could not run menu script: {e}")
+            print(f"  {C.YELLOW}[!]{C.RESET} Could not run menu script: {e}")
     
     return True
 
 def main():
     enable_ansi()
     print(f"""
-{C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════════════╗
-║          ZOO TYCOON 1 ENGINE - STEP 5: SETUP RUNTIME             ║
-╚══════════════════════════════════════════════════════════════════╝{C.RESET}
+{C.CYAN}{C.BOLD}+==================================================================+
+|          ZOO TYCOON 1 ENGINE - STEP 5: SETUP RUNTIME             |
++==================================================================+{C.RESET}
 """)
     
     print(f"  Release Folder: {C.CYAN}{REL_DIR}{C.RESET}")
@@ -290,9 +290,9 @@ def main():
     # Final summary
     print()
     if all_ok:
-        print(f"  {C.GREEN}{C.BOLD}╔════════════════════════════════════════╗{C.RESET}")
-        print(f"  {C.GREEN}{C.BOLD}║      RUNTIME SETUP COMPLETE! 🎮        ║{C.RESET}")
-        print(f"  {C.GREEN}{C.BOLD}╚════════════════════════════════════════╝{C.RESET}")
+        print(f"  {C.GREEN}{C.BOLD}+========================================+{C.RESET}")
+        print(f"  {C.GREEN}{C.BOLD}|      RUNTIME SETUP COMPLETE! 🎮        |{C.RESET}")
+        print(f"  {C.GREEN}{C.BOLD}+========================================+{C.RESET}")
         print()
         print(f"  You can now run: {C.CYAN}zt1-engine.exe{C.RESET}")
         print(f"  Location: {C.DIM}{REL_DIR}{C.RESET}")

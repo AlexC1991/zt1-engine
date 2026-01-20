@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-╔══════════════════════════════════════════════════════════════════╗
-║           ZOO TYCOON 1 ENGINE - STEP 4: IMPORT ASSETS            ║
-╚══════════════════════════════════════════════════════════════════╝
++==================================================================+
+|           ZOO TYCOON 1 ENGINE - STEP 4: IMPORT ASSETS            |
++==================================================================+
 """
 
 import os
@@ -88,15 +88,15 @@ def import_from_folder(source_dir):
         except Exception as e:
             print(f"    {C.RED}Failed: {item} - {e}{C.RESET}")
     
-    print(f"  {C.GREEN}✓ Copied {files_copied} files, {dirs_copied} folders{C.RESET}")
+    print(f"  {C.GREEN}[OK]{C.RESET} Copied {files_copied} files, {dirs_copied} folders{C.RESET}")
     return files_copied + dirs_copied
 
 def main():
     enable_ansi()
     print(f"""
-{C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════════════╗
-║           ZOO TYCOON 1 ENGINE - STEP 4: IMPORT ASSETS            ║
-╚══════════════════════════════════════════════════════════════════╝{C.RESET}
+{C.CYAN}{C.BOLD}+==================================================================+
+|           ZOO TYCOON 1 ENGINE - STEP 4: IMPORT ASSETS            |
++==================================================================+{C.RESET}
 """)
     
     print(f"  Destination: {C.CYAN}{REL_DIR}{C.RESET}")
@@ -110,7 +110,7 @@ def main():
     
     # Check if assets already present
     if check_assets_present():
-        print(f"  {C.GREEN}✓{C.RESET} Game assets already present")
+        print(f"  {C.GREEN}[OK]{C.RESET} Game assets already present")
         print(f"  {C.DIM}Skipping import (delete .ztd files to re-import){C.RESET}")
         return 0
     
@@ -146,7 +146,7 @@ def main():
         source_dir = input(f"  {C.CYAN}Path:{C.RESET} ").strip().strip('"')
     
     if not source_dir or not os.path.exists(source_dir):
-        print(f"  {C.RED}✗ Invalid path{C.RESET}")
+        print(f"  {C.RED}[X]{C.RESET} Invalid path{C.RESET}")
         return 1
     
     print()
@@ -158,7 +158,7 @@ def main():
     
     print()
     if files_copied > 0:
-        print(f"  {C.GREEN}✓ Imported {files_copied} files{C.RESET}")
+        print(f"  {C.GREEN}[OK]{C.RESET} Imported {files_copied} files{C.RESET}")
     else:
         print(f"  {C.YELLOW}No new files to import{C.RESET}")
     

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-╔══════════════════════════════════════════════════════════════════╗
-║            ZOO TYCOON 1 ENGINE - STEP 3: BUILD ENGINE            ║
-╚══════════════════════════════════════════════════════════════════╝
++==================================================================+
+|            ZOO TYCOON 1 ENGINE - STEP 3: BUILD ENGINE            |
++==================================================================+
 """
 import os
 import sys
@@ -66,16 +66,16 @@ def run_smart_build(command, cwd, desc):
             
             # Show Configuration Steps
             elif "Configuring" in desc and ("Check" in clean or "Detect" in clean):
-                 sys.stdout.write('\r' + ' '*70 + '\r' + f"  {C.CYAN}• {clean[:60]}...{C.RESET}")
+                 sys.stdout.write('\r' + ' '*70 + '\r' + f"  {C.CYAN}* {clean[:60]}...{C.RESET}")
                  sys.stdout.flush()
 
     print() # New line after done
     return process.poll(), full_log
 
 def print_error_box(log_lines):
-    print(f"\n{C.RED}{C.BOLD}╔══════════════════════════════════════════════════════════════════╗{C.RESET}")
-    print(f"{C.RED}{C.BOLD}║                       BUILD ERRORS DETECTED                      ║{C.RESET}")
-    print(f"{C.RED}{C.BOLD}╚══════════════════════════════════════════════════════════════════╝{C.RESET}")
+    print(f"\n{C.RED}{C.BOLD}+==================================================================+{C.RESET}")
+    print(f"{C.RED}{C.BOLD}|                       BUILD ERRORS DETECTED                      |{C.RESET}")
+    print(f"{C.RED}{C.BOLD}+==================================================================+{C.RESET}")
     
     # Filter for lines containing "error" or "fatal"
     error_lines = []
@@ -115,7 +115,7 @@ def main():
         print_error_box(log)
         return 1
         
-    print(f"\n{C.GREEN}✓ Build Successful! ({time.time()-start:.1f}s){C.RESET}")
+    print(f"\n{C.GREEN}[OK]{C.RESET} Build Successful! ({time.time()-start:.1f}s){C.RESET}")
     print(f"  Exe: {os.path.join(REL_DIR, 'zt1-engine.exe')}")
     print()
     return 0

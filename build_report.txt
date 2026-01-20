@@ -5,11 +5,11 @@ Time: 0.0 seconds
 COMPLETED STEPS:
 
 FAILED AT:
-  ✗ Step 1: CLEAN WORKSPACE
+  X Step 1: CLEAN WORKSPACE
 
 ERRORS:
 
-──────────────────────────────────────────────────
+==================================================
 Step 1: CLEAN WORKSPACE
 Type: StepFailed
 Message:

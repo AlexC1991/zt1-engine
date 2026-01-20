@@ -1,0 +1,38 @@
+===============================================================================
+                      ZT1-ENGINE MEMORY DUMP REPORT
+===============================================================================
+Timestamp:  2026-01-21 03:07:49
+Reason:     shutdown
+Total Mem:  0 B
+===============================================================================
+
+=== CURRENT MEMORY BY SYSTEM ===
+System                       Current     Count          Peak  Peak Cnt      Allocs       Frees
+----------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------
+TOTAL                            0 B         0                                   0           0
+
+=== CHURN ANALYSIS ===
+Systems with high allocation churn (many alloc/free cycles):
+
+No high-churn patterns detected.
+
+=== LARGE FREES (512KB+) ===
+Large memory blocks that were freed:
+
+No large frees detected.
+
+=== GARBAGE LOG (Recent Frees) ===
+Showing last 100 freed allocations:
+
+System                    Size    Lifetime                    Alloc Site                     Free Site  Tag
+--------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+Total entries: 0
+
+=== ACTIVE ALLOCATIONS (Snapshot) ===
+All currently tracked memory allocations:
+
+
+(Note: Individual allocation details require internal tracker access.
+ See garbage log for detailed free records.)

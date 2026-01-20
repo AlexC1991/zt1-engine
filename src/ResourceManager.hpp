@@ -19,6 +19,7 @@
 #include "ZtdFile.hpp"
 
 class ResourceManager {
+  friend class World; // [STRESS TEST] Allow access
 public:
   ResourceManager(Config *config);
   ~ResourceManager();

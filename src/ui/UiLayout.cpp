@@ -3,6 +3,7 @@
 #include "UiButton.hpp"
 #include "UiImage.hpp"
 #include "UiListBox.hpp"
+#include "UiScrollBar.hpp"
 #include "UiText.hpp"
 
 UiLayout::UiLayout(IniReader *ini_reader, ResourceManager *resource_manager) {
@@ -16,11 +17,8 @@ UiLayout::UiLayout(IniReader *ini_reader, ResourceManager *resource_manager) {
   this->process_sections(ini_reader, resource_manager);
 }
 
-UiLayout::UiLayout(
-  IniReader *ini_reader,
-  ResourceManager *resource_manager,
-  std::string name
-) {
+UiLayout::UiLayout(IniReader *ini_reader, ResourceManager *resource_manager,
+                   std::string name) {
   this->ini_reader = ini_reader;
   this->resource_manager = resource_manager;
 
@@ -46,7 +44,8 @@ UiLayout::~UiLayout() {
 }
 
 void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
-  if (renderer == nullptr) return;
+  if (renderer == nullptr)
+    return;
 
   if (layout_rect == nullptr) {
     if (!window) {
@@ -60,10 +59,8 @@ void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   drawChildren(renderer, layout_rect);
 }
 
-void UiLayout::process_sections(
-  IniReader *ini_reader,
-  ResourceManager *resource_manager
-) {
+void UiLayout::process_sections(IniReader *ini_reader,
+                                ResourceManager *resource_manager) {
   this->id = ini_reader->getInt(name, "id", 0);
   this->layer_count = ini_reader->getInt(name, "layer", 0);
 
@@ -80,38 +77,40 @@ void UiLayout::process_sections(
     UiElement *new_element = nullptr;
     std::string element_type = ini_reader->get(section, "type");
 
-    // Map preview boxes sometimes have odd metadata; force UiImage for known names.
+    // Map preview boxes sometimes have odd metadata; force UiImage for known
+    // names.
     if (section == "smap" || section == "fmap" || section == "map_preview") {
       new_element =
-        (UiElement *)new UiImage(ini_reader, resource_manager, section);
+          (UiElement *)new UiImage(ini_reader, resource_manager, section);
     } else if (element_type == "UIImage") {
       new_element =
-        (UiElement *)new UiImage(ini_reader, resource_manager, section);
+          (UiElement *)new UiImage(ini_reader, resource_manager, section);
     } else if (element_type == "UIButton") {
       new_element =
-        (UiElement *)new UiButton(ini_reader, resource_manager, section);
+          (UiElement *)new UiButton(ini_reader, resource_manager, section);
     } else if (element_type == "UIText") {
       new_element =
-        (UiElement *)new UiText(ini_reader, resource_manager, section);
+          (UiElement *)new UiText(ini_reader, resource_manager, section);
     } else if (element_type == "UIListBox") {
       new_element =
-        (UiElement *)new UiListBox(ini_reader, resource_manager, section);
+          (UiElement *)new UiListBox(ini_reader, resource_manager, section);
     } else if (element_type == "UILayout") {
       new_element =
-        (UiElement *)new UiLayout(ini_reader, resource_manager, section);
+          (UiElement *)new UiLayout(ini_reader, resource_manager, section);
+    } else if (element_type == "UIScrollBar") {
+      new_element =
+          (UiElement *)new UiScrollBar(ini_reader, resource_manager, section);
     } else {
       if (element_type.empty()) {
         SDL_Log("Could not determine type of section %s", section.c_str());
       } else {
-        SDL_Log(
-          "Unknown UI element type '%s' in section %s",
-          element_type.c_str(),
-          section.c_str()
-        );
+        SDL_Log("Unknown UI element type '%s' in section %s",
+                element_type.c_str(), section.c_str());
       }
     }
 
-    if (!new_element) continue;
+    if (!new_element)
+      continue;
 
     int anchorId = new_element->getAnchor();
     if (anchorId == 0 || anchorId == this->id) {
@@ -129,12 +128,8 @@ void UiLayout::process_sections(
     if (anchorTarget != nullptr) {
       anchorTarget->addChild(child);
     } else {
-      SDL_Log(
-        "Anchor id %d was not found for element id=%d name='%s'",
-        anchorId,
-        child->getId(),
-        child->getName().c_str()
-      );
+      SDL_Log("Anchor id %d was not found for element id=%d name='%s'",
+              anchorId, child->getId(), child->getName().c_str());
 
       // Fallback: attach to root so it still exists (helps debugging and
       // avoids “missing UI element” issues).
@@ -143,7 +138,8 @@ void UiLayout::process_sections(
   }
 }
 
-void UiLayout::process_layout(ResourceManager *resource_manager, std::string layout) {
+void UiLayout::process_layout(ResourceManager *resource_manager,
+                              std::string layout) {
   if (layout.empty()) {
     return;
   }
@@ -171,7 +167,8 @@ UiElement *UiLayout::getElementById(int targetId) {
     UiLayout *childLayout = dynamic_cast<UiLayout *>(child);
     if (childLayout) {
       UiElement *found = childLayout->getElementById(targetId);
-      if (found) return found;
+      if (found)
+        return found;
     }
   }
 
