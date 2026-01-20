@@ -3,3 +3,7 @@ build/
 build_log.txt
 runtime_log.txt
 # pc-sync/ is intentionally tracked for sharing custom files between PCs
+CMakeCache.txt
+CMakeFiles/
+__pycache__/
+*.pyc

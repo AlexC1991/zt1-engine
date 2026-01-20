@@ -113,9 +113,20 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   //   - 4 bytes: unknown field (possibly frame count) - SKIP THIS
   //   - Then frame data starts...
 
-  uint32_t timing_or_height =
-      SDL_ReadLE32(rw); // Not used - dimensions come from .ani
-  uint32_t str_len = SDL_ReadLE32(rw);
+  uint32_t timing_or_height = SDL_ReadLE32(rw);
+  uint32_t str_len;
+  
+  // Check for FATZ header (0x5A544146)
+  if (timing_or_height == 0x5A544146) {
+      SDL_Log("AniFile: Detected FATZ header");
+      SDL_ReadLE32(rw); // Skip unknown 0x00000000
+      SDL_ReadLE32(rw); // Skip Timing (shifted)
+      str_len = SDL_ReadLE32(rw); // Read Length (shifted)
+      str_len >>= 8; // Fix shift
+      SDL_ReadU8(rw); // Skip padding byte (0x00)
+  } else {
+      str_len = SDL_ReadLE32(rw);
+  }
 
   // Read Palette String
   char *pal_str = (char *)calloc(1, str_len + 1);

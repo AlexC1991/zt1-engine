@@ -99,7 +99,11 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
                   (base_name.find("_N") != std::string::npos) ||
                   (base_name.find("_H") != std::string::npos) ||
                   (base_name.find("_S") != std::string::npos) ||
-                  (base_name.find("_G") != std::string::npos);
+                  (base_name.find("_G") != std::string::npos) ||
+                  (base_name.find("_n") != std::string::npos) ||
+                  (base_name.find("_h") != std::string::npos) ||
+                  (base_name.find("_s") != std::string::npos) ||
+                  (base_name.find("_g") != std::string::npos);
 
   if (!suppress) {
     SDL_Log("Resource not found: %s", base_name.c_str());

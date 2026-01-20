@@ -17,5 +17,9 @@ enum class UiAction {
     // [PATCH] Starting cash spinner buttons (using button IDs)
     CASH_SPINNER_UP=11511,          // Increase starting cash
     CASH_SPINNER_DOWN=11512,        // Decrease starting cash
+
+    // [PATCH] Play Buttons (mapped to Layout IDs)
+    PLAY_SCENARIO_START = 50008,    // "Play" on Scenario screen
+    PLAY_FREEFORM_START = 11513,    // "Play" on Freeform screen
 };
 #endif // UI_ACTION_HPP
