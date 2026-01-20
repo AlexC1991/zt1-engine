@@ -1,7 +1,7 @@
 import os
 import zipfile
 
-PROJECT_ROOT = "c:\\Users\\batty\\OneDrive\\Desktop\\Lua\\zt1-engine"
+PROJECT_ROOT = "c:\\Users\\batty\\OneDrive\\Documents\\GitHub\\zt1-engine"
 RELEASE_DIR = os.path.join(PROJECT_ROOT, "build", "Release")
 
 def search_ztd(ztd_path, query):
