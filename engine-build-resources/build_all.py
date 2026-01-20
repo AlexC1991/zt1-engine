@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-╔══════════════════════════════════════════════════════════════════╗
-║              ZOO TYCOON 1 ENGINE - FULL BUILD                    ║
-║                   Runs all 5 build steps                         ║
-╚══════════════════════════════════════════════════════════════════╝
++==================================================================+
+|              ZOO TYCOON 1 ENGINE - FULL BUILD                    |
+|                   Runs all 5 build steps                         |
++==================================================================+
 """
 
 import os
@@ -31,45 +31,29 @@ class C:
 
 LOGO = f"""
 {C.CYAN}{C.BOLD}
-    ███████╗ ██████╗  ██████╗    ████████╗██╗   ██╗ ██████╗ ██████╗  ██████╗ ███╗   ██╗
-    ╚══███╔╝██╔═══██╗██╔═══██╗   ╚══██╔══╝╚██╗ ██╔╝██╔════╝██╔═══██╗██╔═══██╗████╗  ██║
-      ███╔╝ ██║   ██║██║   ██║      ██║    ╚████╔╝ ██║     ██║   ██║██║   ██║██╔██╗ ██║
-     ███╔╝  ██║   ██║██║   ██║      ██║     ╚██╔╝  ██║     ██║   ██║██║   ██║██║╚██╗██║
-    ███████╗╚██████╔╝╚██████╔╝      ██║      ██║   ╚██████╗╚██████╔╝╚██████╔╝██║ ╚████║
-    ╚══════╝ ╚═════╝  ╚═════╝       ╚═╝      ╚═╝    ╚═════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝
+    Zoo Tycoon 1 Engine
+    Reimplementation
 {C.RESET}
-{C.YELLOW}                          🦁 ENGINE BUILDER v2.0 🐘{C.RESET}
+{C.YELLOW}                          ENGINE BUILDER v2.0{C.RESET}
 {C.DIM}                    Open Source Zoo Tycoon 1 Reimplementation{C.RESET}
 """
 
 SUCCESS_BANNER = f"""
 {C.GREEN}{C.BOLD}
-    ╔═══════════════════════════════════════════════════════════════╗
-    ║                                                               ║
-    ║   ███████╗██╗   ██╗ ██████╗ ██████╗███████╗███████╗███████╗   ║
-    ║   ██╔════╝██║   ██║██╔════╝██╔════╝██╔════╝██╔════╝██╔════╝   ║
-    ║   ███████╗██║   ██║██║     ██║     █████╗  ███████╗███████╗   ║
-    ║   ╚════██║██║   ██║██║     ██║     ██╔══╝  ╚════██║╚════██║   ║
-    ║   ███████║╚██████╔╝╚██████╗╚██████╗███████╗███████║███████║   ║
-    ║   ╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝╚══════╝╚══════╝╚══════╝   ║
-    ║                                                               ║
-    ║              🎉 BUILD COMPLETED SUCCESSFULLY! 🎉              ║
-    ╚═══════════════════════════════════════════════════════════════╝
+    +===============================================================+
+    |                                                               |
+    |              BUILD COMPLETED SUCCESSFULLY!                    |
+    |                                                               |
+    +===============================================================+
 {C.RESET}"""
 
 FAIL_BANNER = f"""
 {C.RED}{C.BOLD}
-    ╔═══════════════════════════════════════════════════════════════╗
-    ║                                                               ║
-    ║        ███████╗ █████╗ ██╗██╗     ███████╗██████╗             ║
-    ║        ██╔════╝██╔══██╗██║██║     ██╔════╝██╔══██╗            ║
-    ║        █████╗  ███████║██║██║     █████╗  ██║  ██║            ║
-    ║        ██╔══╝  ██╔══██║██║██║     ██╔══╝  ██║  ██║            ║
-    ║        ██║     ██║  ██║██║███████╗███████╗██████╔╝            ║
-    ║        ╚═╝     ╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚═════╝             ║
-    ║                                                               ║
-    ║                 ❌ BUILD FAILED - SEE ERRORS ABOVE            ║
-    ╚═══════════════════════════════════════════════════════════════╝
+    +===============================================================+
+    |                                                               |
+    |                 BUILD FAILED - SEE ERRORS ABOVE               |
+    |                                                               |
+    +===============================================================+
 {C.RESET}"""
 
 def enable_ansi():
@@ -86,9 +70,9 @@ class BuildError:
         self.traceback_str = traceback_str
     
     def display(self):
-        print(f"\n{C.RED}{'═' * 65}{C.RESET}")
+        print(f"\n{C.RED}{'=' * 65}{C.RESET}")
         print(f"{C.RED}{C.BOLD}  ERROR IN STEP {self.step_num}: {self.step_name}{C.RESET}")
-        print(f"{C.RED}{'═' * 65}{C.RESET}")
+        print(f"{C.RED}{'=' * 65}{C.RESET}")
         print(f"\n  {C.YELLOW}Error Type:{C.RESET} {self.error_type}")
         print(f"\n  {C.YELLOW}Message:{C.RESET}")
         for line in str(self.message).split('\n')[:30]:  # Limit to 30 lines
@@ -100,9 +84,9 @@ class BuildError:
 
 def run_step(step_num, name, script_name, errors_list):
     """Run a build step and return success status."""
-    print(f"\n{C.MAGENTA}{'═' * 65}{C.RESET}")
+    print(f"\n{C.MAGENTA}{'=' * 65}{C.RESET}")
     print(f"  {C.BOLD}STEP {step_num}/5: {name}{C.RESET}")
-    print(f"{C.MAGENTA}{'═' * 65}{C.RESET}\n")
+    print(f"{C.MAGENTA}{'=' * 65}{C.RESET}\n")
     
     script_path = os.path.join(SCRIPT_DIR, script_name)
     
@@ -114,7 +98,7 @@ def run_step(step_num, name, script_name, errors_list):
             f"Script not found: {script_path}"
         )
         errors_list.append(error)
-        print(f"  {C.RED}✗ Script not found: {script_name}{C.RESET}")
+        print(f"  {C.RED}X Script not found: {script_name}{C.RESET}")
         return False
     
     # Import and run the step's main function
@@ -152,7 +136,7 @@ def run_step(step_num, name, script_name, errors_list):
             tb
         )
         errors_list.append(error)
-        print(f"  {C.RED}✗ Exception: {e}{C.RESET}")
+        print(f"  {C.RED}X Exception: {e}{C.RESET}")
         return False
 
 def main():
@@ -198,7 +182,7 @@ def main():
         # Summary of completed steps
         print(f"\n  {C.GREEN}Completed steps:{C.RESET}")
         for num, name in completed_steps:
-            print(f"    {C.GREEN}✓{C.RESET} Step {num}: {name}")
+            print(f"    {C.GREEN}[OK]{C.RESET} Step {num}: {name}")
         
         return 0
     else:
@@ -212,11 +196,11 @@ def main():
         # Summary
         print(f"\n  {C.GREEN}Completed steps:{C.RESET}")
         for num, name in completed_steps:
-            print(f"    {C.GREEN}✓{C.RESET} Step {num}: {name}")
+            print(f"    {C.GREEN}[OK]{C.RESET} Step {num}: {name}")
         
         if failed_step:
             print(f"\n  {C.RED}Failed at:{C.RESET}")
-            print(f"    {C.RED}✗{C.RESET} Step {failed_step[0]}: {failed_step[1]}")
+            print(f"    {C.RED}X{C.RESET} Step {failed_step[0]}: {failed_step[1]}")
         
         # Save error report
         report_file = os.path.join(ROOT_DIR, "build_report.txt")
@@ -227,15 +211,15 @@ def main():
             
             f.write("COMPLETED STEPS:\n")
             for num, name in completed_steps:
-                f.write(f"  ✓ Step {num}: {name}\n")
+                f.write(f"  OK Step {num}: {name}\n")
             
             if failed_step:
                 f.write(f"\nFAILED AT:\n")
-                f.write(f"  ✗ Step {failed_step[0]}: {failed_step[1]}\n")
+                f.write(f"  X Step {failed_step[0]}: {failed_step[1]}\n")
             
             f.write(f"\nERRORS:\n")
             for error in errors_list:
-                f.write(f"\n{'─' * 50}\n")
+                f.write(f"\n{'=' * 50}\n")
                 f.write(f"Step {error.step_num}: {error.step_name}\n")
                 f.write(f"Type: {error.error_type}\n")
                 f.write(f"Message:\n{error.message}\n")
@@ -256,9 +240,9 @@ if __name__ == "__main__":
         print(f"\n  {C.YELLOW}Build cancelled{C.RESET}")
         sys.exit(1)
     except Exception as e:
-        print(f"\n{C.RED}{'═' * 65}{C.RESET}")
+        print(f"\n{C.RED}{'=' * 65}{C.RESET}")
         print(f"{C.RED}UNEXPECTED ERROR IN BUILD SYSTEM{C.RESET}")
-        print(f"{C.RED}{'═' * 65}{C.RESET}")
+        print(f"{C.RED}{'=' * 65}{C.RESET}")
         print(f"\n  {C.RED}{type(e).__name__}: {e}{C.RESET}")
         print(f"\n  {C.DIM}{traceback.format_exc()}{C.RESET}")
         input(f"\n  {C.CYAN}Press Enter to exit...{C.RESET}")

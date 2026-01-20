@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.12)
 project(zt1-engine)
+# Triggering CMake re-configure to include new files: MemoryTracker, MemoryDumpLog, SpriteDatabase, Entity, EntityManager
 
 # 1. UPGRADE TO C++20 (Fixes 'contains' and 'designated initializer' errors)
 set(CMAKE_CXX_STANDARD 20)

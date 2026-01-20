@@ -1,11 +1,9 @@
+#include "DiagnosticUtilityData.hpp"
 #include "Window.hpp"
 
 #include "SDL_image.h"
 #include "SDL_mixer.h"
 #include "SDL_ttf.h"
-
-// #define INTERNAL_WIDTH 800
-// #define INTERNAL_HEIGHT 600
 
 Window::Window(const std::string &title, int width, int height, float fps_target) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_TIMER) != 0) {
@@ -36,7 +34,6 @@ Window::Window(const std::string &title, int width, int height, float fps_target
         exit(5);
     }
 
-    // Make the use of transparency possible
     SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
 
     this->start_frame = SDL_GetTicks();
@@ -53,6 +50,14 @@ void Window::present() {
     if (delta < this->frame_delay) {
         SDL_Delay(this->frame_delay - delta);
     }
+    
+    // [GLOBAL DIAGNOSTICS] - Silent Version
+    static DiagnosticUtilityData* globalDiag = new DiagnosticUtilityData();
+    if (globalDiag) {
+        globalDiag->update();
+        globalDiag->draw(this->renderer);
+    }
+    
     SDL_RenderPresent(this->renderer);
     this->start_frame = SDL_GetTicks();
 }

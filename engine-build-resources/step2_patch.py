@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-╔══════════════════════════════════════════════════════════════════╗
-║          ZOO TYCOON 1 ENGINE - STEP 2: PATCH RUNNER              ║
-║        (Automatically applies scripts from /patches folder)      ║
-║                    + Auto-Archive Completed Patches              ║
-╚══════════════════════════════════════════════════════════════════╝
++==================================================================+
+|          ZOO TYCOON 1 ENGINE - STEP 2: PATCH RUNNER              |
+|        (Automatically applies scripts from /patches folder)      |
+|                    + Auto-Archive Completed Patches              |
++==================================================================+
 """
 
 import os
@@ -82,7 +82,7 @@ def archive_patch_file(patch_name):
 def run_patches(auto_archive=False):
     """Run all active patches and return count of applied patches"""
     if not os.path.exists(PATCHES_DIR):
-        print(f"  {C.YELLOW}⚠ 'patches' folder not found at: {PATCHES_DIR}{C.RESET}")
+        print(f"  {C.YELLOW}[!] 'patches' folder not found at: {PATCHES_DIR}{C.RESET}")
         return -1, []
 
     patch_files = get_active_patches()
@@ -111,7 +111,7 @@ def run_patches(auto_archive=False):
                     patches_skipped.append(p_file)
                 
         except Exception as e:
-            print(f"  {C.YELLOW}⚠ Error in {p_file}: {e}{C.RESET}")
+            print(f"  {C.YELLOW}[!] Error in {p_file}: {e}{C.RESET}")
             patches_with_errors.append(p_file)
 
     return patches_applied, patches_skipped
@@ -122,7 +122,7 @@ def display_patches():
     archived = get_archived_patches()
     
     print(f"\n  {C.BOLD}ACTIVE PATCHES ({len(active)}):{C.RESET}")
-    print(f"  {C.DIM}{'─' * 50}{C.RESET}")
+    print(f"  {C.DIM}{'-' * 50}{C.RESET}")
     
     if active:
         # Group by category
@@ -137,21 +137,21 @@ def display_patches():
             if cat in by_category:
                 print(f"  {C.CYAN}{cat}:{C.RESET}")
                 for p in by_category[cat]:
-                    print(f"    {C.GREEN}●{C.RESET} {p}")
+                    print(f"    {C.GREEN}*{C.RESET} {p}")
         
         # Show uncategorized
         if "Other" in by_category:
             print(f"  {C.CYAN}Other:{C.RESET}")
             for p in by_category["Other"]:
-                print(f"    {C.GREEN}●{C.RESET} {p}")
+                print(f"    {C.GREEN}*{C.RESET} {p}")
     else:
         print(f"  {C.DIM}(none){C.RESET}")
     
     if archived:
         print(f"\n  {C.BOLD}ARCHIVED PATCHES ({len(archived)}):{C.RESET}")
-        print(f"  {C.DIM}{'─' * 50}{C.RESET}")
+        print(f"  {C.DIM}{'-' * 50}{C.RESET}")
         for p in archived:
-            print(f"    {C.DIM}○ {p}{C.RESET}")
+            print(f"    {C.DIM}o {p}{C.RESET}")
 
 def archive_patch():
     """Archive a patch (move to archive folder)"""
@@ -174,7 +174,7 @@ def archive_patch():
         if 0 <= idx < len(active):
             patch = active[idx]
             if archive_patch_file(patch):
-                print(f"  {C.GREEN}✓ Archived: {patch}{C.RESET}")
+                print(f"  {C.GREEN}[OK]{C.RESET} Archived: {patch}{C.RESET}")
         else:
             print(f"  {C.YELLOW}Invalid selection.{C.RESET}")
     except ValueError:
@@ -202,7 +202,7 @@ def restore_patch():
             src = os.path.join(ARCHIVE_DIR, patch)
             dst = os.path.join(PATCHES_DIR, patch)
             shutil.move(src, dst)
-            print(f"  {C.GREEN}✓ Restored: {patch}{C.RESET}")
+            print(f"  {C.GREEN}[OK]{C.RESET} Restored: {patch}{C.RESET}")
         else:
             print(f"  {C.YELLOW}Invalid selection.{C.RESET}")
     except ValueError:
@@ -236,7 +236,7 @@ def archive_range():
                     num = int(prefix)
                     if start_num <= num <= end_num:
                         if archive_patch_file(p):
-                            print(f"    {C.GREEN}✓{C.RESET} Archived: {p}")
+                            print(f"    {C.GREEN}[OK]{C.RESET} Archived: {p}")
                             archived_count += 1
                 except ValueError:
                     pass
@@ -265,7 +265,7 @@ def restore_all():
         src = os.path.join(ARCHIVE_DIR, p)
         dst = os.path.join(PATCHES_DIR, p)
         shutil.move(src, dst)
-        print(f"    {C.GREEN}✓{C.RESET} Restored: {p}")
+        print(f"    {C.GREEN}[OK]{C.RESET} Restored: {p}")
         restored += 1
     
     print(f"\n  {C.GREEN}Restored {restored} patches.{C.RESET}")
@@ -273,9 +273,9 @@ def restore_all():
 def patch_manager_menu():
     """Interactive patch manager menu"""
     while True:
-        print(f"\n  {C.BOLD}╔════════════════════════════════════╗{C.RESET}")
-        print(f"  {C.BOLD}║       PATCH MANAGER OPTIONS        ║{C.RESET}")
-        print(f"  {C.BOLD}╚════════════════════════════════════╝{C.RESET}")
+        print(f"\n  {C.BOLD}+====================================+{C.RESET}")
+        print(f"  {C.BOLD}|       PATCH MANAGER OPTIONS        |{C.RESET}")
+        print(f"  {C.BOLD}+====================================+{C.RESET}")
         
         display_patches()
         
@@ -322,7 +322,7 @@ def main():
         
         # Auto-archive patches that didn't need to apply
         if patches_skipped:
-            print(f"\n  {C.DIM}{'─' * 50}{C.RESET}")
+            print(f"\n  {C.DIM}{'-' * 50}{C.RESET}")
             print(f"  {C.CYAN}Auto-archiving {len(patches_skipped)} completed patch(es):{C.RESET}")
             
             for p in patches_skipped:
@@ -333,7 +333,7 @@ def main():
     
     # If running standalone, offer patch management
     if standalone:
-        print(f"\n  {C.DIM}{'─' * 50}{C.RESET}")
+        print(f"\n  {C.DIM}{'-' * 50}{C.RESET}")
         manage = input(f"\n  Open patch manager? [y/N]: ").strip().lower()
         if manage == 'y':
             patch_manager_menu()

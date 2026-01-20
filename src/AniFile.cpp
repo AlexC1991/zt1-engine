@@ -1,4 +1,6 @@
 #include "AniFile.hpp"
+#include <chrono>
+#include <thread>
 
 #include <cstring>
 #include <vector>
@@ -6,7 +8,7 @@
 #include "Utils.hpp"
 #include "ZtdFile.hpp"
 
-// PATCHED: NULL safety checks
+// PATCHED: NULL safety checks & Memory Allocation Fix
 Animation *AniFile::getAnimation(PalletManager *pallet_manager,
                                  const std::string &ztd_file,
                                  const std::string &file_name) {
@@ -33,6 +35,9 @@ Animation *AniFile::getAnimation(PalletManager *pallet_manager,
   std::unordered_map<std::string, AnimationData *> *animations =
       new std::unordered_map<std::string, AnimationData *>;
   std::string directory = AniFile::getAnimationDirectory(ini_reader);
+
+  // [CLEANUP] Blacklist removed. All assets allowed.
+
   bool has_valid_animation = false;
   for (std::string direction : ini_reader->getList("animation", "animation")) {
     AnimationData *anim_data = AniFile::loadAnimationData(
@@ -54,7 +59,9 @@ Animation *AniFile::getAnimation(PalletManager *pallet_manager,
     return nullptr;
   }
 
-  return new Animation(animations);
+  Animation *anim = new Animation(animations);
+  delete animations;
+  return anim;
 }
 
 std::string AniFile::getAnimationDirectory(IniReader *ini_reader) {
@@ -98,61 +105,68 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   }
 
   Sint64 file_size = raw_size;
-  AnimationData *animation_data = new AnimationData;
+
+  // [CRITICAL FIX] Use calloc() instead of new
+  AnimationData *animation_data =
+      (AnimationData *)calloc(1, sizeof(AnimationData));
+  if (!animation_data) {
+    SDL_RWclose(rw);
+    free(file_data);
+    return NULL;
+  }
+
   animation_data->frame_count = 0;
   animation_data->frames = nullptr;
   animation_data->has_background = false;
   animation_data->frame_time_in_ms = 100;
 
   // --- HEADER PARSING ---
-  // File format:
-  //   - 4 bytes: timing/height value (not used - actual dimensions come from
-  //   .ani file)
-  //   - 4 bytes: palette string length
-  //   - N bytes: palette path string (null terminated or not)
-  //   - 4 bytes: unknown field (possibly frame count) - SKIP THIS
-  //   - Then frame data starts...
-
   uint32_t timing_or_height = SDL_ReadLE32(rw);
   uint32_t str_len;
-  
+
   // Check for FATZ header (0x5A544146)
   if (timing_or_height == 0x5A544146) {
-      SDL_Log("AniFile: Detected FATZ header");
-      SDL_ReadLE32(rw); // Skip unknown 0x00000000
-      SDL_ReadLE32(rw); // Skip Timing (shifted)
-      str_len = SDL_ReadLE32(rw); // Read Length (shifted)
-      str_len >>= 8; // Fix shift
-      SDL_ReadU8(rw); // Skip padding byte (0x00)
+    // SDL_Log("AniFile: Detected FATZ header");
+    SDL_ReadLE32(rw);           // Skip unknown 0x00000000
+    SDL_ReadLE32(rw);           // Skip Timing (shifted)
+    str_len = SDL_ReadLE32(rw); // Read Length (shifted)
+    str_len >>= 8;              // Fix shift
+    SDL_ReadU8(rw);             // Skip padding byte (0x00)
   } else {
-      str_len = SDL_ReadLE32(rw);
+    str_len = SDL_ReadLE32(rw);
+  }
+
+  // [SAFETY] Validate string length against file size
+  if (SDL_RWtell(rw) + str_len > file_size) {
+    SDL_Log("AniFile: CRITICAL - Palette string length exceeds file size!");
+    SDL_RWclose(rw);
+    free(file_data);
+    free(animation_data);
+    return NULL;
   }
 
   // Read Palette String
   char *pal_str = (char *)calloc(1, str_len + 1);
   SDL_RWread(rw, pal_str, 1, str_len);
-  
+
   std::string palette_path = pal_str;
   free(pal_str);
-  
+
   // Sanitize path (remove nulls if embedded)
   size_t null_pos = palette_path.find('\0');
   if (null_pos != std::string::npos) {
     palette_path.resize(null_pos);
   }
-  
-  SDL_Log("AniFile: Loading palette '%s' for animation", palette_path.c_str());
+
+  // SDL_Log("AniFile: Loading palette '%s' for animation",
+  // palette_path.c_str());
   animation_data->pallet = pallet_manager->getPallet(palette_path);
-  if (!animation_data->pallet) {
-       SDL_Log("AniFile: Warning - Palette %s not found/loaded!", palette_path.c_str());
+
+  // Skip the 4-byte field after palette
+  if (SDL_RWtell(rw) + 4 <= file_size) {
+    SDL_ReadLE32(rw); // Skip this field
   }
 
-  // Skip the 4-byte field after palette (frame count or other metadata)
-  // This field was incorrectly being read as "width" causing offset issues
-  SDL_ReadLE32(rw); // Skip this field
-
-  // Initialize with placeholder values - these get overwritten by the .ani file
-  // values
   animation_data->width = 0;
   animation_data->height = 0;
 
@@ -160,6 +174,11 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   std::vector<AnimationFrameData> temp_frames;
 
   while (SDL_RWtell(rw) < file_size) {
+    // [SAFETY] Check if we have enough bytes for a frame header (14 bytes)
+    if (SDL_RWtell(rw) + 14 > file_size) {
+      break;
+    }
+
     AnimationFrameData frame;
 
     // 1. FRAME HEADER
@@ -176,21 +195,27 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
     frame.mystery_bytes = SDL_ReadLE16(rw);
     frame.is_shadow = false;
 
-    SDL_Log("AniFile: Frame header: size=%u, %dx%d, offset=(%d,%d)", frame.size,
-            frame.width, frame.height, frame.offset_x, frame.offset_y);
-
     // 2. PIXEL DATA
     frame.lines =
         (AnimationLineData *)calloc(frame.height, sizeof(AnimationLineData));
 
+    if (!frame.lines && frame.height > 0) {
+      break;
+    }
+
     long frame_data_start = SDL_RWtell(rw);
     long frame_data_end = frame_data_start + frame.size;
 
-    SDL_Log("AniFile: Pixel data starts at offset %ld (0x%lx), ends at %ld",
-            frame_data_start, frame_data_start, frame_data_end);
+    // [SAFETY] Clamp end to actual file size (Truncation Fix)
+    if (frame_data_end > file_size) {
+      frame_data_end = file_size;
+    }
 
     for (int y = 0; y < frame.height; y++) {
+      // [SAFETY] Global bounds check
       if (SDL_RWtell(rw) >= frame_data_end)
+        break;
+      if (SDL_RWtell(rw) >= file_size)
         break;
 
       frame.lines[y].instruction_count = SDL_ReadU8(rw);
@@ -199,16 +224,34 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
         frame.lines[y].instructions = (AnimationDrawInstruction *)calloc(
             frame.lines[y].instruction_count, sizeof(AnimationDrawInstruction));
 
+        if (!frame.lines[y].instructions)
+          continue;
+
         for (int x = 0; x < frame.lines[y].instruction_count; x++) {
+
+          if (SDL_RWtell(rw) + 2 > frame_data_end) {
+            break;
+          }
+
           frame.lines[y].instructions[x].offset = SDL_ReadU8(rw);
           frame.lines[y].instructions[x].color_count = SDL_ReadU8(rw);
 
           if (frame.lines[y].instructions[x].color_count > 0) {
+
+            if (SDL_RWtell(rw) + frame.lines[y].instructions[x].color_count >
+                frame_data_end) {
+              frame.lines[y].instructions[x].color_count = 0;
+              break;
+            }
+
             frame.lines[y].instructions[x].colors = (uint8_t *)calloc(
                 frame.lines[y].instructions[x].color_count, sizeof(uint8_t));
-            SDL_RWread(rw, frame.lines[y].instructions[x].colors,
-                       sizeof(uint8_t),
-                       frame.lines[y].instructions[x].color_count);
+
+            if (frame.lines[y].instructions[x].colors) {
+              SDL_RWread(rw, frame.lines[y].instructions[x].colors,
+                         sizeof(uint8_t),
+                         frame.lines[y].instructions[x].color_count);
+            }
           }
         }
       }
@@ -233,4 +276,30 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   SDL_RWclose(rw);
   free(file_data); // Free the raw memory
   return animation_data;
+}
+
+void AniFile::freeAnimationData(AnimationData *data) {
+  if (!data)
+    return;
+
+  if (data->frames) {
+    for (uint32_t i = 0; i < data->frame_count; i++) {
+      if (data->frames[i].lines) {
+        for (int y = 0; y < data->frames[i].height; y++) {
+          if (data->frames[i].lines[y].instructions) {
+            for (int x = 0; x < data->frames[i].lines[y].instruction_count;
+                 x++) {
+              if (data->frames[i].lines[y].instructions[x].colors) {
+                free(data->frames[i].lines[y].instructions[x].colors);
+              }
+            }
+            free(data->frames[i].lines[y].instructions);
+          }
+        }
+        free(data->frames[i].lines);
+      }
+    }
+    free(data->frames);
+  }
+  free(data);
 }
