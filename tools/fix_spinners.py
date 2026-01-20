@@ -3,7 +3,7 @@ import struct
 import zipfile
 import io
 
-PROJECT_ROOT = "c:\\Users\\batty\\OneDrive\\Desktop\\Lua\\zt1-engine"
+PROJECT_ROOT = "c:\\Users\\batty\\OneDrive\\Documents\\GitHub\\zt1-engine"
 BUILD_UI_DIR = os.path.join(PROJECT_ROOT, "build", "Release", "ui")
 ZTD_PATH = os.path.join(PROJECT_ROOT, "build", "Release", "ui.ztd")
 
@@ -48,11 +48,15 @@ def read_palette(zf, path):
     try:
         data = zf.read(path)
         colors = []
+        # Skip 4-byte header, then read RGBA (4 bytes per color)
+        offset = 4
         for i in range(256):
-            if i*3+2 < len(data):
-                colors.append((data[i*3], data[i*3+1], data[i*3+2], 255))
+            idx = offset + i * 4
+            if idx + 3 < len(data):
+                r, g, b, a = data[idx], data[idx+1], data[idx+2], data[idx+3]
+                colors.append((r, g, b, a if a > 0 else 255))
             else:
-                colors.append((0,0,0,0))
+                colors.append((0, 0, 0, 0))
         # Index 0 is transparent
         colors[0] = (colors[0][0], colors[0][1], colors[0][2], 0)
         return colors
