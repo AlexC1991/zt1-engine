@@ -14,6 +14,7 @@
 
 #include "Utils.hpp"
 #include "Window.hpp"
+#include "World.hpp"
 
 #include "ui/UiImage.hpp"
 #include "ui/UiLayout.hpp"
@@ -40,7 +41,8 @@ enum class LayoutState {
   SCENARIO_SELECT,
   FREEFORM_SELECT,
   CREDITS,
-  OPTIONS
+  OPTIONS,
+  GAME_LOOP
 };
 LayoutState g_currentState = LayoutState::MAIN_MENU;
 
@@ -50,6 +52,7 @@ UiText *g_scenarioDescText = nullptr;
 UiText *g_freeformDescText = nullptr;
 UiImage *g_scenarioMap = nullptr;
 UiImage *g_freeformMap = nullptr;
+World *g_world = nullptr;
 
 // [PATCH] Starting Cash UI
 UiText *g_startingCashText = nullptr;
@@ -431,6 +434,8 @@ int main(int argc, char *argv[]) {
   g_scenarioManager->loadScenarios();
   g_scenarioManager->loadFreeformMaps();
 
+  g_world = new World(&resource_manager);
+
   // Load saved scenario states from project root saves/ folder
   // Path is relative to executable: build/Release/zt1-engine.exe ->
   // ../../saves/
@@ -549,11 +554,50 @@ int main(int argc, char *argv[]) {
       }
       break;
 
+    case UiAction::PLAY_SCENARIO_START:
+      if (g_scenarioListBox && g_scenarioListBox->getSelectedIndex() >= 0) {
+        int idx = g_scenarioListBox->getSelectedIndex();
+        const ScenarioInfo *info = g_scenarioManager->getScenario(idx);
+        if (info && !info->isLocked) {
+          SDL_Log("Starting Scenario: %s", info->name.c_str());
+          g_world->loadScenario(info->scenarioPath);
+          
+          delete layout;
+          layout = nullptr; // UI is gone in game mode
+          g_currentState = LayoutState::GAME_LOOP;
+        }
+      }
+      break;
+
+    case UiAction::PLAY_FREEFORM_START:
+      if (g_freeformListBox && g_freeformListBox->getSelectedIndex() >= 0) {
+        int idx = g_freeformListBox->getSelectedIndex();
+        const FreeformMap *map = g_scenarioManager->getFreeformMap(idx);
+        if (map) {
+          SDL_Log("Starting Freeform: %s", map->name.c_str());
+          g_world->loadFreeform(map->path);
+
+          delete layout;
+          layout = nullptr;
+          g_currentState = LayoutState::GAME_LOOP;
+        }
+      }
+      break;
+
     default:
       break;
     }
 
-    layout->draw(window.renderer, nullptr);
+
+
+
+    if (g_currentState == LayoutState::GAME_LOOP) {
+        const Uint8 *state = SDL_GetKeyboardState(nullptr);
+        g_world->update(state);
+        g_world->draw(window.renderer);
+    } else if (layout) {
+        layout->draw(window.renderer, nullptr);
+    }
     window.present();
   }
 

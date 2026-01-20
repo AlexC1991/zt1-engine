@@ -362,8 +362,9 @@ UiAction UiButton::getActionBasedOnName() {
     action = UiAction::STARTUP_EXIT;
   } else if (this->name == "back to main menu") {
     action = UiAction::SCENARIO_BACK_TO_MAIN_MENU;
-  } else {
-    if (this->id == 11511 || this->id == 11512) {
+    } else {
+    if (this->id == 11511 || this->id == 11512 || this->id == 50008 ||
+        this->id == 11513) {
       action = static_cast<UiAction>(this->id);
     }
   }
