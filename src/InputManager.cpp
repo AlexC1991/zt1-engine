@@ -27,7 +27,11 @@ std::vector<Input> InputManager::getInputs() {
         
       case SDL_KEYDOWN:
         input.type = InputType::BUTTON;
-        input.event = InputEvent::NONE;
+        if (event.key.keysym.sym == SDLK_ESCAPE) {
+          input.event = InputEvent::KEY_ESCAPE;
+        } else {
+          input.event = InputEvent::NONE;
+        }
         break;
         
       case SDL_MOUSEBUTTONDOWN:

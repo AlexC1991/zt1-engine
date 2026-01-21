@@ -512,6 +512,15 @@ int main(int argc, char *argv[]) {
       if (input.event == InputEvent::QUIT) {
         running = 0;
       }
+      // Handle ESC key to return to freeform menu from game loop
+      if (input.event == InputEvent::KEY_ESCAPE && g_currentState == LayoutState::GAME_LOOP) {
+        // Return to freeform selection menu
+        lyt_reader = resource_manager.getIniReader(
+            getLayoutPath(&resource_manager, "mapselec.lyt"));
+        layout = new UiLayout(lyt_reader, &resource_manager);
+        g_currentState = LayoutState::FREEFORM_SELECT;
+        populateFreeformList(layout, g_scenarioManager);
+      }
     }
 
     if (layout) {
@@ -661,18 +670,7 @@ int main(int argc, char *argv[]) {
       layout->draw(window.renderer, nullptr);
     }
 
-    if (g_currentState == LayoutState::GAME_LOOP) {
-      SDL_Log("MainLoop: Pre-Present");
-    }
     window.present();
-    if (g_currentState == LayoutState::GAME_LOOP) {
-      SDL_Log("MainLoop: Post-Present");
-    }
-
-    // Trace loop restart
-    if (g_currentState == LayoutState::GAME_LOOP) {
-      SDL_Log("MainLoop: Loop Restart");
-    }
 
     // Check if it's time for periodic memory dump
     // ZT_MEMORY_DUMP_CHECK();

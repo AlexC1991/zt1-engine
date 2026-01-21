@@ -148,15 +148,15 @@ void World::loadFreeform(const std::string &path) {
 }
 
 void World::update(const Uint8 *state, float deltaTime) {
-  // Camera panning
+  // Camera panning (arrow keys and WASD)
   int scrollSpeed = 10;
-  if (state[SDL_SCANCODE_LEFT])
+  if (state[SDL_SCANCODE_LEFT] || state[SDL_SCANCODE_A])
     this->camX += scrollSpeed;
-  if (state[SDL_SCANCODE_RIGHT])
+  if (state[SDL_SCANCODE_RIGHT] || state[SDL_SCANCODE_D])
     this->camX -= scrollSpeed;
-  if (state[SDL_SCANCODE_UP])
+  if (state[SDL_SCANCODE_UP] || state[SDL_SCANCODE_W])
     this->camY += scrollSpeed;
-  if (state[SDL_SCANCODE_DOWN])
+  if (state[SDL_SCANCODE_DOWN] || state[SDL_SCANCODE_S])
     this->camY -= scrollSpeed;
 
   // Zoom (optional)
@@ -281,9 +281,7 @@ void World::drawTerrain(SDL_Renderer *renderer) {
 }
 
 void World::drawEntities(SDL_Renderer *renderer) {
-  SDL_Log("World::drawEntities: Start");
   entityManager.draw(renderer, camX, camY, startX, startY);
-  SDL_Log("World::drawEntities: End");
 }
 
 void World::draw(SDL_Renderer *renderer) {
