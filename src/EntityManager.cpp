@@ -186,8 +186,8 @@ void EntityManager::draw(SDL_Renderer* renderer, int camX, int camY, int startX,
         int screenX = static_cast<int>((worldX - worldY) * (TILE_WIDTH / 2)) + camX + startX;
         int screenY = static_cast<int>((worldX + worldY) * (TILE_HEIGHT / 2)) + camY + startY;
 
-        // Culling
-        if (screenX < -TILE_WIDTH || screenX > 1200 || screenY < -TILE_HEIGHT || screenY > 900) {
+        // Culling - match actual screen resolution (1280x720)
+        if (screenX < -TILE_WIDTH || screenX > 1280 || screenY < -TILE_HEIGHT || screenY > 720) {
             continue;
         }
 
