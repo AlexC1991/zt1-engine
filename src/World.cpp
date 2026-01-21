@@ -170,29 +170,66 @@ void World::update(const Uint8 *state, float deltaTime) {
 }
 
 int World::getRemappedTerrainId(int terrainId) const {
-  if (terrainId != 0)
-    return terrainId;
-
-  // Handle "Default Terrain" (ID 0) based on map header
-  uint32_t baseId = this->zooReader.getBaseTerrainId();
-
-  if (baseId == 6) {
-    return 15; // Snow
-  } else if (baseId == 1) {
-    // Context sensitive "Other" terrain
-    uint32_t mapType = this->zooReader.getMapType();
-    if (mapType == 12) {
-      return 8; // Savannah (Ancient)
-    } else if (mapType == 11) {
-      return 18; // Water (Ocean)
-    } else if (mapType == 16) {
-      return 9; // Forest Floor (Volcano/Island)
-    } else {
-      return 11; // Deciduous Floor (default for BaseId 1)
-    }
+  // First, handle invalid terrain IDs that appear in original game files
+  // These need to be mapped to valid terrain IDs (0-19)
+  switch (terrainId) {
+    case 254:
+      return 18; // Water - most common invalid ID (458 tiles in some maps)
+    case 255:
+      return 18; // Water - treat as deep water
+    case 98:
+      return 2; // Dirt - occasional invalid ID
+    case 109:
+      return 9; // Forest Floor - occasional invalid ID
+    case 464:
+      return 18; // Water - rare invalid ID
+    case 14:
+      return 0; // Grass - missing sprite, fallback to grass
+    case 12:
+      return 9; // Rainforest Floor (missing) -> Forest Floor
+    case 13:
+      return 0; // Dino Digs Grass -> Grass (if sprite missing)
   }
 
-  return 0; // Grass (default)
+  // Clamp any other out-of-range IDs to valid range
+  if (terrainId < 0) {
+    return 0; // Default to grass
+  }
+  if (terrainId >= 20) {
+    // Unknown invalid ID - log once and fallback to water or grass
+    static bool loggedInvalidId = false;
+    if (!loggedInvalidId) {
+      SDL_Log("World: Unknown terrain ID %d detected, mapping to grass", terrainId);
+      loggedInvalidId = true;
+    }
+    return 0; // Grass fallback for any unknown high ID
+  }
+
+  // Handle "Default Terrain" (ID 0) based on map header
+  if (terrainId == 0) {
+    uint32_t baseId = this->zooReader.getBaseTerrainId();
+
+    if (baseId == 6) {
+      return 15; // Snow
+    } else if (baseId == 1) {
+      // Context sensitive "Other" terrain
+      uint32_t mapType = this->zooReader.getMapType();
+      if (mapType == 12) {
+        return 8; // Savannah (Ancient)
+      } else if (mapType == 11) {
+        return 18; // Water (Ocean)
+      } else if (mapType == 16) {
+        return 9; // Forest Floor (Volcano/Island)
+      } else {
+        return 11; // Deciduous Floor (default for BaseId 1)
+      }
+    }
+
+    return 0; // Grass (default)
+  }
+
+  // Valid terrain ID in range [1-19], return as-is
+  return terrainId;
 }
 
 void World::tileToScreen(int tileX, int tileY, int elevation, int &screenX,
@@ -206,6 +243,8 @@ void World::tileToScreen(int tileX, int tileY, int elevation, int &screenX,
 
 void World::drawTerrain(SDL_Renderer *renderer) {
   static bool loggedOnce = false;
+  static int lastMapWidth = 0;
+  static int lastMapHeight = 0;
 
   int mapWidth = this->zooReader.getMapWidth();
   int mapHeight = this->zooReader.getMapHeight();
@@ -213,30 +252,47 @@ void World::drawTerrain(SDL_Renderer *renderer) {
   if (mapWidth == 0 || mapHeight == 0 || mapWidth > 500)
     return;
 
-  // Log terrain ID distribution once
-  if (!loggedOnce) {
+  // Log terrain ID distribution once per map (detect map change)
+  bool mapChanged = (mapWidth != lastMapWidth || mapHeight != lastMapHeight);
+  if (!loggedOnce || mapChanged) {
     int terrainCounts[20] = {0};
+    int rawTerrainCounts[256] = {0}; // Track raw IDs to detect invalids
+
     for (int y = 0; y < mapHeight; y++) {
       for (int x = 0; x < mapWidth; x++) {
         const ZooReader::ZooTile *tile = this->zooReader.getTile(x, y);
         if (tile) {
+          // Track raw terrain ID BEFORE remapping
+          if (tile->terrainId >= 0 && tile->terrainId < 256) {
+            rawTerrainCounts[tile->terrainId]++;
+          }
+
+          // Track remapped terrain ID
           int tId = getRemappedTerrainId(tile->terrainId);
           if (tId >= 0 && tId < 20) {
             terrainCounts[tId]++;
-            // Trace location of Snow/14
-            if (tId == 14 || tId == 15) {
-              SDL_Log("World: Found Terrain %d at %d,%d", tId, x, y);
-            }
           }
         }
       }
     }
-    SDL_Log("World: Terrain ID distribution:");
+
+    SDL_Log("World: Raw Terrain IDs in map (before remapping):");
+    for (int i = 0; i < 256; i++) {
+      if (rawTerrainCounts[i] > 0) {
+        SDL_Log("  Raw ID %d: %d tiles", i, rawTerrainCounts[i]);
+      }
+    }
+
+    SDL_Log("World: Remapped Terrain ID distribution:");
     for (int i = 0; i < 20; i++) {
       if (terrainCounts[i] > 0) {
         SDL_Log("  Terrain %d: %d tiles", i, terrainCounts[i]);
       }
     }
+
+    lastMapWidth = mapWidth;
+    lastMapHeight = mapHeight;
+    loggedOnce = true;
   }
 
   // Trace disabled for cleanup
@@ -262,6 +318,19 @@ void World::drawTerrain(SDL_Renderer *renderer) {
       int terrainId = getRemappedTerrainId(tile->terrainId);
 
       Animation *anim = SpriteDatabase::get().getTerrainSprite(terrainId);
+
+      // Debug logging for non-grass terrain
+      static int nonGrassLogCount = 0;
+      if (terrainId != 0 && nonGrassLogCount < 5) {
+        SDL_Log("World: Rendering terrain ID %d at (%d,%d) -> screen(%d,%d), anim=%p",
+                terrainId, x, y, screenX, screenY, (void*)anim);
+        if (anim) {
+          SDL_Log("World: Animation isValid=%d, hasFrames=%d",
+                  anim->isValid() ? 1 : 0,
+                  anim->hasFrames(CompassDirection::N) ? 1 : 0);
+        }
+        nonGrassLogCount++;
+      }
 
       // Fallback to grass if specific terrain not loaded
       if (!anim && terrainId != 18) {
