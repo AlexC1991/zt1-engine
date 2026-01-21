@@ -132,6 +132,23 @@ bool ZooReader::load(const AssetBuffer &buffer) {
     mapHeight = 100;
   }
 
+  // Read baseTerrainId and mapType from header
+  // Offset 0x20 (32): baseTerrainId - determines what terrain ID 0 represents
+  // Offset 0x24 (36): mapType - additional map classification
+  if (buffer.safeRead(0x20, &baseTerrainId)) {
+    SDL_Log("ZooReader: baseTerrainId = %u (from offset 0x20)", baseTerrainId);
+  } else {
+    SDL_Log("ZooReader: Could not read baseTerrainId, defaulting to 0");
+    baseTerrainId = 0;
+  }
+
+  if (buffer.safeRead(0x24, &mapType)) {
+    SDL_Log("ZooReader: mapType = %u (from offset 0x24)", mapType);
+  } else {
+    SDL_Log("ZooReader: Could not read mapType, defaulting to 0");
+    mapType = 0;
+  }
+
   // Find Map Data
   size_t offset = findMapDataOffset((const uint8_t *)buffer.data, buffer.size,
                                     mapWidth, mapHeight);

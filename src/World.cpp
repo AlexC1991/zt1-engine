@@ -70,9 +70,34 @@ void World::loadScenario(const std::string &path) {
     SDL_Log("World::loadScenario: Failed to read %s", zooPath.c_str());
   }
 
-  // Reset camera to center of map
-  this->camX = 0;
-  this->camY = 0;
+  // Initialize camera at a good starting position
+  int mapWidth = this->zooReader.getMapWidth();
+  int mapHeight = this->zooReader.getMapHeight();
+
+  if (mapWidth <= 75) {
+    // Small map - position to show center area (tile 37,37 at screen center)
+    this->camX = 240;
+    this->camY = -924;
+  } else if (mapWidth <= 125) {
+    this->camX = 160;
+    this->camY = -2020;
+  } else {
+    this->camX = 165;
+    this->camY = -2300;
+  }
+
+  // Set camera bounds based on map size
+  if (mapWidth <= 75) {
+    camMaxX = 3160; camMinX = -2485; camMaxY = 515; camMinY = -2140;
+  } else if (mapWidth <= 125) {
+    camMaxX = 4545; camMinX = -4230; camMaxY = 465; camMinY = -4500;
+  } else {
+    camMaxX = 5415; camMinX = -5085; camMaxY = 510; camMinY = -5100;
+  }
+
+  SDL_Log("World: Camera at (%d, %d) for %dx%d map, bounds X[%d,%d] Y[%d,%d]",
+          this->camX, this->camY, mapWidth, mapHeight,
+          camMinX, camMaxX, camMinY, camMaxY);
 }
 
 void World::loadFreeform(const std::string &path) {
@@ -142,9 +167,51 @@ void World::loadFreeform(const std::string &path) {
     SDL_Log("World::loadFreeform: Failed to read %s", path.c_str());
   }
 
-  // Reset camera
-  this->camX = 0;
-  this->camY = 0;
+  // Initialize camera at a good starting position
+  int mapWidth = this->zooReader.getMapWidth();
+  int mapHeight = this->zooReader.getMapHeight();
+
+  // Start camera at a centered position based on map size
+  // These values put the camera at a nice viewing angle showing the map center
+  if (mapWidth <= 75) {
+    // Small map - position to show center area (tile 37,37 at screen center)
+    this->camX = 240;
+    this->camY = -924;
+  } else if (mapWidth <= 125) {
+    // Medium map
+    this->camX = 160;
+    this->camY = -2020;
+  } else {
+    // Large map
+    this->camX = 165;
+    this->camY = -2300;
+  }
+
+  // Set camera bounds based on map size
+  // Data from testing: Small (75x75), Medium (125x125), Large (150x150)
+  if (mapWidth <= 75) {
+    // Small map (75x75)
+    camMaxX = 3160;
+    camMinX = -2485;
+    camMaxY = 515;
+    camMinY = -2140;
+  } else if (mapWidth <= 125) {
+    // Medium map (125x125)
+    camMaxX = 4545;
+    camMinX = -4230;
+    camMaxY = 465;
+    camMinY = -4500;
+  } else {
+    // Large map (150x150+)
+    camMaxX = 5415;
+    camMinX = -5085;
+    camMaxY = 510;
+    camMinY = -5100;
+  }
+
+  SDL_Log("World: Camera at (%d, %d) for %dx%d map, bounds X[%d,%d] Y[%d,%d]",
+          this->camX, this->camY, mapWidth, mapHeight,
+          camMinX, camMaxX, camMinY, camMaxY);
 }
 
 void World::update(const Uint8 *state, float deltaTime) {
@@ -159,6 +226,12 @@ void World::update(const Uint8 *state, float deltaTime) {
   if (state[SDL_SCANCODE_DOWN] || state[SDL_SCANCODE_S])
     this->camY -= scrollSpeed;
 
+  // Clamp camera to map bounds
+  if (this->camX < camMinX) this->camX = camMinX;
+  if (this->camX > camMaxX) this->camX = camMaxX;
+  if (this->camY < camMinY) this->camY = camMinY;
+  if (this->camY > camMaxY) this->camY = camMaxY;
+
   // Zoom (optional)
   if (state[SDL_SCANCODE_PAGEUP])
     this->zoom = std::min(2.0f, zoom + 0.01f);
@@ -170,25 +243,21 @@ void World::update(const Uint8 *state, float deltaTime) {
 }
 
 int World::getRemappedTerrainId(int terrainId) const {
-  // First, handle invalid terrain IDs that appear in original game files
-  // These need to be mapped to valid terrain IDs (0-19)
+  // Handle garbage/null IDs (254, 255) - treat as base terrain for the map
+  // These are common in ZT1 files as border/unused tiles
+  if (terrainId == 254 || terrainId == 255) {
+    // Use terrain ID 0 which will be remapped to base terrain below
+    terrainId = 0;
+  }
+
+  // Handle other known corrupt IDs from original game files
   switch (terrainId) {
-    case 254:
-      return 18; // Water - most common invalid ID (458 tiles in some maps)
-    case 255:
-      return 18; // Water - treat as deep water
     case 98:
       return 2; // Dirt - occasional invalid ID
     case 109:
       return 9; // Forest Floor - occasional invalid ID
     case 464:
       return 18; // Water - rare invalid ID
-    case 14:
-      return 0; // Grass - missing sprite, fallback to grass
-    case 12:
-      return 9; // Rainforest Floor (missing) -> Forest Floor
-    case 13:
-      return 0; // Dino Digs Grass -> Grass (if sprite missing)
   }
 
   // Clamp any other out-of-range IDs to valid range
@@ -196,13 +265,13 @@ int World::getRemappedTerrainId(int terrainId) const {
     return 0; // Default to grass
   }
   if (terrainId >= 20) {
-    // Unknown invalid ID - log once and fallback to water or grass
+    // Unknown invalid ID - log once and treat as base terrain
     static bool loggedInvalidId = false;
     if (!loggedInvalidId) {
-      SDL_Log("World: Unknown terrain ID %d detected, mapping to grass", terrainId);
+      SDL_Log("World: Unknown terrain ID %d detected, mapping to base terrain", terrainId);
       loggedInvalidId = true;
     }
-    return 0; // Grass fallback for any unknown high ID
+    terrainId = 0; // Treat as base terrain
   }
 
   // Handle "Default Terrain" (ID 0) based on map header
@@ -229,6 +298,7 @@ int World::getRemappedTerrainId(int terrainId) const {
   }
 
   // Valid terrain ID in range [1-19], return as-is
+  // Sprite loading will handle missing sprites with fallback to grass in drawTerrain()
   return terrainId;
 }
 

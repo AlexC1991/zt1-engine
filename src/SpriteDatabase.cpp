@@ -106,9 +106,12 @@ void SpriteDatabase::loadTerrainSprites() {
     terrainSprites[9] = resourceManager->getAnimation("terrain/icffloor");
     terrainSprites[10] = resourceManager->getAnimation("terrain/icfflorc");
     terrainSprites[11] = resourceManager->getAnimation("terrain/icfflord");
-    // 12, 13, 14 - not used or unknown
+    terrainSprites[12] = resourceManager->getAnimation("terrain/icrfflor");  // Rainforest Floor
+    terrainSprites[13] = resourceManager->getAnimation("terrain/icgrs_dd");  // Dino Digs Grass
+    terrainSprites[14] = resourceManager->getAnimation("terrain/icgrsdd2");  // Dino Digs Grass 2
     terrainSprites[15] = resourceManager->getAnimation("terrain/icsnow");
-    // 16, 17 - not used
+    terrainSprites[16] = resourceManager->getAnimation("terrain/icice");     // Ice
+    terrainSprites[17] = resourceManager->getAnimation("terrain/icmud");     // Mud
     terrainSprites[18] = resourceManager->getAnimation("terrain/icwater");
     terrainSprites[19] = resourceManager->getAnimation("terrain/icdpwatr");
 

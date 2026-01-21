@@ -38,6 +38,9 @@ private:
   int camX, camY;
   float zoom = 1.0f;
 
+  // Camera bounds (prevent panning beyond map edges)
+  int camMaxX, camMinX, camMaxY, camMinY;
+
   // Isometric constants
   static const int TILE_WIDTH = 64;
   static const int TILE_HEIGHT = 32;
