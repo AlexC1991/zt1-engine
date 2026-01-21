@@ -16,6 +16,7 @@ enum class InputEvent {
   MOUSE_MOVE,      // [PATCH] Alias for CURSOR_MOVE
   SCROLL_UP,       // [PATCH] Mouse wheel up
   SCROLL_DOWN,     // [PATCH] Mouse wheel down
+  KEY_ESCAPE,      // ESC key pressed
   QUIT
 };
 
