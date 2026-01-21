@@ -1,4 +1,5 @@
 .vscode/
+.claude/
 build/
 build_log.txt
 runtime_log.txt
