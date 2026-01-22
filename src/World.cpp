@@ -2,434 +2,427 @@
 #include "CompassDirection.hpp"
 #include "MemoryManager.hpp"
 #include "MemoryTracker.hpp"
+#include <algorithm>
+#include <vector>
+
+// ============================================================================
+// ZT1 ENGINE REMAKE - WORLD RENDERING
+// ============================================================================
+// Isometric Projection Rules:
+//   - Tile Dimensions: 64x32 pixels (2:1 ratio)
+//   - Elevation Step: 16 pixels per unit (0-31 range)
+//   - Screen X: (tileX - tileY) * 32
+//   - Screen Y: (tileX + tileY) * 16 - (elevation * 16)
+//
+// Z-Sorting (Painter's Algorithm):
+//   - Sort by isometric depth (x + y)
+//   - Lower depth = draw first (further back)
+//   - Walls drawn after floor to appear in front
+// ============================================================================
+
+float g_ZoomLevel = 1.0f;
+int g_ElevationScale = 16;
+int g_BaseHeightOffset = 0;
+
+// Debug flags
+static bool g_DebugOnce = true;
+
+struct RenderTile {
+    int x, y;
+    int sortKey;
+    int screenX, screenY;
+    int elevation;
+    int terrainId;
+    int rawTerrainId;
+};
 
 World::World(ResourceManager *resourceManager) {
-  ZT_MEMORY_CONTEXT(MemoryOwner::World);
+    ZT_MEMORY_CONTEXT(MemoryOwner::World);
+    this->resourceManager = resourceManager;
+    this->camX = 0;
+    this->camY = 0;
+    this->startX = 640;  // Screen center X (1280/2)
+    this->startY = 360;  // Screen center Y (720/2)
 
-  SDL_Log("World::World() - Starting initialization");
-
-  this->resourceManager = resourceManager;
-  this->camX = 0;
-  this->camY = 0;
-
-  // Initialize SpriteDatabase with our resource manager
-  SDL_Log("World::World() - Initializing SpriteDatabase");
-  SpriteDatabase::get().init(resourceManager);
-  SDL_Log("World::World() - Loading sprite definitions");
-  SpriteDatabase::get().loadDefinitions();
-
-  SDL_Log("World::World() - Initialization complete");
+    SpriteDatabase::get().init(resourceManager);
+    SpriteDatabase::get().loadDefinitions();
 }
 
-World::~World() {
-  ZT_MEMORY_CONTEXT(MemoryOwner::World);
-  SDL_Log("World: Cleaning up");
-  // EntityManager will clean up entities automatically
-  // SpriteDatabase is a singleton and manages its own lifecycle
-}
+World::~World() {}
 
 void World::loadScenario(const std::string &path) {
-  SDL_Log("Loading scenario: %s", path.c_str());
-
-  // Extract the actual .zoo file path from the scenario path
-  // Scenarios are typically: scenario/scnXX/scnXX.zoo
-  std::string zooPath = path;
-
-  // If path ends with .scn, convert to .zoo
-  if (zooPath.size() > 4 && zooPath.substr(zooPath.size() - 4) == ".scn") {
-    zooPath = zooPath.substr(0, zooPath.size() - 4) + ".zoo";
-  }
-
-  int size = 0;
-  void *raw_data = this->resourceManager->getFileContent(zooPath, &size);
-
-  if (raw_data) {
-    AssetBuffer buffer =
-        MemoryManager::get().wrap(raw_data, static_cast<size_t>(size));
-
-    if (this->zooReader.load(buffer)) {
-      SDL_Log("World::loadScenario: Loaded map dimensions %dx%d",
-              this->zooReader.getMapWidth(), this->zooReader.getMapHeight());
-
-      // Load entities from the map data
-      entityManager.loadFromZooReader(zooReader);
-
-      // If no entities were found in the map, add some test animals
-      if (entityManager.getAnimalCount() == 0) {
-        SDL_Log("World: No animals found in map data, adding test animals");
-        int centerX = zooReader.getMapWidth() / 2;
-        int centerY = zooReader.getMapHeight() / 2;
-
-        entityManager.addAnimal(AnimalSpecies::Lion, centerX, centerY);
-        entityManager.addAnimal(AnimalSpecies::Zebra, centerX + 5, centerY + 3);
-        entityManager.addAnimal(AnimalSpecies::Elephant_African, centerX - 3,
-                                centerY + 5);
-      }
-    }
-  } else {
-    SDL_Log("World::loadScenario: Failed to read %s", zooPath.c_str());
-  }
-
-  // Initialize camera at a good starting position
-  int mapWidth = this->zooReader.getMapWidth();
-  int mapHeight = this->zooReader.getMapHeight();
-
-  if (mapWidth <= 75) {
-    // Small map - position to show center area (tile 37,37 at screen center)
-    this->camX = 240;
-    this->camY = -924;
-  } else if (mapWidth <= 125) {
-    this->camX = 160;
-    this->camY = -2020;
-  } else {
-    this->camX = 165;
-    this->camY = -2300;
-  }
-
-  // Set camera bounds based on map size
-  if (mapWidth <= 75) {
-    camMaxX = 3160; camMinX = -2485; camMaxY = 515; camMinY = -2140;
-  } else if (mapWidth <= 125) {
-    camMaxX = 4545; camMinX = -4230; camMaxY = 465; camMinY = -4500;
-  } else {
-    camMaxX = 5415; camMinX = -5085; camMaxY = 510; camMinY = -5100;
-  }
-
-  SDL_Log("World: Camera at (%d, %d) for %dx%d map, bounds X[%d,%d] Y[%d,%d]",
-          this->camX, this->camY, mapWidth, mapHeight,
-          camMinX, camMaxX, camMinY, camMaxY);
+    loadFreeform(path);
 }
 
 void World::loadFreeform(const std::string &path) {
-  SDL_Log("Loading freeform map: %s", path.c_str());
+    SDL_Log("[World] ========================================");
+    SDL_Log("[World] Loading map: %s", path.c_str());
+    SDL_Log("[World] ========================================");
 
-  int size = 0;
-  void *raw_data = this->resourceManager->getFileContent(path, &size);
-
-  if (raw_data) {
-    // Check if it's an INI file (starts with '[')
-    const char *data_char = (const char *)raw_data;
-    if (size > 0 && data_char[0] == '[') {
-      // It's an INI file, look for savegame=
-      std::string content(data_char, size);
-      std::string key = "savegame=";
-      size_t pos = content.find(key);
-      if (pos != std::string::npos) {
-        size_t start = pos + key.length();
-        size_t end = content.find_first_of("\r\n", start);
-        std::string mapPath = content.substr(start, end - start);
-
-        SDL_Log("World::loadFreeform: Redirecting to map %s", mapPath.c_str());
-
-        // Load the actual map file
-        this->loadFreeform(mapPath);
-        return;
-      } else {
-        SDL_Log("World::loadFreeform: Could not find savegame key in %s",
-                path.c_str());
-      }
-    } else {
-      // Assume it's a binary map file
-      AssetBuffer buffer =
-          MemoryManager::get().wrap(raw_data, static_cast<size_t>(size));
-
-      if (this->zooReader.load(buffer)) {
-        SDL_Log("World::loadFreeform: Loaded map dimensions %dx%d",
-                this->zooReader.getMapWidth(), this->zooReader.getMapHeight());
-        SDL_Log("World::loadFreeform: baseTerrainId=%u, mapType=%u",
-                this->zooReader.getBaseTerrainId(),
-                this->zooReader.getMapType());
-
-        // Load entities from the map data
-        entityManager.loadFromZooReader(zooReader);
-
-        // For freeform maps, add some starter animals if none exist AND their
-        // sprites are loaded
-        if (entityManager.getAnimalCount() == 0) {
-          int centerX = zooReader.getMapWidth() / 2;
-          int centerY = zooReader.getMapHeight() / 2;
-
-          // Only add if sprite is loaded to prevent crash
-          if (SpriteDatabase::get().getAnimalSprite(AnimalSpecies::Lion)) {
-            SDL_Log("World: Freeform map - adding starter Lion");
-            entityManager.addAnimal(AnimalSpecies::Lion, centerX, centerY);
-          }
-
-          if (SpriteDatabase::get().getAnimalSprite(AnimalSpecies::Giraffe)) {
-            SDL_Log("World: Freeform map - adding starter Giraffe");
-            entityManager.addAnimal(AnimalSpecies::Giraffe, centerX + 8,
-                                    centerY + 4);
-          }
+    // Resolve path: .scn -> .zoo, freeform/ -> maps/
+    std::string actualPath = path;
+    if (actualPath.find(".scn") != std::string::npos) {
+        actualPath = actualPath.substr(0, actualPath.find(".scn")) + ".zoo";
+        if (actualPath.find("freeform/") != std::string::npos) {
+            actualPath.replace(actualPath.find("freeform/"), 9, "maps/");
         }
-      }
     }
-  } else {
-    SDL_Log("World::loadFreeform: Failed to read %s", path.c_str());
-  }
+    SDL_Log("[World] Resolved path: %s", actualPath.c_str());
 
-  // Initialize camera at a good starting position
-  int mapWidth = this->zooReader.getMapWidth();
-  int mapHeight = this->zooReader.getMapHeight();
+    int size = 0;
+    void *raw_data = this->resourceManager->getFileContent(actualPath, &size);
 
-  // Start camera at a centered position based on map size
-  // These values put the camera at a nice viewing angle showing the map center
-  if (mapWidth <= 75) {
-    // Small map - position to show center area (tile 37,37 at screen center)
-    this->camX = 240;
-    this->camY = -924;
-  } else if (mapWidth <= 125) {
-    // Medium map
-    this->camX = 160;
-    this->camY = -2020;
-  } else {
-    // Large map
-    this->camX = 165;
-    this->camY = -2300;
-  }
+    if (!raw_data) {
+        SDL_Log("[World] ERROR: Failed to load file!");
+        return;
+    }
 
-  // Set camera bounds based on map size
-  // Data from testing: Small (75x75), Medium (125x125), Large (150x150)
-  if (mapWidth <= 75) {
-    // Small map (75x75)
-    camMaxX = 3160;
-    camMinX = -2485;
-    camMaxY = 515;
-    camMinY = -2140;
-  } else if (mapWidth <= 125) {
-    // Medium map (125x125)
-    camMaxX = 4545;
-    camMinX = -4230;
-    camMaxY = 465;
-    camMinY = -4500;
-  } else {
-    // Large map (150x150+)
-    camMaxX = 5415;
-    camMinX = -5085;
-    camMaxY = 510;
-    camMinY = -5100;
-  }
+    SDL_Log("[World] File loaded: %d bytes", size);
+    AssetBuffer buffer = MemoryManager::get().wrap(raw_data, static_cast<size_t>(size));
 
-  SDL_Log("World: Camera at (%d, %d) for %dx%d map, bounds X[%d,%d] Y[%d,%d]",
-          this->camX, this->camY, mapWidth, mapHeight,
-          camMinX, camMaxX, camMinY, camMaxY);
+    if (!this->zooReader.load(buffer)) {
+        SDL_Log("[World] ERROR: ZooReader failed to parse!");
+        return;
+    }
+
+    // Map successfully loaded - setup world state
+    int mapW = zooReader.getMapWidth();
+    int mapH = zooReader.getMapHeight();
+
+    entityManager.loadFromZooReader(zooReader);
+
+    // Calculate elevation statistics for camera positioning
+    g_ElevationScale = 16;
+    g_BaseHeightOffset = 0;
+
+    long totalElev = 0;
+    int count = 0;
+    int minElev = 999, maxElev = 0;
+
+    for (int y = 0; y < mapH; y++) {
+        for (int x = 0; x < mapW; x++) {
+            const ZooReader::ZooTile* t = zooReader.getTile(x, y);
+            if (t) {
+                totalElev += t->elevation;
+                count++;
+                if (t->elevation < minElev) minElev = t->elevation;
+                if (t->elevation > maxElev) maxElev = t->elevation;
+            }
+        }
+    }
+
+    int avgElev = (count > 0) ? (int)(totalElev / count) : 0;
+    if (avgElev > 30) avgElev = 0;
+
+    // Center camera on map, adjusted for average elevation
+    int isoCenterY = mapW * 16;
+    this->camX = 0;
+    this->camY = -isoCenterY + (avgElev * g_ElevationScale);
+
+    SDL_Log("[World] === WORLD SETUP ===");
+    SDL_Log("[World]   Map Size: %d x %d tiles", mapW, mapH);
+    SDL_Log("[World]   Elevation Range: %d to %d (avg: %d)", minElev, maxElev, avgElev);
+    SDL_Log("[World]   Camera: (%d, %d)", camX, camY);
+    SDL_Log("[World]   Map Type: %u", zooReader.getMapType());
+
+    g_DebugOnce = true;
+    SDL_Log("[World] ========================================");
 }
 
 void World::update(const Uint8 *state, float deltaTime) {
-  // Camera panning (arrow keys and WASD)
-  int scrollSpeed = 10;
-  if (state[SDL_SCANCODE_LEFT] || state[SDL_SCANCODE_A])
-    this->camX += scrollSpeed;
-  if (state[SDL_SCANCODE_RIGHT] || state[SDL_SCANCODE_D])
-    this->camX -= scrollSpeed;
-  if (state[SDL_SCANCODE_UP] || state[SDL_SCANCODE_W])
-    this->camY += scrollSpeed;
-  if (state[SDL_SCANCODE_DOWN] || state[SDL_SCANCODE_S])
-    this->camY -= scrollSpeed;
+    // Camera movement (scaled by zoom)
+    int scrollSpeed = (int)(25 * (1.0f / g_ZoomLevel));
 
-  // Clamp camera to map bounds
-  if (this->camX < camMinX) this->camX = camMinX;
-  if (this->camX > camMaxX) this->camX = camMaxX;
-  if (this->camY < camMinY) this->camY = camMinY;
-  if (this->camY > camMaxY) this->camY = camMaxY;
+    if (state[SDL_SCANCODE_LEFT] || state[SDL_SCANCODE_A]) this->camX += scrollSpeed;
+    if (state[SDL_SCANCODE_RIGHT] || state[SDL_SCANCODE_D]) this->camX -= scrollSpeed;
+    if (state[SDL_SCANCODE_UP] || state[SDL_SCANCODE_W]) this->camY += scrollSpeed;
+    if (state[SDL_SCANCODE_DOWN] || state[SDL_SCANCODE_S]) this->camY -= scrollSpeed;
 
-  // Zoom (optional)
-  if (state[SDL_SCANCODE_PAGEUP])
-    this->zoom = std::min(2.0f, zoom + 0.01f);
-  if (state[SDL_SCANCODE_PAGEDOWN])
-    this->zoom = std::max(0.5f, zoom - 0.01f);
+    // Debug controls (throttled)
+    static int keyTimer = 0;
+    keyTimer++;
+    if (keyTimer > 5) {
+        if (state[SDL_SCANCODE_EQUALS]) g_BaseHeightOffset += 16;
+        if (state[SDL_SCANCODE_MINUS]) g_BaseHeightOffset -= 16;
+        if (state[SDL_SCANCODE_2]) g_ElevationScale++;
+        if (state[SDL_SCANCODE_1]) g_ElevationScale--;
+        keyTimer = 0;
+    }
 
-  // Update all entities
-  entityManager.update(deltaTime);
+    // Zoom controls
+    if (state[SDL_SCANCODE_RIGHTBRACKET]) g_ZoomLevel += 0.01f;
+    if (state[SDL_SCANCODE_LEFTBRACKET]) g_ZoomLevel -= 0.01f;
+    if (g_ZoomLevel < 0.2f) g_ZoomLevel = 0.2f;
+    if (g_ZoomLevel > 3.0f) g_ZoomLevel = 3.0f;
+
+    entityManager.update(deltaTime);
 }
+
+// ============================================================================
+// TERRAIN ID REMAPPING
+// ============================================================================
+// ZT1 Terrain Byte Encoding (discovered via map file analysis):
+//
+//   Byte format: [FFFF][TTTT] (high nibble = flags, low nibble = terrain)
+//
+//   Low Nibble (bits 0-3): Actual terrain type (0-15)
+//     0 = Grass          4 = Rainforest      8 = Snow         12 = Waterfall
+//     1 = Savannah       5 = Brown Stone     9 = Fresh Water  13 = Conifer Floor
+//     2 = Sand           6 = Gray Stone     10 = Salt Water   14 = Concrete
+//     3 = Dirt           7 = Gravel         11 = Deciduous    15 = Asphalt
+//
+//   High Nibble (bits 4-7): Terrain flags/modifiers
+//     0x00 = Natural/unmodified terrain
+//     0x10 = Modified variant 1 (edge blending?)
+//     0x40 = Modified variant 2 (biome transition?)
+//     0x50 = Modified variant 3
+//     0x60 = Special markers (object placement, spawn points?)
+//     0xF0 = Player-placed/painted terrain
+//
+//   Examples from map analysis:
+//     0xF4 (244) -> terrain 4 (Rainforest) with flag 0xF0 (player-placed)
+//     0x11 (17)  -> terrain 1 (Savannah) with flag 0x10 (modified)
+//     0x44 (68)  -> terrain 4 (Rainforest) with flag 0x40 (transition)
+//     0xFF (255) -> terrain 15 (Asphalt) with flag 0xF0 (player-placed)
+//     0x55 (85)  -> terrain 5 (Brown Stone) with flag 0x50
 
 int World::getRemappedTerrainId(int terrainId) const {
-  // Handle garbage/null IDs (254, 255) - treat as base terrain for the map
-  // These are common in ZT1 files as border/unused tiles
-  if (terrainId == 254 || terrainId == 255) {
-    // Use terrain ID 0 which will be remapped to base terrain below
-    terrainId = 0;
-  }
+    // Extract terrain type from low nibble (bits 0-3)
+    // This is the actual terrain regardless of any flags in the high nibble
+    int actualTerrain = terrainId & 0x0F;
 
-  // Handle other known corrupt IDs from original game files
-  switch (terrainId) {
-    case 98:
-      return 2; // Dirt - occasional invalid ID
-    case 109:
-      return 9; // Forest Floor - occasional invalid ID
-    case 464:
-      return 18; // Water - rare invalid ID
-  }
-
-  // Clamp any other out-of-range IDs to valid range
-  if (terrainId < 0) {
-    return 0; // Default to grass
-  }
-  if (terrainId >= 20) {
-    // Unknown invalid ID - log once and treat as base terrain
-    static bool loggedInvalidId = false;
-    if (!loggedInvalidId) {
-      SDL_Log("World: Unknown terrain ID %d detected, mapping to base terrain", terrainId);
-      loggedInvalidId = true;
-    }
-    terrainId = 0; // Treat as base terrain
-  }
-
-  // Handle "Default Terrain" (ID 0) based on map header
-  if (terrainId == 0) {
-    uint32_t baseId = this->zooReader.getBaseTerrainId();
-
-    if (baseId == 6) {
-      return 15; // Snow
-    } else if (baseId == 1) {
-      // Context sensitive "Other" terrain
-      uint32_t mapType = this->zooReader.getMapType();
-      if (mapType == 12) {
-        return 8; // Savannah (Ancient)
-      } else if (mapType == 11) {
-        return 18; // Water (Ocean)
-      } else if (mapType == 16) {
-        return 9; // Forest Floor (Volcano/Island)
-      } else {
-        return 11; // Deciduous Floor (default for BaseId 1)
-      }
+    // Valid terrain types are 0-15
+    // The original engine only has 16 terrain textures (0-15)
+    // ID 16 (Trampled) shares the Dirt texture, so clamp to 15
+    if (actualTerrain > 15) {
+        actualTerrain = 3;  // Fallback to Dirt
     }
 
-    return 0; // Grass (default)
-  }
-
-  // Valid terrain ID in range [1-19], return as-is
-  // Sprite loading will handle missing sprites with fallback to grass in drawTerrain()
-  return terrainId;
+    return actualTerrain;
 }
 
-void World::tileToScreen(int tileX, int tileY, int elevation, int &screenX,
-                         int &screenY) const {
-  screenX = (tileX - tileY) * (TILE_WIDTH / 2) + camX + startX;
-  screenY = (tileX + tileY) * (TILE_HEIGHT / 2) + camY + startY;
+// ============================================================================
+// SUBSTRATE MATERIAL SELECTION
+// ============================================================================
+// Determines what texture to use for cliff walls based on surface material
 
-  // Apply elevation offset (higher tiles appear higher on screen)
-  screenY -= elevation * ELEVATION_HEIGHT;
+static int getSubstrateMaterial(int floorId) {
+    switch (floorId) {
+        case 14:  // Concrete
+        case 15:  // Asphalt
+            return 3;  // Dirt walls
+        case 8:   // Snow
+            return 6;  // Gray Stone walls
+        case 2:   // Sand
+            return 2;  // Sand walls
+        case 3:   // Dirt
+            return 3;  // Dirt walls
+        case 5:   // Brown Stone
+        case 6:   // Gray Stone
+            return floorId;  // Stone walls match surface
+        default:
+            return 3;  // Default: Dirt
+    }
 }
+
+// ============================================================================
+// COORDINATE CONVERSION
+// ============================================================================
+
+void World::tileToScreen(int tileX, int tileY, int elevation, int &screenX, int &screenY) const {
+    // Isometric projection (2:1 ratio)
+    int isoX = (tileX - tileY) * 32;
+    int isoY = (tileX + tileY) * 16;
+
+    // Apply camera offset and screen center
+    screenX = isoX + camX + startX;
+    screenY = isoY + camY + startY;
+
+    // Apply elevation offset (higher = further up on screen)
+    screenY -= (elevation * g_ElevationScale) + g_BaseHeightOffset;
+}
+
+static int getTileElev(const ZooReader& reader, int x, int y) {
+    if (x < 0 || y < 0 || x >= reader.getMapWidth() || y >= reader.getMapHeight()) {
+        return -999;  // Out of bounds marker
+    }
+    const ZooReader::ZooTile* t = reader.getTile(x, y);
+    return t ? t->elevation : -999;
+}
+
+// ============================================================================
+// TERRAIN RENDERING
+// ============================================================================
 
 void World::drawTerrain(SDL_Renderer *renderer) {
-  static bool loggedOnce = false;
-  static int lastMapWidth = 0;
-  static int lastMapHeight = 0;
+    int mapWidth = this->zooReader.getMapWidth();
+    int mapHeight = this->zooReader.getMapHeight();
+    if (mapWidth == 0 || mapHeight == 0) return;
 
-  int mapWidth = this->zooReader.getMapWidth();
-  int mapHeight = this->zooReader.getMapHeight();
+    // Debug output on first frame
+    if (g_DebugOnce) {
+        SDL_Log("[Render] === FIRST FRAME ===");
+        SDL_Log("[Render] Map: %dx%d, Camera: (%d,%d), Scale: %d, Zoom: %.2f",
+            mapWidth, mapHeight, camX, camY, g_ElevationScale, g_ZoomLevel);
+        SDL_Log("[Render] MapType: %u, BaseTerrainId: %u",
+            zooReader.getMapType(), zooReader.getBaseTerrainId());
 
-  if (mapWidth == 0 || mapHeight == 0 || mapWidth > 500)
-    return;
+        // Log terrain ID remapping for debugging
+        SDL_Log("[Render] === TERRAIN ID REMAPPING SAMPLE ===");
+        int remapCounts[17] = {0};
+        int unmappedIds[32] = {0};
+        int unmappedCount = 0;
 
-  // Log terrain ID distribution once per map (detect map change)
-  bool mapChanged = (mapWidth != lastMapWidth || mapHeight != lastMapHeight);
-  if (!loggedOnce || mapChanged) {
-    int terrainCounts[20] = {0};
-    int rawTerrainCounts[256] = {0}; // Track raw IDs to detect invalids
+        for (int y = 0; y < mapHeight; y++) {
+            for (int x = 0; x < mapWidth; x++) {
+                const ZooReader::ZooTile *tile = this->zooReader.getTile(x, y);
+                if (!tile) continue;
+                int raw = tile->terrainId;
+                int mapped = getRemappedTerrainId(raw);
+                if (mapped >= 0 && mapped < 17) remapCounts[mapped]++;
+
+                // Track unique unmapped high IDs for debugging
+                if (raw > 16 && unmappedCount < 32) {
+                    bool found = false;
+                    for (int i = 0; i < unmappedCount; i++) {
+                        if (unmappedIds[i] == raw) { found = true; break; }
+                    }
+                    if (!found) unmappedIds[unmappedCount++] = raw;
+                }
+            }
+        }
+
+        SDL_Log("[Render] Remapped terrain distribution:");
+        const char* terrainNames[] = {
+            "Grass", "Savannah", "Sand", "Dirt", "Rainforest", "BrownRock",
+            "GrayRock", "Gravel", "Snow", "FreshWater", "SaltWater",
+            "Deciduous", "Waterfall", "Conifer", "Concrete", "Asphalt", "Trampled"
+        };
+        for (int i = 0; i < 17; i++) {
+            if (remapCounts[i] > 0) {
+                SDL_Log("[Render]   ID %2d (%s): %d tiles", i, terrainNames[i], remapCounts[i]);
+            }
+        }
+
+        if (unmappedCount > 0) {
+            SDL_Log("[Render] Raw high IDs found (>16): ");
+            for (int i = 0; i < unmappedCount && i < 16; i++) {
+                int raw = unmappedIds[i];
+                int mapped = getRemappedTerrainId(raw);
+                SDL_Log("[Render]   Raw %3d (0x%02X) -> Mapped %d (%s)",
+                    raw, raw, mapped, terrainNames[mapped]);
+            }
+        }
+    }
+
+    // Collect all tiles for sorting
+    std::vector<RenderTile> drawList;
+    drawList.reserve(mapWidth * mapHeight);
 
     for (int y = 0; y < mapHeight; y++) {
-      for (int x = 0; x < mapWidth; x++) {
-        const ZooReader::ZooTile *tile = this->zooReader.getTile(x, y);
-        if (tile) {
-          // Track raw terrain ID BEFORE remapping
-          if (tile->terrainId >= 0 && tile->terrainId < 256) {
-            rawTerrainCounts[tile->terrainId]++;
-          }
+        for (int x = 0; x < mapWidth; x++) {
+            const ZooReader::ZooTile *tile = this->zooReader.getTile(x, y);
+            if (!tile) continue;
 
-          // Track remapped terrain ID
-          int tId = getRemappedTerrainId(tile->terrainId);
-          if (tId >= 0 && tId < 20) {
-            terrainCounts[tId]++;
-          }
+            int screenX, screenY;
+            tileToScreen(x, y, tile->elevation, screenX, screenY);
+
+            RenderTile rt;
+            rt.x = x;
+            rt.y = y;
+            rt.sortKey = x + y;  // Isometric depth
+            rt.screenX = screenX;
+            rt.screenY = screenY;
+            rt.elevation = tile->elevation;
+            rt.rawTerrainId = tile->terrainId;
+            rt.terrainId = getRemappedTerrainId(tile->terrainId);
+            drawList.push_back(rt);
         }
-      }
     }
 
-    SDL_Log("World: Raw Terrain IDs in map (before remapping):");
-    for (int i = 0; i < 256; i++) {
-      if (rawTerrainCounts[i] > 0) {
-        SDL_Log("  Raw ID %d: %d tiles", i, rawTerrainCounts[i]);
-      }
-    }
+    // Sort back-to-front (painter's algorithm)
+    std::sort(drawList.begin(), drawList.end(), [](const RenderTile& a, const RenderTile& b) {
+        if (a.sortKey != b.sortKey) return a.sortKey < b.sortKey;
+        // Tiebreaker: lower elevation draws first
+        return a.elevation < b.elevation;
+    });
 
-    SDL_Log("World: Remapped Terrain ID distribution:");
-    for (int i = 0; i < 20; i++) {
-      if (terrainCounts[i] > 0) {
-        SDL_Log("  Terrain %d: %d tiles", i, terrainCounts[i]);
-      }
-    }
+    // Render statistics
+    int floorsDrawn = 0, wallsDrawn = 0;
 
-    lastMapWidth = mapWidth;
-    lastMapHeight = mapHeight;
-    loggedOnce = true;
-  }
+    for (const auto& rt : drawList) {
+        Animation *floorAnim = SpriteDatabase::get().getTerrainSprite(rt.terrainId);
+        int wallId = getSubstrateMaterial(rt.terrainId);
+        Animation *wallAnim = SpriteDatabase::get().getTerrainSprite(wallId);
+        if (!wallAnim) wallAnim = SpriteDatabase::get().getTerrainSprite(3);  // Dirt fallback
 
-  // Trace disabled for cleanup
-  // bool trace = false;
+        // --- Draw Floor Surface ---
+        if (floorAnim) {
+            floorAnim->draw(renderer, rt.screenX, rt.screenY, CompassDirection::N);
+            floorsDrawn++;
+        } else {
+            // Fallback: colored rectangle
+            SDL_Color c = {50, 150, 50, 255};  // Default green
+            if (rt.terrainId == 2) c = {210, 180, 140, 255};       // Sand
+            else if (rt.terrainId == 3) c = {139, 90, 43, 255};    // Dirt
+            else if (rt.terrainId == 8) c = {240, 240, 240, 255};  // Snow
+            else if (rt.terrainId == 9) c = {64, 164, 223, 255};   // Water
+            else if (rt.terrainId == 15) c = {80, 80, 80, 255};    // Asphalt
 
-  for (int y = 0; y < mapHeight; y++) {
-    for (int x = 0; x < mapWidth; x++) {
-      int idx = y * mapWidth + x;
-
-      const ZooReader::ZooTile *tile = this->zooReader.getTile(x, y);
-      if (!tile)
-        continue;
-
-      int screenX, screenY;
-      tileToScreen(x, y, tile->elevation, screenX, screenY);
-
-      // Culling (Updated for 1280x720)
-      if (screenX < -TILE_WIDTH || screenX > 1280 || screenY < -TILE_HEIGHT ||
-          screenY > 720) {
-        continue;
-      }
-
-      int terrainId = getRemappedTerrainId(tile->terrainId);
-
-      Animation *anim = SpriteDatabase::get().getTerrainSprite(terrainId);
-
-      // Debug logging for non-grass terrain
-      static int nonGrassLogCount = 0;
-      if (terrainId != 0 && nonGrassLogCount < 5) {
-        SDL_Log("World: Rendering terrain ID %d at (%d,%d) -> screen(%d,%d), anim=%p",
-                terrainId, x, y, screenX, screenY, (void*)anim);
-        if (anim) {
-          SDL_Log("World: Animation isValid=%d, hasFrames=%d",
-                  anim->isValid() ? 1 : 0,
-                  anim->hasFrames(CompassDirection::N) ? 1 : 0);
+            SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, 255);
+            SDL_Rect r = {rt.screenX + 16, rt.screenY + 8, 32, 16};
+            SDL_RenderFillRect(renderer, &r);
         }
-        nonGrassLogCount++;
-      }
 
-      // Fallback to grass if specific terrain not loaded
-      if (!anim && terrainId != 18) {
-        anim = SpriteDatabase::get().getTerrainSprite(0);
-      }
+        // --- Draw Cliff Walls ---
+        // Walls appear where this tile is higher than its neighbor
+        int southElev = getTileElev(zooReader, rt.x, rt.y + 1);
+        int eastElev = getTileElev(zooReader, rt.x + 1, rt.y);
 
-      if (anim) {
-        anim->draw(renderer, screenX, screenY, CompassDirection::N);
-      } else {
-        // Debug: magenta dot for missing terrain
-        SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255);
-        SDL_RenderDrawPoint(renderer, screenX + 32, screenY + 16);
-      }
+        const int MAX_WALL_GAP = 15;
+
+        // South wall (left face as viewed by player)
+        if (southElev != -999 && rt.elevation > southElev) {
+            int gap = std::min(rt.elevation - southElev, MAX_WALL_GAP);
+            for (int h = 0; h < gap; h++) {
+                int wallY = rt.screenY + 16 + (h * g_ElevationScale);
+                if (wallAnim) {
+                    wallAnim->draw(renderer, rt.screenX, wallY, CompassDirection::N);
+                }
+                wallsDrawn++;
+            }
+        }
+
+        // East wall (right face as viewed by player)
+        if (eastElev != -999 && rt.elevation > eastElev) {
+            int gap = std::min(rt.elevation - eastElev, MAX_WALL_GAP);
+            for (int h = 0; h < gap; h++) {
+                int wallY = rt.screenY + 12 + (h * g_ElevationScale);
+                if (wallAnim) {
+                    wallAnim->draw(renderer, rt.screenX + 16, wallY, CompassDirection::N);
+                }
+                wallsDrawn++;
+            }
+        }
     }
-  }
-  loggedOnce = true;
+
+    if (g_DebugOnce) {
+        SDL_Log("[Render] Tiles: %zu, Floors: %d, Walls: %d",
+            drawList.size(), floorsDrawn, wallsDrawn);
+        SDL_Log("[Render] === END FIRST FRAME ===");
+        g_DebugOnce = false;
+    }
 }
 
 void World::drawEntities(SDL_Renderer *renderer) {
-  entityManager.draw(renderer, camX, camY, startX, startY);
+    entityManager.draw(renderer, camX, camY, startX, startY);
 }
 
 void World::draw(SDL_Renderer *renderer) {
-  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); // Black background
-  SDL_RenderClear(renderer);
-
-  // Draw terrain layer first
-  drawTerrain(renderer);
-
-  // Draw entities on top (with depth sorting)
-  drawEntities(renderer);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+    SDL_RenderSetScale(renderer, g_ZoomLevel, g_ZoomLevel);
+    drawTerrain(renderer);
+    drawEntities(renderer);
+    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
 }

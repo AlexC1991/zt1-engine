@@ -1,3 +1,4 @@
+#include "Enums.hpp"
 #ifndef ENTITY_MANAGER_HPP
 #define ENTITY_MANAGER_HPP
 

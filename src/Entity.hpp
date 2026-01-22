@@ -1,6 +1,7 @@
 #ifndef ENTITY_HPP
 #define ENTITY_HPP
 
+#include "Enums.hpp"
 #include <SDL2/SDL.h>
 #include <string>
 #include <vector>

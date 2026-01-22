@@ -68,7 +68,7 @@ void EntityManager::parseEntityFromTile(const ZooReader::ZooTile& tile, int x, i
         AnimalSpecies species = static_cast<AnimalSpecies>(entityWord);
 
         // Only create if it's a known species
-        if (entityWord <= static_cast<uint16_t>(AnimalSpecies::MAX_SPECIES)) {
+        if (entityWord <= static_cast<uint16_t>(MAX_SPECIES)) {
             auto animal = std::make_unique<Animal>(species);
             animal->tileX = x;
             animal->tileY = y;

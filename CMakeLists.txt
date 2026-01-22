@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.12)
 project(zt1-engine)
-# Triggering CMake re-configure to include new files: MemoryTracker, MemoryDumpLog, SpriteDatabase, Entity, EntityManager
+# ZT1 Engine Remake - CMake Configuration
 
 # 1. UPGRADE TO C++20 (Fixes 'contains' and 'designated initializer' errors)
 set(CMAKE_CXX_STANDARD 20)
@@ -38,7 +38,6 @@ add_subdirectory(vendor/libzip)
 add_subdirectory(vendor/pe-resource-loader)
 
 # 6. GATHER SOURCE CODE
-# 6. GATHER SOURCE CODE
 file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.c")
 list(FILTER SOURCES EXCLUDE REGEX "test_zoo_reader.cpp$")
 
@@ -63,7 +62,6 @@ add_executable(zt1-engine ${SOURCES}
 add_executable(test-zoo src/test_zoo_reader.cpp src/ZooReader.cpp src/MemoryManager.cpp)
 target_link_libraries(test-zoo PRIVATE SDL2-static zlibstatic)
 target_include_directories(test-zoo PRIVATE src vendor/SDL/include vendor/zlib ${CMAKE_CURRENT_BINARY_DIR}/vendor/zlib)
-
 
 # 9. FIX INCLUDE PATHS
 target_include_directories(zt1-engine PRIVATE
