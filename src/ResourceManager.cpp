@@ -72,12 +72,14 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
 
   // [PATCH] Allow loose files to override ZTD content (files only, not
   // directories)
+  // [DIAGNOSTIC] Trace every path attempt
   for (const auto &ext : extensions) {
     std::string try_path = base_name + ext;
-    if (std::filesystem::exists(try_path) &&
-        std::filesystem::is_regular_file(try_path)) {
-      SDL_Log("ResourceManager: Loading loose file override: %s",
-              try_path.c_str());
+    // Log what we are checking (Only log failures if you want less spam, but user asked for tracing)
+    // SDL_Log("[TRACE] Checking: %s", try_path.c_str()); 
+    
+    if (std::filesystem::exists(try_path) && std::filesystem::is_regular_file(try_path)) {
+      // // SDL_Log("[SUCCESS] Found Loose File: %s", try_path.c_str());
       return try_path;
     }
   }
@@ -85,6 +87,7 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
   for (const auto &ext : extensions) {
     std::string try_name = base_name + ext;
     if (this->resource_map.count(try_name)) {
+      // // SDL_Log("[SUCCESS] Found in ZTD Map: %s -> %s", try_name.c_str(), this->resource_map[try_name].c_str());
       return this->resource_map[try_name];
     }
   }
@@ -106,7 +109,7 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
                   (base_name.find("_g") != std::string::npos);
 
   if (!suppress) {
-    SDL_Log("Resource not found: %s", base_name.c_str());
+    // SDL_Log("Resource not found: %s", base_name.c_str()); // [PATCH] Silenced
   }
 
   return "";
@@ -207,8 +210,37 @@ void ResourceManager::load_resource_map(std::atomic<float> *progress,
   }
 
   resource_map_loaded = true;
-  SDL_Log("Loading resource map done. Total files indexed: %zu",
+    SDL_Log("Loading resource map done. Total files indexed: %zu",
           resource_map.size());
+
+  // --- [DIAGNOSTIC] ZTD MAP SCANNER ---
+  SDL_Log("========================================");
+  SDL_Log("      INTERNAL MAP ARCHIVE SCAN");
+  SDL_Log("========================================");
+  int mapCount = 0;
+  for (auto const& [key, val] : resource_map) {
+      if (key.length() > 4 && key.substr(key.length() - 4) == ".zoo") {
+          int size = 0;
+          // Read header from ZTD
+          void* data = ZtdFile::getFileContent(val, key, &size);
+          if (data && size > 0x28) {
+              uint8_t* b = (uint8_t*)data;
+              uint32_t baseId = 0;
+              uint32_t mapType = 0;
+              memcpy(&baseId, b + 0x20, 4);
+              memcpy(&mapType, b + 0x24, 4);
+              
+              SDL_Log("MAP DETECTED: %-20s | BaseID: %-2u | Type: %-6u", 
+                      key.c_str(), baseId, mapType);
+              mapCount++;
+              free(data);
+          }
+      }
+  }
+  SDL_Log("Total Maps Found in ZTDs: %d", mapCount);
+  SDL_Log("========================================");
+  // ------------------------------------
+
 }
 
 void ResourceManager::load_string_map(std::atomic<float> *progress,

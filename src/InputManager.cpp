@@ -1,5 +1,7 @@
 #include "InputManager.hpp"
 
+extern float g_ZoomLevel;
+
 InputManager::InputManager() {
 }
 
@@ -56,11 +58,19 @@ std::vector<Input> InputManager::getInputs() {
         SDL_GetMouseState(&input.position.x, &input.position.y);
         input.x = input.position.x;
         input.y = input.position.y;
+        
+        // [ZOOM HACK] Direct Global Zoom Control
         if (event.wheel.y > 0) {
           input.event = InputEvent::SCROLL_UP;
+          g_ZoomLevel += 0.1f; 
         } else if (event.wheel.y < 0) {
           input.event = InputEvent::SCROLL_DOWN;
+          g_ZoomLevel -= 0.1f;
         }
+        
+        // Clamp Zoom (0.1x to 3.0x)
+        if (g_ZoomLevel < 0.1f) g_ZoomLevel = 0.1f;
+        if (g_ZoomLevel > 3.0f) g_ZoomLevel = 3.0f;
         break;
     }
     

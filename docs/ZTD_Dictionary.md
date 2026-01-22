@@ -337,3 +337,41 @@ zip -r custom_animals.ztd animals/
 ---
 
 **.ZTD files form the backbone of Zoo Tycoon's asset system, providing a compact, organized way to distribute thousands of game assets while maintaining fast access and modding capabilities. Understanding this format is essential for extending or modifying the game.**
+
+
+
+# Zoo Tycoon 1 .ZTD File Format Dictionary
+
+## Technical Specifications
+- **Format**: Modified ZIP archive.
+- **Extension**: `.ztd` (Zoo Tycoon Data).
+
+## Core Resource Mapping
+
+### Terrain Graphics (Documented Mapping)
+Based on `tiletex.cfg` and `lang.dll` reverse engineering:
+
+| ID | Name (from lang.dll) | ZTD Path | Help ID |
+|----|----------------------|----------|---------|
+| 0  | Grass                | terrain/icgrass  | 3365 |
+| 1  | Savannah Grass       | terrain/icgrs_sv | 3366 |
+| 2  | Sand                 | terrain/icsand   | 3367 |
+| 3  | Dirt                 | terrain/icdirt   | 3368 |
+| 14 | Concrete             | terrain/icccrete | 3379 |
+| 15 | Asphalt              | terrain/icaphalt | 3380 |
+
+### Archive Priority
+The engine uses a specific mounting order to support expansion packs and patches:
+1. **Update Archives (.zup):** Highest priority overrides.
+2. **Expansion Archives:** `ztatb00.ztd` (Dino Digs), `animals2.ztd` (Marine Mania).
+3. **Base Archives:** `terrain.ztd`, `animals.ztd`, `ui.ztd`.
+
+## Internal File Structure
+
+### UI Components
+- **IDs 1000-1100:** Main tool buttons.
+- **IDs 3000-3999:** Terrain names (linked to Help IDs in `tiletex.cfg`).
+
+### Animation Files (.ani)
+- **Format**: INI-style configuration files.
+- **Directions**: Standard 8-direction support (N, NE, E, SE, S, SW, W, NW).
