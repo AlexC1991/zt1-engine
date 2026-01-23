@@ -1,18 +1,110 @@
-# Current Task: Terrain Rendering & Elevation System
+# Current Task: Terrain Rendering & Texture Loading
 
-**Status:** ✅ COMPLETE - Terrain Encoding Fixed
-**Priority:** High (Visual Geometry & Draw Order)
-**Session:** Terrain Byte Encoding Discovery
+**Status:** ✅ COMPLETE - Terrain Textures Now Loading
+**Priority:** High (Visual Rendering)
+**Session:** Terrain Texture Path Fix
 
 ---
 
 ## Summary
 
-Successfully discovered and implemented the correct terrain byte encoding scheme. Maps now render with proper terrain types.
+Fixed terrain texture loading by correcting file paths in SpriteDatabase. All 17 terrain types now load successfully from terrain.ztd. The issue was that terrain animations are stored in subdirectories (e.g., `terrain/icgrass/icgrass.ani`) but the code was trying to load them as flat paths.
 
 ---
 
-## 1. BREAKTHROUGH: Terrain Byte Encoding
+## 1. TERRAIN TEXTURE LOADING FIX
+
+### The Problem
+The engine was not loading terrain textures from terrain.ztd. Terrain tiles were rendering as colored rectangles instead of textured sprites.
+
+### Root Cause Analysis
+Examined the original ZT1 terrain.ztd file structure:
+```
+terrain/icgrass/
+  icgrass.ani
+  icgrass.pal
+  N
+terrain/icsand/
+  icsand.ani
+  icsand.pal
+  N
+terrain/icwater/
+  icwater.ani
+  icwater.pal
+  N
+```
+
+The SpriteDatabase was attempting to load:
+- `terrain/IcGrass` ❌
+- `terrain/icgrass` ❌
+
+But the actual path should be:
+- `terrain/icgrass/icgrass.ani` ✅
+
+### The Solution
+Updated `SpriteDatabase.cpp::tryLoadTerrain()` to correctly construct paths:
+
+```cpp
+// NEW: Directory structure (terrain/icgrass/icgrass)
+snprintf(buf, sizeof(buf), "terrain/ic%s/ic%s", baseName, baseName);
+for (int i = 8; buf[i] && buf[i] != '/'; i++) buf[i] = tolower(buf[i]);
+for (int i = 0; buf[i]; i++) {
+    if (buf[i] == '/' && buf[i+1] == 'i' && buf[i+2] == 'c') {
+        for (int j = i+3; buf[j] && buf[j] != '/'; j++) buf[j] = tolower(buf[j]);
+        break;
+    }
+}
+anim = rm->getAnimation(buf);
+```
+
+### Terrain Name Mappings Updated
+```cpp
+const TerrainDef terrains[] = {
+    {  0, "Grass",              "grass"   },   // terrain/icgrass/icgrass.ani
+    {  1, "Savannah Grass",     "grs_sv"  },   // terrain/icgrs_sv/icgrs_sv.ani
+    {  2, "Sand",               "sand"    },   // terrain/icsand/icsand.ani
+    {  3, "Dirt",               "dirt"    },   // terrain/icdirt/icdirt.ani
+    {  4, "Rainforest Floor",   "ffloor"  },   // terrain/icffloor/icffloor.ani
+    {  5, "Brown Stone",        "bnrock"  },   // terrain/icbnrock/icbnrock.ani
+    {  6, "Gray Stone",         "grock"   },   // terrain/icgrock/icgrock.ani
+    {  7, "Gravel",             "gravel"  },   // terrain/icgravel/icgravel.ani
+    {  8, "Snow",               "snow"    },   // terrain/icsnow/icsnow.ani
+    {  9, "Fresh Water",        "water"   },   // terrain/icwater/icwater.ani
+    { 10, "Salt Water",         "dpwatr"  },   // terrain/icdpwatr/icdpwatr.ani
+    { 11, "Deciduous Floor",    "fflord"  },   // terrain/icfflord/icfflord.ani
+    { 12, "Waterfall",          "water"   },   // Use water as fallback
+    { 13, "Coniferous Floor",   "fflorc"  },   // terrain/icfflorc/icfflorc.ani
+    { 14, "Concrete",           "ccrete"  },   // terrain/icccrete/icccrete.ani
+    { 15, "Asphalt",            "aphalt"  },   // terrain/icaphalt/icaphalt.ani
+    { 16, "Trampled Terrain",   "dirt"    },   // Use dirt as fallback
+};
+```
+
+### Verification
+Engine output confirms all 17 terrain types loaded successfully:
+```
+[SpriteDatabase]   [OK] ID  0: Grass                -> terrain/icgrass/icgrass
+[SpriteDatabase]   [OK] ID  1: Savannah Grass       -> terrain/icgrs_sv/icgrs_sv
+[SpriteDatabase]   [OK] ID  2: Sand                 -> terrain/icsand/icsand
+[SpriteDatabase]   [OK] ID  3: Dirt                 -> terrain/icdirt/icdirt
+[SpriteDatabase]   [OK] ID  4: Rainforest Floor     -> terrain/icffloor/icffloor
+[SpriteDatabase]   [OK] ID  5: Brown Stone          -> terrain/icbnrock/icbnrock
+[SpriteDatabase]   [OK] ID  6: Gray Stone           -> terrain/icgrock/icgrock
+[SpriteDatabase]   [OK] ID  7: Gravel               -> terrain/icgravel/icgravel
+[SpriteDatabase]   [OK] ID  8: Snow                 -> terrain/icsnow/icsnow
+[SpriteDatabase]   [OK] ID  9: Fresh Water          -> terrain/icwater/icwater
+[SpriteDatabase]   [OK] ID 10: Salt Water           -> terrain/icdpwatr/icdpwatr
+[SpriteDatabase]   [OK] ID 11: Deciduous Floor      -> terrain/icfflord/icfflord
+[SpriteDatabase]   [OK] ID 12: Waterfall            -> terrain/icwater/icwater
+[SpriteDatabase]   [OK] ID 13: Coniferous Floor     -> terrain/icfflorc/icfflorc
+[SpriteDatabase]   [OK] ID 14: Concrete             -> terrain/icccrete/icccrete
+[SpriteDatabase]   [OK] ID 15: Asphalt              -> terrain/icaphalt/icaphalt
+[SpriteDatabase]   [OK] ID 16: Trampled Terrain     -> terrain/icdirt/icdirt (aliased)
+```
+
+---
+
+## 2. BREAKTHROUGH: Terrain Byte Encoding (Previous Session)
 
 **Discovery:** The terrain ID byte uses a **nibble-based encoding** scheme!
 
@@ -61,7 +153,7 @@ int getRemappedTerrainId(int terrainId) {
 
 ---
 
-## 2. Analysis Tools Created
+## 3. Analysis Tools Created
 
 ### `tools/analyze_terrain.py`
 Basic terrain ID distribution analysis for .zoo files.
@@ -74,17 +166,19 @@ Advanced analysis showing low-nibble terrain extraction proof:
 
 ---
 
-## 3. Files Modified
+## 4. Files Modified
 
 | File | Changes |
 |------|---------|
+| `src/SpriteDatabase.cpp` | Fixed `tryLoadTerrain()` to use correct directory paths |
+| `src/SpriteDatabase.cpp` | Updated terrain name mappings to match ZTD structure |
 | `src/World.cpp` | Simplified `getRemappedTerrainId()` to use `& 0x0F` |
-| `docs/current_task.md` | Updated with discovery |
+| `docs/current_task.md` | Updated with terrain texture loading fix |
 | `docs/GLOBAL_ENGINE_CONFIG.md` | Added terrain byte encoding reference |
 
 ---
 
-## 4. Verification Results
+## 5. Verification Results
 
 Analyzed 15+ map files confirming the encoding:
 - **crater.zoo:** 66% tiles with 0xF0 flag (player-placed)
@@ -96,16 +190,18 @@ All maps now decode correctly with low-nibble extraction.
 
 ---
 
-## 5. Next Steps
+## 6. Next Steps
 
-1. **Flag Investigation:** Determine if high-nibble flags affect terrain variants/rendering
-2. **Water Rendering:** Add transparency/animation for water tiles (ID 9, 10, 12)
-3. **Entity Elevation:** Snap entities to terrain height
-4. **Performance:** Implement view frustum culling
+1. **Test Rendering:** Run the engine and verify textures render correctly in-game
+2. **Water Animation:** Implement animated water tiles (ID 9, 10, 12)
+3. **Transparency:** Add alpha blending for water and special terrains
+4. **Entity Elevation:** Snap entities to terrain height
+5. **Performance:** Implement view frustum culling
+6. **Flag Investigation:** Determine if high-nibble flags affect terrain variants/rendering
 
 ---
 
-## 6. Quick Reference
+## 7. Quick Reference
 
 ### Binary Format (.zoo files)
 ```
@@ -131,4 +227,4 @@ Tile Data (10 bytes per tile):
 
 ---
 
-*Last Updated: Terrain Encoding Discovery Session*
+*Last Updated: Terrain Texture Loading Fix Session - 2026-01-23*

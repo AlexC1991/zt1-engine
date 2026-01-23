@@ -64,23 +64,34 @@ Animation* SpriteDatabase::getAnimation(EntityType type, int id, AnimState state
 }
 
 // Helper to try multiple file name variations
+// ZT1 stores terrain animations in directories like:
+//   terrain/icgrass/icgrass.ani
+//   terrain/icsand/icsand.ani
+//   terrain/icwater/icwater.ani
 static Animation* tryLoadTerrain(ResourceManager* rm, const char* baseName) {
     char buf[128];
     Animation* anim = nullptr;
 
-    // Try 1: Standard "Ic" prefix (IcGrass, IcSand, etc.)
+    // Try 1: Directory structure (terrain/icgrass/icgrass)
+    snprintf(buf, sizeof(buf), "terrain/ic%s/ic%s", baseName, baseName);
+    for (int i = 8; buf[i] && buf[i] != '/'; i++) buf[i] = tolower(buf[i]);
+    for (int i = 0; buf[i]; i++) {
+        if (buf[i] == '/' && buf[i+1] == 'i' && buf[i+2] == 'c') {
+            for (int j = i+3; buf[j] && buf[j] != '/'; j++) buf[j] = tolower(buf[j]);
+            break;
+        }
+    }
+    anim = rm->getAnimation(buf);
+    if (anim) return anim;
+
+    // Try 2: Standard "Ic" prefix (terrain/IcGrass - legacy attempt)
     snprintf(buf, sizeof(buf), "terrain/Ic%s", baseName);
     anim = rm->getAnimation(buf);
     if (anim) return anim;
 
-    // Try 2: Lowercase ic prefix
+    // Try 3: Lowercase ic prefix (terrain/icgrass - legacy attempt)
     snprintf(buf, sizeof(buf), "terrain/ic%s", baseName);
     for (int i = 8; buf[i]; i++) buf[i] = tolower(buf[i]);
-    anim = rm->getAnimation(buf);
-    if (anim) return anim;
-
-    // Try 3: Direct name without prefix
-    snprintf(buf, sizeof(buf), "terrain/%s", baseName);
     anim = rm->getAnimation(buf);
     if (anim) return anim;
 
@@ -99,24 +110,26 @@ void SpriteDatabase::loadTerrainSprites() {
         const char* baseName;
     };
 
+    // Terrain name mapping based on actual ZTD file structure
+    // Files are stored as: terrain/ic<name>/ic<name>.ani
     const TerrainDef terrains[] = {
-        {  0, "Grass",              "Grass"   },
-        {  1, "Savannah Grass",     "Grs_sv"  },
-        {  2, "Sand",               "Sand"    },
-        {  3, "Dirt",               "Dirt"    },
-        {  4, "Rainforest Floor",   "Ffloor"  },
-        {  5, "Brown Stone",        "BnRock"  },
-        {  6, "Gray Stone",         "Grock"   },
-        {  7, "Gravel",             "Gravel"  },
-        {  8, "Snow",               "Snow"    },
-        {  9, "Fresh Water",        "Water"   },
-        { 10, "Salt Water",         "DpWatr"  },
-        { 11, "Deciduous Floor",    "Fflord"  },
-        { 12, "Waterfall",          "Water"   },  // Bogus doesn't exist, use water
-        { 13, "Coniferous Floor",   "Fflorc"  },
-        { 14, "Concrete",           "Ccrete"  },
-        { 15, "Asphalt",            "Aphalt"  },
-        { 16, "Trampled Terrain",   "Dirt"    },  // Worn doesn't exist, use dirt
+        {  0, "Grass",              "grass"   },   // terrain/icgrass/icgrass.ani
+        {  1, "Savannah Grass",     "grs_sv"  },   // terrain/icgrs_sv/icgrs_sv.ani
+        {  2, "Sand",               "sand"    },   // terrain/icsand/icsand.ani
+        {  3, "Dirt",               "dirt"    },   // terrain/icdirt/icdirt.ani
+        {  4, "Rainforest Floor",   "ffloor"  },   // terrain/icffloor/icffloor.ani
+        {  5, "Brown Stone",        "bnrock"  },   // terrain/icbnrock/icbnrock.ani
+        {  6, "Gray Stone",         "grock"   },   // terrain/icgrock/icgrock.ani
+        {  7, "Gravel",             "gravel"  },   // terrain/icgravel/icgravel.ani
+        {  8, "Snow",               "snow"    },   // terrain/icsnow/icsnow.ani
+        {  9, "Fresh Water",        "water"   },   // terrain/icwater/icwater.ani
+        { 10, "Salt Water",         "dpwatr"  },   // terrain/icdpwatr/icdpwatr.ani
+        { 11, "Deciduous Floor",    "fflord"  },   // terrain/icfflord/icfflord.ani
+        { 12, "Waterfall",          "water"   },   // Use water as fallback
+        { 13, "Coniferous Floor",   "fflorc"  },   // terrain/icfflorc/icfflorc.ani
+        { 14, "Concrete",           "ccrete"  },   // terrain/icccrete/icccrete.ani
+        { 15, "Asphalt",            "aphalt"  },   // terrain/icaphalt/icaphalt.ani
+        { 16, "Trampled Terrain",   "dirt"    },   // Use dirt as fallback
     };
 
     int loaded = 0;
@@ -127,10 +140,12 @@ void SpriteDatabase::loadTerrainSprites() {
         if (anim) {
             terrainSprites[t.id] = anim;
             loaded++;
-            SDL_Log("[SpriteDatabase]   [OK] ID %2d: %-20s -> Ic%s", t.id, t.name, t.baseName);
+            SDL_Log("[SpriteDatabase]   [OK] ID %2d: %-20s -> terrain/ic%s/ic%s",
+                    t.id, t.name, t.baseName, t.baseName);
         } else {
             failed++;
-            SDL_Log("[SpriteDatabase]   [!!] ID %2d: %-20s -> MISSING (tried Ic%s)", t.id, t.name, t.baseName);
+            SDL_Log("[SpriteDatabase]   [!!] ID %2d: %-20s -> MISSING (tried terrain/ic%s/ic%s)",
+                    t.id, t.name, t.baseName, t.baseName);
         }
     }
 
