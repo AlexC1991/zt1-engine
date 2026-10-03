@@ -57,6 +57,11 @@ const char *modeName(Mode mode) {
 Mode mode() { return g_mode; }
 int factor() { return g_factor; }
 
+int worldFactor() {
+  return g_mode == Mode::Off ? 1
+                             : static_cast<int>(std::ceil(kMaxWorldZoom));
+}
+
 // ----------------------------------------------------------------------------
 // Texture bookkeeping: the upscale factor rides along as the texture's user
 // data, so any texture can report the size of the art it stands for
@@ -91,6 +96,9 @@ static SDL_Texture *makeTexture(SDL_Renderer *renderer, SDL_Surface *surface,
   if (t && scale > 1) {
     SDL_SetTextureUserData(t, reinterpret_cast<void *>(intptr_t(scale)));
     SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+    // The upscaled art holds the detail; linear finishes the last bit of
+    // scaling smoothly
+    SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
   }
   return t;
 }
@@ -146,11 +154,18 @@ static inline bool noneEq4(uint32_t b, uint32_t a0, uint32_t a1, uint32_t a2,
   return b != a0 && b != a1 && b != a2 && b != a3;
 }
 
-static void mmpx2x(const uint32_t *srcBuf, uint32_t *dst, int w, int h) {
+// Sample position for x in [0, n): clamped to the edge, or wrapped around
+// for art that tiles
+static inline int edgeIndex(int x, int n, bool wrap) {
+  if (wrap)
+    return ((x % n) + n) % n;
+  return std::clamp(x, 0, n - 1);
+}
+
+static void mmpx2x(const uint32_t *srcBuf, uint32_t *dst, int w, int h,
+                   bool wrap) {
   auto src = [&](int x, int y) {
-    x = std::clamp(x, 0, w - 1);
-    y = std::clamp(y, 0, h - 1);
-    return srcBuf[y * w + x];
+    return srcBuf[edgeIndex(y, h, wrap) * w + edgeIndex(x, w, wrap)];
   };
   forRows(h, [&](int sy) {
     for (int sx = 0; sx < w; sx++) {
@@ -302,9 +317,9 @@ static inline void easuSet(float &dirX, float &dirY, float &len, float w,
 }
 
 static void easu(const std::vector<Px> &in, int w, int h, std::vector<Px> &out,
-                 int W, int H) {
+                 int W, int H, bool wrap) {
   auto at = [&](int x, int y) -> const Px & {
-    return in[std::clamp(y, 0, h - 1) * w + std::clamp(x, 0, w - 1)];
+    return in[edgeIndex(y, h, wrap) * w + edgeIndex(x, w, wrap)];
   };
   float sx = static_cast<float>(w) / W, sy = static_cast<float>(h) / H;
   forRows(H, [&](int oy) {
@@ -386,11 +401,11 @@ static void easu(const std::vector<Px> &in, int w, int h, std::vector<Px> &out,
 }
 
 static void rcas(const std::vector<Px> &in, int w, int h, std::vector<Px> &out,
-                 float sharpness) {
+                 float sharpness, bool wrap) {
   const float limit = 0.25f - 1.0f / 16.0f;
   const float con = std::exp2(-sharpness);
   auto at = [&](int x, int y) -> const Px & {
-    return in[std::clamp(y, 0, h - 1) * w + std::clamp(x, 0, w - 1)];
+    return in[edgeIndex(y, h, wrap) * w + edgeIndex(x, w, wrap)];
   };
   forRows(h, [&](int y) {
     for (int x = 0; x < w; x++) {
@@ -424,7 +439,7 @@ static void rcas(const std::vector<Px> &in, int w, int h, std::vector<Px> &out,
 
 // ----------------------------------------------------------------------------
 
-static SDL_Surface *upscale(SDL_Surface *surface, int k) {
+static SDL_Surface *upscale(SDL_Surface *surface, int k, bool wrap) {
   SDL_Surface *rgba =
       SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
   if (!rgba)
@@ -450,7 +465,7 @@ static SDL_Surface *upscale(SDL_Surface *surface, int k) {
     int cw = w, ch = h;
     while (outScale < k) {
       std::vector<uint32_t> next(static_cast<size_t>(cw) * ch * 4);
-      mmpx2x(result.data(), next.data(), cw, ch);
+      mmpx2x(result.data(), next.data(), cw, ch, wrap);
       result.swap(next);
       cw *= 2;
       ch *= 2;
@@ -467,8 +482,8 @@ static SDL_Surface *upscale(SDL_Surface *surface, int k) {
                ((c >> 16) & 0xFF) / 255.0f * a, a};
     }
     std::vector<Px> big(static_cast<size_t>(W) * H), sharp(big.size());
-    easu(in, w, h, big, W, H);
-    rcas(big, W, H, sharp, g_sharpness);
+    easu(in, w, h, big, W, H, wrap);
+    rcas(big, W, H, sharp, g_sharpness, wrap);
     result.resize(sharp.size());
     for (size_t i = 0; i < sharp.size(); i++) {
       const Px &p = sharp[i];
@@ -493,12 +508,14 @@ static SDL_Surface *upscale(SDL_Surface *surface, int k) {
   return out;
 }
 
-SDL_Texture *createTexture(SDL_Renderer *renderer, SDL_Surface *surface) {
+SDL_Texture *createTexture(SDL_Renderer *renderer, SDL_Surface *surface,
+                           int factor, bool tileable) {
   if (!renderer || !surface)
     return nullptr;
-  if (g_mode == Mode::Off || g_factor <= 1)
+  int k = factor > 0 ? factor : g_factor;
+  if (g_mode == Mode::Off || k <= 1)
     return SDL_CreateTextureFromSurface(renderer, surface);
-  SDL_Surface *big = upscale(surface, g_factor);
+  SDL_Surface *big = upscale(surface, k, tileable);
   if (!big)
     return SDL_CreateTextureFromSurface(renderer, surface);
   int scale = big->w / std::max(1, surface->w);

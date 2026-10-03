@@ -1,4 +1,6 @@
 #include "World.hpp"
+#include "RenderSettings.hpp"
+#include "ArtScaler.hpp"
 #include "MemoryManager.hpp"
 #include "MemoryTracker.hpp"
 #include <SDL2/SDL.h>
@@ -245,8 +247,10 @@ void World::draw(SDL_Renderer *renderer) {
     cam.screenCenterY = outH / 2;
   }
 
-  // Apply zoom
+  // Apply zoom. Past 1x the map's art is drawn from its upscaled textures.
   SDL_RenderSetScale(renderer, cam.zoom, cam.zoom);
+  RenderSettings::worldZoomedIn =
+      cam.zoom > 1.001f && ArtScaler::worldFactor() > 1;
 
   // Render terrain layer
   worldRenderer.renderTerrain(renderer, worldMap, SpriteDatabase::get());
@@ -259,6 +263,7 @@ void World::draw(SDL_Renderer *renderer) {
 
   // Reset scale
   SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+  RenderSettings::worldZoomedIn = false;
 }
 
 void World::setCameraPosition(int x, int y) {

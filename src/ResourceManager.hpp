@@ -27,10 +27,13 @@ public:
   void load_all(std::atomic<float> *progress, std::atomic<bool> *is_done);
 
   void *getFileContent(const std::string &file_name, int *size);
-  // magnified: art drawn scaled up (menus, HUD), which gets art upscaling
-  // and HD pack replacements; world art passes false
+  // magnified: art drawn scaled up (menus, HUD, the zoomed-in map), which
+  // gets art upscaling and HD pack replacements; map art at 1:1 passes
+  // false. factor: upscale factor (0 = the configured one). tileable: the
+  // art repeats edge to edge (ground textures).
   SDL_Texture *getTexture(SDL_Renderer *renderer, const std::string &file_name,
-                          bool magnified = true);
+                          bool magnified = true, int factor = 0,
+                          bool tileable = false);
 
   // NEW: ZT1 raw preview decode (N + .pal)
   // One frame of a ZT1 sprite file (the per-frame graphics inside an
@@ -38,10 +41,13 @@ public:
   // the file names. nullptr if missing or not decodable.
   // anchorX/anchorY (optional) receive the frame's anchor: the pixel in
   // the image that sits on the object's position (e.g. a tile's centre).
+  // magnified: the upscaled version for the zoomed-in map (an HD pack's
+  // <file_name>_0.png when there is one); still reports the art's own size
   SDL_Texture *getZt1FrameTexture(SDL_Renderer *renderer,
                                   const std::string &file_name,
                                   int *anchorX = nullptr,
-                                  int *anchorY = nullptr);
+                                  int *anchorY = nullptr,
+                                  bool magnified = false);
   SDL_Texture *getZt1Texture(SDL_Renderer *renderer,
                              const std::string &raw_name,
                              const std::string &pal_name);

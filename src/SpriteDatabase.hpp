@@ -33,18 +33,24 @@ public:
 
     // Get the tileable ground texture for a terrain type (the "texture" key
     // in terrain/tiletex*.cfg). Loaded on first use; nullptr if unavailable.
-    SDL_Texture* getTerrainTexture(SDL_Renderer* renderer, int terrainId);
+    // hires: the upscaled version for the zoomed-in map (same art size).
+    SDL_Texture* getTerrainTexture(SDL_Renderer* renderer, int terrainId,
+                                   bool hires = false);
 
     // One frame of a path type's art: paths/<type>.ai names the animation
     // ([Animations] idle = idle), whose frames are paths/<type>/idle/1..20.
     // Frames 1-4 are ramps, 5-20 flat pieces with kerbs. Loaded on first use.
+    // hires also makes hiTexture, the upscaled version for the zoomed-in map
+    // (same anchor and art size).
     struct Sprite {
         SDL_Texture* texture = nullptr;
+        SDL_Texture* hiTexture = nullptr;
+        bool hiTried = false;
         int anchorX = 0, anchorY = 0; // image pixel on the tile centre
         int width = 0, height = 0;
     };
     const Sprite& getPathSprite(SDL_Renderer* renderer, const std::string& type,
-                                int frame);
+                                int frame, bool hires = false);
 
     // Terrain name from its tiletex*.cfg section, without "tt" (e.g. "Grass",
     // "SavannahGrass"); used to look up colours such as ui/miniclr.cfg
@@ -81,6 +87,7 @@ private:
     std::unordered_map<int, bool> terrainBlendFlags;
     std::unordered_map<int, std::string> terrainNames;
     std::unordered_map<int, SDL_Texture*> terrainTextures;
+    std::unordered_map<int, SDL_Texture*> terrainTexturesHi;
     SDL_Renderer* textureRenderer = nullptr;
     std::unordered_map<std::string, Sprite> pathSprites;
     std::unordered_map<std::string, std::string> pathArtFolders;

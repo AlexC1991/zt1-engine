@@ -58,6 +58,12 @@ Animation* SpriteManager::loadAnimation(const std::string& path) {
     );
 
     if (anim && anim->isValid()) {
+        // Animals are map art: upscaled frames for the zoomed-in map
+        if (path.find("ui/") == 0)
+            anim->setArtOptions(true, directory);
+        else
+            anim->setWorldArt(directory);
+
         // Store in cache (move semantics)
         animationCache.emplace(path, std::move(*anim));
         delete anim;

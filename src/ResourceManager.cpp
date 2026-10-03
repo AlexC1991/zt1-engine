@@ -368,7 +368,8 @@ void *ResourceManager::getFileContent(const std::string &name_raw, int *size) {
 // Texture for magnified art: an HD pack's replacement when there is one,
 // otherwise the art upscaled per the setting
 static SDL_Texture *magnifiedTexture(SDL_Renderer *r, SDL_Surface *s,
-                                     const std::string &name) {
+                                     const std::string &name, int factor = 0,
+                                     bool tileable = false) {
   std::string stem = name;
   size_t slash = stem.find_last_of('/'), dot = stem.find_last_of('.');
   if (dot != std::string::npos && (slash == std::string::npos || dot > slash))
@@ -379,12 +380,13 @@ static SDL_Texture *magnifiedTexture(SDL_Renderer *r, SDL_Surface *s,
     if (t)
       return t;
   }
-  return ArtScaler::createTexture(r, s);
+  return ArtScaler::createTexture(r, s, factor, tileable);
 }
 
 SDL_Texture *ResourceManager::getTexture(SDL_Renderer *r,
                                          const std::string &name_raw,
-                                         bool magnified) {
+                                         bool magnified, int factor,
+                                         bool tileable) {
   std::string name = fixDoubleName(name_raw);
   std::string actual_key = findActualResourceKey(name);
   std::string loc = getResourceLocation(name);
@@ -409,7 +411,7 @@ SDL_Texture *ResourceManager::getTexture(SDL_Renderer *r,
   if (!s)
     return nullptr;
 
-  SDL_Texture *t = magnified ? magnifiedTexture(r, s, name)
+  SDL_Texture *t = magnified ? magnifiedTexture(r, s, name, factor, tileable)
                              : SDL_CreateTextureFromSurface(r, s);
   SDL_FreeSurface(s);
   return t;
@@ -559,7 +561,8 @@ static SDL_Surface *decodeZt1NToSurface(const uint8_t *data, int size,
 // Only the first frame is decoded.
 SDL_Texture *ResourceManager::getZt1FrameTexture(SDL_Renderer *renderer,
                                                  const std::string &file_name,
-                                                 int *anchorX, int *anchorY) {
+                                                 int *anchorX, int *anchorY,
+                                                 bool magnified) {
   if (renderer == nullptr)
     return nullptr;
   std::string loc = getResourceLocation(file_name);
@@ -618,7 +621,20 @@ SDL_Texture *ResourceManager::getZt1FrameTexture(SDL_Renderer *renderer,
             }
           }
         }
-        texture = SDL_CreateTextureFromSurface(renderer, surf);
+        if (magnified) {
+          // The same file naming as the HD pack exporter: frame 0
+          std::string hdPath = file_name + "_0";
+          if (SDL_Surface *hd = ArtScaler::loadHdSurface(hdPath)) {
+            texture = ArtScaler::createHdTexture(renderer, hd, width, height,
+                                                 hdPath);
+            SDL_FreeSurface(hd);
+          }
+          if (!texture)
+            texture = ArtScaler::createTexture(renderer, surf,
+                                               ArtScaler::worldFactor());
+        } else {
+          texture = SDL_CreateTextureFromSurface(renderer, surf);
+        }
         if (texture)
           SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
         SDL_FreeSurface(surf);
@@ -723,17 +739,19 @@ Pallet *ResourceManager::getPallet(const std::string &name_raw) {
   return pallet_manager.getPallet(name);
 }
 
-// UI animations are drawn magnified: they get art upscaling, and their
-// frames can come from an HD pack in hd/<folder of the .ani>/
+// UI animations are drawn magnified: they get art upscaling. Everything
+// else is map art, upscaled only for the zoomed-in map. Either way frames
+// can come from an HD pack in hd/<folder of the .ani>/
 static Animation *withArtOptions(Animation *a, const std::string &name,
                                  const std::string &ani_key) {
   std::string lower = name;
   std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-  if (lower.rfind("ui/", 0) == 0) {
-    size_t slash = ani_key.find_last_of('/');
-    std::string dir = slash == std::string::npos ? "" : ani_key.substr(0, slash);
+  size_t slash = ani_key.find_last_of('/');
+  std::string dir = slash == std::string::npos ? "" : ani_key.substr(0, slash);
+  if (lower.rfind("ui/", 0) == 0)
     a->setArtOptions(true, dir);
-  }
+  else
+    a->setWorldArt(dir);
   return a;
 }
 
