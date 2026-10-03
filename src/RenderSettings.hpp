@@ -16,6 +16,14 @@ inline SDL_ScaleMode artScaleMode = SDL_ScaleModeNearest;
 // upscaled textures
 inline bool worldZoomedIn = false;
 
+// Which part of the UI is being drawn. With GPU FSR the art is drawn into a
+// 1:1 layer that FSR upscales (Art), then text on top at the window's own
+// resolution so it stays sharp (Text). Otherwise everything at once (All).
+enum class UiPass { All, Art, Text };
+inline UiPass uiPass = UiPass::All;
+inline bool drawsUiArt() { return uiPass != UiPass::Text; }
+inline bool drawsUiText() { return uiPass != UiPass::Art; }
+
 inline void applyArtScaleMode(SDL_Texture *texture) {
   if (!texture)
     return;

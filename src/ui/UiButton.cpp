@@ -67,8 +67,13 @@ UiAction UiButton::handleInputs(std::vector<Input> &inputs) {
 
     switch (input.event) {
     case InputEvent::LEFT_CLICK:
-      if (this->isToggle())
-        this->toggled_on = !this->toggled_on;
+      if (this->isToggle()) {
+        bool on = !this->toggled_on;
+        if (this->radio_group)
+          for (UiButton *b : *this->radio_group)
+            b->toggled_on = false;
+        this->toggled_on = on;
+      }
       if (this->ini_reader->getInt(this->name, "action", 0) == 1) {
         int target = this->ini_reader->getInt(this->name, "target", 0);
         if (target != 0) {
@@ -255,7 +260,14 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
         this->dest_rect.h = h;
       }
     }
-    this->animation->draw(renderer, &dest_rect, state);
+    // The original centres the art on its anchor point (only the art moves;
+    // elements anchored to this button still use the layout position)
+    int ax = 0, ay = 0;
+    this->animation->anchorOffset(state, &ax, &ay);
+    this->dest_rect.x += ax;
+    this->dest_rect.y += ay;
+    if (RenderSettings::drawsUiArt())
+      this->animation->draw(renderer, &dest_rect, state);
   } else if (this->is_static) {
     SDL_Texture *target = this->tex_normal;
     if (this->selected && this->tex_hover)
@@ -274,7 +286,8 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       this->dest_rect.h = th;
     }
     RenderSettings::applyArtScaleMode(target);
-    SDL_RenderCopy(renderer, target, nullptr, &render_rect);
+    if (RenderSettings::drawsUiArt())
+      SDL_RenderCopy(renderer, target, nullptr, &render_rect);
   }
 
   if (this->text != nullptr) {
@@ -341,7 +354,8 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     }
     if (t) {
       RenderSettings::applyArtScaleMode(t);
-      SDL_RenderCopy(renderer, t, NULL, &dest_rect);
+      if (RenderSettings::drawsUiArt())
+        SDL_RenderCopy(renderer, t, NULL, &dest_rect);
     }
   }
 
@@ -353,7 +367,7 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
          this->text_string == "Back" || this->text_string == "Play" ||
          this->text_string == "back" || this->text_string == "play");
 
-    if (!this->transparent || force_bg) {
+    if ((!this->transparent || force_bg) && RenderSettings::drawsUiArt()) {
       SDL_SetRenderDrawColor(renderer, 40, 50, 40, 255);
       SDL_RenderFillRect(renderer, &dest_rect);
 
@@ -374,12 +388,14 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     }
   }
 
-  if (this->shadow != nullptr && text_rect.w > 0 && text_rect.h > 0) {
+  if (this->shadow != nullptr && text_rect.w > 0 && text_rect.h > 0 &&
+      RenderSettings::drawsUiText()) {
     shadow_rect = {text_rect.x - 1, text_rect.y + 1, text_rect.w, text_rect.h};
     SDL_RenderCopy(renderer, this->shadow, nullptr, &shadow_rect);
   }
 
-  if (this->text != nullptr && text_rect.w > 0 && text_rect.h > 0) {
+  if (this->text != nullptr && text_rect.w > 0 && text_rect.h > 0 &&
+      RenderSettings::drawsUiText()) {
     SDL_RenderCopy(renderer, this->text, nullptr, &text_rect);
   }
 

@@ -1,4 +1,5 @@
 #include "UiText.hpp"
+#include "../RenderSettings.hpp"
 #include <sstream>
 #include <vector>
 #include <algorithm>
@@ -130,13 +131,24 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
   else if (justify == "right")
     dest_rect.x -= dest_rect.w;
   
+  // border: the text sits that far inside its box on every side (the HUD's
+  // date and money use 2; measured 2 px lower than without it)
+  int border = this->ini_reader->getInt(this->name, "border", 0);
+  if (border > 0) {
+    dest_rect.x += border;
+    dest_rect.y += border;
+    dest_rect.w -= 2 * border;
+    dest_rect.h -= 2 * border;
+  }
+
   bool is_multiline = (this->cached_lines.size() > 1);
 
   // 2. Draw Background (only if multiline)
   if (is_multiline) {
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
       SDL_SetRenderDrawColor(renderer, 0, 0, 0, 60); // Dark background
-      SDL_RenderFillRect(renderer, &dest_rect);
+      if (RenderSettings::drawsUiArt())
+          SDL_RenderFillRect(renderer, &dest_rect);
       
       // Set Clipping
       SDL_RenderSetClipRect(renderer, &dest_rect);
@@ -186,7 +198,8 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
           }
           
           SDL_Rect dst = {draw_x, y_pos, w, h};
-          SDL_RenderCopy(renderer, t, NULL, &dst);
+          if (RenderSettings::drawsUiText())
+              SDL_RenderCopy(renderer, t, NULL, &dst);
       }
       y_pos += 14; 
   }
@@ -196,7 +209,7 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
 
   // 6. Draw Scrollbar (Zoo Tycoon Style)
   int total_h = ((int)cached_lines.size() * 14) + 15;
-  if (is_multiline && total_h > dest_rect.h) {
+  if (is_multiline && total_h > dest_rect.h && RenderSettings::drawsUiArt()) {
       int bar_x = dest_rect.x + dest_rect.w - 10;
       int bar_h = dest_rect.h;
       int bar_w = 8;

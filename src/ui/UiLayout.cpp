@@ -1,8 +1,10 @@
 #include "UiLayout.hpp"
+#include "../RenderSettings.hpp"
 
 #include <algorithm>
 #include <cstdlib>
 #include <functional>
+#include <memory>
 
 #include "UiButton.hpp"
 #include "UiImage.hpp"
@@ -63,33 +65,48 @@ void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   }
 
   // Like the original: every element drawn in layer order across the whole
-  // layout (not parent-then-children), each positioned inside its anchor
+  // layout (not parent-then-children), each positioned inside its anchor.
+  // Within a layer, elements anchored to another are drawn before it (the
+  // HUD's rating buttons cover the left end of their bars in the original).
   struct Item {
     UiElement *element;
     SDL_Rect parent;
+    int depth;
   };
   std::vector<Item> items;
-  std::function<void(UiElement *, SDL_Rect)> visit = [&](UiElement *e,
-                                                          SDL_Rect parent) {
-    if (e->isHidden())
-      return;
-    items.push_back({e, parent});
-    if (dynamic_cast<UiLayout *>(e))
-      return;
-    SDL_Rect r = e->computeRect(renderer, &parent);
-    for (UiElement *c : e->getChildren())
-      visit(c, r);
-  };
+  int maxDepth = 0;
+  std::function<void(UiElement *, SDL_Rect, int)> visit =
+      [&](UiElement *e, SDL_Rect parent, int depth) {
+        if (e->isHidden())
+          return;
+        items.push_back({e, parent, depth});
+        maxDepth = std::max(maxDepth, depth);
+        if (dynamic_cast<UiLayout *>(e))
+          return;
+        SDL_Rect r = e->computeRect(renderer, &parent);
+        for (UiElement *c : e->getChildren())
+          visit(c, r, depth + 1);
+      };
   for (UiElement *child : this->children)
-    visit(child, *layout_rect);
+    visit(child, *layout_rect, 0);
 
   int maxLayer = 0;
   for (const Item &it : items)
     maxLayer = std::max(maxLayer, it.element->getLayer());
+  // The text pass (GPU FSR draws text after the upscaled art) only needs
+  // the elements that have text
+  auto hasText = [](UiElement *e) {
+    return dynamic_cast<UiText *>(e) || dynamic_cast<UiButton *>(e) ||
+           dynamic_cast<UiListBox *>(e) || dynamic_cast<UiLayout *>(e);
+  };
   for (int layer = 0; layer <= maxLayer; layer++) {
+    for (int depth = maxDepth; depth >= 0; depth--)
     for (Item &it : items) {
-      if (it.element->getLayer() == layer)
-        it.element->draw(renderer, &it.parent);
+      if (it.element->getLayer() != layer || it.depth != depth)
+        continue;
+      if (!RenderSettings::drawsUiArt() && !hasText(it.element))
+        continue;
+      it.element->draw(renderer, &it.parent);
     }
   }
 }
@@ -103,6 +120,7 @@ void UiLayout::process_sections(IniReader *ini_reader,
   // Pass 1: create everything and add root-anchored elements.
   // Pass 2: attach anchored elements once the tree exists.
   std::vector<UiElement *> pending_anchored;
+  std::vector<std::vector<int>> radio_sets;
 
   for (std::string section : ini_reader->getSections()) {
     if (section == this->name || section == "layoutinfo") {
@@ -141,7 +159,12 @@ void UiLayout::process_sections(IniReader *ini_reader,
       new_element =
           (UiElement *)new UiMiniMap(ini_reader, resource_manager, section);
     } else if (element_type == "UIRadioSet") {
-      // Groups toolbar buttons so only one is selected; no visuals
+      // Groups toolbar buttons so only one is selected; no visuals. Linked
+      // up once every button exists.
+      std::vector<int> ids;
+      for (const std::string &id : ini_reader->getList(section, "button"))
+        ids.push_back(std::atoi(id.c_str()));
+      radio_sets.push_back(ids);
       continue;
     } else if (element_type == "UIScrollBar") {
       new_element =
@@ -206,6 +229,16 @@ void UiLayout::process_sections(IniReader *ini_reader,
   };
   for (UiElement *child : this->children)
     mark(child);
+
+  // Radio sets: their buttons share one group
+  for (const std::vector<int> &ids : radio_sets) {
+    auto group = std::make_shared<std::vector<UiButton *>>();
+    for (int id : ids)
+      if (UiButton *b = dynamic_cast<UiButton *>(this->getElementById(id)))
+        group->push_back(b);
+    for (UiButton *b : *group)
+      b->setRadioGroup(group);
+  }
 
   // Pass 3a: fillers stretch between two named elements
   for (UiElement *child : this->children) {
