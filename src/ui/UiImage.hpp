@@ -20,6 +20,10 @@ public:
   void draw(SDL_Renderer *renderer, SDL_Rect *layout_rect);
 
   void setImage(const std::string &path);
+  // A UIImageSet's images (its animation= lines), one shown at a time
+  std::vector<std::string> getImageSet() const {
+    return this->ini_reader->getList(this->name, "animation");
+  }
 
   SDL_Rect computeRect(SDL_Renderer *renderer, SDL_Rect *parent_rect) override;
 

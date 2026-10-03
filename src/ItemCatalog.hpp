@@ -70,6 +70,8 @@ public:
                                               bool availableOnly = true) const;
 
   const CatalogItem *find(const std::string &file) const;
+  // By cNameID (what research programs and unlock lists name items by)
+  const CatalogItem *findName(int nameId) const;
 
 private:
   std::vector<CatalogItem> items;

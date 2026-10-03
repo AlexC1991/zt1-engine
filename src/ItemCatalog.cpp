@@ -231,6 +231,13 @@ void ItemCatalog::load(ResourceManager *rm) {
   }
 }
 
+const CatalogItem *ItemCatalog::findName(int nameId) const {
+  for (const CatalogItem &item : this->items)
+    if (item.nameId == nameId)
+      return &item;
+  return nullptr;
+}
+
 std::vector<const CatalogItem *>
 ItemCatalog::inCategory(const std::string &category, bool availableOnly) const {
   std::string c = Utils::string_to_lower(category);

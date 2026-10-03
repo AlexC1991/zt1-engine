@@ -1,6 +1,10 @@
 #include "UiListBox.hpp"
 #include "../RenderSettings.hpp"
 #include <algorithm>
+#include <sstream>
+
+#include "../Animation.hpp"
+#include "../CompassDirection.hpp"
 
 UiListBox::UiListBox(IniReader* ini_reader, ResourceManager* resource_manager, std::string name) {
     this->name = name;
@@ -34,6 +38,12 @@ UiListBox::UiListBox(IniReader* ini_reader, ResourceManager* resource_manager, s
     this->item_height = std::max(8, resource_manager->getFontLineHeight(
                                         font_id, font_size_id) + 1);
     this->visible_items = std::max(1, (dy - border * 2) / item_height);
+
+    this->toggle_select = ini_reader->getInt(name, "toggleselect", 0) == 1;
+    this->minicon_width = ini_reader->getInt(name, "miniconwidth", 0);
+    this->line_height = resource_manager->getFontLineHeight(font_id, font_size_id);
+    if (this->toggle_select)
+        this->checkbox = resource_manager->getAnimation("ui/sharedui/checkbx/checkbx");
 
     SDL_Log("Created UiListBox: %s (id=%d, %dx%d, visible=%d items)",
             name.c_str(), id, dx, dy, visible_items);
@@ -94,7 +104,34 @@ void UiListBox::clear() {
     scroll_offset = 0;
 }
 
+// toggleselect lists: an item is as tall as its wrapped lines (measured:
+// 30 px for two lines of Arial Bold 9, 16 for one)
+int UiListBox::itemHeight(const ListBoxItem& item) const {
+    int lines = std::max<int>(1, (int)item.lines.size());
+    return lines * line_height + 2;
+}
+
+int UiListBox::fittingFrom(int first) const {
+    int room = dy - border * 2, n = 0;
+    for (int i = first; i < (int)items.size(); i++) {
+        room -= itemHeight(items[i]);
+        if (room < 0) break;
+        n++;
+    }
+    return std::max(1, n);
+}
+
 int UiListBox::getScrollMaximum() const {
+    if (toggle_select) {
+        // Scrolls until the last item is in view
+        int room = dy - border * 2;
+        int first = (int)items.size();
+        while (first > 0 && room - itemHeight(items[first - 1]) >= 0) {
+            room -= itemHeight(items[first - 1]);
+            first--;
+        }
+        return first;
+    }
     return std::max(0, (int)items.size() - visible_items);
 }
 
@@ -116,12 +153,45 @@ std::string UiListBox::getSelectedText() const {
     return "";
 }
 
+void UiListBox::wrapItems(SDL_Renderer* renderer) {
+    int room = dx - minicon_width;
+    auto width = [&](const std::string& s) {
+        SDL_Texture* t = resource_manager->getStringTexture(
+            renderer, font_id, s, forecolor, font_size_id);
+        int w = 0, h = 0;
+        if (t) resource_manager->getTextSize(t, &w, &h);
+        return w;
+    };
+    for (ListBoxItem& item : items) {
+        if (!item.lines.empty()) continue;
+        std::istringstream words(item.text);
+        std::string word, current;
+        while (words >> word) {
+            std::string candidate = current.empty() ? word : current + " " + word;
+            if (!current.empty() && width(candidate) > room) {
+                item.lines.push_back(current);
+                current = word;
+            } else {
+                current = candidate;
+            }
+        }
+        if (!current.empty() || item.lines.empty()) item.lines.push_back(current);
+    }
+}
+
 int UiListBox::getItemAtPoint(int px, int py) {
     if (px < cached_rect.x || px > cached_rect.x + cached_rect.w ||
         py < cached_rect.y || py > cached_rect.y + cached_rect.h) {
         return -1;
     }
     int relative_y = py - cached_rect.y - border;
+    if (toggle_select) {
+        for (int i = scroll_offset; i < (int)items.size(); i++) {
+            relative_y -= itemHeight(items[i]);
+            if (relative_y < 0) return i;
+        }
+        return -1;
+    }
     int index = scroll_offset + (relative_y / item_height);
     if (index >= 0 && index < (int)items.size()) return index;
     return -1;
@@ -163,7 +233,10 @@ UiAction UiListBox::handleInputs(std::vector<Input>& inputs) {
         }
         else if (input.event == InputEvent::LEFT_CLICK) {
             int clicked = getItemAtPoint(mx, my);
-            if (clicked >= 0 && clicked != selected_index) {
+            if (toggle_select && clicked >= 0) {
+                items[clicked].checked = !items[clicked].checked;
+                if (selection_action != UiAction::NONE) result = selection_action;
+            } else if (clicked >= 0 && clicked != selected_index) {
                 selected_index = clicked;
                 if (selection_action != UiAction::NONE) result = selection_action;
             }
@@ -200,13 +273,49 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
         SDL_SetRenderDrawColor(renderer, backcolor.r, backcolor.g, backcolor.b, backcolor.a);
         SDL_RenderFillRect(renderer, &cached_rect);
     }
-    if (border > 0 && art) {
+    // (the research categories' list has no outline in the original)
+    if (border > 0 && art && !toggle_select) {
         SDL_SetRenderDrawColor(renderer, forecolor.r, forecolor.g, forecolor.b, 255);
         SDL_RenderDrawRect(renderer, &cached_rect);
     }
 
     int item_y = cached_rect.y + border;
     int max_items = std::min(visible_items, (int)items.size() - scroll_offset);
+
+    if (toggle_select) {
+        // Checkbox in the mini-icon column, then the name wrapped to the
+        // rest of the width
+        wrapItems(renderer);
+        int count = std::min(fittingFrom(scroll_offset),
+                             (int)items.size() - scroll_offset);
+        for (int i = 0; i < count; i++) {
+            ListBoxItem& item = items[scroll_offset + i];
+            int h = itemHeight(item);
+            if (checkbox && art) {
+                int bw = 0, bh = 0;
+                checkbox->queryTexture(CompassDirection::N, &bw, &bh);
+                SDL_Rect box = {cached_rect.x + (minicon_width - bw) / 2,
+                                item_y + (h - bh) / 2, bw, bh};
+                checkbox->draw(renderer, &box, item.checked ? CompassDirection::S
+                                                            : CompassDirection::N);
+            }
+            int ty = item_y + (h - (int)item.lines.size() * line_height) / 2;
+            for (const std::string& line : item.lines) {
+                SDL_Texture* t = resource_manager->getStringTexture(
+                    renderer, font_id, line, forecolor, font_size_id);
+                if (t && RenderSettings::drawsUiText()) {
+                    int tw = 0, th = 0;
+                    resource_manager->getTextSize(t, &tw, &th);
+                    SDL_Rect dst = {cached_rect.x + minicon_width, ty, tw, th};
+                    SDL_RenderCopy(renderer, t, nullptr, &dst);
+                }
+                ty += line_height;
+            }
+            item_y += h;
+        }
+        drawChildren(renderer, &cached_rect);
+        return;
+    }
 
     for (int i = 0; i < max_items; i++) {
         int item_index = scroll_offset + i;

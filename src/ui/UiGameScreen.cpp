@@ -5,11 +5,14 @@
 #include <set>
 
 #include "../ItemCatalog.hpp"
+#include "../Research.hpp"
 #include "../Utils.hpp"
 #include "UiButton.hpp"
 #include "UiLayout.hpp"
 #include "UiScrollingRegion.hpp"
 #include "UiImage.hpp"
+#include "UiListBox.hpp"
+#include "UiStatusImage.hpp"
 #include "UiText.hpp"
 
 UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
@@ -71,6 +74,8 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
                    [](const Entry &a, const Entry &b) { return a.layer < b.layer; });
 
   this->setupBuyPanels();
+  this->setupTerraform();
+  this->setupResearch();
 }
 
 static std::string formatPrice(int amount) {
@@ -269,6 +274,291 @@ void UiGameScreen::showDetails(BuyPanel &p, const CatalogItem *item) {
     gate->setDisabled(true);
 }
 
+// ----------------------------------------------------------------------------
+// Terraform (buldhab.lyt's last two tabs, both showing ui/teraform.lyt)
+// ----------------------------------------------------------------------------
+// Measured against the original: Terrain Types lists every terrain of
+// terrain/tiletex*.cfg by type (those without an icon, the waterfall and
+// trampled ground, left out), grass picked; below, "Modification Cost $0"
+// and the terrain's name and its price for the brush (cost per tile x the
+// brush's tiles: Grass $1000 at 5x5). Terrain Height shows the four height
+// tools instead (the first chosen) and the chosen tool's help text. The
+// brush starts at its largest, 5x5 (+ greyed); undo and accept are greyed
+// until something is changed.
+void UiGameScreen::setupTerraform() {
+  TerraformPage &t = this->terraform;
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 8)
+      t.panel = e.layout;
+  if (!t.panel)
+    return;
+  t.typesTab = dynamic_cast<UiButton *>(t.panel->getElementById(3362));
+  t.heightTab = dynamic_cast<UiButton *>(t.panel->getElementById(3361));
+  t.region = dynamic_cast<UiScrollingRegion *>(t.panel->getElementById(3350));
+  t.brush = dynamic_cast<UiImage *>(t.panel->getElementById(3320));
+  t.plus = dynamic_cast<UiButton *>(t.panel->getElementById(3310));
+  t.minus = dynamic_cast<UiButton *>(t.panel->getElementById(3314));
+  if (t.brush)
+    t.brushes = t.brush->getImageSet();
+  // The layout hides + and - (state=1); the page shows them
+  for (UiButton *b : {t.plus, t.minus})
+    if (b)
+      b->setHidden(false);
+  // The first height tool (hills and valleys) starts chosen
+  if (UiButton *b = dynamic_cast<UiButton *>(t.panel->getElementById(3315)))
+    b->choose();
+  t.brushIndex = t.brushes.empty() ? 0 : (int)t.brushes.size() - 1;
+  if (t.plus)
+    t.plus->onClick = [this] {
+      if (this->terraform.brushIndex + 1 < (int)this->terraform.brushes.size())
+        this->terraform.brushIndex++;
+    };
+  if (t.minus)
+    t.minus->onClick = [this] {
+      if (this->terraform.brushIndex > 0)
+        this->terraform.brushIndex--;
+    };
+
+  // The terrains, by type (a later file's entry for a type wins)
+  std::map<int, Terrain> byType;
+  for (const std::string &cfg :
+       this->resource_manager->listResources("terrain/tiletex", ".cfg")) {
+    IniReader *ini = this->resource_manager->getIniReader(cfg);
+    if (!ini)
+      continue;
+    for (const std::string &section : ini->getSections()) {
+      Terrain terrain;
+      terrain.type = ini->getInt(section, "type", -1);
+      terrain.icon = ini->get(section, "icon");
+      terrain.cost = ini->getInt(section, "cost", 0);
+      int helpId = ini->getInt(section, "helpid", 0);
+      if (terrain.type < 0 || terrain.icon.empty() ||
+          !this->resource_manager->hasResource(terrain.icon + ".ani"))
+        continue;
+      terrain.name = helpId ? this->resource_manager->getString(helpId) : "";
+      byType[terrain.type] = terrain;
+    }
+    delete ini;
+  }
+  for (auto &kv : byType)
+    t.terrains.push_back(kv.second);
+
+  if (t.region) {
+    std::vector<UiScrollingRegion::Item> cells;
+    for (const Terrain &terrain : t.terrains)
+      cells.push_back({terrain.icon, terrain.name});
+    t.region->setItems(cells);
+    t.region->setSelected(t.terrains.empty() ? -1 : 0);
+    t.region->onSelect = [this](int index) { this->terraform.selected = index; };
+  }
+  this->refreshTerraform();
+}
+
+void UiGameScreen::refreshTerraform() {
+  TerraformPage &t = this->terraform;
+  if (!t.panel)
+    return;
+  const bool types = t.typesTab && t.typesTab->isToggledOn();
+  const bool height = t.heightTab && t.heightTab->isToggledOn();
+  const bool shown = types || height;
+
+  // The page covers the panel's own grid and details; they keep their
+  // state for when a buy tab is picked again
+  static const int covered[] = {3261, 3204, 3240, 3208, 3222, 3210, 3258, 3259,
+                                3263, 3207, 3284, 3283, 3281, 3280, 3296, 3299};
+  if (shown != t.shown) {
+    for (int id : covered) {
+      UiElement *e = t.panel->getElementById(id);
+      if (!e)
+        continue;
+      if (shown) {
+        t.covered[id] = e->isHidden();
+        e->setHidden(true);
+      } else {
+        e->setHidden(t.covered[id]);
+      }
+    }
+    t.shown = shown;
+  }
+  if (!shown)
+    return;
+
+  auto element = [&](int id) { return t.panel->getElementById(id); };
+  auto text = [&](int id, const std::string &s) {
+    if (UiText *e = dynamic_cast<UiText *>(element(id)))
+      e->setText(s);
+  };
+  auto show = [&](int id, bool on) {
+    if (UiElement *e = element(id))
+      e->setHidden(!on);
+  };
+
+  text(3306, this->resource_manager->getString(types ? 3362 : 3361));
+  show(3350, types);
+  show(3355, types);
+  for (int id : {3315, 3316, 3317, 3318})
+    show(id, height);
+  show(3304, types);
+  text(3305, "$0");
+  for (int id : {3302, 3303}) // accept, undo: nothing to accept yet
+    if (UiElement *e = element(id))
+      e->setDisabled(true);
+
+  int n = t.brushIndex + 1; // brushN covers N x N tiles
+  if (t.brush && t.brushIndex < (int)t.brushes.size())
+    t.brush->setImage(t.brushes[t.brushIndex]);
+  if (t.plus)
+    t.plus->setDisabled(t.brushIndex + 1 >= (int)t.brushes.size());
+  if (t.minus)
+    t.minus->setDisabled(t.brushIndex <= 0);
+
+  if (types) {
+    const Terrain *terrain =
+        t.selected >= 0 && t.selected < (int)t.terrains.size()
+            ? &t.terrains[t.selected]
+            : nullptr;
+    text(3319, terrain ? terrain->name : "");
+    // No thousands separator here, unlike the buy panels
+    text(3321, terrain ? "$" + std::to_string(terrain->cost * n * n) : "");
+  } else {
+    // The chosen tool's help text (the tools' ids are their strings)
+    int mode = 3315;
+    for (int id : {3315, 3316, 3317, 3318})
+      if (UiButton *b = dynamic_cast<UiButton *>(element(id)))
+        if (b->isToggledOn())
+          mode = id;
+    text(3319, this->resource_manager->getString(mode));
+    text(3321, "");
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Research (research.lyt, id 15)
+// ----------------------------------------------------------------------------
+void UiGameScreen::setupResearch() {
+  ResearchPanel &r = this->research;
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 15)
+      r.panel = e.layout;
+  if (!r.panel)
+    return;
+  Research::get().load(this->resource_manager);
+  r.researchTab = dynamic_cast<UiButton *>(r.panel->getElementById(4009));
+  r.conservationTab = dynamic_cast<UiButton *>(r.panel->getElementById(4010));
+
+  // The content filter starts on "All", as in the buy panels
+  if (UiButton *b = dynamic_cast<UiButton *>(r.panel->getElementById(4021)))
+    b->setLabel(this->resource_manager->getString(22900));
+  // Funding - and + (hidden in the layout until the page shows them)
+  auto funding = [this](int step) {
+    ResearchBranch *b = Research::get().branch(this->research.shownBranch);
+    if (!b || b->funding.empty())
+      return;
+    b->fundingLevel =
+        std::clamp(b->fundingLevel + step, 0, (int)b->funding.size() - 1);
+  };
+  if (UiButton *less = dynamic_cast<UiButton *>(r.panel->getElementById(4003))) {
+    less->setHidden(false);
+    less->onClick = [funding] { funding(-1); };
+  }
+  if (UiButton *more = dynamic_cast<UiButton *>(r.panel->getElementById(4004))) {
+    more->setHidden(false);
+    more->onClick = [funding] { funding(1); };
+  }
+  this->refreshResearch();
+}
+
+void UiGameScreen::refreshResearch() {
+  ResearchPanel &r = this->research;
+  if (!r.panel)
+    return;
+  Research &research = Research::get();
+  auto element = [&](int id) { return r.panel->getElementById(id); };
+  auto text = [&](int id, const std::string &s) {
+    if (UiText *e = dynamic_cast<UiText *>(element(id)))
+      e->setText(s);
+  };
+  auto image = [&](int id, const std::string &path) {
+    if (UiImage *e = dynamic_cast<UiImage *>(element(id))) {
+      e->setImage(path);
+      e->setHidden(path.empty());
+    }
+  };
+  auto progress = [&](int id, const ResearchProgram *p) {
+    if (UiStatusImage *e = dynamic_cast<UiStatusImage *>(element(id)))
+      e->setValue(p && p->cost > 0 ? p->progress * 100 / p->cost : 0);
+  };
+
+  // Status: each branch's program (Research, then Conservation)
+  const int statusIds[2][3] = {{4016, 4019, 4018}, {4012, 4020, 4014}};
+  for (int i = 0; i < 2; i++) {
+    ResearchBranch *b = research.branch(i);
+    ResearchProgram *p = b ? research.current(*b) : nullptr;
+    text(statusIds[i][0], p ? p->name : "");
+    image(statusIds[i][1], p ? p->icon : b ? b->noProgramIcon : "");
+    progress(statusIds[i][2], p);
+  }
+
+  // The category page: the branch of the chosen tab
+  int shown = r.researchTab && r.researchTab->isToggledOn()           ? 0
+              : r.conservationTab && r.conservationTab->isToggledOn() ? 1
+                                                                      : -1;
+  ResearchBranch *b = research.branch(shown);
+  UiListBox *list = dynamic_cast<UiListBox *>(element(4022));
+  if (shown != r.shownBranch) {
+    r.shownBranch = shown;
+    if (list && b) {
+      list->clear();
+      for (int i = 0; i < (int)b->categories.size(); i++) {
+        list->addItem(b->categories[i].name, b->categories[i].file);
+        list->setChecked(i, b->enabled[i]);
+      }
+    }
+  }
+  // The panel's title is the page's ("Program Status", "Research", ...)
+  for (int tab : {4008, 4009, 4010})
+    if (UiButton *t = dynamic_cast<UiButton *>(element(tab)))
+      if (t->isToggledOn())
+        text(4001, this->resource_manager->getString(t->getHelpId()));
+  if (!b)
+    return;
+  // The checkboxes say which categories are researched; unchecking the one
+  // being worked on moves to another
+  if (list) {
+    bool changed = false;
+    for (int i = 0; i < (int)b->categories.size(); i++)
+      if (list->isChecked(i) != b->enabled[i]) {
+        b->enabled[i] = list->isChecked(i);
+        changed = true;
+      }
+    if (changed && (b->currentCategory < 0 || !b->enabled[b->currentCategory]))
+      research.pick(*b);
+  }
+
+  if (!b->funding.empty()) {
+    const ResearchFunding &f = b->funding[b->fundingLevel];
+    std::string name = f.name;
+    size_t at = name.find("%s");
+    if (at != std::string::npos)
+      name.replace(at, 2, formatPrice(f.cost));
+    text(4006, name);
+    if (UiElement *less = element(4003))
+      less->setDisabled(b->fundingLevel <= 0);
+    if (UiElement *more = element(4004))
+      more->setDisabled(b->fundingLevel + 1 >= (int)b->funding.size());
+  }
+
+  // The program being researched and its category
+  int c = b->currentCategory;
+  ResearchCategory *category =
+      c >= 0 && c < (int)b->categories.size() ? &b->categories[c] : nullptr;
+  ResearchProgram *p = research.current(*b);
+  text(4024, category ? category->name : "");
+  text(4025, p ? p->name : "");
+  image(4029, p ? p->icon : b->noProgramIcon);
+  progress(4027, p);
+}
+
 UiGameScreen::~UiGameScreen() {
   for (Entry &e : this->entries)
     delete e.layout;
@@ -300,6 +590,20 @@ void UiGameScreen::showPanel(int id, const std::string &category) {
       tab->setToggledOn(Utils::string_to_lower(tab->getStringData()) == category);
     this->refreshBuyPanel(p);
   }
+}
+
+void UiGameScreen::showTab(int panelId, int buttonId) {
+  for (Entry &e : this->entries) {
+    if (!e.panel || e.id != panelId)
+      continue;
+    if (UiButton *b = dynamic_cast<UiButton *>(e.layout->getElementById(buttonId)))
+      b->choose();
+    e.layout->syncTabs();
+  }
+  for (BuyPanel &p : this->buyPanels)
+    this->refreshBuyPanel(p);
+  this->refreshTerraform();
+  this->refreshResearch();
 }
 
 void UiGameScreen::setPanelOpen(int id, bool open) {
@@ -359,6 +663,8 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
   // A tab may have changed what a buy panel lists
   for (BuyPanel &p : this->buyPanels)
     this->refreshBuyPanel(p);
+  this->refreshTerraform();
+  this->refreshResearch();
 
   if (isPanelToggle(action)) {
     // The panel buttons are toggles in one radio set: each open panel is

@@ -1,6 +1,7 @@
 #ifndef UI_BUTTON_HPP
 #define UI_BUTTON_HPP
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -37,6 +38,17 @@ public:
     this->radio_group = group;
     this->toggled_on = (this->state_flags & 8) != 0;
   }
+  // Turns this choice on and the rest of its radio set off
+  void choose() {
+    if (this->radio_group)
+      for (UiButton *b : *this->radio_group)
+        b->toggled_on = false;
+    this->toggled_on = true;
+  }
+
+  // Called when the player clicks the button (for buttons the game handles
+  // itself, like the terraform brush's + and -)
+  std::function<void()> onClick;
 
   // The layout's animation= and stringData= (e.g. a tab's category)
   std::string getAnimationPath() const {
