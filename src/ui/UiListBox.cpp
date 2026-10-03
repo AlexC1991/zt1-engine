@@ -16,6 +16,8 @@ UiListBox::UiListBox(IniReader* ini_reader, ResourceManager* resource_manager, s
     this->dy = ini_reader->getInt(name, "dy", 200);
 
     this->font_id = ini_reader->getInt(name, "font", 14002);
+    this->font_size_id = ini_reader->getInt(name, "fontsize", 0);
+    this->scrollbar_id = ini_reader->getInt(name, "scrollbar", 0);
 
     parseColors(ini_reader, name, "forecolor", forecolor);
     parseColors(ini_reader, name, "backcolor", backcolor);
@@ -26,8 +28,11 @@ UiListBox::UiListBox(IniReader* ini_reader, ResourceManager* resource_manager, s
     this->transparent = ini_reader->getInt(name, "transparent", 1) == 1;
     this->border = ini_reader->getInt(name, "border", 2);
 
-    this->item_height = 22;
-    this->visible_items = (dy - border * 2) / item_height;
+    // Rows are one pixel taller than the font (GDI's spacing): 16 px for
+    // Arial Bold 10, which gives the original's 29 rows in the map list
+    this->item_height = std::max(8, resource_manager->getFontLineHeight(
+                                        font_id, font_size_id) + 1);
+    this->visible_items = std::max(1, (dy - border * 2) / item_height);
 
     SDL_Log("Created UiListBox: %s (id=%d, %dx%d, visible=%d items)",
             name.c_str(), id, dx, dy, visible_items);
@@ -86,6 +91,14 @@ void UiListBox::clear() {
     selected_index = -1;
     hover_index = -1;
     scroll_offset = 0;
+}
+
+int UiListBox::getScrollMaximum() const {
+    return std::max(0, (int)items.size() - visible_items);
+}
+
+void UiListBox::setScrollPosition(int position) {
+    scroll_offset = std::clamp(position, 0, getScrollMaximum());
 }
 
 std::string UiListBox::getSelectedData() const {
@@ -165,8 +178,7 @@ UiAction UiListBox::handleInputs(std::vector<Input>& inputs) {
             if (getItemAtPoint(mx, my) >= 0 ||
                 (mx >= cached_rect.x && mx <= cached_rect.x + cached_rect.w &&
                  my >= cached_rect.y && my <= cached_rect.y + cached_rect.h)) {
-                int max_scroll = std::max(0, (int)items.size() - visible_items);
-                if (scroll_offset < max_scroll) scroll_offset++;
+                setScrollPosition(scroll_offset + 1);
             }
         }
     }
@@ -199,10 +211,12 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
 
         ListBoxItem& item = items[item_index];
 
+        // Measured from the original: the selection box starts 2 px left
+        // of the list and runs to its right edge (the scrollbar sits outside)
         SDL_Rect item_rect = {
-            cached_rect.x + border,
+            cached_rect.x - 2,
             item_y,
-            cached_rect.w - border * 2 - 20,
+            cached_rect.w + 2,
             item_height
         };
 
@@ -212,7 +226,7 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
         if (item_index == selected_index) {
             bg = &selectbackcolor;
             fg = &selectcolor;
-            SDL_SetRenderDrawColor(renderer, bg->r, bg->g, bg->b, 180);
+            SDL_SetRenderDrawColor(renderer, bg->r, bg->g, bg->b, 255);
             SDL_RenderFillRect(renderer, &item_rect);
             SDL_SetRenderDrawColor(renderer, 255, 217, 90, 255);
             SDL_RenderDrawRect(renderer, &item_rect);
@@ -229,7 +243,7 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
             item.loadAttempted = true; // Stop asking if it fails!
         }
 
-        int text_x_offset = 4;
+        int text_x_offset = 2;
         if (item.iconTex) {
             SDL_Rect iconRect = {
                 item_rect.x + 2,
@@ -243,11 +257,11 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
 
         if (!item.text.empty()) {
             SDL_Texture* text_texture = resource_manager->getStringTexture(
-                renderer, font_id, item.text, *fg);
+                renderer, font_id, item.text, *fg, font_size_id);
 
             if (text_texture) {
                 int tex_w, tex_h;
-                SDL_QueryTexture(text_texture, nullptr, nullptr, &tex_w, &tex_h);
+                resource_manager->getTextSize(text_texture, &tex_w, &tex_h);
                 SDL_Rect text_rect = {
                     item_rect.x + text_x_offset,
                     item_rect.y + (item_height - tex_h) / 2,
@@ -262,20 +276,6 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
         item_y += item_height;
     }
 
-    if ((int)items.size() > visible_items) {
-        int scrollbar_x = cached_rect.x + cached_rect.w - 15;
-        int scrollbar_h = cached_rect.h - border * 2;
-        int thumb_h = std::max(20, scrollbar_h * visible_items / (int)items.size());
-        int max_scroll = items.size() - visible_items;
-        int thumb_y = cached_rect.y + border;
-        if (max_scroll > 0) thumb_y += (scrollbar_h - thumb_h) * scroll_offset / max_scroll;
-
-        SDL_SetRenderDrawColor(renderer, 60, 50, 30, 200);
-        SDL_Rect track = {scrollbar_x, cached_rect.y + border, 12, scrollbar_h};
-        SDL_RenderFillRect(renderer, &track);
-        SDL_SetRenderDrawColor(renderer, 150, 140, 100, 255);
-        SDL_Rect thumb = {scrollbar_x + 1, thumb_y, 10, thumb_h};
-        SDL_RenderFillRect(renderer, &thumb);
-    }
+    // The scrollbar is its own element (UiScrollBar), linked by the layout
     drawChildren(renderer, &cached_rect);
 }

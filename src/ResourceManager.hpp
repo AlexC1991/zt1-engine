@@ -41,10 +41,21 @@ public:
   Pallet *getPallet(const std::string &file_name);
   SDL_Texture *getLoadTexture(SDL_Renderer *renderer);
   SDL_Texture *getStringTexture(SDL_Renderer *renderer, const int font,
-                                const std::string &string, SDL_Color color);
+                                const std::string &string, SDL_Color color,
+                                int fontSize = 0);
+  int getFontLineHeight(int font, int fontSize = 0);
+  // Text is rendered for this many screen pixels per layout pixel
+  void setTextScale(float scale) { font_manager.setScale(scale); }
+  // Size of a text texture in layout pixels
+  void getTextSize(SDL_Texture *texture, int *w, int *h) {
+    font_manager.querySize(texture, w, h);
+  }
   std::string getString(uint32_t string_id);
 
   bool hasResource(const std::string &resource_name_raw);
+
+  // Access to PalletManager for sprite loading
+  PalletManager* getPalletManager() { return &pallet_manager; }
 
 private:
   std::unordered_map<std::string, std::string> resource_map;

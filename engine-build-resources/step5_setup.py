@@ -88,8 +88,10 @@ def setup_fonts():
 
 def setup_zoo_ini():
     """Create the zoo.ini configuration file."""
+    # Same search order as the original game's zoo.ini: patches and
+    # expansions first, base game (".") last
     ini_content = """[resource]
-path=.
+path=./dlupdate;./updates;./xpack2/loc;./xpack2;./dupdate;./zupdate1;./xpack1/loc;./xpack1;./zupdate;./loc;.
 
 [ui]
 noMenuMusic=0
@@ -204,11 +206,30 @@ def setup_ui_files():
         print(f"  {C.DIM}Copy Zoo Tycoon game files to: {REL_DIR}{C.RESET}")
         return True
     
-    # 1. Extract only .lyt files from ui.ztd (layout files for UI positioning)
+    # 1. Extract only .lyt files from ui.ztd (layout files for UI positioning).
+    # Skip any layout an expansion or patch archive also provides: a loose
+    # copy of the base version would override it (e.g. the Marine Mania
+    # mapselec.lyt with its own background and Starting Cash box).
     try:
         os.makedirs(ui_dir, exist_ok=True)
+        overridden = set()
+        for sub in ["dlupdate", "updates", "xpack2", "dupdate", "zupdate1",
+                    "xpack1", "zupdate"]:
+            folder = os.path.join(REL_DIR, sub)
+            if not os.path.isdir(folder):
+                continue
+            for name in os.listdir(folder):
+                if not name.lower().endswith(".ztd"):
+                    continue
+                try:
+                    with zipfile.ZipFile(os.path.join(folder, name)) as xz:
+                        overridden.update(f.lower() for f in xz.namelist())
+                except zipfile.BadZipFile:
+                    pass
         with zipfile.ZipFile(ui_ztd, 'r') as z:
-            lyt_files = [f for f in z.namelist() if f.endswith('.lyt') or f.endswith('.cfg')]
+            lyt_files = [f for f in z.namelist()
+                         if (f.endswith('.lyt') or f.endswith('.cfg'))
+                         and f.lower() not in overridden]
             for f in lyt_files:
                 # Extract just the file, preserving path
                 z.extract(f, REL_DIR)

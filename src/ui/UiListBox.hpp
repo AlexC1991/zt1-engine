@@ -6,6 +6,7 @@
 #include <SDL2/SDL.h>
 
 #include "UiElement.hpp"
+#include "UiScrollBar.hpp"
 #include "../IniReader.hpp"
 #include "../ResourceManager.hpp"
 
@@ -18,7 +19,7 @@ struct ListBoxItem {
     bool loadAttempted = false; // [FIX] Prevents lag if file is missing
 };
 
-class UiListBox : public UiElement {
+class UiListBox : public UiElement, public UiScrollable {
 public:
     UiListBox(IniReader* ini_reader, ResourceManager* resource_manager, std::string name);
     ~UiListBox();
@@ -31,11 +32,22 @@ public:
     void clear();
 
     int getSelectedIndex() const { return selected_index; }
+    void setSelectedIndex(int index) { selected_index = index; }
     std::string getSelectedData() const;
     std::string getSelectedText() const;
     size_t getItemCount() const { return items.size(); }
 
     void setSelectionAction(UiAction action) { selection_action = action; }
+
+    // Id of the UIScrollBar this list uses ("scrollbar=" in the layout)
+    int getScrollBarId() const { return scrollbar_id; }
+
+    // UiScrollable
+    int getScrollPosition() const override { return scroll_offset; }
+    int getScrollMaximum() const override;
+    int getScrollPage() const override { return visible_items; }
+    void setScrollPosition(int position) override;
+    SDL_Rect getScrollBounds() const override { return cached_rect; }
 
 private:
     std::vector<ListBoxItem> items;
@@ -53,7 +65,9 @@ private:
     SDL_Color selectbackcolor = {121, 104, 50, 255};
 
     int font_id = 14002;
-    int item_height = 20;
+    int font_size_id = 0;
+    int item_height = 16;
+    int scrollbar_id = 0;
 
     bool transparent = true;
     int border = 2;

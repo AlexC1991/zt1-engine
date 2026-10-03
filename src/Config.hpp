@@ -14,6 +14,8 @@ public:
   ~Config();
 
   std::vector<std::string> getResourcePaths();
+  // [user] uiScale: menu scale (0 or missing = fit the window)
+  float getUiScale();
   std::string getMenuMusic();
   bool getPlayMenuMusic();
   int getScreenWidth();

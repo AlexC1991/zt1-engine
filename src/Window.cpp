@@ -1,6 +1,8 @@
 #include "DiagnosticUtilityData.hpp"
 #include "Window.hpp"
 
+bool g_showDiagnostics = false;
+
 #include "SDL_image.h"
 #include "SDL_mixer.h"
 #include "SDL_ttf.h"
@@ -21,6 +23,10 @@ Window::Window(const std::string &title, int width, int height, float fps_target
         exit(3);
     }
     Mix_VolumeMusic(MIX_MAX_VOLUME);
+
+    // A click that focuses the window also counts as a click (SDL drops it
+    // by default, so menu buttons needed two clicks)
+    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 
     this->window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_RESIZABLE);
     if (this->window == nullptr) {
@@ -51,9 +57,9 @@ void Window::present() {
         SDL_Delay(this->frame_delay - delta);
     }
     
-    // [GLOBAL DIAGNOSTICS] - Silent Version
+    // Diagnostics overlay (FPS, RAM, renderer, resolution): toggled with F3
     static DiagnosticUtilityData* globalDiag = new DiagnosticUtilityData();
-    if (globalDiag) {
+    if (globalDiag && g_showDiagnostics) {
         globalDiag->update();
         globalDiag->draw(this->renderer);
     }

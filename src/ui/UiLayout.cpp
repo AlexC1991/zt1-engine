@@ -88,7 +88,9 @@ void UiLayout::process_sections(IniReader *ini_reader,
     } else if (element_type == "UIButton") {
       new_element =
           (UiElement *)new UiButton(ini_reader, resource_manager, section);
-    } else if (element_type == "UIText") {
+    } else if (element_type == "UIText" || element_type == "UIEditableText") {
+      // UIEditableText (e.g. the expansions' Starting Cash box) is shown as
+      // plain text for now; typing into it isn't supported yet
       new_element =
           (UiElement *)new UiText(ini_reader, resource_manager, section);
     } else if (element_type == "UIListBox") {
@@ -135,6 +137,18 @@ void UiLayout::process_sections(IniReader *ini_reader,
       // avoids “missing UI element” issues).
       this->children.push_back(child);
     }
+  }
+
+  // Pass 3: list boxes name the scrollbar that scrolls them
+  // ("scrollbar=11505"); hand each scrollbar its list
+  for (UiElement *child : this->children) {
+    UiListBox *list = dynamic_cast<UiListBox *>(child);
+    if (!list || list->getScrollBarId() == 0)
+      continue;
+    UiScrollBar *bar =
+        dynamic_cast<UiScrollBar *>(this->getElementById(list->getScrollBarId()));
+    if (bar)
+      bar->attach(list);
   }
 }
 

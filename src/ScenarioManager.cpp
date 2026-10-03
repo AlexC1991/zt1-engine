@@ -188,13 +188,7 @@ void ScenarioManager::loadScenarios() {
 }
 
 void ScenarioManager::loadFreeformMaps() {
-  // Base Game
-  SDL_Log("Loading freeform maps from freeform.cfg...");
-  IniReader *reader = resource_manager->getIniReader("freeform.cfg");
-  if (reader) {
-    parseFreeformConfig(reader);
-    delete reader;
-  }
+  IniReader *reader = nullptr;
 
   // Expansion 1: Dinosaur Digs
   if (Utils::getExpansion() >= Expansion::DINOSAUR_DIGS) {
@@ -227,6 +221,15 @@ void ScenarioManager::loadFreeformMaps() {
         break;
       }
     }
+  }
+
+  // The original lists the expansion maps first, then the base game's
+  // Base Game
+  SDL_Log("Loading freeform maps from freeform.cfg...");
+  reader = resource_manager->getIniReader("freeform.cfg");
+  if (reader) {
+    parseFreeformConfig(reader);
+    delete reader;
   }
 
   SDL_Log("Loaded %zu freeform maps", freeform_maps.size());
@@ -349,36 +352,37 @@ void ScenarioManager::parseFreeformConfig(IniReader *reader) {
       map.size = "Medium"; // Default
     }
 
-    size_t lastSlash = path.find_last_of('/');
-    size_t lastDot = path.find_last_of('.');
-    if (lastSlash != std::string::npos && lastDot != std::string::npos) {
-      map.name = path.substr(lastSlash + 1, lastDot - lastSlash - 1);
-    } else {
-      map.name = path;
+    // The .scn's [freeform] section names the map (a string-table id, e.g.
+    // 27010 = "Small Beach (Small)") and its preview picture (icon=)
+    if (IniReader *scn = resource_manager->getIniReader(path)) {
+      uint32_t nameId = scn->getUnsignedInt("freeform", "name", 0);
+      if (nameId > 0)
+        map.name = cp1252_to_utf8(resource_manager->getString(nameId));
+      map.iconPath = scn->get("freeform", "icon");
+      delete scn;
     }
 
+    // The .txt next to the .scn holds the description
     std::string txtPath = path;
     if (txtPath.size() > 4)
       txtPath = txtPath.substr(0, txtPath.size() - 4) + ".txt";
-
-    // Load map name
     int size = 0;
     void *data = resource_manager->getFileContent(txtPath, &size);
     if (data) {
       std::string raw((char *)data, size);
       free(data);
-      map.name = cp1252_to_utf8(raw);
-      // Clean up newlines for the list name
-      map.name.erase(std::remove(map.name.begin(), map.name.end(), '\r'),
-                     map.name.end());
-      map.name.erase(std::remove(map.name.begin(), map.name.end(), '\n'),
-                     map.name.end());
+      map.description = cp1252_to_utf8(raw);
+      map.description.erase(std::remove(map.description.begin(),
+                                        map.description.end(), '\r'),
+                            map.description.end());
+      while (!map.description.empty() && map.description.back() == '\n')
+        map.description.pop_back();
     }
+
     if (map.name.empty())
-      map.name = "Map: " + map.path;
+      map.name = map.description.empty() ? "Map: " + map.path : map.description;
 
     map.startingCash = 50000;
-    map.description = "";
     freeform_maps.push_back(map);
   }
 }

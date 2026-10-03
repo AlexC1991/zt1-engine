@@ -1,45 +1,61 @@
+import zipfile
 import sys
-import math
+import struct
+from collections import Counter
 
-def calculate_entropy(data):
-    if not data:
-        return 0
-    entropy = 0
-    for x in range(256):
-        p_x = float(data.count(x))/len(data)
-        if p_x > 0:
-            entropy += - p_x*math.log(p_x, 2)
-    return entropy
+def analyze_zoo(ztd_path, zoo_filename):
+    print(f"Analyzing {zoo_filename} in {ztd_path}...")
+    try:
+        with zipfile.ZipFile(ztd_path, 'r') as z:
+            with z.open(zoo_filename) as f:
+                data = f.read()
+                
+                if len(data) < 100:
+                    print("Error: File too small.")
+                    return
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python analyze_zoo.py <file.zoo>")
-        return
+                # Header Parsing
+                magic, version = struct.unpack('<II', data[0:8])
+                w, h = struct.unpack('<II', data[12:20])
+                base_id, map_type = struct.unpack('<II', data[32:40])
+                
+                print(f"Header Info:")
+                print(f"  Dimensions: {w}x{h} ({w*h} tiles)")
+                print(f"  Base Terrain ID: {base_id}")
+                print(f"  Map Type: {map_type}")
+                
+                # Tile Data (Starts at 100)
+                # Stride 10
+                header_size = 100
+                tile_stride = 10
+                expected_size = header_size + (w * h * tile_stride)
+                
+                if len(data) < expected_size:
+                    print(f"Error: Data size {len(data)} < Expected {expected_size}")
+                    return
+                
+                terrain_counts = Counter()
+                
+                # Scan tiles
+                for i in range(w * h):
+                    offset = header_size + (i * tile_stride)
+                    # Byte 0 is TerrainID
+                    tid = data[offset]
+                    terrain_counts[tid] += 1
+                
+                print("\nTerrain ID Distribution:")
+                total_tiles = w * h
+                for tid, count in terrain_counts.most_common(10):
+                    pct = (count / total_tiles) * 100
+                    print(f"  ID {tid}: {count} tiles ({pct:.1f}%)")
 
-    filepath = sys.argv[1]
-    with open(filepath, 'rb') as f:
-        content = f.read()
-
-    print(f"File: {filepath}")
-    print(f"Size: {len(content)} bytes")
-    
-    # Analyze header
-    print(f"Header: {content[:4].decode('ascii', errors='ignore')}")
-    
-    # Analyze entropy of 1KB chunks
-    print("\n--- Entropy Analysis (High > 7.0 = Compressed/Random) ---")
-    chunk_size = 1024
-    for i in range(0, len(content), chunk_size):
-        chunk = content[i:i+chunk_size]
-        ent = calculate_entropy(chunk)
-        print(f"Offset {i:6d} (0x{i:4X}): Entropy = {ent:.2f}")
-
-    # Look for repeating patterns (simple RLE check)
-    print("\n--- Pattern Search ---")
-    # Take a sample from the middle
-    mid = len(content) // 2
-    sample = content[mid:mid+64]
-    print(f"Sample at {mid}: {sample.hex()}")
+    except KeyError:
+        print(f"File {zoo_filename} not found in {ztd_path}")
+    except Exception as e:
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 2:
+        analyze_zoo(sys.argv[1], sys.argv[2])
+    else:
+        print("Usage: python analyze_zoo.py <ztd_path> <zoo_filename>")

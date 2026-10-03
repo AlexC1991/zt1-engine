@@ -3,7 +3,6 @@
 #include <thread>
 
 #include <cstring>
-#include <vector>
 
 #include "Utils.hpp"
 #include "ZtdFile.hpp"
@@ -21,6 +20,7 @@ Animation *AniFile::getAnimation(PalletManager *pallet_manager,
 
   SDL_Log("AniFile::getAnimation: ztd='%s' file='%s'", ztd_file.c_str(),
           file_name.c_str());
+
   IniReader *ini_reader = ZtdFile::getIniReader(ztd_file, file_name);
   if (ini_reader == nullptr) {
     SDL_Log("Warning: Could not read ini for animation: %s", file_name.c_str());

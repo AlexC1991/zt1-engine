@@ -2,69 +2,70 @@
 #define WORLD_HPP
 
 #include "ResourceManager.hpp"
-#include "Animation.hpp"
-#include "ZooReader.hpp"
-#include "EntityManager.hpp"
+#include "WorldMap.hpp"
+#include "WorldRenderer.hpp"
 #include "SpriteDatabase.hpp"
+#include "SpriteManager.hpp"
+#include "EntityManager.hpp"
+#include "ZooReader.hpp"
 #include <SDL2/SDL.h>
 #include <string>
 
+// ============================================================================
+// WORLD - Coordinator Class (Original ZT1 Engine Architecture)
+// ============================================================================
+// PURPOSE: Coordinate all world-related subsystems
+// ARCHITECTURE:
+//   - WorldMap: Pure data storage (tiles, terrain, elevation)
+//   - WorldRenderer: Pure rendering (reads WorldMap, draws to screen)
+//   - SpriteDatabase: Terrain sprite cache
+//   - SpriteManager: Entity/object sprite cache
+//   - EntityManager: Entity tracking and simulation
+//   - ZooReader: Map file parser
+// ============================================================================
+
 class World {
 public:
-  World(ResourceManager *resourceManager);
-  ~World();
+    World(ResourceManager* resourceManager);
+    ~World();
 
-  void loadScenario(const std::string &path);
-  void loadFreeform(const std::string &path);
+    // Load a map from .zoo/.scn file
+    // Return false (and keep the previous map) if the file fails to load
+    bool loadScenario(const std::string& path);
+    bool loadFreeform(const std::string& path);
 
-  void update(const Uint8 *state, float deltaTime);
-  void draw(SDL_Renderer *renderer);
+    // Update world state (simulation)
+    void update(const Uint8* state, float deltaTime);
 
-  // Entity access
-  EntityManager& getEntityManager() { return entityManager; }
+    // Render world (isometric terrain + entities)
+    void draw(SDL_Renderer* renderer);
 
-  // Map info
-  int getMapWidth() const { return zooReader.getMapWidth(); }
-  int getMapHeight() const { return zooReader.getMapHeight(); }
+    // Access subsystems
+    WorldMap& getMap() { return worldMap; }
+    WorldRenderer& getRenderer() { return worldRenderer; }
+    EntityManager& getEntityManager() { return entityManager; }
+    Camera& getCamera() { return worldRenderer.getCamera(); }
 
-  // Camera control
-  void setCameraPosition(int x, int y) { camX = x; camY = y; }
-  void getCameraPosition(int& x, int& y) const { x = camX; y = camY; }
+    // Camera control
+    void setCameraPosition(int x, int y);
+    void getCameraPosition(int& x, int& y) const;
 
 private:
-  ResourceManager *resourceManager;
+    ResourceManager* resourceManager;
 
-  // Camera
-  int camX, camY;
-  float zoom = 1.0f;
+    // Core subsystems (separated concerns)
+    WorldMap worldMap;              // Pure data
+    WorldRenderer worldRenderer;    // Pure rendering
+    EntityManager entityManager;    // Entity tracking
+    ZooReader zooReader;           // Map file parser
 
-  // Camera bounds (prevent panning beyond map edges)
-  int camMaxX, camMinX, camMaxY, camMinY;
+    // Input handling
+    void handleCameraInput(const Uint8* state, float deltaTime);
+    void handleDebugInput(const Uint8* state);
 
-  // Isometric constants
-  static const int TILE_WIDTH = 64;
-  static const int TILE_HEIGHT = 32;
-  static const int ELEVATION_HEIGHT = 8;  // Pixels per elevation level
-
-  // Screen offset for centering
-  int startX = 400;
-  int startY = 100;
-
-  // Zoo Reader provides dimensions and terrain data
-  ZooReader zooReader;
-
-  // Entity management
-  EntityManager entityManager;
-
-  // Internal methods
-  void drawTerrain(SDL_Renderer* renderer);
-  void drawEntities(SDL_Renderer* renderer);
-
-  // Helper: Get remapped terrain ID based on map header
-  int getRemappedTerrainId(int terrainId) const;
-
-  // Helper: Convert tile coords to screen coords
-  void tileToScreen(int tileX, int tileY, int elevation, int& screenX, int& screenY) const;
+    // Debug state
+    static int keyTimer;
+    static bool showDebugInfo;
 };
 
 #endif // WORLD_HPP

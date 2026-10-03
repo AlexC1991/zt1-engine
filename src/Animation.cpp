@@ -1,6 +1,9 @@
 #include "Animation.hpp"
 #include "AniFile.hpp"
+#include "RenderSettings.hpp"
+#include <SDL2/SDL.h>
 #include <assert.h>
+#include <cstdio>
 #include <cstdlib> // for abs
 
 Animation::Animation(std::unordered_map<std::string, AnimationData *> *data)
@@ -12,13 +15,27 @@ Animation::Animation(std::unordered_map<std::string, AnimationData *> *data)
   }
 }
 
+Animation::Animation(SDL_Surface *single_frame)
+    : current_frame(0), last_direction(CompassDirection::S),
+      renderer_flip(SDL_FLIP_NONE), has_background(false),
+      frame_time_in_ms(100), frame_start_time(0) {
+  if (single_frame) {
+    // Duplicate the surface so we own the memory
+    SDL_Surface *copy = SDL_DuplicateSurface(single_frame);
+    if (copy) {
+      this->surfaces["N"].push_back(copy);
+    }
+  }
+}
+
 Animation::Animation(Animation &&other) noexcept { *this = std::move(other); }
 
 Animation &Animation::operator=(Animation &&other) noexcept {
   if (this != &other) {
     for (auto surface_list : this->surfaces) {
       for (SDL_Surface *surface : surface_list.second) {
-        if (surface) SDL_FreeSurface(surface);
+        if (surface)
+          SDL_FreeSurface(surface);
       }
       surface_list.second.clear();
     }
@@ -26,7 +43,8 @@ Animation &Animation::operator=(Animation &&other) noexcept {
 
     for (auto texture_list : this->textures) {
       for (SDL_Texture *texture : texture_list.second) {
-        if (texture) SDL_DestroyTexture(texture);
+        if (texture)
+          SDL_DestroyTexture(texture);
       }
       texture_list.second.clear();
     }
@@ -50,13 +68,15 @@ Animation &Animation::operator=(Animation &&other) noexcept {
 Animation::~Animation() {
   for (auto surface_list : this->surfaces) {
     for (SDL_Surface *surface : surface_list.second) {
-      if (surface) SDL_FreeSurface(surface);
+      if (surface)
+        SDL_FreeSurface(surface);
     }
     surface_list.second.clear();
   }
   for (auto texture_list : this->textures) {
     for (SDL_Texture *texture : texture_list.second) {
-      if (texture) SDL_DestroyTexture(texture);
+      if (texture)
+        SDL_DestroyTexture(texture);
     }
     texture_list.second.clear();
   }
@@ -71,13 +91,15 @@ void Animation::draw(SDL_Renderer *renderer, int x, int y,
 
   if (!this->textures[direction_string].empty()) {
     size_t texCount = this->textures[direction_string].size();
-    if (texCount == 0) return;
+    if (texCount == 0)
+      return;
 
     if ((size_t)this->current_frame >= texCount)
       this->current_frame = 0;
 
     SDL_Texture *t = this->textures[direction_string][this->current_frame];
-    if (t == nullptr) return;
+    if (t == nullptr)
+      return;
 
     SDL_QueryTexture(t, NULL, NULL, &rect.w, &rect.h);
   } else {
@@ -93,19 +115,22 @@ void Animation::draw(SDL_Renderer *renderer, int x, int y,
       this->current_frame = 0;
 
     SDL_Surface *s = this->surfaces[direction_string][this->current_frame];
-    if (s == nullptr) return;
+    if (s == nullptr)
+      return;
 
     rect.w = s->w;
     rect.h = s->h;
   }
 
-  if (rect.w <= 0 || rect.h <= 0) return;
+  if (rect.w <= 0 || rect.h <= 0)
+    return;
   this->draw(renderer, &rect, direction);
 }
 
 void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
                      CompassDirection direction) {
-  if (renderer == nullptr) return;
+  if (renderer == nullptr)
+    return;
 
   std::string direction_string =
       convertCompassDirectionToExistingAnimationString(direction,
@@ -115,7 +140,8 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
     direction_string = convertCompassDirectionToExistingAnimationString(
         direction, this->surfaces);
 
-    if (this->surfaces.find(direction_string) == this->surfaces.end()) return;
+    if (this->surfaces.find(direction_string) == this->surfaces.end())
+      return;
 
     this->textures[direction_string] = std::vector<SDL_Texture *>();
     if (!direction_string.empty()) {
@@ -125,10 +151,12 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
           continue;
         }
         SDL_Texture *t = SDL_CreateTextureFromSurface(renderer, surface);
-        if (!t) SDL_Log("Warning: Failed to create texture: %s", SDL_GetError());
+        if (!t)
+          SDL_Log("Warning: Failed to create texture: %s", SDL_GetError());
+
 
         this->textures[direction_string].push_back(t);
-        SDL_FreeSurface(surface); 
+        SDL_FreeSurface(surface);
       }
       this->surfaces[direction_string].clear();
     } else {
@@ -136,10 +164,12 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
     }
   }
 
-  if (this->textures[direction_string].empty()) return;
+  if (this->textures[direction_string].empty())
+    return;
 
   size_t texCount = this->textures[direction_string].size();
-  if (texCount == 0) return;
+  if (texCount == 0)
+    return;
 
   if (direction != this->last_direction) {
     this->last_direction = direction;
@@ -157,6 +187,7 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
   SDL_Texture *texture = this->textures[direction_string][this->current_frame];
 
   if (texture) {
+    RenderSettings::applyArtScaleMode(texture);
     SDL_RenderCopyEx(renderer, texture, NULL, dest_rect, 0, NULL,
                      this->renderer_flip);
   }
@@ -169,17 +200,21 @@ void Animation::queryTexture(CompassDirection direction, int *w, int *h) {
   if (!this->textures[direction_string].empty()) {
     if ((size_t)this->current_frame < this->textures[direction_string].size()) {
       SDL_Texture *t = this->textures[direction_string][this->current_frame];
-      if (t) SDL_QueryTexture(t, NULL, NULL, w, h);
+      if (t)
+        SDL_QueryTexture(t, NULL, NULL, w, h);
     }
   } else {
     direction_string = convertCompassDirectionToExistingAnimationString(
         direction, this->surfaces);
     if (!this->surfaces[direction_string].empty()) {
-      if ((size_t)this->current_frame < this->surfaces[direction_string].size()) {
+      if ((size_t)this->current_frame <
+          this->surfaces[direction_string].size()) {
         SDL_Surface *s = this->surfaces[direction_string][this->current_frame];
         if (s) {
-          if (w) *w = s->w;
-          if (h) *h = s->h;
+          if (w)
+            *w = s->w;
+          if (h)
+            *h = s->h;
         }
       }
     }
@@ -189,17 +224,28 @@ void Animation::queryTexture(CompassDirection direction, int *w, int *h) {
 std::string
 Animation::convertCompassDirectionToString(CompassDirection direction) {
   switch (direction) {
-  case CompassDirection::N: return "N";
-  case CompassDirection::NE: return "NE";
-  case CompassDirection::NW: return "NW";
-  case CompassDirection::S: return "S";
-  case CompassDirection::SE: return "SE";
-  case CompassDirection::SW: return "SW";
-  case CompassDirection::E: return "E";
-  case CompassDirection::W: return "W";
-  case CompassDirection::G: return "G";
-  case CompassDirection::H: return "H";
-  default: return "N";
+  case CompassDirection::N:
+    return "N";
+  case CompassDirection::NE:
+    return "NE";
+  case CompassDirection::NW:
+    return "NW";
+  case CompassDirection::S:
+    return "S";
+  case CompassDirection::SE:
+    return "SE";
+  case CompassDirection::SW:
+    return "SW";
+  case CompassDirection::E:
+    return "E";
+  case CompassDirection::W:
+    return "W";
+  case CompassDirection::G:
+    return "G";
+  case CompassDirection::H:
+    return "H";
+  default:
+    return "N";
   }
 }
 
@@ -219,57 +265,100 @@ std::string Animation::convertCompassDirectionToExistingAnimationString(
 
   switch (direction) {
   case CompassDirection::N:
-    TRY_DIR("N", SDL_FLIP_NONE); TRY_DIR("NE", SDL_FLIP_NONE); TRY_DIR("NW", SDL_FLIP_NONE); break;
+    TRY_DIR("N", SDL_FLIP_NONE);
+    TRY_DIR("NE", SDL_FLIP_NONE);
+    TRY_DIR("NW", SDL_FLIP_NONE);
+    break;
   case CompassDirection::NE:
-    TRY_DIR("NE", SDL_FLIP_NONE); TRY_DIR("NW", SDL_FLIP_HORIZONTAL); TRY_DIR("N", SDL_FLIP_NONE); break;
+    TRY_DIR("NE", SDL_FLIP_NONE);
+    TRY_DIR("NW", SDL_FLIP_HORIZONTAL);
+    TRY_DIR("N", SDL_FLIP_NONE);
+    break;
   case CompassDirection::NW:
-    TRY_DIR("NW", SDL_FLIP_NONE); TRY_DIR("NE", SDL_FLIP_HORIZONTAL); TRY_DIR("N", SDL_FLIP_NONE); break;
+    TRY_DIR("NW", SDL_FLIP_NONE);
+    TRY_DIR("NE", SDL_FLIP_HORIZONTAL);
+    TRY_DIR("N", SDL_FLIP_NONE);
+    break;
   case CompassDirection::S:
-    TRY_DIR("S", SDL_FLIP_NONE); TRY_DIR("SE", SDL_FLIP_NONE); TRY_DIR("SW", SDL_FLIP_NONE); TRY_DIR("N", SDL_FLIP_NONE); break;
+    TRY_DIR("S", SDL_FLIP_NONE);
+    TRY_DIR("SE", SDL_FLIP_NONE);
+    TRY_DIR("SW", SDL_FLIP_NONE);
+    TRY_DIR("N", SDL_FLIP_NONE);
+    break;
   case CompassDirection::SE:
-    TRY_DIR("SE", SDL_FLIP_NONE); TRY_DIR("SW", SDL_FLIP_HORIZONTAL); TRY_DIR("E", SDL_FLIP_NONE); TRY_DIR("S", SDL_FLIP_NONE); break;
+    TRY_DIR("SE", SDL_FLIP_NONE);
+    TRY_DIR("SW", SDL_FLIP_HORIZONTAL);
+    TRY_DIR("E", SDL_FLIP_NONE);
+    TRY_DIR("S", SDL_FLIP_NONE);
+    break;
   case CompassDirection::SW:
-    TRY_DIR("SW", SDL_FLIP_NONE); TRY_DIR("SE", SDL_FLIP_HORIZONTAL); TRY_DIR("W", SDL_FLIP_NONE); TRY_DIR("S", SDL_FLIP_NONE); break;
+    TRY_DIR("SW", SDL_FLIP_NONE);
+    TRY_DIR("SE", SDL_FLIP_HORIZONTAL);
+    TRY_DIR("W", SDL_FLIP_NONE);
+    TRY_DIR("S", SDL_FLIP_NONE);
+    break;
   case CompassDirection::E:
-    TRY_DIR("E", SDL_FLIP_NONE); TRY_DIR("W", SDL_FLIP_HORIZONTAL); TRY_DIR("SE", SDL_FLIP_NONE); TRY_DIR("NE", SDL_FLIP_NONE); break;
+    TRY_DIR("E", SDL_FLIP_NONE);
+    TRY_DIR("W", SDL_FLIP_HORIZONTAL);
+    TRY_DIR("SE", SDL_FLIP_NONE);
+    TRY_DIR("NE", SDL_FLIP_NONE);
+    break;
   case CompassDirection::W:
-    TRY_DIR("W", SDL_FLIP_NONE); TRY_DIR("E", SDL_FLIP_HORIZONTAL); TRY_DIR("SW", SDL_FLIP_NONE); TRY_DIR("NW", SDL_FLIP_NONE); break;
+    TRY_DIR("W", SDL_FLIP_NONE);
+    TRY_DIR("E", SDL_FLIP_HORIZONTAL);
+    TRY_DIR("SW", SDL_FLIP_NONE);
+    TRY_DIR("NW", SDL_FLIP_NONE);
+    break;
   case CompassDirection::G:
-    TRY_DIR("G", SDL_FLIP_NONE); TRY_DIR("N", SDL_FLIP_NONE); break;
+    TRY_DIR("G", SDL_FLIP_NONE);
+    TRY_DIR("N", SDL_FLIP_NONE);
+    break;
   case CompassDirection::H:
-    TRY_DIR("H", SDL_FLIP_NONE); TRY_DIR("N", SDL_FLIP_NONE); break;
+    TRY_DIR("H", SDL_FLIP_NONE);
+    TRY_DIR("N", SDL_FLIP_NONE);
+    break;
   }
   return "";
 }
 
 // [FIX] CLAMP OFFSETS TO PREVENT SKY-HIGH SPRITES
-static void calculateOffset(AnimationData *data, int16_t *offset_x, int16_t *offset_y) {
+static void calculateOffset(AnimationData *data, int16_t *offset_x,
+                            int16_t *offset_y) {
   *offset_x = 0;
   *offset_y = 0;
 
-  if (data == nullptr || data->frame_count == 0) return;
+  if (data == nullptr || data->frame_count == 0)
+    return;
 
   int raw_x = 0;
   int raw_y = 0;
 
   if (data->has_background) {
-    raw_x = (data->width / 2) - (data->frames[data->frame_count].width / 2) + data->frames[data->frame_count].offset_x;
-    raw_y = (data->height / 2) - (data->frames[data->frame_count].height / 2) + data->frames[data->frame_count].offset_y;
+    raw_x = (data->width / 2) - (data->frames[data->frame_count].width / 2) +
+            data->frames[data->frame_count].offset_x;
+    raw_y = (data->height / 2) - (data->frames[data->frame_count].height / 2) +
+            data->frames[data->frame_count].offset_y;
   } else {
-    raw_x = (data->width / 2) - (data->frames[0].width / 2) + data->frames[0].offset_x;
-    raw_y = (data->height / 2) - (data->frames[0].height / 2) + data->frames[0].offset_y;
+    raw_x = (data->width / 2) - (data->frames[0].width / 2) +
+            data->frames[0].offset_x;
+    raw_y = (data->height / 2) - (data->frames[0].height / 2) +
+            data->frames[0].offset_y;
   }
-  
+
   // CLAMP: Max 200 pixels up or down
-  if (raw_y < -200) raw_y = -200;
-  if (raw_y > 200) raw_y = 200;
+  if (raw_y < -200)
+    raw_y = -200;
+  if (raw_y > 200)
+    raw_y = 200;
 
   *offset_x = (int16_t)raw_x;
   *offset_y = (int16_t)raw_y;
 }
 
-void Animation::loadSurfaces(std::string direction_string, AnimationData *data) {
-  if (data == nullptr || data->frame_count == 0) return;
+void Animation::loadSurfaces(std::string direction_string,
+                             AnimationData *data) {
+  if (data == nullptr || data->frame_count == 0)
+    return;
   this->frame_time_in_ms = data->frame_time_in_ms;
   this->has_background = data->has_background;
 
@@ -282,7 +371,8 @@ void Animation::loadSurfaces(std::string direction_string, AnimationData *data) 
   int loop_limit = (int)data->frame_count + (int)data->has_background;
 
   for (int i = 0; i < loop_limit; i++) {
-    SDL_Surface *new_surface = SDL_CreateRGBSurfaceWithFormat(0, data->width, data->height, 0, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *new_surface = SDL_CreateRGBSurfaceWithFormat(
+        0, data->width, data->height, 0, SDL_PIXELFORMAT_RGBA32);
     if (!new_surface) {
       this->surfaces[direction_string].push_back(nullptr);
       continue;
@@ -292,41 +382,79 @@ void Animation::loadSurfaces(std::string direction_string, AnimationData *data) 
 
     for (int y = 0; y < data->frames[i].height; y++) {
       int x = offset_x - data->frames[i].offset_x;
-      if (!data->frames[i].lines) continue;
+      if (!data->frames[i].lines)
+        continue;
 
-      for (int instruction = 0; instruction < data->frames[i].lines[y].instruction_count; instruction++) {
-        if (!data->frames[i].lines[y].instructions) continue;
+      for (int instruction = 0;
+           instruction < data->frames[i].lines[y].instruction_count;
+           instruction++) {
+        if (!data->frames[i].lines[y].instructions)
+          continue;
         x += data->frames[i].lines[y].instructions[instruction].offset;
 
-        for (int p = 0; p < data->frames[i].lines[y].instructions[instruction].color_count; p++, x++) {
-          if (x < 0 || x >= data->width || y < 0 || y >= data->height) continue;
+        for (int p = 0;
+             p < data->frames[i].lines[y].instructions[instruction].color_count;
+             p++, x++) {
+          if (x < 0 || x >= data->width || y < 0 || y >= data->height)
+            continue;
           uint32_t color = 0xFFFF00FF;
           if (data->frames[i].is_shadow) {
             color = 0xFF000000;
           } else if (data->pallet && data->pallet->colors) {
-            if (!data->frames[i].lines[y].instructions[instruction].colors) continue;
-            uint8_t index = data->frames[i].lines[y].instructions[instruction].colors[p];
+            if (!data->frames[i].lines[y].instructions[instruction].colors)
+              continue;
+            uint8_t index =
+                data->frames[i].lines[y].instructions[instruction].colors[p];
             color = data->pallet->colors[index];
             color |= 0xFF000000;
+
+            // DEBUG: Log specific pixel colors for Terrain ID 2 (Sand) to catch
+            // the Yellow Bug We check if this is likely the first
+            // non-transparent pixel of the frame
+            static bool loggedSand = false;
+            if (!loggedSand && color != 0 && (color & 0xFFFFFF) != 0) {
+              // We don't have Terrain ID easily accessible here, but we can
+              // verify color range If color is Yellow (FFFF00), log it!
+              if ((color & 0xFFFFFF) == 0xFFFF00 ||
+                  (color & 0xFFFFFF) == 0x00FFFF) {
+                SDL_Log(
+                    "[Animation] DEBUG: FOUND YELLOW PIXEL! 0x%08X (Idx %d)",
+                    color, index);
+                loggedSand = true;
+              }
+              // Log Brown as well to see if it's working
+              if ((color & 0xFFFFFF) == 0x3D6E9A ||
+                  (color & 0xFFFFFF) == 0x9A6E3D) { // Check both endianness
+                SDL_Log("[Animation] DEBUG: FOUND BROWN PIXEL! 0x%08X (Idx %d)",
+                        color, index);
+                loggedSand = true;
+              }
+            }
           }
           int pitch = new_surface->pitch / 4;
           uint32_t *pixels = (uint32_t *)new_surface->pixels;
           int y_final = y + offset_y - data->frames[i].offset_y;
           int x_final = x;
-          if (y_final >= 0 && y_final < data->height && x_final >= 0 && x_final < data->width) {
+          if (y_final >= 0 && y_final < data->height && x_final >= 0 &&
+              x_final < data->width) {
             pixels[y_final * pitch + x_final] = color;
           }
         }
       }
     }
   }
-  if (data) AniFile::freeAnimationData(data);
+  if (data)
+    AniFile::freeAnimationData(data);
 }
 
 bool Animation::hasFrames(CompassDirection direction) {
-  std::string dir_str = convertCompassDirectionToExistingAnimationString(direction, this->surfaces);
-  if (!dir_str.empty()) return true;
-  dir_str = convertCompassDirectionToExistingAnimationString(direction, this->textures);
-  if (!dir_str.empty()) return true;
+  std::string dir_str = convertCompassDirectionToExistingAnimationString(
+      direction, this->surfaces);
+  if (!dir_str.empty())
+    return true;
+  dir_str = convertCompassDirectionToExistingAnimationString(direction,
+                                                             this->textures);
+  if (!dir_str.empty())
+    return true;
   return false;
 }

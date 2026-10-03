@@ -1,4 +1,5 @@
 #include "UiButton.hpp"
+#include "../RenderSettings.hpp"
 #include <set>
 
 #include "../Animation.hpp"
@@ -112,10 +113,11 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       };
     }
 
+    // The font manager draws the text with its shadow, like the original
     this->text = this->resource_manager->getStringTexture(
-        renderer, this->font, this->text_string, color);
-    this->shadow = this->resource_manager->getStringTexture(
-        renderer, this->font, this->text_string, {0, 0, 0, 255});
+        renderer, this->font, this->text_string, color,
+        ini_reader->getInt(name, "fontsize", 0));
+    this->shadow = nullptr;
 
     this->selected_updated = false;
   }
@@ -227,7 +229,22 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   if (this->is_static && is_nav_button) {
     // Defer drawing until size is calculated
   } else if (has_valid_animation) {
-    this->animation->draw(renderer, &dest_rect, CompassDirection::N);
+    // UI animations use "directions" as states: N normal, H highlighted
+    CompassDirection state = CompassDirection::N;
+    if (this->selected && this->animation->hasFrames(CompassDirection::H))
+      state = CompassDirection::H;
+
+    // Buttons like the cash spinners have no dx/dy in the layout; they are
+    // as big as their animation frame
+    if (this->dest_rect.w <= 0 || this->dest_rect.h <= 0) {
+      int w = 0, h = 0;
+      this->animation->queryTexture(state, &w, &h);
+      if (w > 0 && h > 0) {
+        this->dest_rect.w = w;
+        this->dest_rect.h = h;
+      }
+    }
+    this->animation->draw(renderer, &dest_rect, state);
   } else if (this->is_static) {
     SDL_Texture *target = this->tex_normal;
     if (this->selected && this->tex_hover)
@@ -245,12 +262,13 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       this->dest_rect.w = tw;
       this->dest_rect.h = th;
     }
+    RenderSettings::applyArtScaleMode(target);
     SDL_RenderCopy(renderer, target, nullptr, &render_rect);
   }
 
   if (this->text != nullptr) {
     int tw, th;
-    SDL_QueryTexture(this->text, nullptr, nullptr, &tw, &th);
+    this->resource_manager->getTextSize(this->text, &tw, &th);
     text_rect.w = tw;
     text_rect.h = th;
 
@@ -311,6 +329,7 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       t = this->tex_hover;
     }
     if (t) {
+      RenderSettings::applyArtScaleMode(t);
       SDL_RenderCopy(renderer, t, NULL, &dest_rect);
     }
   }

@@ -25,7 +25,8 @@ struct ScenarioInfo {
 
 struct FreeformMap {
   std::string path;         // Path to .scn file (e.g., "freeform/ff01.scn")
-  std::string name;         // Map name
+  std::string name;         // Map name (string table, e.g. "Small Beach (Small)")
+  std::string iconPath;     // Preview animation, e.g. "freeform/smbeach/smbeach"
   std::string description;  // Map description
   std::string size;         // Size category: "Small", "Medium", "Large"
   int startingCash = 50000; // Default starting cash

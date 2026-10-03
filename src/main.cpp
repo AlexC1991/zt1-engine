@@ -2,9 +2,13 @@
 
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <vector>
 #include <string>
 
 #include "Config.hpp"
+#include "RenderSettings.hpp"
 #include "IniReader.hpp"
 #include "Input.hpp"
 #include "InputManager.hpp"
@@ -61,11 +65,23 @@ World *g_world = nullptr;
 // [PATCH] Starting Cash UI
 UiText *g_startingCashText = nullptr;
 UiText *g_difficultyText = nullptr;
-int g_currentStartingCash = 100000; // Default $100,000
-const int CASH_VALUES[] = {25000,  50000,  75000,  100000,
-                           150000, 200000, 250000, 500000};
-const int NUM_CASH_VALUES = 8;
-int g_cashIndex = 3; // Index into CASH_VALUES (starts at $100,000)
+// Starting cash spinner, same rules as the original (its zoo.ini [UI]
+// MSStartingCash / MSCashIncrement / MSMinCash / MSMaxCash)
+const int CASH_START = 75000;
+const int CASH_STEP = 5000;
+const int CASH_MIN = 10000;
+const int CASH_MAX = 500000;
+int g_currentStartingCash = CASH_START;
+
+static void showStartingCash() {
+  if (!g_startingCashText)
+    return;
+  // "$75,000"
+  std::string digits = std::to_string(g_currentStartingCash);
+  for (int i = static_cast<int>(digits.size()) - 3; i > 0; i -= 3)
+    digits.insert(i, ",");
+  g_startingCashText->setText("$" + digits);
+}
 
 // These IDs trigger the TARGET_WIDTH/HEIGHT resize in UiImage.cpp
 static constexpr int SCENARIO_PREVIEW_IMAGE_ID = 50001;
@@ -192,19 +208,92 @@ static void setScenarioPreview(UiImage *img, ResourceManager *rm,
 }
 
 static void setFreeformPreview(UiImage *img, ResourceManager *rm,
-                               const std::string &freeformScnPath) {
+                               const FreeformMap &map) {
   if (img == nullptr || rm == nullptr)
     return;
 
-  std::string baseFolder = getFolderFromPath(freeformScnPath);
-  std::string stem = getFileStem(freeformScnPath);
-
-  std::string raw = baseFolder + "/" + stem + "/N";
-  std::string pal = baseFolder + "/" + stem + "/" + stem + ".pal";
+  // The preview is the "N" frame next to the .scn's icon=, with the icon's
+  // palette (e.g. freeform/smbeach/N + freeform/smbeach/smbeach.pal).
+  // Fall back to the .scn's own name for maps without an icon entry.
+  std::string icon = map.iconPath;
+  if (icon.empty()) {
+    std::string stem = getFileStem(map.path);
+    icon = getFolderFromPath(map.path) + "/" + stem + "/" + stem;
+  }
+  std::string raw = getFolderFromPath(icon) + "/N";
+  std::string pal = icon + ".pal";
 
   if (rm->hasResource(raw) && rm->hasResource(pal)) {
     img->setZt1Image(raw, pal);
+  } else {
+    SDL_Log("[Freeform] No preview for %s (%s)", map.path.c_str(), raw.c_str());
   }
+}
+
+// ============================================================================
+// MENU SCALING
+// ============================================================================
+// The original's menu layouts (*.lyt) are authored for 800x600. Like
+// OpenRCT2's UI scale, they are scaled to fit the window (or to zoo.ini
+// [user] uiScale) and centred. Text is rendered by the font at the final
+// size so it stays sharp; art is filtered smoothly unless the scale is a
+// whole number. Mouse positions are mapped back into layout space.
+// ============================================================================
+
+static float g_uiScaleSetting = 0.0f; // 0 = fit the window
+static const int UI_LAYOUT_W = 800;
+static const int UI_LAYOUT_H = 600;
+
+struct UiTransform {
+  float scale = 1.0f;
+  float offsetX = 0.0f;
+  float offsetY = 0.0f;
+};
+
+static UiTransform getUiTransform(SDL_Renderer *renderer) {
+  int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
+  SDL_GetRendererOutputSize(renderer, &w, &h);
+  UiTransform t;
+  t.scale = g_uiScaleSetting > 0.0f
+                ? g_uiScaleSetting
+                : std::min(w / float(UI_LAYOUT_W), h / float(UI_LAYOUT_H));
+  t.scale = std::max(0.5f, t.scale);
+  // The viewport is set in layout units, so snap the offset to them; mouse
+  // mapping uses the same snapped offset
+  t.offsetX = std::round((w - UI_LAYOUT_W * t.scale) * 0.5f / t.scale) * t.scale;
+  t.offsetY = std::round((h - UI_LAYOUT_H * t.scale) * 0.5f / t.scale) * t.scale;
+  return t;
+}
+
+static void mapInputsToLayout(std::vector<Input> &inputs, const UiTransform &t) {
+  for (Input &in : inputs) {
+    if (in.type != InputType::POSITIONED)
+      continue;
+    in.x = static_cast<int>((in.x - t.offsetX) / t.scale);
+    in.y = static_cast<int>((in.y - t.offsetY) / t.scale);
+    in.position.x = in.x;
+    in.position.y = in.y;
+  }
+}
+
+static void drawLayoutCentered(SDL_Renderer *renderer, UiLayout *layout,
+                               ResourceManager *rm) {
+  UiTransform t = getUiTransform(renderer);
+  rm->setTextScale(t.scale);
+  bool wholeScale = std::fabs(t.scale - std::round(t.scale)) < 0.01f;
+  RenderSettings::artScaleMode =
+      wholeScale ? SDL_ScaleModeNearest : SDL_ScaleModeLinear;
+  SDL_RenderSetScale(renderer, t.scale, t.scale);
+  // Viewport is given in scaled units
+  SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
+                       static_cast<int>(std::lround(t.offsetY / t.scale)),
+                       UI_LAYOUT_W, UI_LAYOUT_H};
+  SDL_RenderSetViewport(renderer, &viewport);
+  SDL_Rect layoutRect = {0, 0, UI_LAYOUT_W, UI_LAYOUT_H};
+  layout->draw(renderer, &layoutRect);
+  SDL_RenderSetViewport(renderer, nullptr);
+  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+  RenderSettings::artScaleMode = SDL_ScaleModeNearest;
 }
 
 static std::string getLayoutPath(ResourceManager *rm,
@@ -328,7 +417,7 @@ static void updateFreeformDetails(UiLayout *layout,
       g_freeformMap = dynamic_cast<UiImage *>(elem);
   }
   if (g_freeformMap) {
-    setFreeformPreview(g_freeformMap, resourceManager, map->path);
+    setFreeformPreview(g_freeformMap, resourceManager, *map);
   }
 }
 
@@ -389,14 +478,13 @@ static void populateFreeformList(UiLayout *layout,
       g_freeformListBox->clear();
       g_freeformListBox->setSelectionAction(UiAction::FREEFORM_LIST_SELECTION);
 
-      for (const auto &map : scenarioManager->getFreeformMaps()) {
-        // Build display name with size indicator
-        std::string displayName = map.name;
-        if (!map.size.empty()) {
-          displayName += " (" + map.size + ")";
-        }
-        g_freeformListBox->addItem(displayName, map.path);
-      }
+      // Names already carry the size, e.g. "Small Beach (Small)"
+      for (const auto &map : scenarioManager->getFreeformMaps())
+        g_freeformListBox->addItem(map.name, map.path);
+
+      // Like the original, start with the first map selected
+      if (!scenarioManager->getFreeformMaps().empty())
+        g_freeformListBox->setSelectedIndex(0);
     }
   }
 
@@ -404,12 +492,7 @@ static void populateFreeformList(UiLayout *layout,
   element = layout->getElementById(11510);
   if (element) {
     g_startingCashText = dynamic_cast<UiText *>(element);
-    if (g_startingCashText) {
-      // Format cash with $ and commas
-      char buf[32];
-      snprintf(buf, sizeof(buf), "$%d,000", g_currentStartingCash / 1000);
-      g_startingCashText->setText(buf);
-    }
+    showStartingCash();
   }
 
   // Initialize Difficulty text (ID 11531)
@@ -422,6 +505,143 @@ static void populateFreeformList(UiLayout *layout,
   }
 }
 
+// ============================================================================
+// MAP RENDER CHECK
+// (--render-maps <outDir> [elevationScale] [tileWidth] [unused] [stem,stem]
+//  [extra rotation on top of the map's start view] [shadingMode: 0 lit,
+//  1 unlit, 2 normals])
+// ============================================================================
+// Headless verification: for every freeform map, saves the game's own
+// map-select preview next to our WorldRenderer output, so the two can be
+// compared. Uses the same World::loadFreeform path as the Play button.
+// ============================================================================
+
+// Optional fixed tile width for --render-maps (0 = fit whole map)
+static int g_renderCheckTileWidth = 0;
+// Optional comma-separated map stems to render (empty = all)
+static std::string g_renderCheckOnly;
+// Extra view rotation on top of each map's start rotation
+static int g_renderCheckExtraRotation = 0;
+
+static bool saveTargetToBmp(SDL_Renderer *renderer, SDL_Texture *target,
+                            const std::string &path) {
+  int w = 0, h = 0;
+  SDL_QueryTexture(target, nullptr, nullptr, &w, &h);
+  SDL_SetRenderTarget(renderer, target);
+  SDL_Surface *surface =
+      SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+  bool ok = surface &&
+            SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
+                                 surface->pixels, surface->pitch) == 0 &&
+            SDL_SaveBMP(surface, path.c_str()) == 0;
+  if (surface)
+    SDL_FreeSurface(surface);
+  SDL_SetRenderTarget(renderer, nullptr);
+  if (!ok)
+    SDL_Log("[RenderCheck] Failed to save %s: %s", path.c_str(), SDL_GetError());
+  return ok;
+}
+
+static void renderWorldToBmp(SDL_Renderer *renderer, World *world,
+                             bool debugColors, bool elevation,
+                             const std::string &path) {
+  WorldMap &map = world->getMap();
+  WorldRenderer &wr = world->getRenderer();
+  int span = map.getWidth() + map.getHeight();
+
+  // Fit the whole map into ~1200px wide, unless a tile width was given
+  int tileW = g_renderCheckTileWidth > 0
+                  ? g_renderCheckTileWidth
+                  : std::max(4, (2400 / span) & ~1);
+  int tileH = tileW / 2;
+  wr.setTileSize(tileW, tileH);
+  if (wr.isTerrainDebugEnabled() != debugColors)
+    wr.toggleTerrainDebug();
+  if (wr.isElevationEnabled() != elevation)
+    wr.toggleElevation();
+
+  // Room for the tallest point and the floor slab under the lowest one
+  float unitPx = wr.getHeightUnitPixels();
+  int minH = map.getMinHeight() - 1, maxH = map.getMaxHeight();
+  int headroom = static_cast<int>((maxH - minH) * unitPx);
+  int outW = span * tileW / 2 + 16;
+  int outH = span * tileH / 2 + 16 + headroom;
+
+  Camera &cam = wr.getCamera();
+  cam.zoom = 1.0f;
+  cam.screenCenterX = outW / 2;
+  cam.screenCenterY = outH / 2;
+  // View grid is height x width in rotations 0 and 2
+  bool swapped = wr.getViewRotation() % 2 == 0;
+  int viewU = swapped ? map.getHeight() : map.getWidth();
+  int viewV = swapped ? map.getWidth() : map.getHeight();
+  cam.x = -(viewU - viewV) * tileW / 4;
+  cam.y = -span * tileH / 4 + static_cast<int>((maxH + minH) * 0.5f * unitPx);
+
+  SDL_Texture *target = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+                                          SDL_TEXTUREACCESS_TARGET, outW, outH);
+  SDL_SetRenderTarget(renderer, target);
+  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+  SDL_RenderClear(renderer);
+  wr.renderTerrain(renderer, map, SpriteDatabase::get());
+  saveTargetToBmp(renderer, target, path);
+  SDL_DestroyTexture(target);
+}
+
+static int runMapRenderCheck(SDL_Renderer *renderer, ResourceManager *rm,
+                             ScenarioManager *sm, World *world,
+                             const std::string &outDir) {
+  int count = 0;
+  for (int i = 0;; i++) {
+    const FreeformMap *map = sm->getFreeformMap(i);
+    if (!map)
+      break;
+
+    std::string stem = getFileStem(map->path);
+    if (!g_renderCheckOnly.empty() &&
+        ("," + g_renderCheckOnly + ",").find("," + stem + ",") == std::string::npos)
+      continue;
+    std::string prefix = outDir + "/" + stem;
+    SDL_Log("[RenderCheck] %s (%s)", map->name.c_str(), map->path.c_str());
+
+    // Game's own preview, as shown on the map-select screen
+    std::string baseFolder = getFolderFromPath(map->path);
+    std::string raw = baseFolder + "/" + stem + "/N";
+    std::string pal = baseFolder + "/" + stem + "/" + stem + ".pal";
+    if (rm->hasResource(raw) && rm->hasResource(pal)) {
+      SDL_Texture *preview = rm->getZt1Texture(renderer, raw, pal);
+      if (preview) {
+        int w = 0, h = 0;
+        SDL_QueryTexture(preview, nullptr, nullptr, &w, &h);
+        SDL_Texture *target = SDL_CreateTexture(
+            renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
+        SDL_SetRenderTarget(renderer, target);
+        SDL_RenderCopy(renderer, preview, nullptr, nullptr);
+        saveTargetToBmp(renderer, target, prefix + "_preview.bmp");
+        SDL_DestroyTexture(target);
+      }
+    }
+
+    bool loaded = world->loadFreeform(map->path);
+    if (loaded)
+      world->getRenderer().rotateView(g_renderCheckExtraRotation);
+    if (!loaded) {
+      SDL_Log("[RenderCheck]   map failed to load");
+      continue;
+    }
+    // With a fixed tile width (comparison against the original), only the
+    // textured view is needed
+    if (g_renderCheckTileWidth == 0) {
+      renderWorldToBmp(renderer, world, true, false, prefix + "_flat.bmp");
+      renderWorldToBmp(renderer, world, true, true, prefix + "_debug.bmp");
+    }
+    renderWorldToBmp(renderer, world, false, true, prefix + "_textured.bmp");
+    count++;
+  }
+  SDL_Log("[RenderCheck] Rendered %d maps to %s", count, outDir.c_str());
+  return count > 0 ? 0 : 1;
+}
+
 int main(int argc, char *argv[]) {
   SDL_SetMainReady();
 
@@ -432,6 +652,7 @@ int main(int argc, char *argv[]) {
   SDL_Log("Memory tracking initialized");
 
   Config config;
+  g_uiScaleSetting = config.getUiScale();
   ResourceManager resource_manager(&config);
 
   Window window("ZT1-Engine", config.getScreenWidth(), config.getScreenHeight(),
@@ -466,26 +687,20 @@ int main(int argc, char *argv[]) {
   UiLayout *layout = new UiLayout(lyt_reader, &resource_manager);
   g_currentState = LayoutState::MAIN_MENU;
 
-  // [VERIFICATION HACK] Auto-load Tundra map to verify crash fix
-  SDL_Log("[VERIFICATION] Searching for Tundra map...");
-  for (int i = 0;; i++) {
-    const FreeformMap *map = g_scenarioManager->getFreeformMap(i);
-    if (!map)
-      break; // End of list
-
-    std::string lower = map->name;
-    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-
-    if (lower.find("tundra") != std::string::npos) {
-      SDL_Log("[VERIFICATION] Auto-loading map: %s (Path: %s)",
-              map->name.c_str(), map->path.c_str());
-      g_world->loadFreeform(map->path);
-
-      // Transition to game loop immediately
-      delete layout;
-      layout = nullptr;
-      g_currentState = LayoutState::GAME_LOOP;
-      break;
+  for (int i = 1; i + 1 < argc; i++) {
+    if (std::string(argv[i]) == "--render-maps") {
+      if (i + 2 < argc)
+        g_world->getRenderer().setElevationScale(std::atoi(argv[i + 2]));
+      if (i + 3 < argc)
+        g_renderCheckTileWidth = std::atoi(argv[i + 3]) & ~1;
+      if (i + 5 < argc && std::string(argv[i + 5]) != "all")
+        g_renderCheckOnly = argv[i + 5];
+      if (i + 6 < argc)
+        g_renderCheckExtraRotation = std::atoi(argv[i + 6]);
+      if (i + 7 < argc)
+        g_world->getRenderer().setShadingMode(std::atoi(argv[i + 7]));
+      return runMapRenderCheck(window.renderer, &resource_manager,
+                               g_scenarioManager, g_world, argv[i + 1]);
     }
   }
 
@@ -520,11 +735,14 @@ int main(int argc, char *argv[]) {
         layout = new UiLayout(lyt_reader, &resource_manager);
         g_currentState = LayoutState::FREEFORM_SELECT;
         populateFreeformList(layout, g_scenarioManager);
+        updateFreeformDetails(layout, g_scenarioManager, &resource_manager);
       }
     }
 
     if (layout) {
-      action = layout->handleInputs(inputs);
+      std::vector<Input> layoutInputs = inputs;
+      mapInputsToLayout(layoutInputs, getUiTransform(window.renderer));
+      action = layout->handleInputs(layoutInputs);
     } else {
       // No layout means we are likely in game loop, so no UI actions
       // Define a safe no-op action if explicit NONE isn't available,
@@ -556,6 +774,7 @@ int main(int argc, char *argv[]) {
       layout = new UiLayout(lyt_reader, &resource_manager);
       g_currentState = LayoutState::FREEFORM_SELECT;
       populateFreeformList(layout, g_scenarioManager);
+      updateFreeformDetails(layout, g_scenarioManager, &resource_manager);
       break;
 
     case UiAction::STARTUP_PLAY_SCENARIO:
@@ -592,29 +811,15 @@ int main(int argc, char *argv[]) {
       break;
 
     case UiAction::CASH_SPINNER_UP:
-      // Increase starting cash
-      if (g_cashIndex < NUM_CASH_VALUES - 1) {
-        g_cashIndex++;
-        g_currentStartingCash = CASH_VALUES[g_cashIndex];
-        if (g_startingCashText) {
-          char buf[32];
-          snprintf(buf, sizeof(buf), "$%d,000", g_currentStartingCash / 1000);
-          g_startingCashText->setText(buf);
-        }
-      }
+      g_currentStartingCash =
+          std::min(CASH_MAX, g_currentStartingCash + CASH_STEP);
+      showStartingCash();
       break;
 
     case UiAction::CASH_SPINNER_DOWN:
-      // Decrease starting cash
-      if (g_cashIndex > 0) {
-        g_cashIndex--;
-        g_currentStartingCash = CASH_VALUES[g_cashIndex];
-        if (g_startingCashText) {
-          char buf[32];
-          snprintf(buf, sizeof(buf), "$%d,000", g_currentStartingCash / 1000);
-          g_startingCashText->setText(buf);
-        }
-      }
+      g_currentStartingCash =
+          std::max(CASH_MIN, g_currentStartingCash - CASH_STEP);
+      showStartingCash();
       break;
 
     case UiAction::PLAY_SCENARIO_START:
@@ -667,7 +872,7 @@ int main(int argc, char *argv[]) {
       g_world->draw(window.renderer);
       // SDL_Log("MainLoop: Post-Draw");
     } else if (layout) {
-      layout->draw(window.renderer, nullptr);
+      drawLayoutCentered(window.renderer, layout, &resource_manager);
     }
 
     window.present();

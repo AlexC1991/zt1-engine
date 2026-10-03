@@ -1,6 +1,7 @@
 #include "InputManager.hpp"
 
 extern float g_ZoomLevel;
+extern bool g_showDiagnostics;
 
 InputManager::InputManager() {
 }
@@ -31,6 +32,10 @@ std::vector<Input> InputManager::getInputs() {
         input.type = InputType::BUTTON;
         if (event.key.keysym.sym == SDLK_ESCAPE) {
           input.event = InputEvent::KEY_ESCAPE;
+        } else if (event.key.keysym.sym == SDLK_F3 && !event.key.repeat) {
+          // Toggle the diagnostics overlay
+          g_showDiagnostics = !g_showDiagnostics;
+          input.event = InputEvent::NONE;
         } else {
           input.event = InputEvent::NONE;
         }
