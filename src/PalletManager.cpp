@@ -1,4 +1,5 @@
 #include "PalletManager.hpp"
+#include "Utils.hpp"
 
 #include <SDL2/SDL.h>
 
@@ -13,7 +14,10 @@ Pallet *PalletManager::getPallet(char *file_name_c) {
   return this->getPallet(file_name);
 }
 
-Pallet *PalletManager::getPallet(std::string &file_name) {
+Pallet *PalletManager::getPallet(std::string &file_name_raw) {
+  // Resource names are indexed lower case; frames name their palette in
+  // any case (e.g. fences/castiron/SE/SE.pal)
+  std::string file_name = Utils::string_to_lower(file_name_raw);
   if (this->pallet_map.contains(file_name)) {
     return &this->pallet_map[file_name];
   }

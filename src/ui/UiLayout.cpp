@@ -12,6 +12,7 @@
 #include "UiMiniMap.hpp"
 #include "UiStatusImage.hpp"
 #include "UiScrollBar.hpp"
+#include "UiScrollingRegion.hpp"
 #include "UiText.hpp"
 
 UiLayout::UiLayout(IniReader *ini_reader, ResourceManager *resource_manager) {
@@ -20,6 +21,7 @@ UiLayout::UiLayout(IniReader *ini_reader, ResourceManager *resource_manager) {
 
   this->name = "layoutinfo";
   this->id = ini_reader->getInt(this->name, "id", 0);
+  this->anchor = ini_reader->getInt(this->name, "anchor", 0);
   this->layer = ini_reader->getInt(this->name, "layer", 1);
 
   this->process_sections(ini_reader, resource_manager);
@@ -27,15 +29,25 @@ UiLayout::UiLayout(IniReader *ini_reader, ResourceManager *resource_manager) {
 
 UiLayout::UiLayout(IniReader *ini_reader, ResourceManager *resource_manager,
                    std::string name) {
-  this->ini_reader = ini_reader;
+  // The section here only says which file (and the layout's state); the
+  // file has the elements and its own [LayoutInfo] (id, place, layer)
   this->resource_manager = resource_manager;
+  this->name = "layoutinfo";
+  this->nested = true;
+  std::string path = ini_reader->get(name, "layout");
+  this->ini_reader =
+      path.empty() ? nullptr : resource_manager->getIniReader(path);
+  if (this->ini_reader == nullptr) {
+    SDL_Log("UiLayout: layout '%s' of section %s not found", path.c_str(),
+            name.c_str());
+    return;
+  }
+  this->id = this->ini_reader->getInt("layoutinfo", "id", 0);
+  this->layer = ini_reader->getInt(
+      name, "layer", this->ini_reader->getInt("layoutinfo", "layer", 1));
+  this->anchor = this->ini_reader->getInt("layoutinfo", "anchor", 0);
 
-  this->name = name;
-  this->id = ini_reader->getInt(name, "id", 0);
-  this->layer = ini_reader->getInt(name, "layer", 1);
-  this->anchor = ini_reader->getInt(name, "anchor", 0);
-
-  this->process_layout(resource_manager, ini_reader->get(name, "layout"));
+  this->process_sections(this->ini_reader, resource_manager);
 }
 
 UiLayout::~UiLayout() {
@@ -55,14 +67,25 @@ void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   if (renderer == nullptr)
     return;
 
+  SDL_Rect window_rect = {0, 0, 0, 0};
   if (layout_rect == nullptr) {
     if (!window) {
       this->window = SDL_RenderGetWindow(renderer);
     }
-    SDL_Rect window_rect = {0, 0, 0, 0};
     SDL_GetWindowSize(this->window, &window_rect.w, &window_rect.h);
     layout_rect = &window_rect;
   }
+  if (this->ini_reader == nullptr)
+    return;
+  // A layout inside a layout sits where its [LayoutInfo] puts it: in its
+  // anchor's rect when it shares its parent's anchor, else in the parent
+  SDL_Rect own_rect;
+  if (this->nested) {
+    SDL_Rect *base = this->has_anchor_rect ? &this->anchor_rect : layout_rect;
+    own_rect = this->getRect(this->ini_reader->getSection("layoutinfo"), base);
+    layout_rect = &own_rect;
+  }
+  this->last_rect = *layout_rect;
 
   // Like the original: every element drawn in layer order across the whole
   // layout (not parent-then-children), each positioned inside its anchor.
@@ -106,6 +129,10 @@ void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
         continue;
       if (!RenderSettings::drawsUiArt() && !hasText(it.element))
         continue;
+      if (UiLayout *sub = dynamic_cast<UiLayout *>(it.element))
+        if (this->has_anchor_rect && sub->getAnchor() != 0 &&
+            sub->getAnchor() == this->getAnchor())
+          sub->setAnchorRect(this->anchor_rect);
       it.element->draw(renderer, &it.parent);
     }
   }
@@ -166,6 +193,9 @@ void UiLayout::process_sections(IniReader *ini_reader,
         ids.push_back(std::atoi(id.c_str()));
       radio_sets.push_back(ids);
       continue;
+    } else if (element_type == "UIScrollingRegion") {
+      new_element = (UiElement *)new UiScrollingRegion(ini_reader,
+                                                       resource_manager, section);
     } else if (element_type == "UIScrollBar") {
       new_element =
           (UiElement *)new UiScrollBar(ini_reader, resource_manager, section);
@@ -240,6 +270,27 @@ void UiLayout::process_sections(IniReader *ini_reader,
       b->setRadioGroup(group);
   }
 
+  // Tabs: action=3 buttons whose target is one of this layout's own
+  // sub-layouts show that sub-layout while they are on
+  std::function<void(UiElement *)> findTabs = [&](UiElement *e) {
+    if (UiButton *b = dynamic_cast<UiButton *>(e)) {
+      if (b->getActionType() == 3 && b->getActionTarget() != 0) {
+        for (UiElement *c : this->children) {
+          UiLayout *sub = dynamic_cast<UiLayout *>(c);
+          if (sub && sub->getId() == b->getActionTarget())
+            this->tabs.push_back({b, sub});
+        }
+      }
+    }
+    if (dynamic_cast<UiLayout *>(e))
+      return; // a sub-layout's own buttons are its business
+    for (UiElement *c : e->getChildren())
+      findTabs(c);
+  };
+  for (UiElement *child : this->children)
+    findTabs(child);
+  this->syncTabs();
+
   // Pass 3a: fillers stretch between two named elements
   for (UiElement *child : this->children) {
     UiImage *img = dynamic_cast<UiImage *>(child);
@@ -247,6 +298,33 @@ void UiLayout::process_sections(IniReader *ini_reader,
       img->setFillerAnchors(this->findById(img->getFillerAnchor1()),
                             this->findById(img->getFillerAnchor2()));
   }
+
+  // Scrolling regions draw their items like their template button, which
+  // is not shown itself; their scrollbar scrolls them
+  std::function<void(UiElement *)> linkRegions = [&](UiElement *e) {
+    if (UiScrollingRegion *region = dynamic_cast<UiScrollingRegion *>(e)) {
+      if (UiButton *t = dynamic_cast<UiButton *>(
+              this->getElementById(region->getTemplateId()))) {
+        IniReader *r = this->ini_reader;
+        std::string section;
+        for (const std::string &s : r->getSections())
+          if (r->getInt(s, "id", 0) == region->getTemplateId())
+            section = s;
+        region->setTemplate(t->getAnimationPath(),
+                            r->getInt(section, "iconfirst", 1) != 0);
+        t->setHidden(true);
+      }
+      if (UiScrollBar *bar = dynamic_cast<UiScrollBar *>(
+              this->getElementById(region->getScrollBarId())))
+        bar->attach(region);
+    }
+    if (dynamic_cast<UiLayout *>(e))
+      return;
+    for (UiElement *c : e->getChildren())
+      linkRegions(c);
+  };
+  for (UiElement *child : this->children)
+    linkRegions(child);
 
   // Pass 3: list boxes name the scrollbar that scrolls them
   // ("scrollbar=11505"); hand each scrollbar its list
@@ -261,21 +339,28 @@ void UiLayout::process_sections(IniReader *ini_reader,
   }
 }
 
-void UiLayout::process_layout(ResourceManager *resource_manager,
-                              std::string layout) {
-  if (layout.empty()) {
-    return;
+UiAction UiLayout::handleInputs(std::vector<Input> &inputs) {
+  UiAction action = handleInputChildren(inputs);
+  if (isPanelToggle(action)) {
+    for (auto &tab : this->tabs) {
+      if (tab.first->getActionTarget() == panelOf(action)) {
+        this->syncTabs();
+        return UiAction::NONE; // handled here
+      }
+    }
   }
-
-  IniReader *child_reader = resource_manager->getIniReader(layout);
-  process_sections(child_reader, resource_manager);
-
-  // We created child_reader with new; process_sections does not take ownership.
-  delete child_reader;
+  return action;
 }
 
-UiAction UiLayout::handleInputs(std::vector<Input> &inputs) {
-  return handleInputChildren(inputs);
+// Each tab's sub-layout is shown while a button for it is on
+void UiLayout::syncTabs() {
+  for (auto &tab : this->tabs) {
+    bool on = false;
+    for (auto &other : this->tabs)
+      if (other.second == tab.second && other.first->isToggledOn())
+        on = true;
+    tab.second->setHidden(!on);
+  }
 }
 
 // Find element by ID recursively

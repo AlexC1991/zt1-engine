@@ -1,5 +1,7 @@
 #include "ZtdFile.hpp"
 
+#include <vector>
+
 #include <zip.h>
 #include <stdlib.h>
 #include <cstdio>
@@ -171,4 +173,33 @@ IniReader * ZtdFile::getIniReader(const std::string &ztd_file, const std::string
 
   SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Could not load ini file %s", file_name.c_str());
   exit(8);
+}
+
+void ZtdFile::readFiles(
+    const std::string &ztd_file, const std::set<std::string> &wanted,
+    const std::function<void(const std::string &, const char *, int)> &got) {
+  int error = 0;
+  zip_t *file = zip_open(ztd_file.c_str(), 0, &error);
+  if (!file)
+    return;
+  zip_int64_t count = zip_get_num_entries(file, 0);
+  std::vector<char> buffer;
+  for (zip_int64_t index = 0; index < count; index++) {
+    struct zip_stat finfo;
+    zip_stat_init(&finfo);
+    if (zip_stat_index(file, index, 0, &finfo) != 0)
+      continue;
+    std::string name = Utils::string_to_lower(std::string(finfo.name));
+    if (!wanted.count(name))
+      continue;
+    buffer.resize(finfo.size);
+    zip_file_t *fd = zip_fopen_index(file, index, 0);
+    if (!fd)
+      continue;
+    zip_int64_t n = zip_fread(fd, buffer.data(), finfo.size);
+    zip_fclose(fd);
+    if (n >= 0)
+      got(name, buffer.data(), static_cast<int>(n));
+  }
+  zip_close(file);
 }

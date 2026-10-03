@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -195,7 +196,9 @@ void ResourceManager::load_resource_map(std::atomic<float> *progress,
   }
   float step = (progress_goal - *progress) / (float)resource_paths.size();
 
+  int pathIndex = -1;
   for (std::string path : resource_paths) {
+    pathIndex++;
     path = Utils::fixPath(path);
     if (path.empty())
       continue;
@@ -213,6 +216,7 @@ void ResourceManager::load_resource_map(std::atomic<float> *progress,
           if (resource_map.count(file) == 0) {
             resource_map[file] = archive.path().string();
           }
+          archive_priority.emplace(archive.path().string(), pathIndex);
         }
       }
     } catch (std::exception &e) {
@@ -861,6 +865,46 @@ SDL_Texture *ResourceManager::getStringTexture(SDL_Renderer *r, const int f,
 
 int ResourceManager::getFontLineHeight(int font, int fontSize) {
   return font_manager.getLineHeight(font, fontSize);
+}
+
+std::vector<std::string>
+ResourceManager::listResources(const std::string &prefix,
+                               const std::string &suffix) {
+  std::vector<std::string> names;
+  for (const auto &entry : resource_map) {
+    const std::string &n = entry.first;
+    if (n.size() >= prefix.size() + suffix.size() &&
+        n.compare(0, prefix.size(), prefix) == 0 &&
+        n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0)
+      names.push_back(n);
+  }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+
+int ResourceManager::getResourcePriority(const std::string &name) {
+  auto it = resource_map.find(name);
+  if (it == resource_map.end())
+    return 1 << 20;
+  auto p = archive_priority.find(it->second);
+  return p == archive_priority.end() ? 1 << 20 : p->second;
+}
+
+std::unordered_map<std::string, std::string>
+ResourceManager::readResources(const std::vector<std::string> &names) {
+  std::unordered_map<std::string, std::set<std::string>> byArchive;
+  for (const std::string &n : names) {
+    auto it = resource_map.find(n);
+    if (it != resource_map.end())
+      byArchive[it->second].insert(n);
+  }
+  std::unordered_map<std::string, std::string> contents;
+  for (const auto &archive : byArchive)
+    ZtdFile::readFiles(archive.first, archive.second,
+                       [&](const std::string &name, const char *data, int size) {
+                         contents[name] = std::string(data, data + size);
+                       });
+  return contents;
 }
 
 std::string ResourceManager::getString(uint32_t id) {

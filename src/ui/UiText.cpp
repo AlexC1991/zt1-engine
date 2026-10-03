@@ -22,9 +22,11 @@ UiText::UiText(IniReader * ini_reader, ResourceManager * resource_manager, std::
   this->anchor = ini_reader->getInt(name, "anchor", 0);
   this->layer = ini_reader->getInt(name, "layer", 1);
 
-  // Load initial text
-  uint32_t string_id = (uint32_t) ini_reader->getUnsignedInt(name, "id");
-  std::string raw = this->resource_manager->getString(string_id);
+  // Initial text: the layout's textid= string. Text without one (a name,
+  // a price, the date) is filled in by the game.
+  int string_id = ini_reader->getInt(name, "textid", 0);
+  std::string raw =
+      string_id > 0 ? this->resource_manager->getString(string_id) : "";
   if(raw.empty()) raw = (name == "version_label") ? "Version: ZT1-Engine 0.1" : "";
   
   this->setText(raw);
@@ -142,6 +144,68 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
   }
 
   bool is_multiline = (this->cached_lines.size() > 1);
+
+  // One line of text wider than its box wraps at word breaks to the box's
+  // width, each line justified like the text (e.g. the Staff panel's
+  // duties). Long texts keep the scrolling box below.
+  if (!is_multiline && dest_rect.w > 0) {
+    const int fontSize = ini_reader->getInt(name, "fontsize", 0);
+    auto width = [&](const std::string &str) {
+      SDL_Texture *t = resource_manager->getStringTexture(
+          renderer, font, str, SDL_Color{255, 255, 255, 255}, fontSize);
+      int w = 0, h = 0;
+      if (t)
+        resource_manager->getTextSize(t, &w, &h);
+      return w;
+    };
+    const std::string &text = this->cached_lines.front();
+    if (width(text) > dest_rect.w) {
+      std::vector<std::string> lines;
+      std::string current;
+      std::istringstream words(text);
+      std::string word;
+      while (words >> word) {
+        std::string candidate = current.empty() ? word : current + " " + word;
+        if (!current.empty() && width(candidate) > dest_rect.w) {
+          lines.push_back(current);
+          current = word;
+        } else {
+          current = candidate;
+        }
+      }
+      if (!current.empty())
+        lines.push_back(current);
+
+      std::vector<std::string> colorValues = ini_reader->getList(name, "forecolor");
+      SDL_Color color = {255, 228, 173, 255};
+      if (colorValues.size() >= 3)
+        color = {(uint8_t)std::atoi(colorValues[0].c_str()),
+                 (uint8_t)std::atoi(colorValues[1].c_str()),
+                 (uint8_t)std::atoi(colorValues[2].c_str()), 255};
+      if (has_color_override)
+        color = color_override;
+      int lineHeight = resource_manager->getFontLineHeight(font, fontSize);
+      int y = dest_rect.y;
+      for (const std::string &line : lines) {
+        SDL_Texture *t = resource_manager->getStringTexture(renderer, font, line,
+                                                            color, fontSize);
+        if (t) {
+          int w = 0, h = 0;
+          resource_manager->getTextSize(t, &w, &h);
+          int x = dest_rect.x;
+          if (justify == "center")
+            x += (dest_rect.w - w) / 2;
+          else if (justify == "right")
+            x += dest_rect.w - w;
+          SDL_Rect dst = {x, y, w, h};
+          if (RenderSettings::drawsUiText())
+            SDL_RenderCopy(renderer, t, NULL, &dst);
+        }
+        y += lineHeight;
+      }
+      return;
+    }
+  }
 
   // 2. Draw Background (only if multiline)
   if (is_multiline) {

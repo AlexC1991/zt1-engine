@@ -228,9 +228,10 @@ uniform float outH;
 uniform float flipY;
 uniform float con; // sharpness, 2^-stops
 
+// The buffer holds the upscaled layer at dst's place
 vec4 tap(vec2 p) {
   p = clamp(p, vec2(0.0), dst.zw - 1.0);
-  return texture2D(src, (p + 0.5) / texSize);
+  return texture2D(src, (dst.xy + p + 0.5) / texSize);
 }
 
 void main() {
@@ -379,7 +380,7 @@ static void fullQuad() {
 }
 
 void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
-              bool blend) {
+              bool blend, const SDL_Rect *dstRect) {
   LayerTargets &lt = g_layers[static_cast<int>(layer)];
   if (!lt.low || SDL_GetRenderTarget(renderer) != lt.low)
     return;
@@ -392,6 +393,8 @@ void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
   if (outW <= 0 || outH <= 0 ||
       !target(renderer, lt.mid, lt.midW, lt.midH, outW, outH))
     return;
+  // Where on the window the layer goes (top-down window pixels)
+  SDL_Rect dst = dstRect ? *dstRect : SDL_Rect{0, 0, outW, outH};
 
   // Pass 1: EASU, the layer -> a window-sized buffer
   SDL_SetRenderTarget(renderer, lt.mid);
@@ -408,7 +411,8 @@ void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
   gl.Disable(GL_SCISSOR_TEST);
   gl.Disable(GL_BLEND);
 
-  gl.Viewport(0, 0, outW, outH);
+  // SDL's render targets are top-down; only dst is drawn
+  gl.Viewport(dst.x, dst.y, dst.w, dst.h);
   SDL_GL_BindTexture(low, nullptr, nullptr);
   gl.UseProgram(g_easu);
   gl.Uniform1i(gl.GetUniformLocation(g_easu, "src"), 0);
@@ -416,15 +420,16 @@ void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
                float(lt.lowH));
   gl.Uniform2f(gl.GetUniformLocation(g_easu, "inView"),
                std::min(viewW, float(lt.lowW)), std::min(viewH, float(lt.lowH)));
-  gl.Uniform4f(gl.GetUniformLocation(g_easu, "dst"), 0.0f, 0.0f, float(outW),
-               float(outH));
+  gl.Uniform4f(gl.GetUniformLocation(g_easu, "dst"), float(dst.x),
+               float(dst.y), float(dst.w), float(dst.h));
   gl.Uniform1f(gl.GetUniformLocation(g_easu, "outH"), float(outH));
   gl.Uniform1f(gl.GetUniformLocation(g_easu, "flipY"), 0.0f);
   fullQuad();
 
   // Pass 2: RCAS, the buffer -> the window
   SDL_SetRenderTarget(renderer, nullptr);
-  gl.Viewport(0, 0, outW, outH);
+  // The window is bottom-up
+  gl.Viewport(dst.x, outH - dst.y - dst.h, dst.w, dst.h);
   if (blend) {
     // The layer is premultiplied (drawn over transparent black)
     gl.Enable(GL_BLEND);
@@ -436,8 +441,8 @@ void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
   gl.Uniform1i(gl.GetUniformLocation(g_rcas, "src"), 0);
   gl.Uniform2f(gl.GetUniformLocation(g_rcas, "texSize"), float(outW),
                float(outH));
-  gl.Uniform4f(gl.GetUniformLocation(g_rcas, "dst"), 0.0f, 0.0f, float(outW),
-               float(outH));
+  gl.Uniform4f(gl.GetUniformLocation(g_rcas, "dst"), float(dst.x),
+               float(dst.y), float(dst.w), float(dst.h));
   gl.Uniform1f(gl.GetUniformLocation(g_rcas, "outH"), float(outH));
   gl.Uniform1f(gl.GetUniformLocation(g_rcas, "flipY"), 1.0f);
   gl.Uniform1f(gl.GetUniformLocation(g_rcas, "con"), g_con);

@@ -2,6 +2,8 @@
 #define ZTD_FILE_HPP
 
 #include <vector>
+#include <functional>
+#include <set>
 #include <string>
 
 #include <SDL.h>
@@ -13,6 +15,12 @@ class ZtdFile {
 public:
     static std::vector<std::string> getFileList(const std::string &ztd_file);
     static void * getFileContent(const std::string &ztd_file, const std::string &file_name, int * size);
+  // Several files from one archive in a single pass: wanted holds lower
+  // case names; got(name, data, size) is called for each one found
+  static void readFiles(const std::string &ztd_file,
+                        const std::set<std::string> &wanted,
+                        const std::function<void(const std::string &,
+                                                 const char *, int)> &got);
     static SDL_Surface * getImageSurface(const std::string &ztd_file, const std::string &file_name);
     static Mix_Music * getMusic(const std::string &ztd_file, const std::string &file_name);
     static IniReader * getIniReader(const std::string &ztd_file, const std::string &file_name);

@@ -187,13 +187,22 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
                                                      CompassDirection direction,
                                                      bool hi) {
   auto &set = hi ? this->textures_hi : this->textures;
-  std::string direction_string =
-      convertCompassDirectionToExistingAnimationString(direction, set);
-  if (!direction_string.empty() && !set[direction_string].empty())
-    return &set[direction_string];
-
-  direction_string =
-      convertCompassDirectionToExistingAnimationString(direction, this->surfaces);
+  // The art's own frames for this direction (or button state) when it has
+  // them - even if another one was made first - else the nearest it has
+  std::string exact = convertCompassDirectionToString(direction);
+  std::string direction_string;
+  if (set.count(exact) && !set[exact].empty())
+    return &set[exact];
+  if (this->surfaces.count(exact) && !this->surfaces[exact].empty())
+    direction_string = exact;
+  else {
+    direction_string =
+        convertCompassDirectionToExistingAnimationString(direction, set);
+    if (!direction_string.empty() && !set[direction_string].empty())
+      return &set[direction_string];
+    direction_string = convertCompassDirectionToExistingAnimationString(
+        direction, this->surfaces);
+  }
   auto source = this->surfaces.find(direction_string);
   if (direction_string.empty() || source == this->surfaces.end())
     return nullptr;
