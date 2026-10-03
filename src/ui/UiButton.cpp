@@ -97,6 +97,8 @@ UiAction UiButton::handleInputs(std::vector<Input> &inputs) {
       } else {
         action = this->getActionBasedOnName();
       }
+      if (this->onClick)
+        this->onClick();
       break;
 
     default:

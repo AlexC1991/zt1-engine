@@ -34,13 +34,14 @@ public:
     this->has_anchor_rect = true;
   }
   UiElement* getElementById(int id);  // [PATCH] Find element by ID
+  // Shows each tab's sub-layout while a button for it is on
+  void syncTabs();
   void draw(SDL_Renderer * renderer, SDL_Rect * layout_rect);
 
 private:
   // Tabs: buttons (action=3 target=<id>) that show one of this layout's own
   // sub-layouts, e.g. the Game Options panel's pages
   std::vector<std::pair<UiButton *, UiLayout *>> tabs;
-  void syncTabs();
 
   int layer_count = 0;
   bool nested = false; // placed by its own [LayoutInfo] inside its parent

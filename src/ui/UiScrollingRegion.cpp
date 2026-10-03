@@ -79,6 +79,13 @@ int UiScrollingRegion::getScrollMaximum() const {
   return std::max(0, rows - this->visibleRows());
 }
 
+SDL_Rect UiScrollingRegion::getScrollBounds() const {
+  int rows = this->visibleRows();
+  int usedH = rows * this->cell_h + (rows - 1) * this->spacing_y;
+  return {this->last_rect.x, this->last_rect.y + (this->last_rect.h - usedH) / 2,
+          this->last_rect.w, usedH};
+}
+
 void UiScrollingRegion::setScrollPosition(int position) {
   this->first_row = std::clamp(position, 0, this->getScrollMaximum());
 }

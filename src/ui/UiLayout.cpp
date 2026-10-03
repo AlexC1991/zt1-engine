@@ -162,7 +162,9 @@ void UiLayout::process_sections(IniReader *ini_reader,
     if (section == "smap" || section == "fmap" || section == "map_preview") {
       new_element =
           (UiElement *)new UiImage(ini_reader, resource_manager, section);
-    } else if (element_type == "UIImage") {
+    } else if (element_type == "UIImage" || element_type == "UIImageSet") {
+      // UIImageSet (the terraform brush) shows one of its images; the
+      // game picks which
       new_element =
           (UiElement *)new UiImage(ini_reader, resource_manager, section);
     } else if (element_type == "UIButton") {

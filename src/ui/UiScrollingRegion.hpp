@@ -48,7 +48,9 @@ public:
   int getScrollMaximum() const override;
   int getScrollPage() const override { return this->visibleRows(); }
   void setScrollPosition(int position) override;
-  SDL_Rect getScrollBounds() const override { return this->last_rect; }
+  // The scrollbar runs the height of the cells, not the region (measured:
+  // the buy panels' 5 rows, the terraform page's 3)
+  SDL_Rect getScrollBounds() const override;
 
 private:
   int template_id = 0;

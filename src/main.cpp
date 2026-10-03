@@ -850,9 +850,17 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       {4, "scenery", "scenery"},   {8, "fence", "fence"},
       {8, "paths", "paths"},       {8, "foliage", "foliage"},
       {8, "rocks", "rocks"},       {10, "", "staff"},
-      {15, "", "research"},        {5, "", "gameopts"}};
+      {8, "#3362", "terrain"},     {8, "#3361", "height"},
+      {15, "#4008", "research"},   {15, "#4009", "research2"},
+      {15, "#4010", "conservation"}, {5, "", "gameopts"}};
   for (const Shot &shot : shots) {
-    g_hud->showPanel(shot.panel, shot.tab);
+    // "#<id>": a tab picked by its button (the terraform tabs)
+    if (shot.tab[0] == '#') {
+      g_hud->showPanel(shot.panel, "");
+      g_hud->showTab(shot.panel, std::atoi(shot.tab + 1));
+    } else {
+      g_hud->showPanel(shot.panel, shot.tab);
+    }
     for (int frame = 0; frame < 3; frame++) { // let art load and settle
       SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
       SDL_RenderClear(renderer);

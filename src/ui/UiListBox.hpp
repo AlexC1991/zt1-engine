@@ -17,7 +17,11 @@ struct ListBoxItem {
     std::string iconPath;
     SDL_Texture* iconTex = nullptr;
     bool loadAttempted = false; // [FIX] Prevents lag if file is missing
+    bool checked = true;        // toggleselect lists: the item's checkbox
+    std::vector<std::string> lines; // toggleselect lists: wrapped text
 };
+
+class Animation;
 
 class UiListBox : public UiElement, public UiScrollable {
 public:
@@ -39,13 +43,24 @@ public:
 
     void setSelectionAction(UiAction action) { selection_action = action; }
 
+    // toggleselect=1 lists (the research categories): every item has a
+    // checkbox, drawn in the miniconwidth column; clicking toggles it
+    bool isChecked(int index) const {
+        return index >= 0 && index < (int)items.size() && items[index].checked;
+    }
+    void setChecked(int index, bool on) {
+        if (index >= 0 && index < (int)items.size()) items[index].checked = on;
+    }
+
     // Id of the UIScrollBar this list uses ("scrollbar=" in the layout)
     int getScrollBarId() const { return scrollbar_id; }
 
     // UiScrollable
     int getScrollPosition() const override { return scroll_offset; }
     int getScrollMaximum() const override;
-    int getScrollPage() const override { return visible_items; }
+    int getScrollPage() const override {
+        return toggle_select ? fittingFrom(scroll_offset) : visible_items;
+    }
     void setScrollPosition(int position) override;
     SDL_Rect getScrollBounds() const override { return cached_rect; }
 
@@ -71,6 +86,14 @@ private:
 
     bool transparent = true;
     int border = 2;
+
+    bool toggle_select = false;
+    int minicon_width = 0;
+    Animation* checkbox = nullptr;
+    int line_height = 16;
+    int itemHeight(const ListBoxItem& item) const;
+    int fittingFrom(int first) const; // items that fit from first on
+    void wrapItems(SDL_Renderer* renderer);
 
     UiAction selection_action = UiAction::NONE;
     SDL_Rect cached_rect = {0, 0, 0, 0};

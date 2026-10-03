@@ -8,6 +8,7 @@
 #include "UiElement.hpp"
 
 class UiButton;
+class UiImage;
 class UiLayout;
 class UiScrollingRegion;
 class UiText;
@@ -42,6 +43,8 @@ public:
   // Opens a panel as its HUD button would (closing the others) and, for a
   // buy panel, picks the tab for a category (empty: leave the tabs)
   void showPanel(int id, const std::string &category);
+  // Picks a panel's tab by its button id (e.g. the Terrain Types tab)
+  void showTab(int panelId, int buttonId);
 
 private:
   struct Entry {
@@ -87,6 +90,41 @@ private:
   // Which details the chosen tab shows, as the original does
   void showDetails(BuyPanel &panel, const CatalogItem *item);
   std::map<int, std::string> infoImages; // ui/infoimg.cfg: id -> image
+
+  // The Buy Habitat panel's Terrain Types and Terrain Height tabs, which
+  // show ui/teraform.lyt over the panel
+  struct Terrain {
+    int type = 0;
+    std::string icon, name;
+    int cost = 0; // per tile
+  };
+  struct TerraformPage {
+    UiLayout *panel = nullptr; // buldhab.lyt
+    UiButton *typesTab = nullptr, *heightTab = nullptr;
+    UiScrollingRegion *region = nullptr;
+    UiImage *brush = nullptr;
+    std::vector<std::string> brushes; // brush1 (1x1) .. brush5 (5x5)
+    UiButton *plus = nullptr, *minus = nullptr;
+    int brushIndex = 4;
+    std::vector<Terrain> terrains;
+    int selected = 0;
+    bool shown = false;
+    std::map<int, bool> covered; // the panel's own elements' hidden state
+  } terraform;
+  void setupTerraform();
+  void refreshTerraform();
+
+  // The research panel (research.lyt): its Status page (resrch1.lyt) shows
+  // what each branch is working on; the Research and Conservation tabs
+  // share one page (resrch2.lyt) listing that branch's categories, its
+  // funding, and the shown category's program
+  struct ResearchPanel {
+    UiLayout *panel = nullptr;
+    UiButton *researchTab = nullptr, *conservationTab = nullptr;
+    int shownBranch = -1; // the category page's branch
+  } research;
+  void setupResearch();
+  void refreshResearch();
 };
 
 #endif // UI_GAME_SCREEN_HPP
