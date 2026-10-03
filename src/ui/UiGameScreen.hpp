@@ -104,6 +104,11 @@ private:
   void setupBuyPanels();
   void refreshBuyPanel(BuyPanel &panel);
   void showItem(BuyPanel &panel, int index);
+  // The rotate buttons: every item in the grids turns a quarter, all
+  // facing the same way (as in the original)
+  int facing = 0; // which of the items' icons (0 SE, 1 SW, 2 NW, 3 NE)
+  void rotateItems(int step);
+  const std::string &facingIcon(const CatalogItem *item) const;
   // Which details the chosen tab shows, as the original does
   void showDetails(BuyPanel &panel, const CatalogItem *item);
   std::map<int, std::string> infoImages; // ui/infoimg.cfg: id -> image

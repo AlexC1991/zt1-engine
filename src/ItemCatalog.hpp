@@ -41,6 +41,9 @@ struct CatalogItem {
   std::string registrySection; // e.g. animals, building, fences, tankwall
   std::set<std::string> members;
   std::string icon;  // animation shown in the buy panels (the male's)
+  // [Icon]'s icons, one per facing (objects: SE, SW, NW, NE), which the buy
+  // panels' rotate buttons step through; icons[0] == icon
+  std::vector<std::string> icons;
   int nameId = 0;    // cNameID (lang DLL string, and the unlock lists' id)
   std::string name;
   int cost = 0;      // cPurchaseCost

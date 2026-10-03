@@ -916,6 +916,30 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       {15, "#4008", "research"},   {15, "#4009", "research2"},
       {15, "#4010", "conservation"}, {5, "", "gameopts"},
       {0, "~esc", "escmenu"}};
+  // Draws a few frames (art loads and settles) and saves the last
+  auto capture = [&](const char *name) {
+    for (int frame = 0; frame < 3; frame++) {
+      SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+      SDL_RenderClear(renderer);
+      world->setView(gameViewRect(renderer),
+                     g_widescreen ? 1.0f : getUiTransform(renderer).scale);
+      world->draw(renderer);
+      drawHud(renderer, rm);
+      if (frame < 2)
+        SDL_RenderPresent(renderer);
+    }
+    int w = 0, h = 0;
+    SDL_GetRendererOutputSize(renderer, &w, &h);
+    SDL_Surface *s =
+        SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (s && SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
+                                  s->pixels, s->pitch) == 0)
+      SDL_SaveBMP(s, (outDir + "/" + name + ".bmp").c_str());
+    if (s)
+      SDL_FreeSurface(s);
+    SDL_RenderPresent(renderer);
+    note(name);
+  };
   for (const Shot &shot : shots) {
     // "!open": the panel's content filter list dropped down; "!<n>": a
     // filter choice, on the animals tab
@@ -935,32 +959,11 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     } else {
       g_hud->showPanel(shot.panel, shot.tab);
     }
-    for (int frame = 0; frame < 3; frame++) { // let art load and settle
-      SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-      SDL_RenderClear(renderer);
-      world->setView(gameViewRect(renderer),
-                     g_widescreen ? 1.0f : getUiTransform(renderer).scale);
-      world->draw(renderer);
-      drawHud(renderer, rm);
-      if (frame < 2)
-        SDL_RenderPresent(renderer);
-    }
-    int w = 0, h = 0;
-    SDL_GetRendererOutputSize(renderer, &w, &h);
-    SDL_Surface *s =
-        SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
-    if (s && SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
-                                  s->pixels, s->pitch) == 0)
-      SDL_SaveBMP(s, (outDir + "/" + shot.name + ".bmp").c_str());
-    if (s)
-      SDL_FreeSurface(s);
-    SDL_RenderPresent(renderer);
-    note(shot.name);
+    capture(shot.name);
   }
 
-  // The game menu's buttons, clicked with made-up input (layout units, on
-  // the buttons as last drawn): Main Menu and Exit Game should come back as
-  // their actions; ESC again should close the menu
+  // Buttons clicked with made-up input (layout units, on the button as
+  // last drawn), returning the action it asked for
   auto click = [&](int id) {
     UiElement *e = g_hud->getElementById(id);
     if (!e)
@@ -981,6 +984,22 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     std::string line = std::string(what) + (ok ? " ok" : " FAILED");
     note(line.c_str());
   };
+
+  // The rotate buttons turn the picked shelter (right twice, left once)
+  g_hud->showPanel(3, "shelters");
+  capture("rotate0");
+  click(2055);
+  capture("rotate1");
+  click(2055);
+  capture("rotate2");
+  click(2054);
+  capture("rotate3");
+
+  // The game menu: Main Menu and Exit Game come back as their actions; ESC
+  // closes and opens it
+  g_hud->showPanel(0, "");
+  g_hud->toggleGameMenu();
+  capture("escmenu2");
   check("main menu button", click(1503) == UiAction::GAME_MAIN_MENU);
   check("exit game button", click(1504) == UiAction::GAME_EXIT);
   g_hud->toggleGameMenu();

@@ -35,6 +35,8 @@ public:
     std::string key;  // what the owner knows the item by
   };
   void setItems(const std::vector<Item> &items);
+  // Shows another icon for one item (a rotated item's other facing)
+  void setItemIcon(int index, const std::string &icon);
   int getSelected() const { return this->selected; }
   void setSelected(int index);
   // Called when the player picks an item
