@@ -83,3 +83,6 @@ SDL_Rect Config::getProgressPosition() {
 
   return rect;
 }
+float Config::getUiScale() {
+  return std::stof(reader->get("user", "uiScale", "0"));
+}

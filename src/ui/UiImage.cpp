@@ -1,4 +1,5 @@
 #include "UiImage.hpp"
+#include "../RenderSettings.hpp"
 
 #include <algorithm>
 
@@ -224,6 +225,7 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       SDL_SetTextureBlendMode(this->image, SDL_BLENDMODE_BLEND);
     }
 
+    RenderSettings::applyArtScaleMode(this->image);
     if (SDL_RenderCopy(renderer, this->image, nullptr, &dest_rect) != 0) {
       SDL_Log("SDL_RenderCopy failed for UiImage(id=%d name=%s): %s", this->id,
               this->name.c_str(), SDL_GetError());

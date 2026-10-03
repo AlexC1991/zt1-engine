@@ -60,4 +60,9 @@ def inspect_zoo(ztd_path, file_path_in_zip):
         print(f"Error: {e}")
 
 if __name__ == "__main__":
-    inspect_zoo("maps/large.zoo", "large.zoo")
+    if len(sys.argv) > 1:
+        path = sys.argv[1]
+        name = sys.argv[2] if len(sys.argv) > 2 else os.path.basename(path)
+        inspect_zoo(path, name)
+    else:
+        inspect_zoo("maps/large.zoo", "large.zoo")

@@ -40,6 +40,7 @@ add_subdirectory(vendor/pe-resource-loader)
 # 6. GATHER SOURCE CODE
 file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.c")
 list(FILTER SOURCES EXCLUDE REGEX "test_zoo_reader.cpp$")
+list(FILTER SOURCES EXCLUDE REGEX "Entity.cpp$")
 
 # 7. FIX LINKER PATHS FOR MSVC
 if(MSVC)
@@ -57,11 +58,14 @@ endif()
 # 8. CREATE EXECUTABLE
 add_executable(zt1-engine ${SOURCES}
         src/UserProfile.cpp
-        src/UserProfile.hpp)
+        src/UserProfile.hpp
+        src/PngLoader.cpp
+        src/PngLoader.hpp)
 
-add_executable(test-zoo src/test_zoo_reader.cpp src/ZooReader.cpp src/MemoryManager.cpp)
-target_link_libraries(test-zoo PRIVATE SDL2-static zlibstatic)
-target_include_directories(test-zoo PRIVATE src vendor/SDL/include vendor/zlib ${CMAKE_CURRENT_BINARY_DIR}/vendor/zlib)
+# Test executable disabled - test_zoo_reader.cpp removed in architecture rebuild
+# add_executable(test-zoo src/test_zoo_reader.cpp src/ZooReader.cpp src/MemoryManager.cpp)
+# target_link_libraries(test-zoo PRIVATE SDL2-static zlibstatic)
+# target_include_directories(test-zoo PRIVATE src vendor/SDL/include vendor/zlib ${CMAKE_CURRENT_BINARY_DIR}/vendor/zlib)
 
 # 9. FIX INCLUDE PATHS
 target_include_directories(zt1-engine PRIVATE

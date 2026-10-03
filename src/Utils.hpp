@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 
-
 #include <SDL2/SDL.h>
 
 #include "Expansion.hpp"
@@ -56,6 +55,12 @@ public:
       new_string += std::tolower((uint8_t)character);
     }
     return new_string;
+  }
+
+  static bool file_exists(const std::string &path) {
+    if (path.empty())
+      return false;
+    return std::filesystem::exists(path);
   }
 
 #ifdef _WIN32

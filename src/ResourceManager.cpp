@@ -13,9 +13,14 @@
 
 #include "Expansion.hpp"
 #include "Utils.hpp"
+// NOTE: PngLoader removed - using original game assets only
 #include "ZtdFile.hpp"
 
-ResourceManager::ResourceManager(Config *config) : config(config) {}
+ResourceManager::ResourceManager(Config *config) : config(config) {
+  // Layout fonts are string-table ids (face name, point size)
+  font_manager.setStringLookup(
+      [this](uint32_t id) { return this->getString(id); });
+}
 
 ResourceManager::~ResourceManager() {
   Mix_HaltMusic();
@@ -75,10 +80,12 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
   // [DIAGNOSTIC] Trace every path attempt
   for (const auto &ext : extensions) {
     std::string try_path = base_name + ext;
-    // Log what we are checking (Only log failures if you want less spam, but user asked for tracing)
-    // SDL_Log("[TRACE] Checking: %s", try_path.c_str()); 
-    
-    if (std::filesystem::exists(try_path) && std::filesystem::is_regular_file(try_path)) {
+    // Log what we are checking (Only log failures if you want less spam, but
+    // user asked for tracing) SDL_Log("[TRACE] Checking: %s",
+    // try_path.c_str());
+
+    if (std::filesystem::exists(try_path) &&
+        std::filesystem::is_regular_file(try_path)) {
       // // SDL_Log("[SUCCESS] Found Loose File: %s", try_path.c_str());
       return try_path;
     }
@@ -87,7 +94,8 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
   for (const auto &ext : extensions) {
     std::string try_name = base_name + ext;
     if (this->resource_map.count(try_name)) {
-      // // SDL_Log("[SUCCESS] Found in ZTD Map: %s -> %s", try_name.c_str(), this->resource_map[try_name].c_str());
+      SDL_Log("[SUCCESS] Found in ZTD Map: %s -> %s", try_name.c_str(),
+              this->resource_map[try_name].c_str());
       return this->resource_map[try_name];
     }
   }
@@ -109,6 +117,10 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
                   (base_name.find("_g") != std::string::npos);
 
   if (!suppress) {
+    // Log terrain resources specifically for debugging
+    if (base_name.find("terrain/") != std::string::npos) {
+      SDL_Log("[WARNING] Terrain resource not found: %s", base_name.c_str());
+    }
     // SDL_Log("Resource not found: %s", base_name.c_str()); // [PATCH] Silenced
   }
 
@@ -210,37 +222,51 @@ void ResourceManager::load_resource_map(std::atomic<float> *progress,
   }
 
   resource_map_loaded = true;
-    SDL_Log("Loading resource map done. Total files indexed: %zu",
+  SDL_Log("Loading resource map done. Total files indexed: %zu",
           resource_map.size());
+
+  // [DEBUG] List terrain sprite entries
+  SDL_Log("=== DEBUG: Terrain Sprite Entries ===");
+  int terrain_count = 0;
+  for (auto const &[key, val] : resource_map) {
+    if (key.find("terrain/ic") != std::string::npos) {
+      SDL_Log("  %s -> %s", key.c_str(), val.c_str());
+      terrain_count++;
+      if (terrain_count > 50) {
+        SDL_Log("  ... (showing first 50 terrain entries)");
+        break;
+      }
+    }
+  }
+  SDL_Log("=== Total terrain/* entries: %d ===", terrain_count);
 
   // --- [DIAGNOSTIC] ZTD MAP SCANNER ---
   SDL_Log("========================================");
   SDL_Log("      INTERNAL MAP ARCHIVE SCAN");
   SDL_Log("========================================");
   int mapCount = 0;
-  for (auto const& [key, val] : resource_map) {
-      if (key.length() > 4 && key.substr(key.length() - 4) == ".zoo") {
-          int size = 0;
-          // Read header from ZTD
-          void* data = ZtdFile::getFileContent(val, key, &size);
-          if (data && size > 0x28) {
-              uint8_t* b = (uint8_t*)data;
-              uint32_t baseId = 0;
-              uint32_t mapType = 0;
-              memcpy(&baseId, b + 0x20, 4);
-              memcpy(&mapType, b + 0x24, 4);
-              
-              SDL_Log("MAP DETECTED: %-20s | BaseID: %-2u | Type: %-6u", 
-                      key.c_str(), baseId, mapType);
-              mapCount++;
-              free(data);
-          }
+  for (auto const &[key, val] : resource_map) {
+    if (key.length() > 4 && key.substr(key.length() - 4) == ".zoo") {
+      int size = 0;
+      // Read header from ZTD
+      void *data = ZtdFile::getFileContent(val, key, &size);
+      if (data && size > 0x28) {
+        uint8_t *b = (uint8_t *)data;
+        uint32_t baseId = 0;
+        uint32_t mapType = 0;
+        memcpy(&baseId, b + 0x20, 4);
+        memcpy(&mapType, b + 0x24, 4);
+
+        SDL_Log("MAP DETECTED: %-20s | BaseID: %-2u | Type: %-6u", key.c_str(),
+                baseId, mapType);
+        mapCount++;
+        free(data);
       }
+    }
   }
   SDL_Log("Total Maps Found in ZTDs: %d", mapCount);
   SDL_Log("========================================");
   // ------------------------------------
-
 }
 
 void ResourceManager::load_string_map(std::atomic<float> *progress,
@@ -601,11 +627,18 @@ Animation *ResourceManager::getAnimation(const std::string &name_raw) {
   std::string name = fixDoubleName(name_raw);
   std::string loc = getResourceLocation(name);
 
-  SDL_Log("getAnimation: name_raw='%s' -> name='%s' loc='%s'", name_raw.c_str(),
-          name.c_str(), loc.c_str());
+  // [DEBUG] Detailed animation loading trace
+  bool is_terrain = (name_raw.find("terrain/") != std::string::npos);
+  if (is_terrain) {
+    SDL_Log("[TERRAIN] getAnimation: name_raw='%s' -> fixed='%s' loc='%s'",
+            name_raw.c_str(), name.c_str(), loc.c_str());
+  }
+
+  // NOTE: pc-sync override system disabled - use original game assets only
 
   if (!loc.empty()) {
     std::string actual_key = findActualResourceKey(name);
+
     SDL_Log("getAnimation: trying actual_key='%s'", actual_key.c_str());
     Animation *a = AniFile::getAnimation(&pallet_manager, loc, actual_key);
     if (a)
@@ -614,23 +647,41 @@ Animation *ResourceManager::getAnimation(const std::string &name_raw) {
 
   std::string name_ani = name + ".ani";
   loc = getResourceLocation(name_ani);
-  SDL_Log("getAnimation: trying name_ani='%s' loc='%s'", name_ani.c_str(),
-          loc.c_str());
+  if (is_terrain) {
+    SDL_Log("[TERRAIN] trying name_ani='%s' loc='%s'", name_ani.c_str(),
+            loc.c_str());
+  }
   if (!loc.empty()) {
     Animation *a = AniFile::getAnimation(&pallet_manager, loc, name_ani);
-    if (a)
+    if (a) {
+      if (is_terrain)
+        SDL_Log("[TERRAIN] SUCCESS with name_ani!");
       return a;
+    }
   }
 
   std::string dir_ani =
       name + "/" + name.substr(name.find_last_of('/') + 1) + ".ani";
   loc = getResourceLocation(dir_ani);
-  SDL_Log("getAnimation: trying dir_ani='%s' loc='%s'", dir_ani.c_str(),
-          loc.c_str());
+  if (is_terrain) {
+    SDL_Log("[TERRAIN] trying dir_ani='%s' loc='%s'", dir_ani.c_str(),
+            loc.c_str());
+  }
   if (!loc.empty()) {
     Animation *a = AniFile::getAnimation(&pallet_manager, loc, dir_ani);
-    if (a)
+    if (a) {
+      if (is_terrain)
+        SDL_Log("[TERRAIN] SUCCESS with dir_ani!");
       return a;
+    } else {
+      if (is_terrain)
+        SDL_Log(
+            "[TERRAIN] AniFile::getAnimation returned nullptr for dir_ani!");
+    }
+  }
+
+  if (is_terrain) {
+    SDL_Log("[TERRAIN] FAILED to load animation for '%s'", name_raw.c_str());
   }
 
   return nullptr;
@@ -672,8 +723,12 @@ SDL_Texture *ResourceManager::getLoadTexture(SDL_Renderer *r) {
 
 SDL_Texture *ResourceManager::getStringTexture(SDL_Renderer *r, const int f,
                                                const std::string &s,
-                                               SDL_Color c) {
-  return font_manager.getStringTexture(r, f, s, c);
+                                               SDL_Color c, int fontSize) {
+  return font_manager.getStringTexture(r, f, s, c, fontSize);
+}
+
+int ResourceManager::getFontLineHeight(int font, int fontSize) {
+  return font_manager.getLineHeight(font, fontSize);
 }
 
 std::string ResourceManager::getString(uint32_t id) {

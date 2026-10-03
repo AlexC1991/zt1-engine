@@ -139,6 +139,12 @@ void DiagnosticUtilityData::draw(SDL_Renderer* renderer) {
     // Ensure we have renderer info
     if (renderer_info == "Unknown") updateSystemStats(renderer);
 
+    // Resolution follows the window (it can be resized)
+    int out_w, out_h;
+    if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0) {
+        resolution_info = std::to_string(out_w) + "x" + std::to_string(out_h);
+    }
+
     // RESET VIEWPORT (Fixes "Invisible Box" bug)
     SDL_RenderSetScale(renderer, 1.0f, 1.0f);
     SDL_RenderSetViewport(renderer, NULL);

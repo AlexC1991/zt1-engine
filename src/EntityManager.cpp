@@ -1,10 +1,17 @@
 #include "EntityManager.hpp"
-#include "MemoryTracker.hpp"
-#include <algorithm>
-#include <SDL.h>
+#include "CompassDirection.hpp"
+#include <SDL2/SDL.h>
+#include <cmath>
 
-EntityManager::EntityManager() {
-    ZT_MEMORY_CONTEXT(MemoryOwner::World);
+// ============================================================================
+// ENTITY MANAGER IMPLEMENTATION
+// ============================================================================
+// Manages all dynamic entities following original ZT1 architecture
+// Tracks entity positions on tiles for spatial queries
+// Separates simulation (update) from rendering (draw)
+// ============================================================================
+
+EntityManager::EntityManager() : nextId(1) {
 }
 
 EntityManager::~EntityManager() {
@@ -12,206 +19,171 @@ EntityManager::~EntityManager() {
 }
 
 void EntityManager::loadFromZooReader(const ZooReader& reader) {
-    ZT_MEMORY_CONTEXT(MemoryOwner::World);
+    // TODO: Parse entity data from .zoo file
+    // For now, this is a placeholder
+    SDL_Log("[EntityManager] Loading entities from map...");
 
-    clear();
+    // Future: Parse entity placement from zoo file header/data
+    // Entities stored in zoo file contain:
+    //   - Type ID
+    //   - Position (x, y, elevation)
+    //   - Initial state
 
-    int width = reader.getMapWidth();
-    int height = reader.getMapHeight();
+    SDL_Log("[EntityManager] Entities loaded");
+}
 
-    SDL_Log("EntityManager: Scanning %dx%d tiles for entities...", width, height);
+int EntityManager::addEntity(const Entity& entity) {
+    Entity newEntity = entity;
+    newEntity.id = nextId++;
 
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            const ZooReader::ZooTile* tile = reader.getTile(x, y);
-            if (tile) {
-                parseEntityFromTile(*tile, x, y);
-            }
+    entities.push_back(newEntity);
+    updateSpatialHash(entities.back());
+
+    SDL_Log("[EntityManager] Added entity ID %d at (%.1f, %.1f)", newEntity.id, newEntity.x, newEntity.y);
+    return newEntity.id;
+}
+
+void EntityManager::removeEntity(int id) {
+    for (auto it = entities.begin(); it != entities.end(); ++it) {
+        if (it->id == id) {
+            // Remove from spatial hash
+            int tileX = static_cast<int>(it->x);
+            int tileY = static_cast<int>(it->y);
+            int key = packTileCoords(tileX, tileY);
+
+            auto& entitiesAtTile = tileEntityMap[key];
+            entitiesAtTile.erase(
+                std::remove(entitiesAtTile.begin(), entitiesAtTile.end(), id),
+                entitiesAtTile.end()
+            );
+
+            // Remove entity
+            entities.erase(it);
+            SDL_Log("[EntityManager] Removed entity ID %d", id);
+            return;
         }
     }
-
-    SDL_Log("EntityManager: Loaded %d animals, %d guests, %d objects",
-            animalCount, guestCount, objectCount);
 }
 
-void EntityManager::parseEntityFromTile(const ZooReader::ZooTile& tile, int x, int y) {
-    // Zoo Tycoon tile data format (8 bytes after terrain/elevation):
-    // The exact format is reverse-engineered and may vary by version.
-    //
-    // Typical structure based on Zoo Tycoon modding community:
-    // Byte 0-1: Entity type/ID (uint16_t) - 0 = no entity
-    // Byte 2: Entity flags (walkable, water, etc.)
-    // Byte 3: Entity sub-type or state
-    // Byte 4-5: Additional data (health, age, etc.)
-    // Byte 6-7: Reserved/padding
-    //
-    // Note: This is speculative and may need adjustment based on actual file analysis
-
-    uint16_t entityWord = tile.data[0] | (tile.data[1] << 8);
-    uint8_t flags = tile.data[2];
-    uint8_t subType = tile.data[3];
-
-    // Skip if no entity data
-    if (entityWord == 0) return;
-
-    // Entity type encoding (speculative):
-    // 0x0001-0x00FF: Animals (species ID)
-    // 0x0100-0x01FF: Objects/Scenery
-    // 0x0200-0x02FF: Buildings
-    // 0x0300-0x03FF: Fences
-    // 0x0400-0x04FF: Paths
-    // 0x1000+: Special entities (guests spawn from entrance, etc.)
-
-    if (entityWord >= 1 && entityWord <= 255) {
-        // Potential animal
-        // Map entity word to species (this mapping is speculative)
-        AnimalSpecies species = static_cast<AnimalSpecies>(entityWord);
-
-        // Only create if it's a known species
-        if (entityWord <= static_cast<uint16_t>(MAX_SPECIES)) {
-            auto animal = std::make_unique<Animal>(species);
-            animal->tileX = x;
-            animal->tileY = y;
-            animal->elevation = tile.elevation;
-
-            // Parse additional data
-            animal->isMale = (flags & 0x01) != 0;
-            animal->health = std::min(100, static_cast<int>(tile.data[4]));
-
-            entities.push_back(std::move(animal));
-            animalCount++;
-        }
-    }
-    else if (entityWord >= 0x0100 && entityWord <= 0x01FF) {
-        // Object/Scenery
-        ObjectType objType = static_cast<ObjectType>(entityWord - 0x0100);
-
-        auto obj = std::make_unique<SceneryObject>(objType);
-        obj->tileX = x;
-        obj->tileY = y;
-        obj->elevation = tile.elevation;
-
-        entities.push_back(std::move(obj));
-        objectCount++;
-    }
-    else if (entityWord >= 0x0200 && entityWord <= 0x02FF) {
-        // Building
-        ObjectType objType = static_cast<ObjectType>(entityWord - 0x0200 + 100); // Buildings start at 100
-
-        auto obj = std::make_unique<SceneryObject>(objType);
-        obj->tileX = x;
-        obj->tileY = y;
-        obj->elevation = tile.elevation;
-
-        entities.push_back(std::move(obj));
-        objectCount++;
-    }
-
-    // Note: Guests and staff are typically spawned dynamically, not stored in map data
-}
-
-void EntityManager::addAnimal(AnimalSpecies species, int tileX, int tileY) {
-    ZT_MEMORY_CONTEXT(MemoryOwner::World);
-
-    auto animal = std::make_unique<Animal>(species);
-    animal->tileX = tileX;
-    animal->tileY = tileY;
-
-    entities.push_back(std::move(animal));
-    animalCount++;
-}
-
-void EntityManager::addGuest(int tileX, int tileY) {
-    ZT_MEMORY_CONTEXT(MemoryOwner::World);
-
-    auto guest = std::make_unique<Guest>();
-    guest->tileX = tileX;
-    guest->tileY = tileY;
-
-    entities.push_back(std::move(guest));
-    guestCount++;
-}
-
-void EntityManager::addStaff(Staff::StaffType type, int tileX, int tileY) {
-    ZT_MEMORY_CONTEXT(MemoryOwner::World);
-
-    auto staff = std::make_unique<Staff>();
-    staff->staffType = type;
-    staff->tileX = tileX;
-    staff->tileY = tileY;
-
-    entities.push_back(std::move(staff));
-}
-
-void EntityManager::addObject(ObjectType objType, int tileX, int tileY) {
-    ZT_MEMORY_CONTEXT(MemoryOwner::World);
-
-    auto obj = std::make_unique<SceneryObject>(objType);
-    obj->tileX = tileX;
-    obj->tileY = tileY;
-
-    entities.push_back(std::move(obj));
-    objectCount++;
-}
-
-void EntityManager::update(float deltaTime) {
+Entity* EntityManager::getEntity(int id) {
     for (auto& entity : entities) {
-        if (entity && entity->isActive) {
-            entity->update(deltaTime);
+        if (entity.id == id) {
+            return &entity;
         }
     }
+    return nullptr;
 }
 
-void EntityManager::sortByDepth() {
-    std::sort(entities.begin(), entities.end(),
-        [](const std::unique_ptr<Entity>& a, const std::unique_ptr<Entity>& b) {
-            return a->getDepth() < b->getDepth();
-        });
-}
-
-void EntityManager::draw(SDL_Renderer* renderer, int camX, int camY, int startX, int startY) {
-    // Sort entities by depth before drawing
-    sortByDepth();
-
-    const int TILE_WIDTH = 64;
-    const int TILE_HEIGHT = 32;
-
-    for (auto& entity : entities) {
-        if (!entity || !entity->isVisible) continue;
-
-        // Calculate screen position using same isometric projection as terrain
-        float worldX = entity->tileX + entity->subX;
-        float worldY = entity->tileY + entity->subY;
-
-        int screenX = static_cast<int>((worldX - worldY) * (TILE_WIDTH / 2)) + camX + startX;
-        int screenY = static_cast<int>((worldX + worldY) * (TILE_HEIGHT / 2)) + camY + startY;
-
-        // Culling - match actual screen resolution (1280x720)
-        if (screenX < -TILE_WIDTH || screenX > 1280 || screenY < -TILE_HEIGHT || screenY > 720) {
-            continue;
-        }
-
-        entity->draw(renderer, screenX, screenY);
-    }
-}
-
-std::vector<Entity*> EntityManager::getEntitiesAt(int tileX, int tileY) {
+std::vector<Entity*> EntityManager::getEntitiesAtTile(int tileX, int tileY) {
     std::vector<Entity*> result;
 
-    for (auto& entity : entities) {
-        if (entity && entity->tileX == tileX && entity->tileY == tileY) {
-            result.push_back(entity.get());
+    int key = packTileCoords(tileX, tileY);
+    auto it = tileEntityMap.find(key);
+
+    if (it != tileEntityMap.end()) {
+        for (int entityId : it->second) {
+            Entity* entity = getEntity(entityId);
+            if (entity) {
+                result.push_back(entity);
+            }
         }
     }
 
     return result;
 }
 
-void EntityManager::clear() {
-    ZT_MEMORY_CONTEXT(MemoryOwner::World);
+void EntityManager::updateSpatialHash(Entity& entity) {
+    int tileX = static_cast<int>(entity.x);
+    int tileY = static_cast<int>(entity.y);
+    int key = packTileCoords(tileX, tileY);
 
+    // Check if already in this tile
+    auto& entitiesAtTile = tileEntityMap[key];
+    bool found = false;
+    for (int id : entitiesAtTile) {
+        if (id == entity.id) {
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        entitiesAtTile.push_back(entity.id);
+    }
+}
+
+void EntityManager::update(float deltaTime) {
+    // Simulate all entities
+    for (auto& entity : entities) {
+        // Simple movement update
+        entity.x += entity.velocityX * deltaTime;
+        entity.y += entity.velocityY * deltaTime;
+
+        // Update spatial hash if entity moved to new tile
+        updateSpatialHash(entity);
+
+        // Simple AI simulation
+        entity.hunger += 0.01f * deltaTime;
+        entity.thirst += 0.015f * deltaTime;
+
+        // Clamp values
+        if (entity.hunger > 1.0f) entity.hunger = 1.0f;
+        if (entity.thirst > 1.0f) entity.thirst = 1.0f;
+
+        // State transitions (basic AI)
+        if (entity.hunger > 0.7f && entity.state != EntityState::Eating) {
+            entity.state = EntityState::Eating;
+        } else if (entity.thirst > 0.7f && entity.state != EntityState::Drinking) {
+            entity.state = EntityState::Drinking;
+        } else if (std::abs(entity.velocityX) > 0.01f || std::abs(entity.velocityY) > 0.01f) {
+            entity.state = EntityState::Walking;
+        } else {
+            entity.state = EntityState::Idle;
+        }
+    }
+}
+
+void EntityManager::draw(SDL_Renderer* renderer, int camX, int camY, int startX, int startY) {
+    // Render all entities
+    // Note: This should eventually be moved to a separate EntityRenderer class
+    // for true separation of concerns
+
+    for (auto& entity : entities) {
+        if (!entity.currentAnimation) continue;
+
+        // Convert entity world position to screen position
+        // Using same isometric conversion as terrain
+        const int TILE_WIDTH = 64;
+        const int TILE_HEIGHT = 32;
+
+        int isoX = (static_cast<int>(entity.x) - static_cast<int>(entity.y)) * (TILE_WIDTH / 2);
+        int isoY = (static_cast<int>(entity.x) + static_cast<int>(entity.y)) * (TILE_HEIGHT / 2);
+
+        int screenX = isoX + camX + startX;
+        int screenY = isoY + camY + startY - (entity.elevation * 16);
+
+        // Draw entity sprite
+        CompassDirection dir = CompassDirection::S; // Default south
+
+        // Convert facing direction to CompassDirection
+        switch (entity.facingDirection) {
+            case 0: dir = CompassDirection::N; break;
+            case 1: dir = CompassDirection::NE; break;
+            case 2: dir = CompassDirection::E; break;
+            case 3: dir = CompassDirection::SE; break;
+            case 4: dir = CompassDirection::S; break;
+            case 5: dir = CompassDirection::SW; break;
+            case 6: dir = CompassDirection::W; break;
+            case 7: dir = CompassDirection::NW; break;
+        }
+
+        entity.currentAnimation->draw(renderer, screenX, screenY, dir);
+    }
+}
+
+void EntityManager::clear() {
     entities.clear();
-    animalCount = 0;
-    guestCount = 0;
-    objectCount = 0;
+    tileEntityMap.clear();
+    nextId = 1;
+    SDL_Log("[EntityManager] Cleared all entities");
 }

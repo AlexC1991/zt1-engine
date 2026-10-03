@@ -117,6 +117,16 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
 
   // 1. Calculate Container
   dest_rect = this->getRect(this->ini_reader->getSection(this->name), layout_rect);
+
+  // getRect shifts justified elements by their width (what buttons need);
+  // text justifies itself inside its box below, so undo that shift. Without
+  // this, centred text sits half a box too far right and right-justified
+  // text (Starting Cash) a whole box, behind the Back button.
+  const std::string justify = this->ini_reader->get(this->name, "justify");
+  if (justify == "center")
+    dest_rect.x -= dest_rect.w / 2;
+  else if (justify == "right")
+    dest_rect.x -= dest_rect.w;
   
   bool is_multiline = (this->cached_lines.size() > 1);
 
@@ -156,10 +166,11 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
           continue; 
       }
 
-      SDL_Texture* t = resource_manager->getStringTexture(renderer, font, line, color);
+      SDL_Texture* t = resource_manager->getStringTexture(
+          renderer, font, line, color, ini_reader->getInt(name, "fontsize", 0));
       if (t) {
           int w, h;
-          SDL_QueryTexture(t, NULL, NULL, &w, &h);
+          resource_manager->getTextSize(t, &w, &h);
           
           int draw_x = start_x;
           if (!is_multiline) {

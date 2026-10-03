@@ -17,6 +17,7 @@ class Animation {
 public:
   Animation() = default;
   Animation(std::unordered_map<std::string, AnimationData *> *data);
+  explicit Animation(SDL_Surface *single_frame);
   ~Animation();
 
   // Rule of Five: Delete Copy, Implement Move

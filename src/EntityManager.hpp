@@ -1,59 +1,111 @@
-#include "Enums.hpp"
 #ifndef ENTITY_MANAGER_HPP
 #define ENTITY_MANAGER_HPP
 
 #include <vector>
-#include <memory>
+#include <unordered_map>
+#include <string>
 #include <SDL2/SDL.h>
-#include "Entity.hpp"
 #include "ZooReader.hpp"
+#include "SpriteManager.hpp"
+
+// ============================================================================
+// ENTITY MANAGER - Original ZT1 Engine Architecture
+// ============================================================================
+// PURPOSE: Track all dynamic entities in the world (animals, guests, staff)
+// SEPARATION: Entity data storage and simulation, NOT rendering
+// SPATIAL TRACKING: Knows which entities are on which tiles
+// ============================================================================
+
+enum class EntityType {
+    Animal,
+    Guest,
+    Staff,
+    Scenery
+};
+
+enum class EntityState {
+    Idle,
+    Walking,
+    Eating,
+    Drinking,
+    Sleeping
+};
+
+struct Entity {
+    int id;                          // Unique entity ID
+    EntityType type;                 // What kind of entity
+    EntityState state;               // Current animation state
+
+    // Position
+    float x, y;                      // World coordinates (can be fractional)
+    int elevation;                   // Height level
+
+    // Visual
+    std::string animationPath;       // Path to animation (e.g., "animals/elephant/idle.ani")
+    Animation* currentAnimation;     // Cached animation pointer
+    int facingDirection;             // 0-7 (N, NE, E, SE, S, SW, W, NW)
+
+    // Simulation
+    float hunger;                    // 0.0 - 1.0
+    float thirst;                    // 0.0 - 1.0
+    float happiness;                 // 0.0 - 1.0
+
+    // Movement
+    float velocityX, velocityY;
+
+    Entity()
+        : id(0), type(EntityType::Animal), state(EntityState::Idle),
+          x(0), y(0), elevation(0),
+          currentAnimation(nullptr), facingDirection(0),
+          hunger(0.5f), thirst(0.5f), happiness(0.8f),
+          velocityX(0), velocityY(0) {}
+};
 
 class EntityManager {
 public:
     EntityManager();
     ~EntityManager();
 
-    // Initialize from ZooReader tile data
+    // Load entities from .zoo file
     void loadFromZooReader(const ZooReader& reader);
 
-    // Add entities manually
-    void addAnimal(AnimalSpecies species, int tileX, int tileY);
-    void addGuest(int tileX, int tileY);
-    void addStaff(Staff::StaffType type, int tileX, int tileY);
-    void addObject(ObjectType objType, int tileX, int tileY);
-
-    // Update all entities
+    // Update all entities (simulation)
     void update(float deltaTime);
 
-    // Draw all entities (sorted by depth)
+    // Render all entities (reads entity data, draws sprites)
     void draw(SDL_Renderer* renderer, int camX, int camY, int startX, int startY);
 
-    // Get entities at a specific tile
-    std::vector<Entity*> getEntitiesAt(int tileX, int tileY);
+    // Add/remove entities
+    int addEntity(const Entity& entity);
+    void removeEntity(int id);
+
+    // Get entity by ID
+    Entity* getEntity(int id);
+
+    // Get all entities at tile position
+    std::vector<Entity*> getEntitiesAtTile(int tileX, int tileY);
 
     // Get all entities
-    const std::vector<std::unique_ptr<Entity>>& getEntities() const { return entities; }
+    const std::vector<Entity>& getAllEntities() const { return entities; }
 
     // Clear all entities
     void clear();
 
-    // Stats
-    int getAnimalCount() const { return animalCount; }
-    int getGuestCount() const { return guestCount; }
-    int getObjectCount() const { return objectCount; }
-
 private:
-    std::vector<std::unique_ptr<Entity>> entities;
+    std::vector<Entity> entities;
+    int nextId;
 
-    int animalCount = 0;
-    int guestCount = 0;
-    int objectCount = 0;
+    // Spatial hash: tile position -> entity IDs
+    // Key: (y << 16) | x  (pack tile coords into single int)
+    std::unordered_map<int, std::vector<int>> tileEntityMap;
 
-    // Sort entities by depth for proper rendering order
-    void sortByDepth();
+    // Update spatial hash for an entity
+    void updateSpatialHash(Entity& entity);
 
-    // Parse entity data from ZooTile
-    void parseEntityFromTile(const ZooReader::ZooTile& tile, int x, int y);
+    // Helper: Pack tile coords
+    int packTileCoords(int x, int y) const {
+        return (y << 16) | (x & 0xFFFF);
+    }
 };
 
 #endif // ENTITY_MANAGER_HPP

@@ -4,6 +4,9 @@
 #include <SDL2/SDL.h>
 #include <string>
 
+// Diagnostics overlay visibility (F3)
+extern bool g_showDiagnostics;
+
 class Window {
 public:
     SDL_Window *window;
