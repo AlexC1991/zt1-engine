@@ -236,6 +236,13 @@ void UiGameScreen::setupBuyPanels() {
   for (BuyPanel &p : this->buyPanels) {
     BuyPanel *self = &p;
     p.region->onSelect = [this, self](int index) { this->showItem(*self, index); };
+    // Right turns it clockwise (SE, SW, NW, NE), left back
+    if (UiButton *left = dynamic_cast<UiButton *>(
+            p.rotateLeft ? p.layout->getElementById(p.rotateLeft) : nullptr))
+      left->onClick = [this] { this->rotateItems(-1); };
+    if (UiButton *right = dynamic_cast<UiButton *>(
+            p.rotateRight ? p.layout->getElementById(p.rotateRight) : nullptr))
+      right->onClick = [this] { this->rotateItems(+1); };
     this->refreshBuyPanel(p);
   }
 }
@@ -261,10 +268,25 @@ void UiGameScreen::refreshBuyPanel(BuyPanel &p) {
       p.items.push_back(item);
   std::vector<UiScrollingRegion::Item> cells;
   for (const CatalogItem *item : p.items)
-    cells.push_back({item->icon, item->file});
+    cells.push_back({this->facingIcon(item), item->file});
   p.region->setItems(cells);
   p.region->setSelected(p.items.empty() ? -1 : 0);
   this->showItem(p, p.items.empty() ? -1 : 0);
+}
+
+// An item's icon for the current facing (items with fewer icons than
+// facings, like the animals, keep theirs)
+const std::string &UiGameScreen::facingIcon(const CatalogItem *item) const {
+  if (item->icons.empty())
+    return item->icon;
+  return item->icons[this->facing % item->icons.size()];
+}
+
+void UiGameScreen::rotateItems(int step) {
+  this->facing = ((this->facing + step) % 4 + 4) % 4;
+  for (BuyPanel &p : this->buyPanels)
+    for (int i = 0; i < (int)p.items.size(); i++)
+      p.region->setItemIcon(i, this->facingIcon(p.items[i]));
 }
 
 void UiGameScreen::showItem(BuyPanel &p, int index) {

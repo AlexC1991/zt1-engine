@@ -191,6 +191,18 @@ void ItemCatalog::load(ResourceManager *rm) {
       return std::string();
     };
     item.icon = value("icon", "icon");
+    for (const std::string &p : prefixes) {
+      auto section = ai.entries.find(p + "icon");
+      if (section == ai.entries.end())
+        continue;
+      for (const auto &kv : section->second)
+        if (kv.first == "icon")
+          item.icons.push_back(kv.second);
+      if (!item.icons.empty())
+        break;
+    }
+    if (item.icons.empty())
+      item.icons.push_back(item.icon);
     // Items whose icon art isn't in the game data can't be shown
     if (item.icon.empty() ||
         !rm->hasResource(Utils::string_to_lower(item.icon) + ".ani"))

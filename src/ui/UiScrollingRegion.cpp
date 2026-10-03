@@ -59,6 +59,15 @@ void UiScrollingRegion::setItems(const std::vector<Item> &items) {
   this->first_row = 0;
 }
 
+void UiScrollingRegion::setItemIcon(int index, const std::string &icon) {
+  if (index < 0 || index >= (int)this->items.size() ||
+      this->items[index].icon == icon)
+    return;
+  this->items[index].icon = icon;
+  delete this->icons[index]; // loaded again as drawn
+  this->icons[index] = nullptr;
+}
+
 void UiScrollingRegion::setSelected(int index) {
   this->selected = (index >= 0 && index < (int)this->items.size()) ? index : -1;
 }
