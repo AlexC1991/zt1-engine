@@ -27,7 +27,10 @@ public:
   void load_all(std::atomic<float> *progress, std::atomic<bool> *is_done);
 
   void *getFileContent(const std::string &file_name, int *size);
-  SDL_Texture *getTexture(SDL_Renderer *renderer, const std::string &file_name);
+  // magnified: art drawn scaled up (menus, HUD), which gets art upscaling
+  // and HD pack replacements; world art passes false
+  SDL_Texture *getTexture(SDL_Renderer *renderer, const std::string &file_name,
+                          bool magnified = true);
 
   // NEW: ZT1 raw preview decode (N + .pal)
   // One frame of a ZT1 sprite file (the per-frame graphics inside an

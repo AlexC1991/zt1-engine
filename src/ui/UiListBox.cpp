@@ -1,4 +1,5 @@
 #include "UiListBox.hpp"
+#include "../RenderSettings.hpp"
 #include <algorithm>
 
 UiListBox::UiListBox(IniReader* ini_reader, ResourceManager* resource_manager, std::string name) {
@@ -251,6 +252,7 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
                 18, 18
             };
             SDL_SetTextureBlendMode(item.iconTex, SDL_BLENDMODE_BLEND);
+            RenderSettings::applyArtScaleMode(item.iconTex);
             SDL_RenderCopy(renderer, item.iconTex, nullptr, &iconRect);
             text_x_offset = 24;
         }

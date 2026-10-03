@@ -1,6 +1,7 @@
 #include "Config.hpp"
 
 #include <SDL2/SDL.h>
+#include <cstdlib>
 
 #include "Utils.hpp"
 
@@ -85,4 +86,17 @@ SDL_Rect Config::getProgressPosition() {
 }
 float Config::getUiScale() {
   return std::stof(reader->get("user", "uiScale", "0"));
+}
+
+std::string Config::getArtUpscale() {
+  return reader->get("user", "artupscale", "fsr");
+}
+
+int Config::getArtUpscaleFactor() {
+  return reader->getInt("user", "artupscalefactor", 0);
+}
+
+float Config::getArtSharpness() {
+  return static_cast<float>(
+      std::atof(reader->get("user", "artsharpness", "0.2").c_str()));
 }

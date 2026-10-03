@@ -16,6 +16,11 @@ public:
   std::vector<std::string> getResourcePaths();
   // [user] uiScale: menu scale (0 or missing = fit the window)
   float getUiScale();
+  // [user] artupscale (fsr default|mmpx|off), artupscalefactor (0 = from the
+  // desktop size), artsharpness (FSR sharpening in stops, 0 = sharpest)
+  std::string getArtUpscale();
+  int getArtUpscaleFactor();
+  float getArtSharpness();
   std::string getMenuMusic();
   bool getPlayMenuMusic();
   int getScreenWidth();

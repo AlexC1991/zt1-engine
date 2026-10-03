@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "ArtScaler.hpp"
 #include "Expansion.hpp"
 #include "Utils.hpp"
 // NOTE: PngLoader removed - using original game assets only
@@ -364,8 +365,26 @@ void *ResourceManager::getFileContent(const std::string &name_raw, int *size) {
   return ZtdFile::getFileContent(loc, actual_key, size);
 }
 
+// Texture for magnified art: an HD pack's replacement when there is one,
+// otherwise the art upscaled per the setting
+static SDL_Texture *magnifiedTexture(SDL_Renderer *r, SDL_Surface *s,
+                                     const std::string &name) {
+  std::string stem = name;
+  size_t slash = stem.find_last_of('/'), dot = stem.find_last_of('.');
+  if (dot != std::string::npos && (slash == std::string::npos || dot > slash))
+    stem = stem.substr(0, dot);
+  if (SDL_Surface *hd = ArtScaler::loadHdSurface(stem)) {
+    SDL_Texture *t = ArtScaler::createHdTexture(r, hd, s->w, s->h, stem);
+    SDL_FreeSurface(hd);
+    if (t)
+      return t;
+  }
+  return ArtScaler::createTexture(r, s);
+}
+
 SDL_Texture *ResourceManager::getTexture(SDL_Renderer *r,
-                                         const std::string &name_raw) {
+                                         const std::string &name_raw,
+                                         bool magnified) {
   std::string name = fixDoubleName(name_raw);
   std::string actual_key = findActualResourceKey(name);
   std::string loc = getResourceLocation(name);
@@ -390,7 +409,8 @@ SDL_Texture *ResourceManager::getTexture(SDL_Renderer *r,
   if (!s)
     return nullptr;
 
-  SDL_Texture *t = SDL_CreateTextureFromSurface(r, s);
+  SDL_Texture *t = magnified ? magnifiedTexture(r, s, name)
+                             : SDL_CreateTextureFromSurface(r, s);
   SDL_FreeSurface(s);
   return t;
 }
@@ -652,7 +672,7 @@ SDL_Texture *ResourceManager::getZt1Texture(SDL_Renderer *renderer,
     return nullptr;
   }
 
-  SDL_Texture *t = SDL_CreateTextureFromSurface(renderer, s);
+  SDL_Texture *t = magnifiedTexture(renderer, s, raw);
   SDL_FreeSurface(s);
   return t;
 }
@@ -703,6 +723,20 @@ Pallet *ResourceManager::getPallet(const std::string &name_raw) {
   return pallet_manager.getPallet(name);
 }
 
+// UI animations are drawn magnified: they get art upscaling, and their
+// frames can come from an HD pack in hd/<folder of the .ani>/
+static Animation *withArtOptions(Animation *a, const std::string &name,
+                                 const std::string &ani_key) {
+  std::string lower = name;
+  std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+  if (lower.rfind("ui/", 0) == 0) {
+    size_t slash = ani_key.find_last_of('/');
+    std::string dir = slash == std::string::npos ? "" : ani_key.substr(0, slash);
+    a->setArtOptions(true, dir);
+  }
+  return a;
+}
+
 Animation *ResourceManager::getAnimation(const std::string &name_raw) {
   std::string name = fixDoubleName(name_raw);
   std::string loc = getResourceLocation(name);
@@ -722,7 +756,7 @@ Animation *ResourceManager::getAnimation(const std::string &name_raw) {
     SDL_Log("getAnimation: trying actual_key='%s'", actual_key.c_str());
     Animation *a = AniFile::getAnimation(&pallet_manager, loc, actual_key);
     if (a)
-      return a;
+      return withArtOptions(a, name_raw, actual_key);
   }
 
   std::string name_ani = name + ".ani";
@@ -736,7 +770,7 @@ Animation *ResourceManager::getAnimation(const std::string &name_raw) {
     if (a) {
       if (is_terrain)
         SDL_Log("[TERRAIN] SUCCESS with name_ani!");
-      return a;
+      return withArtOptions(a, name_raw, name_ani);
     }
   }
 
@@ -752,7 +786,7 @@ Animation *ResourceManager::getAnimation(const std::string &name_raw) {
     if (a) {
       if (is_terrain)
         SDL_Log("[TERRAIN] SUCCESS with dir_ani!");
-      return a;
+      return withArtOptions(a, name_raw, dir_ani);
     } else {
       if (is_terrain)
         SDL_Log(
@@ -793,7 +827,7 @@ SDL_Texture *ResourceManager::getLoadTexture(SDL_Renderer *r) {
     SDL_Surface *s = pe.getLoadScreenSurface(id);
     if (!s)
       return nullptr;
-    SDL_Texture *t = SDL_CreateTextureFromSurface(r, s);
+    SDL_Texture *t = ArtScaler::createTexture(r, s);
     SDL_FreeSurface(s);
     return t;
   } catch (...) {

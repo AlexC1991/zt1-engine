@@ -177,7 +177,7 @@ void UiImage::ensureLoaded(SDL_Renderer *renderer) {
 bool UiImage::naturalSize(int *w, int *h) {
   *w = *h = 0;
   if (this->image)
-    SDL_QueryTexture(this->image, nullptr, nullptr, w, h);
+    ArtScaler::querySize(this->image, w, h);
   else if (this->animation)
     this->animation->queryTexture(CompassDirection::N, w, h);
   return *w > 0 && *h > 0;
@@ -214,7 +214,8 @@ void UiImage::drawTiled(SDL_Renderer *renderer, const SDL_Rect &area) {
       int ch = std::min(h, area.y + area.h - y);
       SDL_Rect r = {x, y, cw, ch};
       if (this->image) {
-        SDL_Rect src = {0, 0, cw, ch};
+        SDL_Rect src = ArtScaler::toTexture(this->image, {0, 0, cw, ch});
+        RenderSettings::applyArtScaleMode(this->image);
         SDL_RenderCopy(renderer, this->image, &src, &r);
       } else if (cw == w && ch == h) {
         this->animation->draw(renderer, &r, CompassDirection::N);
@@ -268,7 +269,7 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
         this->image != nullptr) {
       // Get the original texture dimensions
       int texW, texH;
-      SDL_QueryTexture(this->image, nullptr, nullptr, &texW, &texH);
+      ArtScaler::querySize(this->image, &texW, &texH);
 
       // Use specified dimensions or fall back to texture dimensions
       int finalW = (LOCK_WIDTH > 0) ? LOCK_WIDTH : texW;
@@ -297,7 +298,7 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     if (this->image != nullptr) {
       if (dest_rect.w == 0 || dest_rect.h == 0) {
         int tw, th;
-        SDL_QueryTexture(this->image, nullptr, nullptr, &tw, &th);
+        ArtScaler::querySize(this->image, &tw, &th);
         dest_rect.w = tw;
         dest_rect.h = th;
       }

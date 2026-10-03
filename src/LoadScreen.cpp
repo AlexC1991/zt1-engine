@@ -2,6 +2,8 @@
 
 #include <SDL2/SDL.h>
 
+#include "ArtScaler.hpp"
+
 #include <thread>
 #include <atomic>
 
@@ -14,7 +16,7 @@ void LoadScreen::run(Window * window, Config * config, ResourceManager * resourc
   std::atomic<bool> is_done = false;
   SDL_Color loading_bar_color = config->getProgressColor();
   SDL_Rect background_rect;
-  SDL_QueryTexture(background, NULL, NULL, &background_rect.w, &background_rect.h);
+  ArtScaler::querySize(background, &background_rect.w, &background_rect.h);
   SDL_Rect window_rect;
   SDL_Rect loading_bar_rect = config->getProgressPosition();
 
@@ -31,6 +33,8 @@ void LoadScreen::run(Window * window, Config * config, ResourceManager * resourc
     SDL_GetWindowSize(window->window, &window_rect.w, &window_rect.h);
     background_rect.x = window_rect.w /2 - background_rect.w / 2;
     background_rect.y = window_rect.h /2 - background_rect.h / 2;
+    if (ArtScaler::scaleOf(background) > 1)
+      SDL_SetTextureScaleMode(background, SDL_ScaleModeLinear);
     SDL_RenderCopy(window->renderer, background, NULL, &background_rect);
 
     SDL_Rect loading_bar_draw_rect = loading_bar_rect;
