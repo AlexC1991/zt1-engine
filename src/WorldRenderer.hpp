@@ -79,6 +79,10 @@ public:
   int getDrawDistance() const { return drawDistance; }
 
   // Debug features
+  // Tile grid (the original's Ctrl+G), off by default like the original
+  void toggleGrid() { gridVisible = !gridVisible; }
+  bool isGridVisible() const { return gridVisible; }
+
   void toggleTerrainDebug() { debugTerrainIds = !debugTerrainIds; }
   bool isTerrainDebugEnabled() const { return debugTerrainIds; }
 
@@ -96,6 +100,7 @@ private:
 
   int viewRotation = 0;
   int drawDistance = 0;
+  bool gridVisible = false;
   int shadingMode = 0;
   int mapWidthCache = 0;
   int mapHeightCache = 0;

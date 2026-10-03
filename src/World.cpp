@@ -209,6 +209,13 @@ void World::handleDebugInput(const Uint8 *state) {
     keyTimer = 0;
   }
 
+  // Grid: Ctrl+G, as in the original
+  if (state[SDL_SCANCODE_G] && (SDL_GetModState() & KMOD_CTRL)) {
+    worldRenderer.toggleGrid();
+    SDL_Log("[World] Grid: %s", worldRenderer.isGridVisible() ? "ON" : "OFF");
+    keyTimer = 0;
+  }
+
   // Terrain Debug Mode
   if (state[SDL_SCANCODE_0]) {
     worldRenderer.toggleTerrainDebug();
