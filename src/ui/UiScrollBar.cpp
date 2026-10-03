@@ -65,7 +65,14 @@ UiAction UiScrollBar::handleInputs(std::vector<Input> &inputs) {
       continue;
     int mx = input.position.x, my = input.position.y;
 
-    if (input.event == InputEvent::CURSOR_MOVE) {
+    if (input.event == InputEvent::SCROLL_UP ||
+        input.event == InputEvent::SCROLL_DOWN) {
+      SDL_Rect bar = {up_rect.x, up_rect.y, up_rect.w,
+                      down_rect.y + down_rect.h - up_rect.y};
+      if (inside(bar, mx, my))
+        owner->setScrollPosition(owner->getScrollPosition() +
+                                 (input.event == InputEvent::SCROLL_UP ? -1 : 1));
+    } else if (input.event == InputEvent::CURSOR_MOVE) {
       hover_up = inside(up_rect, mx, my);
       hover_down = inside(down_rect, mx, my);
       if (dragging) {

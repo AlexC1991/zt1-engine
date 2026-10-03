@@ -10,6 +10,7 @@
 class UiButton;
 class UiImage;
 class UiLayout;
+class UiListBox;
 class UiScrollingRegion;
 class UiText;
 struct CatalogItem;
@@ -39,12 +40,27 @@ public:
   UiElement *getElementById(int id);
 
   bool isPanelOpen(int id) const;
+  // Whether a point (layout units) is on an open panel (the wheel scrolls
+  // its lists there rather than zooming the map)
+  bool isOverPanel(int x, int y) const;
   void setPanelOpen(int id, bool open);
   // Opens a panel as its HUD button would (closing the others) and, for a
   // buy panel, picks the tab for a category (empty: leave the tabs)
   void showPanel(int id, const std::string &category);
+  // ESC: opens the game menu (Game Options), or closes it (or a drop-down
+  // list) when open
+  void toggleGameMenu();
+
   // Picks a panel's tab by its button id (e.g. the Terrain Types tab)
   void showTab(int panelId, int buttonId);
+  // The content filter of a panel: drop its list down, or pick a choice
+  // (0 all, 1 Zoo Tycoon, 2 Dinosaur Digs, 3 Marine Mania)
+  void openFilter(int panelId);
+  // The filter list, when it is down: drawn after everything else (its own
+  // art and text passes, so no panel text shows through it)
+  bool hasPopup() const { return this->filter.open; }
+  void drawPopup(SDL_Renderer *renderer, SDL_Rect *layout_rect);
+  void setFilter(int panelId, int choice);
 
 private:
   struct Entry {
@@ -53,6 +69,7 @@ private:
     int layer = 0;
     bool panel = false;
     bool open = false;
+    SDL_Rect rect = {0, 0, 0, 0}; // where it was last drawn
   };
   std::vector<Entry> entries; // in drawing order
   UiLayout *hud = nullptr;
@@ -122,7 +139,31 @@ private:
     UiLayout *panel = nullptr;
     UiButton *researchTab = nullptr, *conservationTab = nullptr;
     int shownBranch = -1; // the category page's branch
+    int shownFilter = -1; // and the content filter it was listed with
+    std::vector<int> listed; // list row -> category
   } research;
+
+  // The content filter: a panel's "All" button (action=1 target=152) drops
+  // down ui/xpac.lyt's list - All, Zoo Tycoon, Dinosaur Digs, Marine Mania -
+  // and the panel lists only that pack's items (by cExpansionID; research
+  // categories by the pack that adds them)
+  struct FilterPopup {
+    UiLayout *layout = nullptr;
+    UiListBox *list = nullptr;
+    bool open = false;
+    int owner = 0; // the panel it dropped down from
+  } filter;
+  std::map<int, int> filterChoice; // panel id -> 0 all, 1..3 a pack
+
+  // An action a button the game handles asked for (the game menu's Main
+  // Menu and Exit Game), returned from the next handleInputs
+  UiAction pendingAction = UiAction::NONE;
+  // Whether an item of a pack (0..2) shows with a panel's filter
+  bool passesFilter(int panelId, int expansion) const {
+    auto it = this->filterChoice.find(panelId);
+    return it == this->filterChoice.end() || it->second == 0 ||
+           it->second - 1 == expansion;
+  }
   void setupResearch();
   void refreshResearch();
 };

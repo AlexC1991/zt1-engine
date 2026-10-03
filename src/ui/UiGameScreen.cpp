@@ -76,6 +76,73 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   this->setupBuyPanels();
   this->setupTerraform();
   this->setupResearch();
+
+  // The game menu's Main Menu and Exit Game (their layout gives them no
+  // action; the game does it)
+  for (UiAction a : {UiAction::GAME_MAIN_MENU, UiAction::GAME_EXIT})
+    if (UiButton *b = dynamic_cast<UiButton *>(
+            this->getElementById(static_cast<int>(a))))
+      b->onClick = [this, a] { this->pendingAction = a; };
+
+  if (IniReader *xpac = resource_manager->getIniReader("ui/xpac.lyt")) {
+    this->filter.layout = new UiLayout(xpac, resource_manager);
+    this->filter.list =
+        dynamic_cast<UiListBox *>(this->filter.layout->getElementById(22900));
+    if (this->filter.list)
+      for (int id = 22900; id <= 22903; id++)
+        this->filter.list->addItem(id);
+  }
+}
+
+void UiGameScreen::toggleGameMenu() {
+  if (this->filter.open) {
+    this->filter.open = false;
+    return;
+  }
+  if (this->isPanelOpen(5)) {
+    this->setPanelOpen(5, false);
+    for (UiButton *b : this->panelButtons)
+      if (b->getActionTarget() == 5)
+        b->setToggledOn(false);
+  } else {
+    this->showPanel(5, "");
+  }
+}
+
+void UiGameScreen::openFilter(int panelId) {
+  if (!this->filter.list)
+    return;
+  this->filter.open = true;
+  this->filter.owner = panelId;
+  // The current choice is highlighted
+  auto it = this->filterChoice.find(panelId);
+  this->filter.list->setSelectedIndex(it == this->filterChoice.end() ? 0
+                                                                     : it->second);
+}
+
+void UiGameScreen::setFilter(int panelId, int choice) {
+  this->filter.open = false;
+  this->filterChoice[panelId] = choice;
+  for (Entry &e : this->entries) {
+    if (!e.panel || e.id != panelId)
+      continue;
+    // The button shows the choice
+    std::function<void(UiElement *)> label = [&](UiElement *el) {
+      if (UiButton *b = dynamic_cast<UiButton *>(el))
+        if (b->getActionType() == 1 && b->getActionTarget() == 152)
+          b->setLabel(this->resource_manager->getString(22900 + choice));
+      for (UiElement *c : el->getChildren())
+        label(c);
+    };
+    label(e.layout);
+  }
+  for (BuyPanel &p : this->buyPanels)
+    if (p.id == panelId) {
+      p.category.clear(); // list again
+      this->refreshBuyPanel(p);
+    }
+  if (panelId == 15)
+    this->refreshResearch();
 }
 
 static std::string formatPrice(int amount) {
@@ -183,10 +250,15 @@ void UiGameScreen::refreshBuyPanel(BuyPanel &p) {
     return;
   p.category = category;
   // The panel's title is the chosen tab's name ("Creatures", "Buildings")
+  auto choice = this->filterChoice.find(p.id);
   for (UiButton *tab : p.tabs)
     if (tab->isToggledOn() && p.title)
-      p.title->setText(this->resource_manager->getString(tab->getHelpId()));
-  p.items = ItemCatalog::get().inCategory(category);
+      p.title->setText(this->resource_manager->getString(tab->getHelpId(
+          choice == this->filterChoice.end() ? 0 : choice->second)));
+  p.items.clear();
+  for (const CatalogItem *item : ItemCatalog::get().inCategory(category))
+    if (this->passesFilter(p.id, item->expansion))
+      p.items.push_back(item);
   std::vector<UiScrollingRegion::Item> cells;
   for (const CatalogItem *item : p.items)
     cells.push_back({item->icon, item->file});
@@ -505,13 +577,19 @@ void UiGameScreen::refreshResearch() {
                                                                       : -1;
   ResearchBranch *b = research.branch(shown);
   UiListBox *list = dynamic_cast<UiListBox *>(element(4022));
-  if (shown != r.shownBranch) {
+  int filterNow = this->filterChoice.count(15) ? this->filterChoice[15] : 0;
+  if (shown != r.shownBranch || filterNow != r.shownFilter) {
     r.shownBranch = shown;
+    r.shownFilter = filterNow;
+    r.listed.clear();
     if (list && b) {
       list->clear();
       for (int i = 0; i < (int)b->categories.size(); i++) {
+        if (!this->passesFilter(15, b->categories[i].expansion))
+          continue;
         list->addItem(b->categories[i].name, b->categories[i].file);
-        list->setChecked(i, b->enabled[i]);
+        list->setChecked((int)r.listed.size(), b->enabled[i]);
+        r.listed.push_back(i);
       }
     }
   }
@@ -526,11 +604,13 @@ void UiGameScreen::refreshResearch() {
   // being worked on moves to another
   if (list) {
     bool changed = false;
-    for (int i = 0; i < (int)b->categories.size(); i++)
-      if (list->isChecked(i) != b->enabled[i]) {
-        b->enabled[i] = list->isChecked(i);
+    for (int row = 0; row < (int)r.listed.size(); row++) {
+      int i = r.listed[row];
+      if (list->isChecked(row) != b->enabled[i]) {
+        b->enabled[i] = list->isChecked(row);
         changed = true;
       }
+    }
     if (changed && (b->currentCategory < 0 || !b->enabled[b->currentCategory]))
       research.pick(*b);
   }
@@ -562,6 +642,7 @@ void UiGameScreen::refreshResearch() {
 UiGameScreen::~UiGameScreen() {
   for (Entry &e : this->entries)
     delete e.layout;
+  delete this->filter.layout;
 }
 
 UiElement *UiGameScreen::getElementById(int id) {
@@ -569,6 +650,14 @@ UiElement *UiGameScreen::getElementById(int id) {
     if (UiElement *found = e.layout->getElementById(id))
       return found;
   return nullptr;
+}
+
+bool UiGameScreen::isOverPanel(int x, int y) const {
+  SDL_Point p = {x, y};
+  for (const Entry &e : this->entries)
+    if (e.panel && e.open && SDL_PointInRect(&p, &e.rect))
+      return true;
+  return false;
 }
 
 bool UiGameScreen::isPanelOpen(int id) const {
@@ -641,18 +730,63 @@ void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       continue;
     }
     SDL_Rect r = this->panelRect(renderer, e, layout_rect);
+    e.rect = r;
     e.layout->setAnchorRect(this->anchorRect(e, layout_rect));
     e.layout->draw(renderer, &r);
   }
 }
 
+// The filter list drops down over its button (xpac.lyt's x/y are in the
+// panels' anchor, like the panels')
+void UiGameScreen::drawPopup(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
+  if (!this->filter.open)
+    return;
+  const Entry *owner = nullptr;
+  for (const Entry &e : this->entries)
+    if (e.panel && e.open && e.id == this->filter.owner)
+      owner = &e;
+  if (!owner) {
+    this->filter.open = false;
+    return;
+  }
+  SDL_Rect anchor = this->anchorRect(*owner, layout_rect);
+  SDL_Rect r = this->filter.layout->computeRect(renderer, &anchor);
+  this->filter.layout->draw(renderer, &r);
+}
+
 UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
+  // The filter list, while it is down, takes the mouse: a click picks a
+  // choice, or (outside it) just closes it
+  if (this->filter.open && this->filter.list) {
+    int before = this->filter.list->getSelectedIndex();
+    this->filter.layout->handleInputs(inputs);
+    for (const Input &in : inputs) {
+      if (in.event != InputEvent::LEFT_CLICK && in.event != InputEvent::RIGHT_CLICK)
+        continue;
+      int picked = this->filter.list->getSelectedIndex();
+      this->filter.open = false;
+      if (picked >= 0 && picked != before)
+        this->setFilter(this->filter.owner, picked);
+      break;
+    }
+    return UiAction::NONE;
+  }
+
   UiAction action = UiAction::NONE;
+  if (this->pendingAction != UiAction::NONE) {
+    action = this->pendingAction;
+    this->pendingAction = UiAction::NONE;
+    return action;
+  }
   // Top-most first
   for (auto it = this->entries.rbegin(); it != this->entries.rend(); ++it) {
     if (!it->open)
       continue;
     UiAction a = it->layout->handleInputs(inputs);
+    if (static_cast<int>(a) == 152 && this->filter.list) {
+      this->openFilter(it->id);
+      a = UiAction::NONE;
+    }
     // "Close the panel I'm in"
     if (isPanelClose(a) && panelOf(a) == kPanelSelf)
       a = (UiAction)(kPanelCloseAction + it->id);

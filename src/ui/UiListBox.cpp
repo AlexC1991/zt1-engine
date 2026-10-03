@@ -39,6 +39,7 @@ UiListBox::UiListBox(IniReader* ini_reader, ResourceManager* resource_manager, s
                                         font_id, font_size_id) + 1);
     this->visible_items = std::max(1, (dy - border * 2) / item_height);
 
+    this->centered = ini_reader->get(name, "justify") == "center";
     this->toggle_select = ini_reader->getInt(name, "toggleselect", 0) == 1;
     this->minicon_width = ini_reader->getInt(name, "miniconwidth", 0);
     this->line_height = resource_manager->getFontLineHeight(font_id, font_size_id);
@@ -273,11 +274,8 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
         SDL_SetRenderDrawColor(renderer, backcolor.r, backcolor.g, backcolor.b, backcolor.a);
         SDL_RenderFillRect(renderer, &cached_rect);
     }
-    // (the research categories' list has no outline in the original)
-    if (border > 0 && art && !toggle_select) {
-        SDL_SetRenderDrawColor(renderer, forecolor.r, forecolor.g, forecolor.b, 255);
-        SDL_RenderDrawRect(renderer, &cached_rect);
-    }
+    // No outline: border= is only the inset (the original's map, filter and
+    // research lists have none)
 
     int item_y = cached_rect.y + border;
     int max_items = std::min(visible_items, (int)items.size() - scroll_offset);
@@ -377,7 +375,8 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
                 int tex_w, tex_h;
                 resource_manager->getTextSize(text_texture, &tex_w, &tex_h);
                 SDL_Rect text_rect = {
-                    item_rect.x + text_x_offset,
+                    centered ? item_rect.x + (item_rect.w - tex_w) / 2
+                             : item_rect.x + text_x_offset,
                     item_rect.y + (item_height - tex_h) / 2,
                     tex_w, tex_h
                 };

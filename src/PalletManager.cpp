@@ -50,26 +50,10 @@ void PalletManager::loadPalletMap(
     return;
   }
 
-  float progress_per_pallet_load =
-    (progress_goal - *progress) / (float)this->pallet_files_map.size();
-
-  for (auto pallet_file_map_item : this->pallet_files_map) {
-    std::string file_name = pallet_file_map_item.first;
-
-    if (*progress + progress_per_pallet_load < progress_goal) {
-      *progress = *progress + progress_per_pallet_load;
-    } else {
-      *progress = progress_goal;
-    }
-
-    // Skip ztatb in initial load, there are just too many of them
-    if (file_name.starts_with("ztatb/")) {
-      continue;
-    }
-
-    this->loadPallet(file_name);
-  }
-
+  // Palettes are read when a frame first needs one (getPallet): reading
+  // every one here (thousands, each from its archive) took most of the
+  // start-up time
+  *progress = progress_goal;
   this->loaded = true;
 }
 

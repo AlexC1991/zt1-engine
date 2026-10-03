@@ -420,7 +420,12 @@ void World::drawMiniMap(SDL_Renderer *renderer, const SDL_Rect &box) {
   float cu, cv;
   worldRenderer.getViewCentre(cu, cv);
   const Camera &cam = worldRenderer.getCamera();
-  float zoom = (cam.zoom > 0 ? cam.zoom : 1.0f) * this->viewScale;
+  // The box is never bigger than at the original's furthest zoom out
+  // (half size): zoomed out further (the mouse wheel goes to a tenth) it
+  // keeps that size, centred on the view, like the original's box
+  const float kOriginalMinZoom = 0.5f;
+  float zoom = std::max(cam.zoom > 0 ? cam.zoom : 1.0f, kOriginalMinZoom) *
+               this->viewScale;
   float halfDiff = outputW / zoom * 0.5f / (worldRenderer.getTileWidth() * 0.5f);
   float halfSum = outputH / zoom * 0.5f / (worldRenderer.getTileHeight() * 0.5f);
   float d = cu - cv, s = cu + cv;
@@ -429,11 +434,13 @@ void World::drawMiniMap(SDL_Renderer *renderer, const SDL_Rect &box) {
   SDL_Rect view = {static_cast<int>(toX(d - halfDiff)), static_cast<int>(toY(s - halfSum)),
                    static_cast<int>(toX(d + halfDiff) - toX(d - halfDiff)),
                    static_cast<int>(toY(s + halfSum) - toY(s - halfSum))};
-  SDL_Rect clip = box;
-  SDL_RenderSetClipRect(renderer, &clip);
+  // Near the map's edge the box stops at the minimap's edges (all four
+  // sides showing) rather than running off it
+  SDL_Rect shown;
+  if (!SDL_IntersectRect(&view, &box, &shown))
+    return;
   SDL_SetRenderDrawColor(renderer, 255, 223, 115, 255);
-  SDL_RenderDrawRect(renderer, &view);
-  SDL_RenderSetClipRect(renderer, nullptr);
+  SDL_RenderDrawRect(renderer, &shown);
 }
 
 void World::miniMapClick(float fx, float fy) {

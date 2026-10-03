@@ -3,6 +3,7 @@
 #ifndef UTILS_HPP
 #define UTILS_HPP
 
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -11,8 +12,18 @@
 
 #include "Expansion.hpp"
 
+// Per-file resource tracing (every lookup, every animation read): off
+// unless ZT_DEBUG_RESOURCES is set. Writing thousands of lines to the
+// console was a large part of loading a game.
+#define ZT_TRACE(...)                                                            do {                                                                             if (Utils::traceResources())                                                     SDL_Log(__VA_ARGS__);                                                      } while (0)
+
 class Utils {
 public:
+  static bool traceResources() {
+    static const bool on = std::getenv("ZT_DEBUG_RESOURCES") != nullptr;
+    return on;
+  }
+
   static std::string getExecutableDirectory() {
     std::string exe_directory = "./";
     char *sdl_base_path = SDL_GetBasePath();
@@ -50,10 +61,10 @@ public:
   }
 
   static std::string string_to_lower(const std::string &value) {
-    std::string new_string = "";
-    for (char character : value) {
-      new_string += std::tolower((uint8_t)character);
-    }
+    std::string new_string = value;
+    for (char &character : new_string)
+      if (character >= 'A' && character <= 'Z')
+        character = static_cast<char>(character - 'A' + 'a');
     return new_string;
   }
 

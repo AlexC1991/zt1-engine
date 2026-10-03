@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <vector>
 #include <string>
+#include <thread>
 
 #include "ArtScaler.hpp"
 #include "GpuFsr.hpp"
@@ -17,6 +18,7 @@
 #include "Input.hpp"
 #include "InputManager.hpp"
 #include "LoadScreen.hpp"
+#include "Research.hpp"
 #include "ResourceManager.hpp"
 #include "ScenarioManager.hpp"
 
@@ -374,10 +376,21 @@ static void destroyHud() {
   g_hud = nullptr;
 }
 
+// The in-game screen for the next game, built when the freeform menu opens
+// so that Play goes straight into the game, as in the original (building it
+// takes a moment: every panel's layout and art)
+static UiGameScreen *g_nextHud = nullptr;
+static void prepareHud(ResourceManager *rm) {
+  if (!g_nextHud)
+    g_nextHud = new UiGameScreen(rm, "ui/main.lyt", "ui/gamescrn.lyt");
+}
+
 static void createHud(ResourceManager *rm, World *world, int startingCash) {
   destroyHud();
   // The HUD and its panels, as the original's in-game screen
-  g_hud = new UiGameScreen(rm, "ui/main.lyt", "ui/gamescrn.lyt");
+  g_hud = g_nextHud ? g_nextHud
+                    : new UiGameScreen(rm, "ui/main.lyt", "ui/gamescrn.lyt");
+  g_nextHud = nullptr;
 
   if (UiText *date = dynamic_cast<UiText *>(g_hud->getElementById(1030)))
     date->setText("Jan, Year 1");
@@ -448,6 +461,9 @@ static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
     SDL_Rect rect = hudLayoutRect(renderer, t);
     drawUiScaled(renderer, rm, t,
                  [&](SDL_Renderer *r) { g_hud->draw(r, &rect); });
+    if (g_hud->hasPopup())
+      drawUiScaled(renderer, rm, t,
+                   [&](SDL_Renderer *r) { g_hud->drawPopup(r, &rect); });
     return;
   }
   // Centred at 800x600, exactly like the menus
@@ -460,7 +476,20 @@ static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
     g_hud->draw(r, &layoutRect);
     SDL_RenderSetViewport(r, nullptr);
   });
+  // A drop-down list goes over everything, text included
+  if (g_hud->hasPopup())
+    drawUiScaled(renderer, rm, t, [&](SDL_Renderer *r) {
+      SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
+                           static_cast<int>(std::lround(t.offsetY / t.scale)),
+                           UI_LAYOUT_W, UI_LAYOUT_H};
+      SDL_RenderSetViewport(r, &viewport);
+      SDL_Rect layoutRect = {0, 0, UI_LAYOUT_W, UI_LAYOUT_H};
+      g_hud->drawPopup(r, &layoutRect);
+      SDL_RenderSetViewport(r, nullptr);
+    });
 }
+
+extern float g_ZoomLevel; // World.cpp
 
 static UiAction hudInputs(SDL_Renderer *renderer, std::vector<Input> inputs) {
   if (!g_hud)
@@ -469,7 +498,18 @@ static UiAction hudInputs(SDL_Renderer *renderer, std::vector<Input> inputs) {
   if (g_widescreen)
     t.offsetX = t.offsetY = 0; // the HUD covers the whole window
   mapInputsToLayout(inputs, t);
-  return g_hud->handleInputs(inputs);
+  UiAction action = g_hud->handleInputs(inputs);
+  // The wheel scrolls an open panel's lists (the panel handles that) and
+  // zooms the map anywhere else
+  for (const Input &in : inputs) {
+    if (in.event != InputEvent::SCROLL_UP && in.event != InputEvent::SCROLL_DOWN)
+      continue;
+    if (g_hud->isOverPanel(in.x, in.y))
+      continue;
+    g_ZoomLevel += in.event == InputEvent::SCROLL_UP ? 0.1f : -0.1f;
+    g_ZoomLevel = std::clamp(g_ZoomLevel, 0.1f, 3.0f);
+  }
+  return action;
 }
 
 static std::string getLayoutPath(ResourceManager *rm,
@@ -825,6 +865,15 @@ static int runMapRenderCheck(SDL_Renderer *renderer, ResourceManager *rm,
 static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                          ScenarioManager *sm, World *world,
                          const std::string &outDir, const std::string &stem) {
+  // As if from the freeform menu: the background preload has finished and
+  // the in-game screen is ready
+  ItemCatalog::get().load(rm);
+  Research::get().load(rm);
+  prepareHud(rm);
+  Uint64 t0 = SDL_GetPerformanceCounter();
+  auto ms = [&] {
+    return (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
+  };
   const FreeformMap *chosen = nullptr;
   for (int i = 0; const FreeformMap *map = sm->getFreeformMap(i); i++)
     if (getFileStem(map->path) == stem)
@@ -833,7 +882,17 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     SDL_Log("[PanelShots] map %s not found", stem.c_str());
     return 1;
   }
+  // Timings also go to <outDir>/timings.txt (a real console isn't captured)
+  std::filesystem::create_directories(outDir);
+  FILE *timings = fopen((outDir + "/timings.txt").c_str(), "w");
+  auto note = [&](const char *what) {
+    SDL_Log("[PanelShots] %s at %.0f ms", what, ms());
+    if (timings)
+      fprintf(timings, "%s %.0f ms\n", what, ms());
+  };
+  note("map loaded");
   createHud(rm, world, CASH_START);
+  note("screen built");
   if (!g_hud)
     return 1;
   std::filesystem::create_directories(outDir);
@@ -851,11 +910,26 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       {8, "paths", "paths"},       {8, "foliage", "foliage"},
       {8, "rocks", "rocks"},       {10, "", "staff"},
       {8, "#3362", "terrain"},     {8, "#3361", "height"},
+      {3, "!open", "filterlist"},  {3, "!1", "filterzt"},
+      {3, "!2", "filterdino"},
+      {3, "!3", "filtermarine"},   {3, "!0", "filterall"},
       {15, "#4008", "research"},   {15, "#4009", "research2"},
-      {15, "#4010", "conservation"}, {5, "", "gameopts"}};
+      {15, "#4010", "conservation"}, {5, "", "gameopts"},
+      {0, "~esc", "escmenu"}};
   for (const Shot &shot : shots) {
-    // "#<id>": a tab picked by its button (the terraform tabs)
-    if (shot.tab[0] == '#') {
+    // "!open": the panel's content filter list dropped down; "!<n>": a
+    // filter choice, on the animals tab
+    // "~esc": the game menu as ESC opens it
+    if (shot.tab[0] == '~') {
+      g_hud->showPanel(0, "");
+      g_hud->toggleGameMenu();
+    } else if (shot.tab[0] == '!') {
+      g_hud->showPanel(shot.panel, "animals");
+      if (std::string(shot.tab) == "!open")
+        g_hud->openFilter(shot.panel);
+      else
+        g_hud->setFilter(shot.panel, std::atoi(shot.tab + 1));
+    } else if (shot.tab[0] == '#') {
       g_hud->showPanel(shot.panel, "");
       g_hud->showTab(shot.panel, std::atoi(shot.tab + 1));
     } else {
@@ -881,8 +955,41 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     if (s)
       SDL_FreeSurface(s);
     SDL_RenderPresent(renderer);
-    SDL_Log("[PanelShots] %s", shot.name);
+    note(shot.name);
   }
+
+  // The game menu's buttons, clicked with made-up input (layout units, on
+  // the buttons as last drawn): Main Menu and Exit Game should come back as
+  // their actions; ESC again should close the menu
+  auto click = [&](int id) {
+    UiElement *e = g_hud->getElementById(id);
+    if (!e)
+      return UiAction::NONE;
+    SDL_Rect r = e->getLastRect();
+    Input in{};
+    in.type = InputType::POSITIONED;
+    in.event = InputEvent::LEFT_CLICK;
+    in.position = {r.x + r.w / 2, r.y + r.h / 2};
+    in.x = in.position.x;
+    in.y = in.position.y;
+    std::vector<Input> inputs = {in};
+    g_hud->handleInputs(inputs);
+    std::vector<Input> none;
+    return g_hud->handleInputs(none); // the action it asked for
+  };
+  auto check = [&](const char *what, bool ok) {
+    std::string line = std::string(what) + (ok ? " ok" : " FAILED");
+    note(line.c_str());
+  };
+  check("main menu button", click(1503) == UiAction::GAME_MAIN_MENU);
+  check("exit game button", click(1504) == UiAction::GAME_EXIT);
+  g_hud->toggleGameMenu();
+  check("esc closes the game menu", !g_hud->isPanelOpen(5));
+  g_hud->toggleGameMenu();
+  check("esc opens the game menu", g_hud->isPanelOpen(5));
+
+  if (timings)
+    fclose(timings);
   return 0;
 }
 
@@ -914,11 +1021,19 @@ int main(int argc, char *argv[]) {
   window.set_cursor(resource_manager.getCursor(9));
 
   LoadScreen::run(&window, &config, &resource_manager);
+  // What the in-game screen needs that doesn't depend on the map (every
+  // buyable item, the research programs) is read while the menus show, so
+  // starting a game doesn't wait for it
+  std::thread([rm = &resource_manager] {
+    ItemCatalog::get().load(rm);
+    Research::get().load(rm);
+  }).detach();
 
   // ZT_DUMP_CATALOG=1: log every buy tab's list and quit (for comparing
   // with the original)
   if (std::getenv("ZT_DUMP_CATALOG")) {
     ItemCatalog::get().load(&resource_manager);
+    Research::get().load(&resource_manager); // let the preload finish
     return 0;
   }
 
@@ -992,17 +1107,10 @@ int main(int argc, char *argv[]) {
       if (input.event == InputEvent::QUIT) {
         running = 0;
       }
-      // Handle ESC key to return to freeform menu from game loop
-      if (input.event == InputEvent::KEY_ESCAPE && g_currentState == LayoutState::GAME_LOOP) {
-        destroyHud();
-        // Return to freeform selection menu
-        lyt_reader = resource_manager.getIniReader(
-            getLayoutPath(&resource_manager, "mapselec.lyt"));
-        layout = new UiLayout(lyt_reader, &resource_manager);
-        g_currentState = LayoutState::FREEFORM_SELECT;
-        populateFreeformList(layout, g_scenarioManager);
-        updateFreeformDetails(layout, g_scenarioManager, &resource_manager);
-      }
+      // ESC in a game opens (or closes) the game menu, as in the original
+      if (input.event == InputEvent::KEY_ESCAPE &&
+          g_currentState == LayoutState::GAME_LOOP && g_hud)
+        g_hud->toggleGameMenu();
     }
 
     if (layout) {
@@ -1043,6 +1151,7 @@ int main(int argc, char *argv[]) {
       g_currentState = LayoutState::FREEFORM_SELECT;
       populateFreeformList(layout, g_scenarioManager);
       updateFreeformDetails(layout, g_scenarioManager, &resource_manager);
+      prepareHud(&resource_manager);
       break;
 
     case UiAction::STARTUP_PLAY_SCENARIO:
@@ -1054,6 +1163,13 @@ int main(int argc, char *argv[]) {
       populateScenarioList(layout, g_scenarioManager);
       break;
 
+    // The game menu: Exit Game quits; Main Menu leaves the game
+    case UiAction::GAME_EXIT:
+      running = false;
+      break;
+    case UiAction::GAME_MAIN_MENU:
+      destroyHud();
+      [[fallthrough]];
     case UiAction::CREDITS_EXIT:
     case UiAction::SCENARIO_BACK_TO_MAIN_MENU:
       delete layout;

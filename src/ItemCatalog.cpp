@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <map>
+#include <mutex>
 #include <sstream>
 #include <tuple>
 #include <unordered_map>
@@ -74,6 +75,10 @@ struct AiFile {
 } // namespace
 
 void ItemCatalog::load(ResourceManager *rm) {
+  // Loaded in the background while the menus show (see main); a game
+  // started before it is done waits here
+  static std::mutex loading;
+  std::lock_guard<std::mutex> lock(loading);
   if (this->loaded || !rm)
     return;
   this->loaded = true;
@@ -202,6 +207,9 @@ void ItemCatalog::load(ResourceManager *rm) {
     std::string work = value("characteristics/integers", "cworkcheck");
     item.workCheck = work.empty() ? -1 : std::atoi(work.c_str());
     item.dutiesTextId = integer("cdutiestextid");
+    item.expansion = item.members.count("dinosaur") ? 1
+                     : item.members.count("aqua")   ? 2
+                                                    : 0;
     item.height = integer("cheight");
     item.showFence = integer("cisshowfence") != 0;
     item.capacity = integer("ccapacity");
