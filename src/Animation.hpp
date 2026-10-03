@@ -55,10 +55,23 @@ public:
     this->upscale = upscale;
     this->hd_dir = hdDir;
   }
+  // Map art (objects, animals): drawn as is at 1:1, and from an upscaled
+  // set (or HD pack frames) while the map is zoomed in
+  void setWorldArt(const std::string &hdDir) {
+    this->world_art = true;
+    this->hd_dir = hdDir;
+  }
 
 private:
   bool upscale = false;
+  bool world_art = false;
   std::string hd_dir;
+  // Upscaled frames for the zoomed-in map (map art only)
+  std::unordered_map<std::string, std::vector<SDL_Texture *>> textures_hi;
+
+  std::vector<SDL_Texture *> *frameTextures(SDL_Renderer *renderer,
+                                            CompassDirection direction,
+                                            bool hi);
 
   int current_frame = 0;
   CompassDirection last_direction = CompassDirection::N;

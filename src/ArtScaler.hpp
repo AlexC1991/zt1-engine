@@ -9,8 +9,8 @@
 // ART UPSCALING
 // ============================================================================
 // The original art was drawn for 800x600. When it is drawn magnified (menus
-// and the HUD on bigger windows), it can be upscaled once, at load time,
-// instead of being stretched every frame:
+// and the HUD on bigger windows, the map zoomed in past 1x), it is upscaled
+// once, when first needed, instead of being stretched every frame:
 //
 //   fsr  - AMD FidelityFX Super Resolution 1: EASU upscale + RCAS sharpen
 //          (AMD 2021, MIT), run on the CPU per texture so no shaders
@@ -24,6 +24,10 @@
 //
 // An upscaled texture still reports the art's own size through querySize(),
 // so layouts and anchors stay exactly where the original puts them.
+//
+// Map art (terrain, paths, objects, animals) is drawn 1:1 at the default
+// zoom, so it keeps its original texture there and gets a second, upscaled
+// one (worldFactor()) that is used only while the view is zoomed in.
 // ============================================================================
 namespace ArtScaler {
 
@@ -37,8 +41,16 @@ const char *modeName(Mode mode);
 Mode mode();
 int factor();
 
-// Texture for art that is drawn magnified (upscaled when enabled)
-SDL_Texture *createTexture(SDL_Renderer *renderer, SDL_Surface *surface);
+// How far the map can be zoomed in (the mouse wheel's limit)
+constexpr float kMaxWorldZoom = 3.0f;
+// Upscale factor for map art (1 when upscaling is off)
+int worldFactor();
+
+// Texture for art that is drawn magnified (upscaled when enabled).
+// factor 0 = the configured factor. tileable: the art repeats edge to edge
+// (ground textures), so the upscaler wraps around instead of clamping.
+SDL_Texture *createTexture(SDL_Renderer *renderer, SDL_Surface *surface,
+                           int factor = 0, bool tileable = false);
 
 // Texture from an HD pack image standing in for art of size w x h; nullptr
 // (and a log line) when it is not a whole multiple of that size

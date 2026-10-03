@@ -1,4 +1,5 @@
 #include "SpriteDatabase.hpp"
+#include "ArtScaler.hpp"
 #include "AniFile.hpp"
 #include <SDL2/SDL.h>
 
@@ -92,30 +93,42 @@ Animation *SpriteDatabase::getTerrainSprite(int terrainId) {
   return nullptr;
 }
 
+// Destroys every texture in a cache and empties it
+static void destroyAll(std::unordered_map<int, SDL_Texture *> &cache) {
+  for (auto &entry : cache) {
+    if (entry.second)
+      SDL_DestroyTexture(entry.second);
+  }
+  cache.clear();
+}
+
 SDL_Texture *SpriteDatabase::getTerrainTexture(SDL_Renderer *renderer,
-                                               int terrainId) {
+                                               int terrainId, bool hires) {
   if (!renderer || !resourceManager)
     return nullptr;
 
   // Textures belong to one renderer; drop the cache if it changes
   if (renderer != textureRenderer) {
-    for (auto &entry : terrainTextures) {
-      if (entry.second)
-        SDL_DestroyTexture(entry.second);
-    }
-    terrainTextures.clear();
+    destroyAll(terrainTextures);
+    destroyAll(terrainTexturesHi);
     textureRenderer = renderer;
   }
 
-  auto cached = terrainTextures.find(terrainId);
-  if (cached != terrainTextures.end())
+  auto &cache = hires ? terrainTexturesHi : terrainTextures;
+  auto cached = cache.find(terrainId);
+  if (cached != cache.end())
     return cached->second;
 
   SDL_Texture *texture = nullptr;
   auto path = terrainTexturePaths.find(terrainId);
   if (path != terrainTexturePaths.end()) {
-    texture = resourceManager->getTexture(renderer, path->second,
-                                          false); // world art, drawn 1:1
+    // 1:1 for the normal map; upscaled (wrapping, as ground textures tile)
+    // for the zoomed-in map
+    texture = hires ? resourceManager->getTexture(
+                          renderer, path->second, true,
+                          ArtScaler::worldFactor(), true)
+                    : resourceManager->getTexture(renderer, path->second,
+                                                  false);
     // Terrain blends are drawn with per-vertex alpha, which RGB textures
     // ignore unless blending is switched on
     if (texture)
@@ -124,7 +137,7 @@ SDL_Texture *SpriteDatabase::getTerrainTexture(SDL_Renderer *renderer,
       SDL_Log("[SpriteDatabase] Failed to load ground texture %s",
               path->second.c_str());
   }
-  terrainTextures[terrainId] = texture; // cache misses too
+  cache[terrainId] = texture; // cache misses too
   return texture;
 }
 
@@ -140,14 +153,22 @@ bool SpriteDatabase::terrainBlends(int terrainId) const {
 
 const SpriteDatabase::Sprite &
 SpriteDatabase::getPathSprite(SDL_Renderer *renderer, const std::string &type,
-                              int frame) {
+                              int frame, bool hires) {
   static const Sprite none;
   if (!renderer || !resourceManager || type.empty())
     return none;
   std::string key = type + "#" + std::to_string(frame);
   auto cached = pathSprites.find(key);
-  if (cached != pathSprites.end())
-    return cached->second;
+  if (cached != pathSprites.end()) {
+    Sprite &sprite = cached->second;
+    if (hires && !sprite.hiTried && sprite.texture) {
+      sprite.hiTried = true;
+      sprite.hiTexture = resourceManager->getZt1FrameTexture(
+          renderer, pathArtFolders[type] + "/" + std::to_string(frame),
+          nullptr, nullptr, true);
+    }
+    return sprite;
+  }
 
   // Art folder from the type's .ai, e.g. paths/path/idle
   auto folder = pathArtFolders.find(type);
@@ -173,16 +194,14 @@ SpriteDatabase::getPathSprite(SDL_Renderer *renderer, const std::string &type,
   else
     SDL_Log("[SpriteDatabase] Missing path art %s/%d", folder->second.c_str(),
             frame);
-  return pathSprites[key] = sprite; // cache misses too
+  pathSprites[key] = sprite; // cache misses too
+  return hires ? getPathSprite(renderer, type, frame, true) : pathSprites[key];
 }
 
 void SpriteDatabase::clear() {
   terrainSprites.clear();
-  for (auto &entry : terrainTextures) {
-    if (entry.second)
-      SDL_DestroyTexture(entry.second);
-  }
-  terrainTextures.clear();
+  destroyAll(terrainTextures);
+  destroyAll(terrainTexturesHi);
   textureRenderer = nullptr;
   SDL_Log("[SpriteDatabase] Cache cleared");
 }

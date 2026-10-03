@@ -12,6 +12,10 @@ namespace RenderSettings {
 
 inline SDL_ScaleMode artScaleMode = SDL_ScaleModeNearest;
 
+// True while the map is drawn zoomed in past 1x: map art then draws from its
+// upscaled textures
+inline bool worldZoomedIn = false;
+
 inline void applyArtScaleMode(SDL_Texture *texture) {
   if (!texture)
     return;

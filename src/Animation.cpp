@@ -50,9 +50,16 @@ Animation &Animation::operator=(Animation &&other) noexcept {
       texture_list.second.clear();
     }
     this->textures.clear();
+    for (auto &texture_list : this->textures_hi)
+      for (SDL_Texture *texture : texture_list.second)
+        if (texture)
+          SDL_DestroyTexture(texture);
+    this->textures_hi.clear();
 
     this->surfaces = std::move(other.surfaces);
     this->textures = std::move(other.textures);
+    this->textures_hi = std::move(other.textures_hi);
+    this->world_art = other.world_art;
     this->current_frame = other.current_frame;
     this->last_direction = other.last_direction;
     this->renderer_flip = other.renderer_flip;
@@ -64,6 +71,7 @@ Animation &Animation::operator=(Animation &&other) noexcept {
 
     other.surfaces.clear();
     other.textures.clear();
+    other.textures_hi.clear();
   }
   return *this;
 }
@@ -83,6 +91,10 @@ Animation::~Animation() {
     }
     texture_list.second.clear();
   }
+  for (auto &texture_list : this->textures_hi)
+    for (SDL_Texture *texture : texture_list.second)
+      if (texture)
+        SDL_DestroyTexture(texture);
 }
 
 void Animation::draw(SDL_Renderer *renderer, int x, int y,
@@ -135,58 +147,14 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
   if (renderer == nullptr)
     return;
 
-  std::string direction_string =
-      convertCompassDirectionToExistingAnimationString(direction,
-                                                       this->textures);
-
-  if (direction_string.empty()) {
-    direction_string = convertCompassDirectionToExistingAnimationString(
-        direction, this->surfaces);
-
-    if (this->surfaces.find(direction_string) == this->surfaces.end())
-      return;
-
-    this->textures[direction_string] = std::vector<SDL_Texture *>();
-    if (!direction_string.empty()) {
-      int frame = 0;
-      for (SDL_Surface *surface : this->surfaces[direction_string]) {
-        int index = frame++;
-        if (!surface) {
-          this->textures[direction_string].push_back(nullptr);
-          continue;
-        }
-        SDL_Texture *t = nullptr;
-        if (!this->hd_dir.empty()) {
-          std::string hdPath = this->hd_dir + "/" + direction_string + "_" +
-                               std::to_string(index);
-          if (SDL_Surface *hd = ArtScaler::loadHdSurface(hdPath)) {
-            t = ArtScaler::createHdTexture(renderer, hd, surface->w,
-                                           surface->h, hdPath);
-            SDL_FreeSurface(hd);
-          }
-        }
-        if (!t)
-          t = this->upscale ? ArtScaler::createTexture(renderer, surface)
-                            : SDL_CreateTextureFromSurface(renderer, surface);
-        if (!t)
-          SDL_Log("Warning: Failed to create texture: %s", SDL_GetError());
-
-
-        this->textures[direction_string].push_back(t);
-        SDL_FreeSurface(surface);
-      }
-      this->surfaces[direction_string].clear();
-    } else {
-      return;
-    }
-  }
-
-  if (this->textures[direction_string].empty())
+  // Map art switches to its upscaled frames while the map is zoomed in
+  bool hi = this->world_art && RenderSettings::worldZoomedIn &&
+            ArtScaler::worldFactor() > 1;
+  std::vector<SDL_Texture *> *frames =
+      this->frameTextures(renderer, direction, hi);
+  if (frames == nullptr || frames->empty())
     return;
-
-  size_t texCount = this->textures[direction_string].size();
-  if (texCount == 0)
-    return;
+  size_t texCount = frames->size();
 
   if (direction != this->last_direction) {
     this->last_direction = direction;
@@ -201,13 +169,72 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
   if (static_cast<size_t>(this->current_frame) >= texCount)
     this->current_frame = 0;
 
-  SDL_Texture *texture = this->textures[direction_string][this->current_frame];
+  SDL_Texture *texture = (*frames)[this->current_frame];
 
   if (texture) {
     RenderSettings::applyArtScaleMode(texture);
     SDL_RenderCopyEx(renderer, texture, NULL, dest_rect, 0, NULL,
                      this->renderer_flip);
   }
+}
+
+// Textures for one direction, made on first use. UI art is upscaled per the
+// setting; map art is made as is, or upscaled for the zoomed-in map (hi),
+// and keeps its source frames so it can make the other set later. HD pack
+// frames replace any art that is drawn magnified.
+std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
+                                                     CompassDirection direction,
+                                                     bool hi) {
+  auto &set = hi ? this->textures_hi : this->textures;
+  std::string direction_string =
+      convertCompassDirectionToExistingAnimationString(direction, set);
+  if (!direction_string.empty() && !set[direction_string].empty())
+    return &set[direction_string];
+
+  direction_string =
+      convertCompassDirectionToExistingAnimationString(direction, this->surfaces);
+  auto source = this->surfaces.find(direction_string);
+  if (direction_string.empty() || source == this->surfaces.end())
+    return nullptr;
+
+  std::vector<SDL_Texture *> &frames = set[direction_string];
+  frames.clear();
+  bool magnified = this->upscale || hi;
+  int index = 0;
+  for (SDL_Surface *surface : source->second) {
+    int frame = index++;
+    if (!surface) {
+      frames.push_back(nullptr);
+      continue;
+    }
+    SDL_Texture *t = nullptr;
+    if (magnified && !this->hd_dir.empty()) {
+      std::string hdPath =
+          this->hd_dir + "/" + direction_string + "_" + std::to_string(frame);
+      if (SDL_Surface *hd = ArtScaler::loadHdSurface(hdPath)) {
+        t = ArtScaler::createHdTexture(renderer, hd, surface->w, surface->h,
+                                       hdPath);
+        SDL_FreeSurface(hd);
+      }
+    }
+    if (!t) {
+      if (hi)
+        t = ArtScaler::createTexture(renderer, surface,
+                                     ArtScaler::worldFactor());
+      else if (this->upscale)
+        t = ArtScaler::createTexture(renderer, surface);
+      else
+        t = SDL_CreateTextureFromSurface(renderer, surface);
+    }
+    if (!t)
+      SDL_Log("Warning: Failed to create texture: %s", SDL_GetError());
+    frames.push_back(t);
+    if (!this->world_art)
+      SDL_FreeSurface(surface);
+  }
+  if (!this->world_art)
+    source->second.clear();
+  return &frames;
 }
 
 void Animation::queryTexture(CompassDirection direction, int *w, int *h) {

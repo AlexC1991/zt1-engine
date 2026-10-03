@@ -1,4 +1,6 @@
 #include "WorldRenderer.hpp"
+#include "ArtScaler.hpp"
+#include "RenderSettings.hpp"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cmath>
@@ -568,6 +570,9 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
   SDL_GetRenderDrawBlendMode(renderer, &previousBlend);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
+  // Zoomed in past 1x, map art comes from its upscaled textures
+  const bool hires = RenderSettings::worldZoomedIn;
+
   struct TexInfo {
     SDL_Texture *texture = nullptr;
     float tilesPerTexture = 1.0f;
@@ -576,10 +581,12 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
     TexInfo info;
     if (debugTerrainIds)
       return info;
-    info.texture = spriteDB.getTerrainTexture(renderer, terrainType);
+    info.texture = spriteDB.getTerrainTexture(renderer, terrainType, hires);
+    if (!info.texture && hires)
+      info.texture = spriteDB.getTerrainTexture(renderer, terrainType);
     if (info.texture) {
       int texW = 0;
-      SDL_QueryTexture(info.texture, nullptr, nullptr, &texW, nullptr);
+      ArtScaler::querySize(info.texture, &texW, nullptr);
       info.tilesPerTexture = std::max(1.0f, std::round(texW / kTexelsPerTile));
     }
     return info;
@@ -790,8 +797,10 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
         }
 
         const SpriteDatabase::Sprite &art = spriteDB.getPathSprite(
-            renderer, map.getPathTypes()[pathType], frame);
-        if (art.texture) {
+            renderer, map.getPathTypes()[pathType], frame, hires);
+        SDL_Texture *pathTexture =
+            hires && art.hiTexture ? art.hiTexture : art.texture;
+        if (pathTexture) {
           // Tile centre on screen, at the average corner height
           float centreH = (h[0] + h[1] + h[2] + h[3]) * 0.25f;
           float cx = sx, cy = sy + halfH - centreH * unitPx;
@@ -803,8 +812,8 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
           SDL_Vertex q1 = {{x1, y0}, white, {1, 0}};
           SDL_Vertex q2 = {{x1, y1}, white, {1, 1}};
           SDL_Vertex q3 = {{x0, y1}, white, {0, 1}};
-          addToBucket(2, pathType, art.texture, q0, q1, q2);
-          addToBucket(2, pathType, art.texture, q0, q2, q3);
+          addToBucket(2, pathType, pathTexture, q0, q1, q2);
+          addToBucket(2, pathType, pathTexture, q0, q2, q3);
         }
       }
 
