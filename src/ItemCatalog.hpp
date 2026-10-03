@@ -55,6 +55,11 @@ struct CatalogItem {
   std::string prefIcon; // cPrefIcon: what the animal likes (an object icon)
   int dutiesTextId = 0; // cDutiesTextID (staff: what they do)
   int unlockMonth = -1; // freeform: 0 = from the start, n = after n months
+  // Its pack, for the content filter: 1 Dinosaur Digs ([Member] dinosaur),
+  // 2 Marine Mania ([Member] aqua), else 0 Zoo Tycoon. (Not cExpansionID:
+  // the original files the Loch Ness Monster, the dinosaur fences and
+  // buildings, which have none, under Dinosaur Digs.)
+  int expansion = 0;
 };
 
 class ItemCatalog {

@@ -58,10 +58,16 @@ public:
     return this->ini_reader->get(this->name, "stringdata");
   }
 
-  // The first helpid= (a tab's help string is also its panel's title)
-  int getHelpId() const {
+  // The first helpid= (a tab's help string is also its panel's title); a
+  // tab with several has one per content filter choice (the Animals tab:
+  // Creatures, Animals, Dinosaurs, Animals)
+  int getHelpId(int choice = 0) const {
     std::vector<std::string> ids = this->ini_reader->getList(this->name, "helpid");
-    return ids.empty() ? 0 : std::atoi(ids[0].c_str());
+    if (ids.empty())
+      return 0;
+    if (choice < 0 || choice >= (int)ids.size())
+      choice = 0;
+    return std::atoi(ids[choice].c_str());
   }
   // Text shown on the button, set by the game (e.g. a filter's "All")
   void setLabel(const std::string &label) {

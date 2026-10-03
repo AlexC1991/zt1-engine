@@ -29,6 +29,10 @@ enum class UiAction {
     HUD_ZOOM_OUT = 1023,
     HUD_PAUSE = 1071,
     HUD_PLAY = 1072,
+
+    // The game menu's File Options page (ui/gameopt1.lyt button ids)
+    GAME_MAIN_MENU = 1503,
+    GAME_EXIT = 1504,
 };
 
 // Panels: the in-game screen's sub-layouts (ui/gamescrn.lyt), by layout id.

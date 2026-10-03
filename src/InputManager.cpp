@@ -64,18 +64,13 @@ std::vector<Input> InputManager::getInputs() {
         input.x = input.position.x;
         input.y = input.position.y;
         
-        // [ZOOM HACK] Direct Global Zoom Control
+        // What the wheel does is up to the game: scroll the list under the
+        // cursor, or zoom the map (see hudInputs)
         if (event.wheel.y > 0) {
           input.event = InputEvent::SCROLL_UP;
-          g_ZoomLevel += 0.1f; 
         } else if (event.wheel.y < 0) {
           input.event = InputEvent::SCROLL_DOWN;
-          g_ZoomLevel -= 0.1f;
         }
-        
-        // Clamp Zoom (0.1x to 3.0x)
-        if (g_ZoomLevel < 0.1f) g_ZoomLevel = 0.1f;
-        if (g_ZoomLevel > 3.0f) g_ZoomLevel = 3.0f;
         break;
     }
     

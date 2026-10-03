@@ -18,12 +18,12 @@ Animation *AniFile::getAnimation(PalletManager *pallet_manager,
     return nullptr;
   }
 
-  SDL_Log("AniFile::getAnimation: ztd='%s' file='%s'", ztd_file.c_str(),
+  ZT_TRACE("AniFile::getAnimation: ztd='%s' file='%s'", ztd_file.c_str(),
           file_name.c_str());
 
   IniReader *ini_reader = ZtdFile::getIniReader(ztd_file, file_name);
   if (ini_reader == nullptr) {
-    SDL_Log("Warning: Could not read ini for animation: %s", file_name.c_str());
+    ZT_TRACE("Warning: Could not read ini for animation: %s", file_name.c_str());
     return nullptr;
   }
 
@@ -48,7 +48,7 @@ Animation *AniFile::getAnimation(PalletManager *pallet_manager,
       (*animations)[direction]->height = height;
       has_valid_animation = true;
     } else {
-      SDL_Log("Warning: Could not load animation direction %s from %s",
+      ZT_TRACE("Warning: Could not load animation direction %s from %s",
               direction.c_str(), directory.c_str());
     }
   }

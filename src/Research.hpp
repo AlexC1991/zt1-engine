@@ -45,6 +45,7 @@ struct ResearchProgram {
 struct ResearchCategory {
   std::string file;
   std::string name;
+  int expansion = 0; // 0 Zoo Tycoon, 1 Dinosaur Digs, 2 Marine Mania
   int helpId = 0;
   std::vector<ResearchProgram> programs;
 };

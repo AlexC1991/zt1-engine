@@ -108,6 +108,15 @@ SDL_Rect UiScrollingRegion::cellRect(int index) const {
 
 UiAction UiScrollingRegion::handleInputs(std::vector<Input> &inputs) {
   for (Input &input : inputs) {
+    // The mouse wheel scrolls a row at a time
+    if (input.event == InputEvent::SCROLL_UP ||
+        input.event == InputEvent::SCROLL_DOWN) {
+      SDL_Point p = {input.position.x, input.position.y};
+      if (SDL_PointInRect(&p, &this->last_rect))
+        this->setScrollPosition(this->first_row +
+                                (input.event == InputEvent::SCROLL_UP ? -1 : 1));
+      continue;
+    }
     if (input.type != InputType::POSITIONED)
       continue;
     SDL_Point p = {input.position.x, input.position.y};

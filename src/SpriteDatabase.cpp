@@ -1,6 +1,7 @@
 #include "SpriteDatabase.hpp"
 #include "ArtScaler.hpp"
 #include "AniFile.hpp"
+#include "Utils.hpp"
 #include <SDL2/SDL.h>
 
 // ============================================================================
@@ -76,7 +77,7 @@ void SpriteDatabase::loadTerrainSprite(int terrainId, const std::string &path) {
   if (anim && anim->isValid()) {
     // Store in cache (move semantics)
     terrainSprites.emplace(terrainId, std::move(*anim));
-    SDL_Log("[SpriteDatabase]   ✓ Loaded terrain ID %d from %s", terrainId,
+    ZT_TRACE("[SpriteDatabase]   ✓ Loaded terrain ID %d from %s", terrainId,
             path.c_str());
   } else {
     SDL_Log("[SpriteDatabase]   ✗ Failed to load terrain ID %d from %s",

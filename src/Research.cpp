@@ -1,5 +1,6 @@
 #include "Research.hpp"
 
+#include <mutex>
 #include <random>
 
 #include <SDL2/SDL.h>
@@ -19,6 +20,8 @@ static std::mt19937 &rng() {
 }
 
 void Research::load(ResourceManager *rm) {
+  static std::mutex loading; // see ItemCatalog::load
+  std::lock_guard<std::mutex> lock(loading);
   if (this->loaded)
     return;
   this->loaded = true;
@@ -30,16 +33,18 @@ void Research::load(ResourceManager *rm) {
     return id ? rm->getString(id) : std::string();
   };
 
-  std::vector<std::string> branchFiles;
-  for (const char *cfg : {"research.cfg", "researd.cfg", "researe.cfg"}) {
-    IniReader *root = rm->getIniReader(cfg);
+  // Each branch file, and which pack's research config listed it
+  std::vector<std::pair<std::string, int>> branchFiles;
+  const char *configs[] = {"research.cfg", "researd.cfg", "researe.cfg"};
+  for (int pack = 0; pack < 3; pack++) {
+    IniReader *root = rm->getIniReader(configs[pack]);
     if (!root)
       continue;
     for (const std::string &f : root->getList("branches", "branch"))
-      branchFiles.push_back(f);
+      branchFiles.push_back({f, pack});
     delete root;
   }
-  for (const std::string &branchFile : branchFiles) {
+  for (const auto &[branchFile, pack] : branchFiles) {
     IniReader *b = rm->getIniReader(branchFile);
     if (!b)
       continue;
@@ -61,6 +66,7 @@ void Research::load(ResourceManager *rm) {
         continue;
       ResearchCategory category;
       category.file = categoryFile;
+      category.expansion = pack;
       category.name = text(c, "category", "name");
       category.helpId = c->getInt("category", "helpid", 0);
       for (const std::string &programFile : c->getList("category", "program")) {

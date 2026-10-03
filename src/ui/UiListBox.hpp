@@ -87,6 +87,7 @@ private:
     bool transparent = true;
     int border = 2;
 
+    bool centered = false; // justify=center (the content filter's list)
     bool toggle_select = false;
     int minicon_width = 0;
     Animation* checkbox = nullptr;

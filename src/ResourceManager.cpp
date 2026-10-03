@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <set>
 #include <string>
 #include <vector>
@@ -69,6 +70,22 @@ bool ResourceManager::isDirectory(const std::string &path) {
   return resource_map.count(with_slash) > 0;
 }
 
+// Loose files on disk override the archives' (see getResourceLocation).
+// Whether one exists is remembered: asking the file system for every
+// extension of every lookup was a large part of loading
+static std::mutex g_looseMutex;
+static std::unordered_map<std::string, bool> g_looseFiles;
+static bool looseFileExists(const std::string &path) {
+  std::lock_guard<std::mutex> lock(g_looseMutex);
+  auto it = g_looseFiles.find(path);
+  if (it != g_looseFiles.end())
+    return it->second;
+  std::error_code ec;
+  bool exists = std::filesystem::is_regular_file(path, ec);
+  g_looseFiles.emplace(path, exists);
+  return exists;
+}
+
 std::string
 ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
   std::string base_name = fixDoubleName(resource_name_raw);
@@ -87,8 +104,7 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
     // user asked for tracing) SDL_Log("[TRACE] Checking: %s",
     // try_path.c_str());
 
-    if (std::filesystem::exists(try_path) &&
-        std::filesystem::is_regular_file(try_path)) {
+    if (looseFileExists(try_path)) {
       // // SDL_Log("[SUCCESS] Found Loose File: %s", try_path.c_str());
       return try_path;
     }
@@ -96,11 +112,9 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
 
   for (const auto &ext : extensions) {
     std::string try_name = base_name + ext;
-    if (this->resource_map.count(try_name)) {
-      SDL_Log("[SUCCESS] Found in ZTD Map: %s -> %s", try_name.c_str(),
-              this->resource_map[try_name].c_str());
-      return this->resource_map[try_name];
-    }
+    auto found = this->resource_map.find(try_name);
+    if (found != this->resource_map.end())
+      return found->second;
   }
 
   std::string with_slash = base_name + "/";
@@ -122,7 +136,7 @@ ResourceManager::getResourceLocation(const std::string &resource_name_raw) {
   if (!suppress) {
     // Log terrain resources specifically for debugging
     if (base_name.find("terrain/") != std::string::npos) {
-      SDL_Log("[WARNING] Terrain resource not found: %s", base_name.c_str());
+      ZT_TRACE("[WARNING] Terrain resource not found: %s", base_name.c_str());
     }
     // SDL_Log("Resource not found: %s", base_name.c_str()); // [PATCH] Silenced
   }
@@ -157,15 +171,8 @@ bool ResourceManager::hasResource(const std::string &resource_name_raw) {
       ".ani", ".tga", ".bmp", ".png", ".pal", ".wav",
   };
 
-  // [PATCH] Also check for loose files on disk (like getResourceLocation does)
-  for (const auto &ext : extensions) {
-    std::string try_path = base_name + ext;
-    if (std::filesystem::exists(try_path) &&
-        std::filesystem::is_regular_file(try_path)) {
-      return true;
-    }
-  }
-
+  // The archives first: checking the disk for loose files first cost two
+  // file system calls per extension on every lookup
   for (const auto &ext : extensions) {
     std::string try_name = base_name + ext;
     if (this->resource_map.count(try_name)) {
@@ -176,6 +183,14 @@ bool ResourceManager::hasResource(const std::string &resource_name_raw) {
   std::string with_slash = base_name + "/";
   if (this->resource_map.count(with_slash)) {
     return true;
+  }
+
+  // [PATCH] Also check for loose files on disk (like getResourceLocation does)
+  for (const auto &ext : extensions) {
+    std::string try_path = base_name + ext;
+    if (looseFileExists(try_path)) {
+      return true;
+    }
   }
 
   return false;
@@ -210,14 +225,12 @@ void ResourceManager::load_resource_map(std::atomic<float> *progress,
         if (ext != "ZTD" && ext != "ZIP")
           continue;
 
-        for (std::string file_raw :
-             ZtdFile::getFileList(archive.path().string())) {
-          std::string file = normalizePath(file_raw);
-          if (resource_map.count(file) == 0) {
-            resource_map[file] = archive.path().string();
-          }
-          archive_priority.emplace(archive.path().string(), pathIndex);
-        }
+        const std::string archivePath = archive.path().string();
+        std::vector<std::string> listed = ZtdFile::getFileList(archivePath);
+        archive_priority.emplace(archivePath, pathIndex);
+        resource_map.reserve(resource_map.size() + listed.size());
+        for (const std::string &file_raw : listed)
+          resource_map.try_emplace(normalizePath(file_raw), archivePath);
       }
     } catch (std::exception &e) {
       SDL_Log("Warning: Could not scan path %s: %s", path.c_str(), e.what());
@@ -231,48 +244,52 @@ void ResourceManager::load_resource_map(std::atomic<float> *progress,
   SDL_Log("Loading resource map done. Total files indexed: %zu",
           resource_map.size());
 
-  // [DEBUG] List terrain sprite entries
-  SDL_Log("=== DEBUG: Terrain Sprite Entries ===");
-  int terrain_count = 0;
-  for (auto const &[key, val] : resource_map) {
-    if (key.find("terrain/ic") != std::string::npos) {
-      SDL_Log("  %s -> %s", key.c_str(), val.c_str());
-      terrain_count++;
-      if (terrain_count > 50) {
-        SDL_Log("  ... (showing first 50 terrain entries)");
-        break;
+  // Diagnostics (every terrain entry, every map file's header): only when
+  // tracing resources
+  if (Utils::traceResources()) {
+    // [DEBUG] List terrain sprite entries
+    SDL_Log("=== DEBUG: Terrain Sprite Entries ===");
+    int terrain_count = 0;
+    for (auto const &[key, val] : resource_map) {
+      if (key.find("terrain/ic") != std::string::npos) {
+        SDL_Log("  %s -> %s", key.c_str(), val.c_str());
+        terrain_count++;
+        if (terrain_count > 50) {
+          SDL_Log("  ... (showing first 50 terrain entries)");
+          break;
+        }
       }
     }
-  }
-  SDL_Log("=== Total terrain/* entries: %d ===", terrain_count);
+    SDL_Log("=== Total terrain/* entries: %d ===", terrain_count);
 
-  // --- [DIAGNOSTIC] ZTD MAP SCANNER ---
-  SDL_Log("========================================");
-  SDL_Log("      INTERNAL MAP ARCHIVE SCAN");
-  SDL_Log("========================================");
-  int mapCount = 0;
-  for (auto const &[key, val] : resource_map) {
-    if (key.length() > 4 && key.substr(key.length() - 4) == ".zoo") {
-      int size = 0;
-      // Read header from ZTD
-      void *data = ZtdFile::getFileContent(val, key, &size);
-      if (data && size > 0x28) {
-        uint8_t *b = (uint8_t *)data;
-        uint32_t baseId = 0;
-        uint32_t mapType = 0;
-        memcpy(&baseId, b + 0x20, 4);
-        memcpy(&mapType, b + 0x24, 4);
+    // --- [DIAGNOSTIC] ZTD MAP SCANNER ---
+    SDL_Log("========================================");
+    SDL_Log("      INTERNAL MAP ARCHIVE SCAN");
+    SDL_Log("========================================");
+    int mapCount = 0;
+    for (auto const &[key, val] : resource_map) {
+      if (key.length() > 4 && key.substr(key.length() - 4) == ".zoo") {
+        int size = 0;
+        // Read header from ZTD
+        void *data = ZtdFile::getFileContent(val, key, &size);
+        if (data && size > 0x28) {
+          uint8_t *b = (uint8_t *)data;
+          uint32_t baseId = 0;
+          uint32_t mapType = 0;
+          memcpy(&baseId, b + 0x20, 4);
+          memcpy(&mapType, b + 0x24, 4);
 
-        SDL_Log("MAP DETECTED: %-20s | BaseID: %-2u | Type: %-6u", key.c_str(),
-                baseId, mapType);
-        mapCount++;
-        free(data);
+          SDL_Log("MAP DETECTED: %-20s | BaseID: %-2u | Type: %-6u", key.c_str(),
+                  baseId, mapType);
+          mapCount++;
+          free(data);
+        }
       }
     }
+    SDL_Log("Total Maps Found in ZTDs: %d", mapCount);
+    SDL_Log("========================================");
+    // ------------------------------------
   }
-  SDL_Log("Total Maps Found in ZTDs: %d", mapCount);
-  SDL_Log("========================================");
-  // ------------------------------------
 }
 
 void ResourceManager::load_string_map(std::atomic<float> *progress,
@@ -761,12 +778,28 @@ static Animation *withArtOptions(Animation *a, const std::string &name,
 
 Animation *ResourceManager::getAnimation(const std::string &name_raw) {
   std::string name = fixDoubleName(name_raw);
+
+  // Most names are a folder holding <name>/<last>.ani (ui/sharedui/arowup
+  // -> ui/sharedui/arowup/arowup.ani): read that straight away rather than
+  // first trying (and failing) to read the folder itself
+  {
+    std::string dir_ani =
+        name + "/" + name.substr(name.find_last_of('/') + 1) + ".ani";
+    if (!this->resource_map.count(name + ".ani")) {
+      auto found = this->resource_map.find(dir_ani);
+      if (found != this->resource_map.end() && !looseFileExists(dir_ani))
+        if (Animation *a =
+                AniFile::getAnimation(&pallet_manager, found->second, dir_ani))
+          return withArtOptions(a, name_raw, dir_ani);
+    }
+  }
+
   std::string loc = getResourceLocation(name);
 
   // [DEBUG] Detailed animation loading trace
   bool is_terrain = (name_raw.find("terrain/") != std::string::npos);
   if (is_terrain) {
-    SDL_Log("[TERRAIN] getAnimation: name_raw='%s' -> fixed='%s' loc='%s'",
+    ZT_TRACE("[TERRAIN] getAnimation: name_raw='%s' -> fixed='%s' loc='%s'",
             name_raw.c_str(), name.c_str(), loc.c_str());
   }
 
@@ -775,7 +808,7 @@ Animation *ResourceManager::getAnimation(const std::string &name_raw) {
   if (!loc.empty()) {
     std::string actual_key = findActualResourceKey(name);
 
-    SDL_Log("getAnimation: trying actual_key='%s'", actual_key.c_str());
+    ZT_TRACE("getAnimation: trying actual_key='%s'", actual_key.c_str());
     Animation *a = AniFile::getAnimation(&pallet_manager, loc, actual_key);
     if (a)
       return withArtOptions(a, name_raw, actual_key);
@@ -784,14 +817,14 @@ Animation *ResourceManager::getAnimation(const std::string &name_raw) {
   std::string name_ani = name + ".ani";
   loc = getResourceLocation(name_ani);
   if (is_terrain) {
-    SDL_Log("[TERRAIN] trying name_ani='%s' loc='%s'", name_ani.c_str(),
+    ZT_TRACE("[TERRAIN] trying name_ani='%s' loc='%s'", name_ani.c_str(),
             loc.c_str());
   }
   if (!loc.empty()) {
     Animation *a = AniFile::getAnimation(&pallet_manager, loc, name_ani);
     if (a) {
       if (is_terrain)
-        SDL_Log("[TERRAIN] SUCCESS with name_ani!");
+        ZT_TRACE("[TERRAIN] SUCCESS with name_ani!");
       return withArtOptions(a, name_raw, name_ani);
     }
   }
@@ -800,24 +833,24 @@ Animation *ResourceManager::getAnimation(const std::string &name_raw) {
       name + "/" + name.substr(name.find_last_of('/') + 1) + ".ani";
   loc = getResourceLocation(dir_ani);
   if (is_terrain) {
-    SDL_Log("[TERRAIN] trying dir_ani='%s' loc='%s'", dir_ani.c_str(),
+    ZT_TRACE("[TERRAIN] trying dir_ani='%s' loc='%s'", dir_ani.c_str(),
             loc.c_str());
   }
   if (!loc.empty()) {
     Animation *a = AniFile::getAnimation(&pallet_manager, loc, dir_ani);
     if (a) {
       if (is_terrain)
-        SDL_Log("[TERRAIN] SUCCESS with dir_ani!");
+        ZT_TRACE("[TERRAIN] SUCCESS with dir_ani!");
       return withArtOptions(a, name_raw, dir_ani);
     } else {
       if (is_terrain)
-        SDL_Log(
+        ZT_TRACE(
             "[TERRAIN] AniFile::getAnimation returned nullptr for dir_ani!");
     }
   }
 
   if (is_terrain) {
-    SDL_Log("[TERRAIN] FAILED to load animation for '%s'", name_raw.c_str());
+    ZT_TRACE("[TERRAIN] FAILED to load animation for '%s'", name_raw.c_str());
   }
 
   return nullptr;

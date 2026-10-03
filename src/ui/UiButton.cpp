@@ -414,6 +414,7 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     SDL_RenderCopy(renderer, this->text, nullptr, &text_rect);
   }
 
+  this->last_rect = this->dest_rect; // where it is, for getLastRect
   this->drawChildren(renderer, &dest_rect);
 }
 
