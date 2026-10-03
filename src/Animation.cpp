@@ -68,6 +68,7 @@ Animation &Animation::operator=(Animation &&other) noexcept {
     this->has_background = other.has_background;
     this->upscale = other.upscale;
     this->hd_dir = other.hd_dir;
+    this->anchor_offsets = std::move(other.anchor_offsets);
 
     other.surfaces.clear();
     other.textures.clear();
@@ -235,6 +236,18 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
   if (!this->world_art)
     source->second.clear();
   return &frames;
+}
+
+void Animation::anchorOffset(CompassDirection direction, int *dx, int *dy) {
+  std::string direction_string =
+      convertCompassDirectionToExistingAnimationString(direction,
+                                                       this->anchor_offsets);
+  auto it = this->anchor_offsets.find(direction_string);
+  SDL_Point p = it == this->anchor_offsets.end() ? SDL_Point{0, 0} : it->second;
+  if (dx)
+    *dx = p.x;
+  if (dy)
+    *dy = p.y;
 }
 
 void Animation::queryTexture(CompassDirection direction, int *w, int *h) {
@@ -411,6 +424,15 @@ void Animation::loadSurfaces(std::string direction_string,
   calculateOffset(data, &offset_x, &offset_y);
 
   this->surfaces[direction_string] = std::vector<SDL_Surface *>();
+
+  // Frame 0 lands in its surface at (offset_x - its offset_x, 0). Note the
+  // frame header's fields: offset_x holds the y anchor, offset_y the x one.
+  {
+    const AnimationFrameData &f = data->frames[0];
+    int placedX = offset_x - f.offset_x;
+    this->anchor_offsets[direction_string] = {
+        f.width / 2 - f.offset_y - placedX, f.height / 2 - f.offset_x};
+  }
 
   int loop_limit = (int)data->frame_count + (int)data->has_background;
 

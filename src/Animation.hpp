@@ -55,6 +55,14 @@ public:
     this->upscale = upscale;
     this->hd_dir = hdDir;
   }
+  // Where the original draws a UI frame inside its element's box: it
+  // centres the frame on the frame's own anchor point, i.e. shifts it by
+  // (width / 2 - anchor x, height / 2 - anchor y). Art anchored off-centre
+  // (the 32 px HUD buttons at x=15, the cash spinners at x=8) lands 1 px
+  // right. Measured against the original on the HUD and the freeform menu.
+  // The offset is from where this animation's own surface puts the frame.
+  void anchorOffset(CompassDirection direction, int *dx, int *dy);
+
   // Map art (objects, animals): drawn as is at 1:1, and from an upscaled
   // set (or HD pack frames) while the map is zoomed in
   void setWorldArt(const std::string &hdDir) {
@@ -63,6 +71,9 @@ public:
   }
 
 private:
+  // Per direction: frame 0's offset from its surface's corner to where the
+  // original draws it (see anchorOffset)
+  std::unordered_map<std::string, SDL_Point> anchor_offsets;
   bool upscale = false;
   bool world_art = false;
   std::string hd_dir;

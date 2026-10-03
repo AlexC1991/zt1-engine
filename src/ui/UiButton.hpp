@@ -1,7 +1,9 @@
 #ifndef UI_BUTTON_HPP
 #define UI_BUTTON_HPP
 
+#include <memory>
 #include <string>
+#include <vector>
 
 #include <SDL2/SDL.h>
 
@@ -26,8 +28,17 @@ public:
   bool isToggle() const { return (this->state_flags & 2048) != 0; }
   bool isToggledOn() const { return this->toggled_on; }
 
+  // Buttons of a UIRadioSet: toggles in a set start off (the HUD's rating
+  // buttons, which open their panels), and turning one on turns the others
+  // off
+  void setRadioGroup(std::shared_ptr<std::vector<UiButton *>> group) {
+    this->radio_group = group;
+    this->toggled_on = false;
+  }
+
 private:
   bool toggled_on = true;
+  std::shared_ptr<std::vector<UiButton *>> radio_group;
   std::string text_string = "";
   SDL_Texture *text = nullptr;
   SDL_Texture *shadow = nullptr;

@@ -1,6 +1,7 @@
 #include "World.hpp"
 #include "RenderSettings.hpp"
 #include "ArtScaler.hpp"
+#include "GpuFsr.hpp"
 #include "MemoryManager.hpp"
 #include "MemoryTracker.hpp"
 #include <SDL2/SDL.h>
@@ -247,19 +248,33 @@ void World::draw(SDL_Renderer *renderer) {
     cam.screenCenterY = outH / 2;
   }
 
-  // Apply zoom. Past 1x the map's art is drawn from its upscaled textures.
-  SDL_RenderSetScale(renderer, cam.zoom, cam.zoom);
+  // Apply zoom. Zoomed in past 1x, GPU FSR draws the map at 1:1 into a
+  // layer and upscales it to the window; without it the map's art is drawn
+  // from its upscaled textures.
+  float zoom = cam.zoom > 0.0f ? cam.zoom : 1.0f;
+  const bool gpuFsr = GpuFsr::upscales(zoom);
+  if (gpuFsr) {
+    GpuFsr::beginLayer(renderer, GpuFsr::Layer::World,
+                       static_cast<int>(std::ceil(outputW / zoom)),
+                       static_cast<int>(std::ceil(outputH / zoom)),
+                       SDL_Color{0, 0, 0, 255});
+  } else {
+    SDL_RenderSetScale(renderer, zoom, zoom);
+  }
   RenderSettings::worldZoomedIn =
-      cam.zoom > 1.001f && ArtScaler::worldFactor() > 1;
+      !gpuFsr && zoom > 1.001f && ArtScaler::worldFactor() > 1;
 
   // Render terrain layer
   worldRenderer.renderTerrain(renderer, worldMap, SpriteDatabase::get());
 
   // Render entities layer (same zoom-centred origin as the terrain)
-  float zoom = cam.zoom > 0.0f ? cam.zoom : 1.0f;
   entityManager.draw(renderer, cam.x, cam.y,
                      static_cast<int>(cam.screenCenterX / zoom),
                      static_cast<int>(cam.screenCenterY / zoom));
+
+  if (gpuFsr)
+    GpuFsr::endLayer(renderer, GpuFsr::Layer::World, outputW / zoom,
+                     outputH / zoom, false);
 
   // Reset scale
   SDL_RenderSetScale(renderer, 1.0f, 1.0f);

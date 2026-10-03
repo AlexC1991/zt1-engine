@@ -8,6 +8,7 @@
 #include <string>
 
 #include "ArtScaler.hpp"
+#include "GpuFsr.hpp"
 #include "Config.hpp"
 #include "RenderSettings.hpp"
 #include "IniReader.hpp"
@@ -279,24 +280,53 @@ static void mapInputsToLayout(std::vector<Input> &inputs, const UiTransform &t) 
   }
 }
 
+// Draws a UI at the UI scale. With GPU FSR the art goes into a 1:1 layer
+// that FSR upscales to the window, then the text is drawn at the window's
+// resolution on top; otherwise it is all drawn scaled in one go.
+// draw(renderer) draws the UI in layout units.
+template <typename DrawFn>
+static void drawUiScaled(SDL_Renderer *renderer, ResourceManager *rm,
+                         const UiTransform &t, DrawFn draw) {
+  rm->setTextScale(t.scale);
+  int outW = UI_LAYOUT_W, outH = UI_LAYOUT_H;
+  SDL_GetRendererOutputSize(renderer, &outW, &outH);
+
+  if (GpuFsr::upscales(t.scale)) {
+    GpuFsr::beginLayer(renderer, GpuFsr::Layer::Ui,
+                       static_cast<int>(std::ceil(outW / t.scale)),
+                       static_cast<int>(std::ceil(outH / t.scale)),
+                       SDL_Color{0, 0, 0, 0});
+    RenderSettings::artScaleMode = SDL_ScaleModeNearest;
+    RenderSettings::uiPass = RenderSettings::UiPass::Art;
+    draw(renderer);
+    GpuFsr::endLayer(renderer, GpuFsr::Layer::Ui, outW / t.scale,
+                     outH / t.scale, true);
+    RenderSettings::uiPass = RenderSettings::UiPass::Text;
+  } else {
+    bool wholeScale = std::fabs(t.scale - std::round(t.scale)) < 0.01f;
+    RenderSettings::artScaleMode =
+        wholeScale ? SDL_ScaleModeNearest : SDL_ScaleModeLinear;
+  }
+  SDL_RenderSetScale(renderer, t.scale, t.scale);
+  draw(renderer);
+  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+  RenderSettings::uiPass = RenderSettings::UiPass::All;
+  RenderSettings::artScaleMode = SDL_ScaleModeNearest;
+}
+
 static void drawLayoutCentered(SDL_Renderer *renderer, UiLayout *layout,
                                ResourceManager *rm) {
   UiTransform t = getUiTransform(renderer);
-  rm->setTextScale(t.scale);
-  bool wholeScale = std::fabs(t.scale - std::round(t.scale)) < 0.01f;
-  RenderSettings::artScaleMode =
-      wholeScale ? SDL_ScaleModeNearest : SDL_ScaleModeLinear;
-  SDL_RenderSetScale(renderer, t.scale, t.scale);
-  // Viewport is given in scaled units
-  SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
-                       static_cast<int>(std::lround(t.offsetY / t.scale)),
-                       UI_LAYOUT_W, UI_LAYOUT_H};
-  SDL_RenderSetViewport(renderer, &viewport);
-  SDL_Rect layoutRect = {0, 0, UI_LAYOUT_W, UI_LAYOUT_H};
-  layout->draw(renderer, &layoutRect);
-  SDL_RenderSetViewport(renderer, nullptr);
-  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
-  RenderSettings::artScaleMode = SDL_ScaleModeNearest;
+  drawUiScaled(renderer, rm, t, [&](SDL_Renderer *r) {
+    // Viewport is given in layout units
+    SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
+                         static_cast<int>(std::lround(t.offsetY / t.scale)),
+                         UI_LAYOUT_W, UI_LAYOUT_H};
+    SDL_RenderSetViewport(r, &viewport);
+    SDL_Rect layoutRect = {0, 0, UI_LAYOUT_W, UI_LAYOUT_H};
+    layout->draw(r, &layoutRect);
+    SDL_RenderSetViewport(r, nullptr);
+  });
 }
 
 // ============================================================================
@@ -372,7 +402,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
   // them: the zoo rating a new freeform zoo shows in the original, and no
   // animals or guests yet.
   if (auto *zoo = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1015)))
-    zoo->setValue(29);
+    zoo->setValue(36); // a new zoo on Death Mountain in the original
   if (auto *animals = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1011)))
     animals->setValue(0);
   if (auto *guests = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1013)))
@@ -389,22 +419,19 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
 static SDL_Rect hudLayoutRect(SDL_Renderer *renderer, const UiTransform &t) {
   int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
   SDL_GetRendererOutputSize(renderer, &w, &h);
-  return {0, 0, static_cast<int>(w / t.scale), static_cast<int>(h / t.scale)};
+  // Rounded, not truncated: the right-hand and centred pieces then sit
+  // within half a layout pixel of the window's real right edge and centre
+  return {0, 0, static_cast<int>(std::lround(w / t.scale)),
+          static_cast<int>(std::lround(h / t.scale))};
 }
 
 static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
   if (!g_hud)
     return;
   UiTransform t = getUiTransform(renderer);
-  rm->setTextScale(t.scale);
-  bool wholeScale = std::fabs(t.scale - std::round(t.scale)) < 0.01f;
-  RenderSettings::artScaleMode =
-      wholeScale ? SDL_ScaleModeNearest : SDL_ScaleModeLinear;
-  SDL_RenderSetScale(renderer, t.scale, t.scale);
   SDL_Rect rect = hudLayoutRect(renderer, t);
-  g_hud->draw(renderer, &rect);
-  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
-  RenderSettings::artScaleMode = SDL_ScaleModeNearest;
+  drawUiScaled(renderer, rm, t,
+               [&](SDL_Renderer *r) { g_hud->draw(r, &rect); });
 }
 
 static UiAction hudInputs(SDL_Renderer *renderer, std::vector<Input> inputs) {
@@ -775,9 +802,16 @@ int main(int argc, char *argv[]) {
   g_uiScaleSetting = config.getUiScale();
   ResourceManager resource_manager(&config);
 
+  // FSR runs on the GPU, which needs SDL's OpenGL renderer (shaders). If
+  // that is not available the art is upscaled once when it loads instead.
+  ArtScaler::Mode artMode = ArtScaler::parseMode(config.getArtUpscale());
+  if (artMode == ArtScaler::Mode::Fsr)
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
   Window window("ZT1-Engine", config.getScreenWidth(), config.getScreenHeight(),
                 60.0f);
-  ArtScaler::configure(ArtScaler::parseMode(config.getArtUpscale()),
+  bool gpuFsr = artMode == ArtScaler::Mode::Fsr &&
+                GpuFsr::init(window.renderer, config.getArtSharpness());
+  ArtScaler::configure(gpuFsr ? ArtScaler::Mode::Off : artMode,
                        config.getArtUpscaleFactor(), config.getArtSharpness());
   window.set_cursor(resource_manager.getCursor(9));
 

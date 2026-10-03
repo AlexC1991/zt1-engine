@@ -194,11 +194,13 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
     cached_rect.w = dx;
     cached_rect.h = dy;
 
-    if (!transparent) {
+    // Art and text are drawn in separate passes under GPU FSR
+    const bool art = RenderSettings::drawsUiArt();
+    if (!transparent && art) {
         SDL_SetRenderDrawColor(renderer, backcolor.r, backcolor.g, backcolor.b, backcolor.a);
         SDL_RenderFillRect(renderer, &cached_rect);
     }
-    if (border > 0) {
+    if (border > 0 && art) {
         SDL_SetRenderDrawColor(renderer, forecolor.r, forecolor.g, forecolor.b, 255);
         SDL_RenderDrawRect(renderer, &cached_rect);
     }
@@ -228,13 +230,13 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
             bg = &selectbackcolor;
             fg = &selectcolor;
             SDL_SetRenderDrawColor(renderer, bg->r, bg->g, bg->b, 255);
-            SDL_RenderFillRect(renderer, &item_rect);
+            if (art) SDL_RenderFillRect(renderer, &item_rect);
             SDL_SetRenderDrawColor(renderer, 255, 217, 90, 255);
-            SDL_RenderDrawRect(renderer, &item_rect);
+            if (art) SDL_RenderDrawRect(renderer, &item_rect);
         }
         else if (item_index == hover_index) {
             SDL_SetRenderDrawColor(renderer, highlightcolor.r, highlightcolor.g, highlightcolor.b, 100);
-            SDL_RenderFillRect(renderer, &item_rect);
+            if (art) SDL_RenderFillRect(renderer, &item_rect);
         }
 
         // --- FIXED LAZY LOAD ---
@@ -253,7 +255,8 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
             };
             SDL_SetTextureBlendMode(item.iconTex, SDL_BLENDMODE_BLEND);
             RenderSettings::applyArtScaleMode(item.iconTex);
-            SDL_RenderCopy(renderer, item.iconTex, nullptr, &iconRect);
+            if (art)
+                SDL_RenderCopy(renderer, item.iconTex, nullptr, &iconRect);
             text_x_offset = 24;
         }
 
@@ -272,7 +275,8 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
                 if (text_rect.w > item_rect.w - text_x_offset) {
                     text_rect.w = item_rect.w - text_x_offset;
                 }
-                SDL_RenderCopy(renderer, text_texture, nullptr, &text_rect);
+                if (RenderSettings::drawsUiText())
+                    SDL_RenderCopy(renderer, text_texture, nullptr, &text_rect);
             }
         }
         item_y += item_height;
