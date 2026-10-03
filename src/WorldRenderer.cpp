@@ -83,6 +83,16 @@ const SDL_Color kFallbackColors[NUM_TERRAIN_TYPES] = {
 
 const SDL_Color kUnknownColor = {255, 0, 255, 255};
 
+// Grid line tones. The shapes come from tiles.ztd's grid bitmaps (n*.bmp
+// north edge, e*.bmp east edge: a 2 px line, upper and lower tone). The
+// colours are as the original shows them on screen, averaged over land and
+// water on Death Mountain (its display shifts the bitmaps' (84,59,49),
+// (163,115,95) and (113,79,66) darker and more orange)
+const SDL_Color kGridNorthUpper = {60, 27, 0, 255};
+const SDL_Color kGridNorthLower = {108, 75, 48, 255};
+const SDL_Color kGridEastUpper = {170, 120, 82, 255};
+const SDL_Color kGridEastLower = {84, 50, 20, 255};
+
 // Ground shading, fitted to the original game: screenshots of 16 maps were
 // divided by our unlit render and regressed against our per-pixel world
 // normals (13.6M pixels). The original's terrain/tilevar.cfg names two D3D
@@ -703,6 +713,28 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
            o++) {
         const TileOverlay &ov = cache.overlays[o];
         paint(1, ov.terrain, ov.alpha, checker);
+      }
+
+      // --- Grid (Ctrl+G): this tile's two back edges, at its own corner
+      // heights so it follows slopes and sits on top of cliffs. Same lines
+      // as the original's tiles.ztd grid bitmaps (n*.bmp / e*.bmp): 2 px,
+      // an upper and a lower tone, under any objects on the tile
+      if (gridVisible) {
+        auto edge = [&](SDL_FPoint a, SDL_FPoint b, SDL_Color upper,
+                        SDL_Color lower) {
+          auto band = [&](float top, SDL_Color c) {
+            SDL_Vertex v0 = {{a.x, a.y + top}, c, {0, 0}};
+            SDL_Vertex v1 = {{b.x, b.y + top}, c, {0, 0}};
+            SDL_Vertex v2 = {{b.x, b.y + top + 1.0f}, c, {0, 0}};
+            SDL_Vertex v3 = {{a.x, a.y + top + 1.0f}, c, {0, 0}};
+            addToBucket(2, 0, nullptr, v0, v1, v2);
+            addToBucket(2, 0, nullptr, v0, v2, v3);
+          };
+          band(-1.0f, upper);
+          band(0.0f, lower);
+        };
+        edge(p[VL], p[VT], kGridNorthUpper, kGridNorthLower); // n*.bmp
+        edge(p[VT], p[VR], kGridEastUpper, kGridEastLower);   // e*.bmp
       }
     }
     flushBuckets(renderer);
