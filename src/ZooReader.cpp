@@ -170,68 +170,57 @@ bool ZooReader::load(const AssetBuffer &buffer) {
   }
 
   // --- OBJECT DATA PARSING ---
-  scanForObjects(buffer, tileDataOffset + tiles.size() * TILE_STRIDE);
+  readObjects(raw, buffer.size, tileDataOffset + tiles.size() * TILE_STRIDE);
   return true;
 }
 
-void ZooReader::scanForObjects(const AssetBuffer &buffer, size_t startOffset) {
-    if (startOffset >= buffer.size) {
-        SDL_Log("[ZooReader] No object data (offset beyond buffer)");
-        return;
+void ZooReader::readObjects(const uint8_t *data, size_t size, size_t offset) {
+  size_t pos = offset;
+  auto u32 = [&](uint32_t &out) {
+    if (pos + 4 > size)
+      return false;
+    memcpy(&out, data + pos, 4);
+    pos += 4;
+    return true;
+  };
+  auto str = [&](std::string &out) {
+    uint32_t len = 0;
+    if (!u32(len) || len > 1024 || pos + len > size)
+      return false;
+    out.assign((const char *)data + pos, len);
+    pos += len;
+    return true;
+  };
+
+  uint32_t count = 0;
+  if (!u32(count) || count > 1000000) {
+    SDL_Log("[ZooReader] No object list");
+    return;
+  }
+  objects.reserve(count);
+  for (uint32_t i = 0; i < count; i++) {
+    ZooObject obj;
+    uint32_t payloadSize = 0;
+    if (!str(obj.className) || !str(obj.subClass) || !str(obj.typeName) ||
+        !u32(payloadSize) || pos + payloadSize > size) {
+      SDL_Log("[ZooReader] Object list ended early at %u of %u", i, count);
+      break;
     }
-
-    SDL_Log("[ZooReader] === SCANNING OBJECTS ===");
-    SDL_Log("[ZooReader]   Start offset: 0x%zX (%zu)", startOffset, startOffset);
-    SDL_Log("[ZooReader]   Remaining bytes: %zu", buffer.size - startOffset);
-
-    size_t len = buffer.size;
-    int objectsFound = 0;
-    int objectsRejected = 0;
-
-    for (size_t i = startOffset; i < len - 12; i += 4) {
-        uint32_t id;
-        int32_t x, y;
-
-        if (!buffer.safeRead(i, &id)) continue;
-
-        // Valid object IDs are typically in range 1000-65000
-        if (id > 1000 && id < 65000) {
-            if (buffer.safeRead(i + 4, &x) && buffer.safeRead(i + 8, &y)) {
-                if (x >= 0 && x < mapWidth && y >= 0 && y < mapHeight) {
-                    ZooObject obj = {id, x, y};
-                    this->objects.push_back(obj);
-                    objectsFound++;
-
-                    // Log first few objects for debugging
-                    if (objectsFound <= 5) {
-                        SDL_Log("[ZooReader]   Object #%d: ID=%u at (%d,%d)", objectsFound, id, x, y);
-                    }
-
-                    i += 8; // Skip past this object (will add 4 more in loop)
-                } else {
-                    objectsRejected++;
-                }
-            }
-        }
+    obj.payload.assign(data + pos, data + pos + payloadSize);
+    if (payloadSize >= 24) {
+      memcpy(&obj.x, data + pos + 4, 4);
+      memcpy(&obj.y, data + pos + 8, 4);
+      memcpy(&obj.z, data + pos + 12, 4);
+      memcpy(&obj.id, data + pos + 20, 4);
+      uint32_t nameLen = 0;
+      if (payloadSize >= 28) {
+        memcpy(&nameLen, data + pos + 24, 4);
+        if (nameLen < 256 && 28 + nameLen <= payloadSize)
+          obj.name.assign((const char *)data + pos + 28, nameLen);
+      }
     }
-
-    SDL_Log("[ZooReader]   Objects found: %d", objectsFound);
-    SDL_Log("[ZooReader]   Objects rejected (out of bounds): %d", objectsRejected);
-}
-
-void ZooReader::addObject(const ZooObject &obj) {
-    this->objects.push_back(obj);
-}
-
-void ZooReader::validateObjects(int maxWidth, int maxHeight) {
-    size_t before = objects.size();
-    auto it = std::remove_if(objects.begin(), objects.end(),
-        [maxWidth, maxHeight](const ZooObject& o) {
-            return o.x < 0 || o.y < 0 || o.x >= maxWidth || o.y >= maxHeight;
-        });
-    objects.erase(it, objects.end());
-
-    if (objects.size() != before) {
-        SDL_Log("[ZooReader] Validated objects: %zu -> %zu", before, objects.size());
-    }
+    pos += payloadSize;
+    objects.push_back(std::move(obj));
+  }
+  SDL_Log("[ZooReader]   %zu objects", objects.size());
 }

@@ -35,6 +35,21 @@ public:
     // in terrain/tiletex*.cfg). Loaded on first use; nullptr if unavailable.
     SDL_Texture* getTerrainTexture(SDL_Renderer* renderer, int terrainId);
 
+    // One frame of a path type's art: paths/<type>.ai names the animation
+    // ([Animations] idle = idle), whose frames are paths/<type>/idle/1..20.
+    // Frames 1-4 are ramps, 5-20 flat pieces with kerbs. Loaded on first use.
+    struct Sprite {
+        SDL_Texture* texture = nullptr;
+        int anchorX = 0, anchorY = 0; // image pixel on the tile centre
+        int width = 0, height = 0;
+    };
+    const Sprite& getPathSprite(SDL_Renderer* renderer, const std::string& type,
+                                int frame);
+
+    // Terrain name from its tiletex*.cfg section, without "tt" (e.g. "Grass",
+    // "SavannahGrass"); used to look up colours such as ui/miniclr.cfg
+    std::string getTerrainName(int terrainId) const;
+
     // Whether a terrain type blends into its neighbours ("blend" key in
     // terrain/tiletex*.cfg, default 1; concrete and asphalt are 0)
     bool terrainBlends(int terrainId) const;
@@ -64,8 +79,11 @@ private:
     // Ground textures: terrainId -> path, and lazily created textures
     std::unordered_map<int, std::string> terrainTexturePaths;
     std::unordered_map<int, bool> terrainBlendFlags;
+    std::unordered_map<int, std::string> terrainNames;
     std::unordered_map<int, SDL_Texture*> terrainTextures;
     SDL_Renderer* textureRenderer = nullptr;
+    std::unordered_map<std::string, Sprite> pathSprites;
+    std::unordered_map<std::string, std::string> pathArtFolders;
 
     bool isInitialized = false;
 };

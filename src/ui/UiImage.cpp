@@ -60,6 +60,9 @@ UiImage::UiImage(IniReader *ini_reader, ResourceManager *resource_manager,
   // file (usually 1). If it still overlaps the borders, we can try forcing it
   // to 0 here. if (isPreviewId(this->id)) { this->layer = 0; }
 
+  this->filler_anchor1 = ini_reader->getInt(name, "anchor1", 0);
+  this->filler_anchor2 = ini_reader->getInt(name, "anchor2", 0);
+
   std::string normal = ini_reader->get(name, "normal");
   if (!normal.empty()) {
     this->image_path = normal;
@@ -132,10 +135,9 @@ UiAction UiImage::handleInputs(std::vector<Input> &inputs) {
   return handleInputChildren(inputs);
 }
 
-void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
-  if (renderer == nullptr || layout_rect == nullptr) {
+void UiImage::ensureLoaded(SDL_Renderer *renderer) {
+  if (renderer == nullptr)
     return;
-  }
 
   if (((this->image == nullptr && this->animation == nullptr &&
         !this->image_path.empty()) ||
@@ -170,8 +172,94 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     }
   }
 
-  SDL_Rect dest_rect =
-      this->getRect(this->ini_reader->getSection(this->name), layout_rect);
+}
+
+bool UiImage::naturalSize(int *w, int *h) {
+  *w = *h = 0;
+  if (this->image)
+    SDL_QueryTexture(this->image, nullptr, nullptr, w, h);
+  else if (this->animation)
+    this->animation->queryTexture(CompassDirection::N, w, h);
+  return *w > 0 && *h > 0;
+}
+
+SDL_Rect UiImage::computeRect(SDL_Renderer *renderer, SDL_Rect *parent_rect) {
+  ensureLoaded(renderer);
+  auto section = this->ini_reader->getSection(this->name);
+  int w, h;
+  if (naturalSize(&w, &h)) {
+    // Without an explicit size, an image is as big as its art (needed for
+    // x=right / y=bottom placement)
+    if (!section.contains("dx") || section["dx"] == "whole")
+      if (!section.contains("dynamicwidth"))
+        section["dx"] = std::to_string(w);
+    if (!section.contains("dy") || section["dy"] == "whole" ||
+        section["dy"] == "fitfont")
+      if (!section.contains("dynamicheight"))
+        section["dy"] = std::to_string(h);
+  }
+  return this->getRect(section, parent_rect);
+}
+
+void UiImage::drawTiled(SDL_Renderer *renderer, const SDL_Rect &area) {
+  int w, h;
+  if (!naturalSize(&w, &h) || area.w <= 0 || area.h <= 0)
+    return;
+  // No clip rect here: at a fractional UI scale SDL truncates the clip rect
+  // to whole pixels, leaving a 1px seam where the filler meets the next
+  // piece. Tiles that would overrun the area are cropped instead.
+  for (int y = area.y; y < area.y + area.h; y += h) {
+    for (int x = area.x; x < area.x + area.w; x += w) {
+      int cw = std::min(w, area.x + area.w - x);
+      int ch = std::min(h, area.y + area.h - y);
+      SDL_Rect r = {x, y, cw, ch};
+      if (this->image) {
+        SDL_Rect src = {0, 0, cw, ch};
+        SDL_RenderCopy(renderer, this->image, &src, &r);
+      } else if (cw == w && ch == h) {
+        this->animation->draw(renderer, &r, CompassDirection::N);
+      } else {
+        SDL_Rect clip = r; // a partial animation tile (rare)
+        SDL_RenderSetClipRect(renderer, &clip);
+        SDL_Rect full = {x, y, w, h};
+        this->animation->draw(renderer, &full, CompassDirection::N);
+        SDL_RenderSetClipRect(renderer, nullptr);
+      }
+    }
+  }
+}
+
+void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
+  if (renderer == nullptr || layout_rect == nullptr) {
+    return;
+  }
+  ensureLoaded(renderer);
+
+  // Filler: repeat the art in the gap between its two anchor elements
+  if (filler_a && filler_b) {
+    SDL_Rect a = filler_a->computeRect(renderer, layout_rect);
+    SDL_Rect b = filler_b->computeRect(renderer, layout_rect);
+    int w, h;
+    if (naturalSize(&w, &h)) {
+      SDL_Rect area;
+      if (this->ini_reader->getInt(this->name, "dynamicheight", 0)) {
+        area = {a.x, a.y + a.h, w, b.y - (a.y + a.h)};
+      } else {
+        // Horizontal strip along the bottom edge (y=bottom) or top
+        bool bottom = this->ini_reader->get(this->name, "y") == "bottom";
+        int y = bottom ? layout_rect->y + layout_rect->h - h : layout_rect->y;
+        area = {a.x + a.w, y, b.x - (a.x + a.w), h};
+      }
+      drawTiled(renderer, area);
+      this->last_rect = area;
+    }
+    return;
+  }
+
+  SDL_Rect dest_rect = isPreviewId(this->id)
+                           ? this->getRect(this->ini_reader->getSection(this->name),
+                                           layout_rect)
+                           : this->computeRect(renderer, layout_rect);
 
   // --- MANUAL OVERRIDE FOR PREVIEWS ---
   if (isPreviewId(this->id)) {
@@ -234,5 +322,6 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     this->animation->draw(renderer, &dest_rect, CompassDirection::N);
   }
 
+  this->last_rect = dest_rect;
   this->drawChildren(renderer, &dest_rect);
 }

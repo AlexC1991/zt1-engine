@@ -21,5 +21,13 @@ enum class UiAction {
     // [PATCH] Play Buttons (mapped to Layout IDs)
     PLAY_SCENARIO_START = 50008,    // "Play" on Scenario screen
     PLAY_FREEFORM_START = 11513,    // "Play" on Freeform screen
+
+    // In-game HUD buttons (ui/main.lyt ids)
+    HUD_ZOOM_IN = 1007,
+    HUD_ROTATE_CCW = 1008,
+    HUD_ROTATE_CW = 1009,
+    HUD_ZOOM_OUT = 1023,
+    HUD_PAUSE = 1071,
+    HUD_PLAY = 1072,
 };
 #endif // UI_ACTION_HPP

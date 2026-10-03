@@ -72,6 +72,14 @@ public:
   // 0 = lit (normal), 1 = unlit textures, 2 = world normals as colours
   void setShadingMode(int mode) { shadingMode = mode; }
 
+  // View grid (u across, v deep) for the map last drawn, the world tile
+  // under a view tile, and the view position at the centre of the screen
+  void getViewSize(int &viewU, int &viewV) const;
+  bool viewTileToWorld(int u, int v, int &x, int &y) const;
+  void getViewCentre(float &u, float &v) const;
+  // Centre the screen on a view position (rotation-aware)
+  void centreViewOn(float u, float v);
+
   // Optional draw distance in tiles from the centre of the screen, for slow
   // machines (a future in-game setting; the original never had one).
   // 0 = draw the whole map.
@@ -134,7 +142,7 @@ private:
   void rebuildCache(const WorldMap &map, SpriteDatabase &spriteDB);
 
   // Triangles for one draw diagonal, grouped so each texture is drawn once:
-  // layer 0 = cliffs and surfaces, layer 1 = blend overlays by terrain type
+  // layer 0 = cliffs and surfaces, 1 = terrain blends, 2 = paths, 3 = grid
   struct Bucket {
     int layer;
     int order;

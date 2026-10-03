@@ -246,6 +246,38 @@ void WorldRenderer::startViewAt(const WorldMap &map, int tileX, int tileY) {
           tileY, viewRotation);
 }
 
+void WorldRenderer::getViewSize(int &viewU, int &viewV) const {
+  bool swapped = (viewRotation % 2) == 0;
+  viewU = swapped ? mapHeightCache : mapWidthCache;
+  viewV = swapped ? mapWidthCache : mapHeightCache;
+}
+
+bool WorldRenderer::viewTileToWorld(int u, int v, int &x, int &y) const {
+  int U, V;
+  getViewSize(U, V);
+  if (u < 0 || v < 0 || u >= U || v >= V)
+    return false;
+  int x0, y0, x1, y1;
+  viewToWorldVertex(u, v, x0, y0);
+  viewToWorldVertex(u + 1, v + 1, x1, y1);
+  x = std::min(x0, x1);
+  y = std::min(y0, y1);
+  return true;
+}
+
+void WorldRenderer::getViewCentre(float &u, float &v) const {
+  // The screen centre is the view origin moved by -camera
+  float a = -camera.x / (tileWidth * 0.5f);  // u - v
+  float b = -camera.y / (tileHeight * 0.5f); // u + v
+  u = (a + b) * 0.5f;
+  v = (b - a) * 0.5f;
+}
+
+void WorldRenderer::centreViewOn(float u, float v) {
+  camera.x = static_cast<int>(std::lround(-(u - v) * tileWidth * 0.5f));
+  camera.y = static_cast<int>(std::lround(-(u + v) * tileHeight * 0.5f));
+}
+
 float WorldRenderer::logicalCenterX() const {
   float zoom = camera.zoom > 0.0f ? camera.zoom : 1.0f;
   return camera.screenCenterX / zoom;
@@ -715,6 +747,67 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
         paint(1, ov.terrain, ov.alpha, checker);
       }
 
+      // --- Paths: the path type's frame for this tile, drawn like the
+      // original draws sprites: the frame's anchor on the tile centre.
+      // Frames (paths/<type>/idle/N, measured from the art):
+      //   1-4  ramps, by which two corners are raised (in view terms):
+      //        1 bottom+left, 2 right+bottom, 3 top+left, 4 top+right
+      //   5-20 flat, 5 + (15 - kerb mask); a kerb is drawn on each edge
+      //        with no path beyond it at the same height
+      //        (mask bits: NW 8, NE 4, SE 2, SW 1)
+      int pathType = map.getPathType(x, y);
+      if (pathType >= 0 && !debugTerrainIds) {
+        auto connected = [&](int du, int dv, int a, int na, int b, int nb) {
+          ViewTile n = viewTile(u + du, v + dv);
+          return n.tile && map.getPathType(n.x, n.y) >= 0 && h[a] == n.h[na] &&
+                 h[b] == n.h[nb];
+        };
+        int lowest = *std::min_element(h, h + 4);
+        bool raised[4];
+        for (int i = 0; i < 4; i++)
+          raised[i] = h[i] > lowest;
+
+        int frame;
+        if (raised[VB] && raised[VL] && !raised[VT] && !raised[VR]) {
+          frame = 1;
+        } else if (raised[VR] && raised[VB] && !raised[VT] && !raised[VL]) {
+          frame = 2;
+        } else if (raised[VT] && raised[VL] && !raised[VR] && !raised[VB]) {
+          frame = 3;
+        } else if (raised[VT] && raised[VR] && !raised[VB] && !raised[VL]) {
+          frame = 4;
+        } else {
+          int kerbs = 0;
+          if (!connected(-1, 0, VT, VR, VL, VB))
+            kerbs |= 8; // NW
+          if (!connected(0, -1, VT, VL, VR, VB))
+            kerbs |= 4; // NE
+          if (!connected(1, 0, VR, VT, VB, VL))
+            kerbs |= 2; // SE
+          if (!connected(0, 1, VL, VT, VB, VR))
+            kerbs |= 1; // SW
+          frame = 5 + (15 - kerbs);
+        }
+
+        const SpriteDatabase::Sprite &art = spriteDB.getPathSprite(
+            renderer, map.getPathTypes()[pathType], frame);
+        if (art.texture) {
+          // Tile centre on screen, at the average corner height
+          float centreH = (h[0] + h[1] + h[2] + h[3]) * 0.25f;
+          float cx = sx, cy = sy + halfH - centreH * unitPx;
+          float k = tileWidth / 64.0f; // art is drawn for 64 px tiles
+          float x0 = cx - art.anchorX * k, y0 = cy - art.anchorY * k;
+          float x1 = x0 + art.width * k, y1 = y0 + art.height * k;
+          SDL_Color white = {255, 255, 255, 255};
+          SDL_Vertex q0 = {{x0, y0}, white, {0, 0}};
+          SDL_Vertex q1 = {{x1, y0}, white, {1, 0}};
+          SDL_Vertex q2 = {{x1, y1}, white, {1, 1}};
+          SDL_Vertex q3 = {{x0, y1}, white, {0, 1}};
+          addToBucket(2, pathType, art.texture, q0, q1, q2);
+          addToBucket(2, pathType, art.texture, q0, q2, q3);
+        }
+      }
+
       // --- Grid (Ctrl+G): this tile's two back edges, at its own corner
       // heights so it follows slopes and sits on top of cliffs. Same lines
       // as the original's tiles.ztd grid bitmaps (n*.bmp / e*.bmp): 2 px,
@@ -727,8 +820,8 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
             SDL_Vertex v1 = {{b.x, b.y + top}, c, {0, 0}};
             SDL_Vertex v2 = {{b.x, b.y + top + 1.0f}, c, {0, 0}};
             SDL_Vertex v3 = {{a.x, a.y + top + 1.0f}, c, {0, 0}};
-            addToBucket(2, 0, nullptr, v0, v1, v2);
-            addToBucket(2, 0, nullptr, v0, v2, v3);
+            addToBucket(3, 0, nullptr, v0, v1, v2);
+            addToBucket(3, 0, nullptr, v0, v2, v3);
           };
           band(-1.0f, upper);
           band(0.0f, lower);

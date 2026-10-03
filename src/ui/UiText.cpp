@@ -18,6 +18,8 @@ UiText::UiText(IniReader * ini_reader, ResourceManager * resource_manager, std::
   this->name = name;
   this->id = ini_reader->getInt(name, "id");
   this->font = ini_reader->getInt(name, "font");
+  this->anchor = ini_reader->getInt(name, "anchor", 0);
+  this->layer = ini_reader->getInt(name, "layer", 1);
 
   // Load initial text
   uint32_t string_id = (uint32_t) ini_reader->getUnsignedInt(name, "id");
@@ -146,6 +148,8 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
   if (color_values.size() >= 3) {
       try { color = {(uint8_t)std::stoi(color_values[0]), (uint8_t)std::stoi(color_values[1]), (uint8_t)std::stoi(color_values[2]), 255}; } catch (...) {}
   }
+  if (has_color_override)
+      color = color_override;
 
   // 4. Render Lines
   int start_x = dest_rect.x + (is_multiline ? 4 : 0); 

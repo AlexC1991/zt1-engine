@@ -39,20 +39,30 @@ public:
     return &tiles[y * mapWidth + x];
   }
 
+  // One placed object (path, fence, foliage, building, guest, ...). Every
+  // object in the file uses the same record:
+  //   string class, string sub-class, string type   (u32 length + chars)
+  //   u32 payload size, then the payload:
+  //     u32 (0), u32 x, u32 y, i32 z, u32 (varies), u32 id,
+  //     string display name, then type-specific data
+  // x and y are in 64ths of a tile (tile centre = n*64 + 32); z is height
+  // in 16ths of a height unit. Verified on all 90 shipped maps.
   struct ZooObject {
-    uint32_t id;
-    int x;
-    int y;
+    std::string className; // e.g. "paths", "fences", "objects"
+    std::string subClass;  // e.g. "paths", "zoowall", "foliage"
+    std::string typeName;  // e.g. "path" -> paths/path.ai
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t z = 0;
+    uint32_t id = 0;
+    std::string name;      // e.g. "Concrete Path"
+    std::vector<uint8_t> payload;
+
+    int tileX() const { return x >= 0 ? x / 64 : (x - 63) / 64; }
+    int tileY() const { return y >= 0 ? y / 64 : (y - 63) / 64; }
   };
 
   const std::vector<ZooObject> &getObjects() const { return objects; }
-
-  // Debug helper to manually add objects
-  // Debug helper to manually add objects
-  void addObject(const ZooObject &obj);
-
-  // Validate and remove garbage objects
-  void validateObjects(int maxWidth, int maxHeight);
 
 private:
   int mapWidth = 0;
@@ -67,10 +77,7 @@ private:
 
   static size_t findTileDataOffset(const uint8_t *data, size_t size,
                                    size_t searchFrom, int w, int h);
-  void scanForObjects(const AssetBuffer &buffer, size_t startOffset);
-
-  // Validate and remove garbage objects
-  // (Moved to Public)
+  void readObjects(const uint8_t *data, size_t size, size_t offset);
 };
 
 #endif // ZOOREADER_HPP

@@ -1,6 +1,7 @@
 #ifndef WORLD_MAP_HPP
 #define WORLD_MAP_HPP
 
+#include <string>
 #include <vector>
 #include <cstdint>
 #include "ZooReader.hpp"
@@ -56,6 +57,12 @@ public:
     int getMinHeight() const { return minHeight; }
     int getMaxHeight() const { return maxHeight; }
 
+    // Paths ("paths" objects in the map). Each tile has at most one;
+    // -1 = none, otherwise an index into getPathTypes() (e.g. "path",
+    // "asphpath", art under paths/<type>/)
+    int getPathType(int x, int y) const;
+    const std::vector<std::string>& getPathTypes() const { return pathTypes; }
+
     // Incremented on every successful load, so renderers can tell when
     // cached per-map data is stale
     uint32_t getGeneration() const { return generation; }
@@ -69,6 +76,8 @@ private:
     int minHeight;
     int maxHeight;
     uint32_t generation = 0;
+    std::vector<int16_t> pathTile;        // width * height
+    std::vector<std::string> pathTypes;
 
     // Tile grid (row-major: [y][x])
     std::vector<std::vector<MapTile>> tiles;

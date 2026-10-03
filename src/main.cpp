@@ -23,6 +23,8 @@
 #include "ui/UiImage.hpp"
 #include "ui/UiLayout.hpp"
 #include "ui/UiListBox.hpp"
+#include "ui/UiMiniMap.hpp"
+#include "ui/UiStatusImage.hpp"
 #include "ui/UiText.hpp"
 
 // Memory tracking system
@@ -294,6 +296,123 @@ static void drawLayoutCentered(SDL_Renderer *renderer, UiLayout *layout,
   SDL_RenderSetViewport(renderer, nullptr);
   SDL_RenderSetScale(renderer, 1.0f, 1.0f);
   RenderSettings::artScaleMode = SDL_ScaleModeNearest;
+}
+
+// ============================================================================
+// IN-GAME HUD (ui/main.lyt)
+// ============================================================================
+// The original's in-game screen: the frame pieces, left toolbar and bottom
+// bar (pause, date, money, ratings, minimap, zoom/rotate). It covers the
+// whole window at the menus' UI scale; the map is drawn underneath.
+// ============================================================================
+
+static UiLayout *g_hud = nullptr;
+
+static std::string formatMoney(int amount) {
+  std::string digits = std::to_string(amount);
+  for (int i = static_cast<int>(digits.size()) - 3; i > 0; i -= 3)
+    digits.insert(i, ",");
+  return "$" + digits;
+}
+
+// Zoom buttons: both are shown, and the one that cannot zoom any further is
+// greyed out (at the default zoom the original greys out zoom in)
+static const float HUD_ZOOM_MAX = 1.0f;
+static const float HUD_ZOOM_MIN = 0.5f;
+
+static void updateZoomButtons(World *world) {
+  if (!g_hud || !world)
+    return;
+  float zoom = world->getCamera().zoom;
+  if (UiElement *in = g_hud->getElementById(1007)) {
+    in->setHidden(false);
+    in->setDisabled(zoom >= HUD_ZOOM_MAX - 0.01f);
+  }
+  if (UiElement *out = g_hud->getElementById(1023)) {
+    out->setHidden(false);
+    out->setDisabled(zoom <= HUD_ZOOM_MIN + 0.01f);
+  }
+}
+
+static void destroyHud() {
+  delete g_hud;
+  g_hud = nullptr;
+}
+
+static void createHud(ResourceManager *rm, World *world, int startingCash) {
+  destroyHud();
+  IniReader *reader = rm->getIniReader("ui/main.lyt");
+  if (!reader) {
+    SDL_Log("[HUD] ui/main.lyt not found");
+    return;
+  }
+  g_hud = new UiLayout(reader, rm);
+
+  if (UiText *date = dynamic_cast<UiText *>(g_hud->getElementById(1030)))
+    date->setText("Jan, Year 1");
+  if (UiText *money = dynamic_cast<UiText *>(g_hud->getElementById(1016))) {
+    money->setText(formatMoney(startingCash));
+    // The original shows money in green while it is positive
+    money->setTextColor(startingCash >= 0 ? SDL_Color{83, 219, 83, 255}
+                                          : SDL_Color{255, 60, 60, 255});
+  }
+
+  // Undo starts visible but greyed out (nothing to undo yet); the Scenario
+  // button is greyed out in freeform games
+  if (UiElement *undo = g_hud->getElementById(1075)) {
+    undo->setHidden(false);
+    undo->setDisabled(true);
+  }
+  if (UiElement *scenario = g_hud->getElementById(4107))
+    scenario->setDisabled(true);
+  updateZoomButtons(world);
+
+  // Ratings: zoo, animal, guest. Placeholders until the simulation computes
+  // them: the zoo rating a new freeform zoo shows in the original, and no
+  // animals or guests yet.
+  if (auto *zoo = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1015)))
+    zoo->setValue(29);
+  if (auto *animals = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1011)))
+    animals->setValue(0);
+  if (auto *guests = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1013)))
+    guests->setValue(0);
+
+  if (auto *mini = dynamic_cast<UiMiniMap *>(g_hud->getElementById(1026))) {
+    mini->setCallbacks(
+        [world](SDL_Renderer *r, const SDL_Rect &box) { world->drawMiniMap(r, box); },
+        [world](float fx, float fy) { world->miniMapClick(fx, fy); });
+  }
+}
+
+// The HUD's layout covers the window in layout units (window / UI scale)
+static SDL_Rect hudLayoutRect(SDL_Renderer *renderer, const UiTransform &t) {
+  int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
+  SDL_GetRendererOutputSize(renderer, &w, &h);
+  return {0, 0, static_cast<int>(w / t.scale), static_cast<int>(h / t.scale)};
+}
+
+static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
+  if (!g_hud)
+    return;
+  UiTransform t = getUiTransform(renderer);
+  rm->setTextScale(t.scale);
+  bool wholeScale = std::fabs(t.scale - std::round(t.scale)) < 0.01f;
+  RenderSettings::artScaleMode =
+      wholeScale ? SDL_ScaleModeNearest : SDL_ScaleModeLinear;
+  SDL_RenderSetScale(renderer, t.scale, t.scale);
+  SDL_Rect rect = hudLayoutRect(renderer, t);
+  g_hud->draw(renderer, &rect);
+  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+  RenderSettings::artScaleMode = SDL_ScaleModeNearest;
+}
+
+static UiAction hudInputs(SDL_Renderer *renderer, std::vector<Input> inputs) {
+  if (!g_hud)
+    return UiAction::NONE;
+  UiTransform t = getUiTransform(renderer);
+  t.offsetX = t.offsetY = 0; // the HUD covers the whole window
+  mapInputsToLayout(inputs, t);
+  return g_hud->handleInputs(inputs);
 }
 
 static std::string getLayoutPath(ResourceManager *rm,
@@ -729,6 +848,7 @@ int main(int argc, char *argv[]) {
       }
       // Handle ESC key to return to freeform menu from game loop
       if (input.event == InputEvent::KEY_ESCAPE && g_currentState == LayoutState::GAME_LOOP) {
+        destroyHud();
         // Return to freeform selection menu
         lyt_reader = resource_manager.getIniReader(
             getLayoutPath(&resource_manager, "mapselec.lyt"));
@@ -743,6 +863,8 @@ int main(int argc, char *argv[]) {
       std::vector<Input> layoutInputs = inputs;
       mapInputsToLayout(layoutInputs, getUiTransform(window.renderer));
       action = layout->handleInputs(layoutInputs);
+    } else if (g_currentState == LayoutState::GAME_LOOP && g_hud) {
+      action = hudInputs(window.renderer, inputs);
     } else {
       // No layout means we are likely in game loop, so no UI actions
       // Define a safe no-op action if explicit NONE isn't available,
@@ -829,9 +951,10 @@ int main(int argc, char *argv[]) {
         if (info && !info->isLocked) {
           SDL_Log("Starting Scenario: %s", info->name.c_str());
           g_world->loadScenario(info->scenarioPath);
+          createHud(&resource_manager, g_world, g_currentStartingCash);
 
           delete layout;
-          layout = nullptr; // UI is gone in game mode
+          layout = nullptr; // the in-game HUD replaces the menus
           g_currentState = LayoutState::GAME_LOOP;
         }
       }
@@ -844,11 +967,40 @@ int main(int argc, char *argv[]) {
         if (map) {
           SDL_Log("Starting Freeform: %s", map->name.c_str());
           g_world->loadFreeform(map->path);
+          createHud(&resource_manager, g_world, g_currentStartingCash);
 
           delete layout;
           layout = nullptr;
           g_currentState = LayoutState::GAME_LOOP;
         }
+      }
+      break;
+
+    // In-game HUD buttons
+    case UiAction::HUD_ZOOM_IN:
+      g_world->zoomStep(+1);
+      updateZoomButtons(g_world);
+      break;
+    case UiAction::HUD_ZOOM_OUT:
+      g_world->zoomStep(-1);
+      updateZoomButtons(g_world);
+      break;
+    case UiAction::HUD_ROTATE_CW:
+      g_world->rotateView(+1);
+      break;
+    case UiAction::HUD_ROTATE_CCW:
+      g_world->rotateView(-1);
+      break;
+    case UiAction::HUD_PAUSE:
+    case UiAction::HUD_PLAY:
+      if (g_hud) {
+        bool pause = action == UiAction::HUD_PAUSE;
+        g_world->setPaused(pause);
+        // Pause and Play share a spot; show the one that undoes the state
+        if (UiElement *p = g_hud->getElementById(1071))
+          p->setHidden(pause);
+        if (UiElement *p = g_hud->getElementById(1072))
+          p->setHidden(!pause);
       }
       break;
 
@@ -870,6 +1022,8 @@ int main(int argc, char *argv[]) {
 
       // SDL_Log("MainLoop: Pre-Draw");
       g_world->draw(window.renderer);
+      updateZoomButtons(g_world); // the mouse wheel zooms too
+      drawHud(window.renderer, &resource_manager);
       // SDL_Log("MainLoop: Post-Draw");
     } else if (layout) {
       drawLayoutCentered(window.renderer, layout, &resource_manager);

@@ -21,7 +21,13 @@ public:
   UiAction handleInputs(std::vector<Input> &inputs);
   void draw(SDL_Renderer *renderer, SDL_Rect *layout_rect);
 
+  // Toggle buttons (layout state 2048, e.g. the HUD's tree/guest/building
+  // view toggles) start on and flip on each click
+  bool isToggle() const { return (this->state_flags & 2048) != 0; }
+  bool isToggledOn() const { return this->toggled_on; }
+
 private:
+  bool toggled_on = true;
   std::string text_string = "";
   SDL_Texture *text = nullptr;
   SDL_Texture *shadow = nullptr;
