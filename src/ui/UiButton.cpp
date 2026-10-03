@@ -266,7 +266,7 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     SDL_Rect render_rect = this->dest_rect;
     if ((render_rect.w <= 0 || render_rect.h <= 0) && target != nullptr) {
       int tw, th;
-      SDL_QueryTexture(target, nullptr, nullptr, &tw, &th);
+      ArtScaler::querySize(target, &tw, &th);
       render_rect.w = tw;
       render_rect.h = th;
       // Update the member dest_rect for hit testing

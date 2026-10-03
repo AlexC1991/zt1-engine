@@ -114,7 +114,8 @@ SDL_Texture *SpriteDatabase::getTerrainTexture(SDL_Renderer *renderer,
   SDL_Texture *texture = nullptr;
   auto path = terrainTexturePaths.find(terrainId);
   if (path != terrainTexturePaths.end()) {
-    texture = resourceManager->getTexture(renderer, path->second);
+    texture = resourceManager->getTexture(renderer, path->second,
+                                          false); // world art, drawn 1:1
     // Terrain blends are drawn with per-vertex alpha, which RGB textures
     // ignore unless blending is switched on
     if (texture)

@@ -1,4 +1,5 @@
 #include "UiStatusImage.hpp"
+#include "../RenderSettings.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -49,11 +50,12 @@ void UiStatusImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   SDL_Texture *tex = pick < images.size() ? images[pick] : nullptr;
   if (tex && value > 0) {
     int tw = 0, th = 0;
-    SDL_QueryTexture(tex, nullptr, nullptr, &tw, &th);
+    ArtScaler::querySize(tex, &tw, &th);
     int full = rect.w > 0 ? rect.w : tw;
     int w = full * value / 100;
-    SDL_Rect src = {0, 0, std::min(w, tw), th};
+    SDL_Rect src = ArtScaler::toTexture(tex, {0, 0, std::min(w, tw), th});
     SDL_Rect dst = {rect.x, rect.y, w, th};
+    RenderSettings::applyArtScaleMode(tex);
     SDL_RenderCopy(renderer, tex, &src, &dst);
   }
   this->drawChildren(renderer, &rect);

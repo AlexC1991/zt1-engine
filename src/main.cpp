@@ -7,6 +7,7 @@
 #include <vector>
 #include <string>
 
+#include "ArtScaler.hpp"
 #include "Config.hpp"
 #include "RenderSettings.hpp"
 #include "IniReader.hpp"
@@ -776,6 +777,8 @@ int main(int argc, char *argv[]) {
 
   Window window("ZT1-Engine", config.getScreenWidth(), config.getScreenHeight(),
                 60.0f);
+  ArtScaler::configure(ArtScaler::parseMode(config.getArtUpscale()),
+                       config.getArtUpscaleFactor(), config.getArtSharpness());
   window.set_cursor(resource_manager.getCursor(9));
 
   LoadScreen::run(&window, &config, &resource_manager);

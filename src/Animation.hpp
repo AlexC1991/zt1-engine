@@ -49,7 +49,17 @@ public:
 
   bool hasFrames(CompassDirection direction);
 
+  // Art drawn magnified (UI): upscaled per the art upscaling setting, and
+  // frames can come from an HD pack at <hdDir>/<direction>_<frame>.png
+  void setArtOptions(bool upscale, const std::string &hdDir) {
+    this->upscale = upscale;
+    this->hd_dir = hdDir;
+  }
+
 private:
+  bool upscale = false;
+  std::string hd_dir;
+
   int current_frame = 0;
   CompassDirection last_direction = CompassDirection::N;
   SDL_RendererFlip renderer_flip = SDL_FLIP_NONE;

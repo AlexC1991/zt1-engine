@@ -1,5 +1,6 @@
 #include "Animation.hpp"
 #include "AniFile.hpp"
+#include "ArtScaler.hpp"
 #include "RenderSettings.hpp"
 #include <SDL2/SDL.h>
 #include <assert.h>
@@ -58,6 +59,8 @@ Animation &Animation::operator=(Animation &&other) noexcept {
     this->frame_start_time = other.frame_start_time;
     this->frame_time_in_ms = other.frame_time_in_ms;
     this->has_background = other.has_background;
+    this->upscale = other.upscale;
+    this->hd_dir = other.hd_dir;
 
     other.surfaces.clear();
     other.textures.clear();
@@ -101,7 +104,7 @@ void Animation::draw(SDL_Renderer *renderer, int x, int y,
     if (t == nullptr)
       return;
 
-    SDL_QueryTexture(t, NULL, NULL, &rect.w, &rect.h);
+    ArtScaler::querySize(t, &rect.w, &rect.h);
   } else {
     direction_string = convertCompassDirectionToExistingAnimationString(
         direction, this->surfaces);
@@ -145,12 +148,26 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
 
     this->textures[direction_string] = std::vector<SDL_Texture *>();
     if (!direction_string.empty()) {
+      int frame = 0;
       for (SDL_Surface *surface : this->surfaces[direction_string]) {
+        int index = frame++;
         if (!surface) {
           this->textures[direction_string].push_back(nullptr);
           continue;
         }
-        SDL_Texture *t = SDL_CreateTextureFromSurface(renderer, surface);
+        SDL_Texture *t = nullptr;
+        if (!this->hd_dir.empty()) {
+          std::string hdPath = this->hd_dir + "/" + direction_string + "_" +
+                               std::to_string(index);
+          if (SDL_Surface *hd = ArtScaler::loadHdSurface(hdPath)) {
+            t = ArtScaler::createHdTexture(renderer, hd, surface->w,
+                                           surface->h, hdPath);
+            SDL_FreeSurface(hd);
+          }
+        }
+        if (!t)
+          t = this->upscale ? ArtScaler::createTexture(renderer, surface)
+                            : SDL_CreateTextureFromSurface(renderer, surface);
         if (!t)
           SDL_Log("Warning: Failed to create texture: %s", SDL_GetError());
 
@@ -201,7 +218,7 @@ void Animation::queryTexture(CompassDirection direction, int *w, int *h) {
     if ((size_t)this->current_frame < this->textures[direction_string].size()) {
       SDL_Texture *t = this->textures[direction_string][this->current_frame];
       if (t)
-        SDL_QueryTexture(t, NULL, NULL, w, h);
+        ArtScaler::querySize(t, w, h);
     }
   } else {
     direction_string = convertCompassDirectionToExistingAnimationString(
