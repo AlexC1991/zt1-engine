@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <cstdlib>
 
 #include <SDL2/SDL.h>
 
@@ -26,6 +27,45 @@ public:
   int getLayer() {return this->layer;};
   int getId() {return this->id;};  // [PATCH] Get element ID
   int getAnchor() {return this->anchor;};
+
+  // Layout "state" flags (bits OR'd over every state= line):
+  //   1 hidden, 2 disabled, 16 always hidden, 2048 toggle, 4096 sticky
+  void setStateFlags(int flags) {
+    this->state_flags = flags;
+    this->hidden = (flags & (1 | 16)) != 0;
+  }
+  int getStateFlags() const { return this->state_flags; }
+  bool isHidden() const { return this->hidden; }
+  bool isDisabled() const { return (this->state_flags & 2) != 0; }
+  void setDisabled(bool d) {
+    this->state_flags = d ? (this->state_flags | 2) : (this->state_flags & ~2);
+  }
+  void setHidden(bool h) { this->hidden = h; }
+
+  // Where this element is (its own rect, as it will be drawn) inside the
+  // given parent rect. Elements whose size comes from their art override it.
+  virtual SDL_Rect computeRect(SDL_Renderer *renderer, SDL_Rect *parent_rect) {
+    (void)renderer;
+    return this->getRect(this->ini_reader->getSection(this->name), parent_rect);
+  }
+
+  // Children, for layouts that draw the whole tree themselves
+  const std::vector<UiElement *> &getChildren() const { return this->children; }
+  // When set, draw() leaves children to the owning layout, which draws
+  // every element in layer order (as the original does)
+  void setLayoutDrawsChildren(bool v) { this->layout_draws_children = v; }
+
+  // Rect last drawn at (screen/layout units), for anchors and hit tests
+  SDL_Rect getLastRect() const { return this->last_rect; }
+
+  UiElement *findById(int targetId) {
+    if (this->id == targetId)
+      return this;
+    for (UiElement *child : this->children)
+      if (UiElement *found = child->findById(targetId))
+        return found;
+    return nullptr;
+  }
 
   bool hasId(int id) {
     if (id == this->id) {
@@ -61,14 +101,19 @@ protected:
   int id = 0;
   int layer = 0;
   int anchor = 0;
+  int state_flags = 0;
+  bool hidden = false;
+  bool layout_draws_children = false;
+  SDL_Rect last_rect = {0, 0, 0, 0};
 
   std::vector<UiElement*> children;
 
   void drawChildren(SDL_Renderer * renderer, SDL_Rect * parent_rect) {
-    // TODO: Figure out if layers need to be taken into account here
+    if (this->layout_draws_children)
+      return;
     for (int layer=0; layer < (8 + 1); layer++) {
       for (UiElement * child : this->children) {
-        if (child->layer == layer) {
+        if (child->layer == layer && !child->hidden) {
           child->draw(renderer, parent_rect);
         }
       }
@@ -78,6 +123,8 @@ protected:
   UiAction handleInputChildren(std::vector<Input> &inputs) {
     UiAction action = UiAction::NONE;
     for (UiElement * child : this->children) {
+      if (child->hidden)
+        continue;
       UiAction new_action = child->handleInputs(inputs);
       if (new_action != UiAction::NONE) {
         action = new_action;
@@ -88,12 +135,17 @@ protected:
 
   SDL_Rect getRect(std::map<std::string, std::string> map, SDL_Rect * layout_rect) {
     SDL_Rect rect = {0, 0, 0, 0};
+    // Missing or non-numeric values count as 0 (e.g. scrollbars, which are
+    // placed by the element that owns them)
+    auto num = [](const std::string &v) {
+      return std::atoi(v.c_str());
+    };
 
     if (map.contains("dx")) {
       if (map["dx"] == "whole") {
         rect.w = layout_rect->w;
       } else {
-        rect.w = std::stoi(map["dx"]);
+        rect.w = num(map["dx"]);
       }
     }
 
@@ -101,7 +153,7 @@ protected:
        if (map["dy"] == "whole") {
         rect.h = layout_rect->h;
       } else {
-        rect.h = std::stoi(map["dy"]);
+        rect.h = num(map["dy"]);
       }
     }
 
@@ -112,7 +164,7 @@ protected:
     } else if (map["x"] == "left") {
       rect.x = 0;
     } else {
-      rect.x = std::stoi(map["x"]);
+      rect.x = num(map["x"]);
     }
 
     if (map["y"] == "center") {
@@ -122,7 +174,7 @@ protected:
     } else if (map["y"] == "top") {
       rect.y = 0;
     } else {
-      rect.y = std::stoi(map["y"]);
+      rect.y = num(map["y"]);
     }
 
     if (map.contains("justify")) {

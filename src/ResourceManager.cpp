@@ -7,6 +7,7 @@
 #include <atomic>
 #include <bitset>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -527,6 +528,85 @@ static SDL_Surface *decodeZt1NToSurface(const uint8_t *data, int size,
   }
 
   return surf;
+}
+
+// ZT1 sprite frame file (optionally prefixed by "FATZ" + 5 bytes):
+//   u32 frame time (ms), u32 palette name length, palette name,
+//   u32 frame count, then per frame:
+//     u32 byte size, u16 height, u16 width, i16 y anchor, i16 x anchor,
+//     u16 unknown, then per row: u8 run count, (u8 skip, u8 length,
+//     length palette indices) per run
+// Only the first frame is decoded.
+SDL_Texture *ResourceManager::getZt1FrameTexture(SDL_Renderer *renderer,
+                                                 const std::string &file_name,
+                                                 int *anchorX, int *anchorY) {
+  if (renderer == nullptr)
+    return nullptr;
+  std::string loc = getResourceLocation(file_name);
+  if (loc.empty())
+    return nullptr;
+  int size = 0;
+  uint8_t *data = (uint8_t *)ZtdFile::getFileContent(
+      loc, findActualResourceKey(file_name), &size);
+  if (data == nullptr)
+    return nullptr;
+
+  SDL_Texture *texture = nullptr;
+  auto u16 = [&](int o) { return o + 2 <= size ? data[o] | (data[o + 1] << 8) : 0; };
+  auto u32 = [&](int o) {
+    return o + 4 <= size ? (uint32_t)(data[o] | (data[o + 1] << 8) |
+                                      (data[o + 2] << 16) | (data[o + 3] << 24))
+                         : 0u;
+  };
+
+  int base = (size >= 9 && memcmp(data, "FATZ", 4) == 0) ? 9 : 0;
+  int pos = base + 4;
+  uint32_t palLen = u32(pos);
+  pos += 4;
+  if (palLen > 0 && palLen < 256 && pos + (int)palLen + 18 <= size) {
+    std::string palName((const char *)data + pos, palLen);
+    palName = palName.c_str(); // drop trailing NUL
+    pos += palLen;
+    uint32_t frames = u32(pos);
+    pos += 4;
+    Pallet *pal = pallet_manager.getPallet(palName);
+    int height = u16(pos + 4), width = u16(pos + 6);
+    if (anchorY)
+      *anchorY = (int16_t)u16(pos + 8);
+    if (anchorX)
+      *anchorX = (int16_t)u16(pos + 10);
+    pos += 4 + 10; // frame size, then the 10-byte frame header
+    if (frames > 0 && pal && width > 0 && height > 0 && width < 4096 &&
+        height < 4096) {
+      SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(
+          0, width, height, 32, SDL_PIXELFORMAT_RGBA32);
+      if (surf) {
+        SDL_FillRect(surf, nullptr, SDL_MapRGBA(surf->format, 0, 0, 0, 0));
+        uint32_t *pixels = (uint32_t *)surf->pixels;
+        int pitch = surf->pitch / 4;
+        for (int y = 0; y < height && pos < size; y++) {
+          int runs = data[pos++];
+          int x = 0;
+          for (int r = 0; r < runs && pos + 2 <= size; r++) {
+            x += data[pos++];
+            int len = data[pos++];
+            for (int i = 0; i < len && pos < size; i++, x++) {
+              uint32_t c = pal->colors[data[pos++]];
+              if (x >= 0 && x < width)
+                pixels[y * pitch + x] = SDL_MapRGBA(
+                    surf->format, c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF, 255);
+            }
+          }
+        }
+        texture = SDL_CreateTextureFromSurface(renderer, surf);
+        if (texture)
+          SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+        SDL_FreeSurface(surf);
+      }
+    }
+  }
+  free(data);
+  return texture;
 }
 
 SDL_Texture *ResourceManager::getZt1Texture(SDL_Renderer *renderer,

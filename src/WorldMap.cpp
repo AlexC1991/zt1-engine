@@ -70,6 +70,22 @@ bool WorldMap::loadFromZooReader(const ZooReader &reader) {
       "SaltWater", "Deciduous",  "Waterfall", "Conifer",   "Concrete",
       "Asphalt",   "Trampled",   "Gunnite"};
 
+  // Paths
+  pathTypes.clear();
+  pathTile.assign(static_cast<size_t>(width) * height, -1);
+  for (const ZooReader::ZooObject &obj : reader.getObjects()) {
+    if (obj.className != "paths")
+      continue;
+    int tx = obj.tileX(), ty = obj.tileY();
+    if (tx < 0 || ty < 0 || tx >= width || ty >= height)
+      continue;
+    auto it = std::find(pathTypes.begin(), pathTypes.end(), obj.typeName);
+    int index = static_cast<int>(it - pathTypes.begin());
+    if (it == pathTypes.end())
+      pathTypes.push_back(obj.typeName);
+    pathTile[static_cast<size_t>(ty) * width + tx] = static_cast<int16_t>(index);
+  }
+
   generation++;
   SDL_Log("[WorldMap] Loaded %dx%d, heights %d..%d", width, height, minHeight,
           maxHeight);
@@ -79,6 +95,12 @@ bool WorldMap::loadFromZooReader(const ZooReader &reader) {
               terrainCounts[i]);
   }
   return true;
+}
+
+int WorldMap::getPathType(int x, int y) const {
+  if (x < 0 || y < 0 || x >= width || y >= height || pathTile.empty())
+    return -1;
+  return pathTile[static_cast<size_t>(y) * width + x];
 }
 
 const MapTile *WorldMap::getTile(int x, int y) const {

@@ -1,8 +1,14 @@
 #include "UiLayout.hpp"
 
+#include <algorithm>
+#include <cstdlib>
+#include <functional>
+
 #include "UiButton.hpp"
 #include "UiImage.hpp"
 #include "UiListBox.hpp"
+#include "UiMiniMap.hpp"
+#include "UiStatusImage.hpp"
 #include "UiScrollBar.hpp"
 #include "UiText.hpp"
 
@@ -56,7 +62,36 @@ void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     layout_rect = &window_rect;
   }
 
-  drawChildren(renderer, layout_rect);
+  // Like the original: every element drawn in layer order across the whole
+  // layout (not parent-then-children), each positioned inside its anchor
+  struct Item {
+    UiElement *element;
+    SDL_Rect parent;
+  };
+  std::vector<Item> items;
+  std::function<void(UiElement *, SDL_Rect)> visit = [&](UiElement *e,
+                                                          SDL_Rect parent) {
+    if (e->isHidden())
+      return;
+    items.push_back({e, parent});
+    if (dynamic_cast<UiLayout *>(e))
+      return;
+    SDL_Rect r = e->computeRect(renderer, &parent);
+    for (UiElement *c : e->getChildren())
+      visit(c, r);
+  };
+  for (UiElement *child : this->children)
+    visit(child, *layout_rect);
+
+  int maxLayer = 0;
+  for (const Item &it : items)
+    maxLayer = std::max(maxLayer, it.element->getLayer());
+  for (int layer = 0; layer <= maxLayer; layer++) {
+    for (Item &it : items) {
+      if (it.element->getLayer() == layer)
+        it.element->draw(renderer, &it.parent);
+    }
+  }
 }
 
 void UiLayout::process_sections(IniReader *ini_reader,
@@ -99,6 +134,15 @@ void UiLayout::process_sections(IniReader *ini_reader,
     } else if (element_type == "UILayout") {
       new_element =
           (UiElement *)new UiLayout(ini_reader, resource_manager, section);
+    } else if (element_type == "UIStatusImage") {
+      new_element =
+          (UiElement *)new UiStatusImage(ini_reader, resource_manager, section);
+    } else if (element_type == "ZTMiniMap") {
+      new_element =
+          (UiElement *)new UiMiniMap(ini_reader, resource_manager, section);
+    } else if (element_type == "UIRadioSet") {
+      // Groups toolbar buttons so only one is selected; no visuals
+      continue;
     } else if (element_type == "UIScrollBar") {
       new_element =
           (UiElement *)new UiScrollBar(ini_reader, resource_manager, section);
@@ -114,6 +158,13 @@ void UiLayout::process_sections(IniReader *ini_reader,
     if (!new_element)
       continue;
 
+    int stateFlags = 0;
+    for (const std::string &st : ini_reader->getList(section, "state"))
+      stateFlags |= std::atoi(st.c_str());
+    if (stateFlags == 0)
+      stateFlags = ini_reader->getInt(section, "state", 0);
+    new_element->setStateFlags(stateFlags);
+
     int anchorId = new_element->getAnchor();
     if (anchorId == 0 || anchorId == this->id) {
       this->children.push_back(new_element);
@@ -122,21 +173,46 @@ void UiLayout::process_sections(IniReader *ini_reader,
     }
   }
 
-  // Pass 2: attach anchored elements using recursive lookup.
-  for (UiElement *child : pending_anchored) {
-    int anchorId = child->getAnchor();
-    UiElement *anchorTarget = this->getElementById(anchorId);
-
-    if (anchorTarget != nullptr) {
-      anchorTarget->addChild(child);
-    } else {
-      SDL_Log("Anchor id %d was not found for element id=%d name='%s'",
-              anchorId, child->getId(), child->getName().c_str());
-
-      // Fallback: attach to root so it still exists (helps debugging and
-      // avoids “missing UI element” issues).
-      this->children.push_back(child);
+  // Pass 2: attach anchored elements. An element can anchor to another
+  // anchored element, so repeat until nothing more attaches.
+  bool progress = true;
+  while (!pending_anchored.empty() && progress) {
+    progress = false;
+    for (auto it = pending_anchored.begin(); it != pending_anchored.end();) {
+      UiElement *anchorTarget = this->getElementById((*it)->getAnchor());
+      if (anchorTarget != nullptr) {
+        anchorTarget->addChild(*it);
+        it = pending_anchored.erase(it);
+        progress = true;
+      } else {
+        ++it;
+      }
     }
+  }
+  for (UiElement *child : pending_anchored) {
+    SDL_Log("Anchor id %d was not found for element id=%d name='%s'",
+            child->getAnchor(), child->getId(), child->getName().c_str());
+    // Fallback: attach to root so it still exists
+    this->children.push_back(child);
+  }
+
+  // The layout draws every element itself, in layer order
+  std::function<void(UiElement *)> mark = [&](UiElement *e) {
+    if (dynamic_cast<UiLayout *>(e))
+      return; // nested layouts draw their own elements
+    e->setLayoutDrawsChildren(true);
+    for (UiElement *c : e->getChildren())
+      mark(c);
+  };
+  for (UiElement *child : this->children)
+    mark(child);
+
+  // Pass 3a: fillers stretch between two named elements
+  for (UiElement *child : this->children) {
+    UiImage *img = dynamic_cast<UiImage *>(child);
+    if (img && img->getFillerAnchor1() && img->getFillerAnchor2())
+      img->setFillerAnchors(this->findById(img->getFillerAnchor1()),
+                            this->findById(img->getFillerAnchor2()));
   }
 
   // Pass 3: list boxes name the scrollbar that scrolls them
@@ -172,11 +248,9 @@ UiAction UiLayout::handleInputs(std::vector<Input> &inputs) {
 // Find element by ID recursively
 UiElement *UiLayout::getElementById(int targetId) {
   for (UiElement *child : this->children) {
-    if (child->getId() == targetId) {
-      return child;
-    }
+    if (UiElement *found = child->findById(targetId))
+      return found;
   }
-
   for (UiElement *child : this->children) {
     UiLayout *childLayout = dynamic_cast<UiLayout *>(child);
     if (childLayout) {
@@ -185,6 +259,5 @@ UiElement *UiLayout::getElementById(int targetId) {
         return found;
     }
   }
-
   return nullptr;
 }

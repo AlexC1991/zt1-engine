@@ -21,6 +21,11 @@ public:
   
 private:
   std::string text_string = "";
+  bool has_color_override = false;
+  SDL_Color color_override = {255, 255, 255, 255};
+public:
+  void setTextColor(SDL_Color c) { color_override = c; has_color_override = true; }
+private:
   SDL_Texture * text = nullptr;
   SDL_Texture * shadow = nullptr;
   int font = 0;

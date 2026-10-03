@@ -62,8 +62,13 @@ UiAction UiButton::handleInputs(std::vector<Input> &inputs) {
     this->selected = true;
     this->selected_updated = true;
 
+    if (this->isDisabled())
+      continue;
+
     switch (input.event) {
     case InputEvent::LEFT_CLICK:
+      if (this->isToggle())
+        this->toggled_on = !this->toggled_on;
       if (this->ini_reader->getInt(this->name, "action", 0) == 1) {
         int target = this->ini_reader->getInt(this->name, "target", 0);
         if (target != 0) {
@@ -229,9 +234,15 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   if (this->is_static && is_nav_button) {
     // Defer drawing until size is calculated
   } else if (has_valid_animation) {
-    // UI animations use "directions" as states: N normal, H highlighted
+    // UI animations use "directions" as states: N normal, H highlighted,
+    // S selected (a toggle that is on), G greyed out
     CompassDirection state = CompassDirection::N;
-    if (this->selected && this->animation->hasFrames(CompassDirection::H))
+    if (this->isDisabled() && this->animation->hasFrames(CompassDirection::G))
+      state = CompassDirection::G; // greyed out
+    else if (this->isToggle() && this->toggled_on &&
+             this->animation->hasFrames(CompassDirection::S))
+      state = CompassDirection::S;
+    else if (this->selected && this->animation->hasFrames(CompassDirection::H))
       state = CompassDirection::H;
 
     // Buttons like the cash spinners have no dx/dy in the layout; they are
@@ -382,8 +393,9 @@ UiAction UiButton::getActionBasedOnName() {
   } else if (this->name == "back to main menu") {
     action = UiAction::SCENARIO_BACK_TO_MAIN_MENU;
     } else {
+    // In-game HUD buttons (ui/main.lyt, ids 1000-1099) report their id
     if (this->id == 11511 || this->id == 11512 || this->id == 50008 ||
-        this->id == 11513) {
+        this->id == 11513 || (this->id >= 1000 && this->id < 1100)) {
       action = static_cast<UiAction>(this->id);
     }
   }

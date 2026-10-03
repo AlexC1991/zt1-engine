@@ -52,6 +52,8 @@ int SpriteDatabase::loadDefinitionFile(const std::string &cfgPath) {
     if (!texture.empty())
       terrainTexturePaths[type] = texture;
     terrainBlendFlags[type] = ini->getInt(section, "blend", 1) != 0;
+    terrainNames[type] =
+        section.rfind("tt", 0) == 0 ? section.substr(2) : section;
 
     std::string icon = ini->get(section, "icon", "");
     if (!icon.empty())
@@ -125,9 +127,52 @@ SDL_Texture *SpriteDatabase::getTerrainTexture(SDL_Renderer *renderer,
   return texture;
 }
 
+std::string SpriteDatabase::getTerrainName(int terrainId) const {
+  auto it = terrainNames.find(terrainId);
+  return it == terrainNames.end() ? "" : it->second;
+}
+
 bool SpriteDatabase::terrainBlends(int terrainId) const {
   auto it = terrainBlendFlags.find(terrainId);
   return it == terrainBlendFlags.end() || it->second;
+}
+
+const SpriteDatabase::Sprite &
+SpriteDatabase::getPathSprite(SDL_Renderer *renderer, const std::string &type,
+                              int frame) {
+  static const Sprite none;
+  if (!renderer || !resourceManager || type.empty())
+    return none;
+  std::string key = type + "#" + std::to_string(frame);
+  auto cached = pathSprites.find(key);
+  if (cached != pathSprites.end())
+    return cached->second;
+
+  // Art folder from the type's .ai, e.g. paths/path/idle
+  auto folder = pathArtFolders.find(type);
+  if (folder == pathArtFolders.end()) {
+    std::string anim = "idle";
+    std::string ai = "paths/" + type + ".ai";
+    if (resourceManager->hasResource(ai)) {
+      if (IniReader *ini = resourceManager->getIniReader(ai)) {
+        anim = ini->get("Animations", "idle", "idle");
+        delete ini;
+      }
+    }
+    folder = pathArtFolders.emplace(type, "paths/" + type + "/" + anim).first;
+  }
+
+  Sprite sprite;
+  sprite.texture = resourceManager->getZt1FrameTexture(
+      renderer, folder->second + "/" + std::to_string(frame), &sprite.anchorX,
+      &sprite.anchorY);
+  if (sprite.texture)
+    SDL_QueryTexture(sprite.texture, nullptr, nullptr, &sprite.width,
+                     &sprite.height);
+  else
+    SDL_Log("[SpriteDatabase] Missing path art %s/%d", folder->second.c_str(),
+            frame);
+  return pathSprites[key] = sprite; // cache misses too
 }
 
 void SpriteDatabase::clear() {

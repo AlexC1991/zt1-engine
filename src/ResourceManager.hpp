@@ -30,6 +30,15 @@ public:
   SDL_Texture *getTexture(SDL_Renderer *renderer, const std::string &file_name);
 
   // NEW: ZT1 raw preview decode (N + .pal)
+  // One frame of a ZT1 sprite file (the per-frame graphics inside an
+  // animation folder, e.g. "paths/path/idle/5"). The palette is the one
+  // the file names. nullptr if missing or not decodable.
+  // anchorX/anchorY (optional) receive the frame's anchor: the pixel in
+  // the image that sits on the object's position (e.g. a tile's centre).
+  SDL_Texture *getZt1FrameTexture(SDL_Renderer *renderer,
+                                  const std::string &file_name,
+                                  int *anchorX = nullptr,
+                                  int *anchorY = nullptr);
   SDL_Texture *getZt1Texture(SDL_Renderer *renderer,
                              const std::string &raw_name,
                              const std::string &pal_name);

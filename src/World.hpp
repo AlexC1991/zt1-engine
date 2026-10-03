@@ -46,6 +46,14 @@ public:
     EntityManager& getEntityManager() { return entityManager; }
     Camera& getCamera() { return worldRenderer.getCamera(); }
 
+    // In-game HUD hooks
+    void drawMiniMap(SDL_Renderer* renderer, const SDL_Rect& box);
+    void miniMapClick(float fx, float fy);   // fractions across/down the box
+    void rotateView(int steps);              // keeps the same spot centred
+    void zoomStep(int direction);            // +1 in, -1 out
+    void setPaused(bool p) { paused = p; }
+    bool isPaused() const { return paused; }
+
     // Camera control
     void setCameraPosition(int x, int y);
     void getCameraPosition(int& x, int& y) const;
@@ -62,6 +70,15 @@ private:
     // Input handling
     void handleCameraInput(const Uint8* state, float deltaTime);
     void handleDebugInput(const Uint8* state);
+
+    bool paused = false;
+    int outputW = 1280, outputH = 720;
+
+    // Minimap picture, rebuilt when the map, rotation or box size changes
+    SDL_Texture* miniMapTexture = nullptr;
+    uint32_t miniMapGeneration = 0;
+    int miniMapRotation = -1, miniMapW = 0, miniMapH = 0;
+    void rebuildMiniMap(SDL_Renderer* renderer, int w, int h);
 
     // Debug state
     static int keyTimer;

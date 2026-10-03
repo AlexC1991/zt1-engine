@@ -2,6 +2,10 @@
 #include "MemoryManager.hpp"
 #include "MemoryTracker.hpp"
 #include <SDL2/SDL.h>
+#include <algorithm>
+#include <cmath>
+#include <vector>
+#include "SpriteDatabase.hpp"
 
 // ============================================================================
 // WORLD IMPLEMENTATION - Coordinator
@@ -127,7 +131,8 @@ void World::update(const Uint8 *state, float deltaTime) {
   handleDebugInput(state);
 
   // Update entities (simulation)
-  entityManager.update(deltaTime);
+  if (!paused)
+    entityManager.update(deltaTime);
 }
 
 void World::handleCameraInput(const Uint8 *state, float deltaTime) {
@@ -205,7 +210,7 @@ void World::handleDebugInput(const Uint8 *state) {
 
   // Rotate view 90 degrees
   if (state[SDL_SCANCODE_R]) {
-    worldRenderer.rotateView(1);
+    rotateView(1);
     keyTimer = 0;
   }
 
@@ -234,6 +239,8 @@ void World::draw(SDL_Renderer *renderer) {
   Camera &cam = worldRenderer.getCamera();
   int outW = 0, outH = 0;
   if (SDL_GetRendererOutputSize(renderer, &outW, &outH) == 0 && outW > 0) {
+    outputW = outW;
+    outputH = outH;
     cam.screenCenterX = outW / 2;
     cam.screenCenterY = outH / 2;
   }
@@ -264,4 +271,145 @@ void World::getCameraPosition(int &x, int &y) const {
   const Camera &cam = const_cast<World *>(this)->worldRenderer.getCamera();
   x = cam.x;
   y = cam.y;
+}
+
+// ============================================================================
+// IN-GAME HUD HOOKS
+// ============================================================================
+
+void World::rotateView(int steps) {
+  float u, v;
+  worldRenderer.getViewCentre(u, v);
+  // Which world spot is centred, so it stays centred after rotating
+  int wx, wy;
+  bool onMap = worldRenderer.viewTileToWorld(static_cast<int>(std::floor(u)),
+                                             static_cast<int>(std::floor(v)),
+                                             wx, wy);
+  worldRenderer.rotateView(steps);
+  if (onMap) {
+    // Find the view tile showing (wx, wy) after rotating
+    int NU, NV;
+    worldRenderer.getViewSize(NU, NV);
+    for (int a = 0; a < NU; a++) {
+      for (int b = 0; b < NV; b++) {
+        int x, y;
+        if (worldRenderer.viewTileToWorld(a, b, x, y) && x == wx && y == wy) {
+          worldRenderer.centreViewOn(a + 0.5f, b + 0.5f);
+          return;
+        }
+      }
+    }
+  }
+}
+
+void World::zoomStep(int direction) {
+  Camera &cam = worldRenderer.getCamera();
+  float zoom = direction > 0 ? cam.zoom * 2.0f : cam.zoom * 0.5f;
+  cam.zoom = std::clamp(zoom, 0.5f, 1.0f);
+  g_ZoomLevel = cam.zoom;
+}
+
+void World::rebuildMiniMap(SDL_Renderer *renderer, int w, int h) {
+  if (miniMapTexture) {
+    SDL_DestroyTexture(miniMapTexture);
+    miniMapTexture = nullptr;
+  }
+  miniMapGeneration = worldMap.getGeneration();
+  miniMapRotation = worldRenderer.getViewRotation();
+  miniMapW = w;
+  miniMapH = h;
+  if (w <= 0 || h <= 0 || worldMap.getWidth() == 0)
+    return;
+
+  // Colours from ui/miniclr.cfg, by terrain name ([Grass], [Sand], ...)
+  auto readColour = [](IniReader *ini, const std::string &section,
+                       SDL_Color fallback) {
+    if (!ini)
+      return fallback;
+    std::vector<std::string> c = ini->getList(section, "color");
+    if (c.size() < 3)
+      return fallback;
+    return SDL_Color{(Uint8)std::atoi(c[0].c_str()), (Uint8)std::atoi(c[1].c_str()),
+                     (Uint8)std::atoi(c[2].c_str()), 255};
+  };
+  IniReader *colours = resourceManager->getIniReader("ui/miniclr.cfg");
+  SDL_Color terrain[32];
+  for (int t = 0; t < 32; t++) {
+    std::string name = SpriteDatabase::get().getTerrainName(t);
+    if (name == "Waterfall")
+      name = "FreshWater";
+    terrain[t] = readColour(colours, name, SDL_Color{0, 0, 0, 255});
+  }
+  SDL_Color pathColour = readColour(colours, "path", SDL_Color{231, 232, 167, 255});
+  delete colours;
+
+  // The map as a diamond filling the box, in the current view rotation:
+  // across = (u - v + V) / (U + V), down = (u + v) / (U + V)
+  int U, V;
+  worldRenderer.getViewSize(U, V);
+  SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32);
+  if (!surf)
+    return;
+  SDL_FillRect(surf, nullptr, SDL_MapRGBA(surf->format, 0, 0, 0, 0));
+  uint32_t *px = static_cast<uint32_t *>(surf->pixels);
+  int pitch = surf->pitch / 4;
+  float span = static_cast<float>(U + V);
+  for (int py = 0; py < h; py++) {
+    for (int pxi = 0; pxi < w; pxi++) {
+      float diff = (pxi + 0.5f) / w * span - V; // u - v
+      float sum = (py + 0.5f) / h * span;        // u + v
+      int u = static_cast<int>(std::floor((sum + diff) * 0.5f));
+      int v = static_cast<int>(std::floor((sum - diff) * 0.5f));
+      int x, y;
+      if (!worldRenderer.viewTileToWorld(u, v, x, y))
+        continue;
+      SDL_Color c = worldMap.getPathType(x, y) >= 0
+                        ? pathColour
+                        : terrain[worldMap.getTile(x, y)->terrainType & 31];
+      px[py * pitch + pxi] = SDL_MapRGBA(surf->format, c.r, c.g, c.b, 255);
+    }
+  }
+  miniMapTexture = SDL_CreateTextureFromSurface(renderer, surf);
+  SDL_FreeSurface(surf);
+}
+
+void World::drawMiniMap(SDL_Renderer *renderer, const SDL_Rect &box) {
+  if (worldMap.getWidth() == 0)
+    return;
+  if (!miniMapTexture || miniMapGeneration != worldMap.getGeneration() ||
+      miniMapRotation != worldRenderer.getViewRotation() || miniMapW != box.w ||
+      miniMapH != box.h)
+    rebuildMiniMap(renderer, box.w, box.h);
+  if (miniMapTexture)
+    SDL_RenderCopy(renderer, miniMapTexture, nullptr, &box);
+
+  // What is on screen, as a rectangle (the original's [ScreenView] colour)
+  int U, V;
+  worldRenderer.getViewSize(U, V);
+  float span = static_cast<float>(U + V);
+  float cu, cv;
+  worldRenderer.getViewCentre(cu, cv);
+  const Camera &cam = worldRenderer.getCamera();
+  float zoom = cam.zoom > 0 ? cam.zoom : 1.0f;
+  float halfDiff = outputW / zoom * 0.5f / (worldRenderer.getTileWidth() * 0.5f);
+  float halfSum = outputH / zoom * 0.5f / (worldRenderer.getTileHeight() * 0.5f);
+  float d = cu - cv, s = cu + cv;
+  auto toX = [&](float diff) { return box.x + (diff + V) / span * box.w; };
+  auto toY = [&](float sum) { return box.y + sum / span * box.h; };
+  SDL_Rect view = {static_cast<int>(toX(d - halfDiff)), static_cast<int>(toY(s - halfSum)),
+                   static_cast<int>(toX(d + halfDiff) - toX(d - halfDiff)),
+                   static_cast<int>(toY(s + halfSum) - toY(s - halfSum))};
+  SDL_Rect clip = box;
+  SDL_RenderSetClipRect(renderer, &clip);
+  SDL_SetRenderDrawColor(renderer, 255, 223, 115, 255);
+  SDL_RenderDrawRect(renderer, &view);
+  SDL_RenderSetClipRect(renderer, nullptr);
+}
+
+void World::miniMapClick(float fx, float fy) {
+  int U, V;
+  worldRenderer.getViewSize(U, V);
+  float span = static_cast<float>(U + V);
+  float diff = fx * span - V, sum = fy * span;
+  worldRenderer.centreViewOn((sum + diff) * 0.5f, (sum - diff) * 0.5f);
 }
