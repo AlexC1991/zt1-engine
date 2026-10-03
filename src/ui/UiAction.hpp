@@ -30,4 +30,23 @@ enum class UiAction {
     HUD_PAUSE = 1071,
     HUD_PLAY = 1072,
 };
+
+// Panels: the in-game screen's sub-layouts (ui/gamescrn.lyt), by layout id.
+// A button with action=3 target=<id> toggles a panel; action=2 target=<id>
+// closes it.
+constexpr int kPanelToggleAction = 1000000;
+constexpr int kPanelCloseAction = 2000000;
+inline bool isPanelToggle(UiAction a) {
+  int v = static_cast<int>(a);
+  return v > kPanelToggleAction && v < kPanelCloseAction;
+}
+inline bool isPanelClose(UiAction a) {
+  int v = static_cast<int>(a);
+  return v > kPanelCloseAction && v < kPanelCloseAction + kPanelToggleAction;
+}
+inline int panelOf(UiAction a) {
+  return static_cast<int>(a) % kPanelToggleAction;
+}
+// action=2 target=-1: close the panel the button is in
+constexpr int kPanelSelf = 999999;
 #endif // UI_ACTION_HPP

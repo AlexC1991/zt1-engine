@@ -37,11 +37,11 @@ bool upscales(float scale);
 void beginLayer(SDL_Renderer *renderer, Layer layer, int lowW, int lowH,
                 SDL_Color clear);
 
-// Upscales the layer's viewW x viewH art pixels to the whole window and
-// draws it there (over what is there when blend is set); the window is the
-// render target again afterwards
+// Upscales the layer's viewW x viewH art pixels to dst (default: the whole
+// window) and draws them there (over what is there when blend is set); the
+// window is the render target again afterwards
 void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
-              bool blend);
+              bool blend, const SDL_Rect *dst = nullptr);
 
 } // namespace GpuFsr
 

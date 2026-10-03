@@ -72,11 +72,25 @@ public:
 
   bool hasResource(const std::string &resource_name_raw);
 
+  // Every resource name (lower case, '/' separated) that starts with
+  // prefix and ends with suffix
+  std::vector<std::string> listResources(const std::string &prefix,
+                                         const std::string &suffix);
+  // Where a resource comes from in the search path (zoo.ini [resource]
+  // path): 0 = the first directory (the highest priority, e.g. dlupdate);
+  // bigger = later (the base game's own archives are last)
+  int getResourcePriority(const std::string &name);
+
+  // The contents of many resources at once (each archive opened once)
+  std::unordered_map<std::string, std::string>
+  readResources(const std::vector<std::string> &names);
+
   // Access to PalletManager for sprite loading
   PalletManager* getPalletManager() { return &pallet_manager; }
 
 private:
   std::unordered_map<std::string, std::string> resource_map;
+  std::unordered_map<std::string, int> archive_priority; // archive -> path index
   std::unordered_map<uint32_t, std::string> string_map;
   std::unordered_map<std::string, Animation *> animation_map;
   std::unordered_map<std::string, Pallet *> pallet_map;

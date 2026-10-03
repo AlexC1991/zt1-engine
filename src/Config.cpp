@@ -96,6 +96,10 @@ int Config::getArtUpscaleFactor() {
   return reader->getInt("user", "artupscalefactor", 0);
 }
 
+bool Config::getWidescreen() {
+  return reader->getInt("user", "widescreen", 0) != 0;
+}
+
 float Config::getArtSharpness() {
   return static_cast<float>(
       std::atof(reader->get("user", "artsharpness", "0.2").c_str()));

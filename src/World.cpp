@@ -234,31 +234,39 @@ void World::handleDebugInput(const Uint8 *state) {
 }
 
 void World::draw(SDL_Renderer *renderer) {
-  // Clear screen
+  // Clear screen (the bars beside a centred view stay black)
+  SDL_RenderSetViewport(renderer, nullptr);
   SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
   SDL_RenderClear(renderer);
 
-  // The view is centred on the window as it is now (it can be resized)
+  // The map's area: the view set by the game, else the whole window
   Camera &cam = worldRenderer.getCamera();
   int outW = 0, outH = 0;
-  if (SDL_GetRendererOutputSize(renderer, &outW, &outH) == 0 && outW > 0) {
-    outputW = outW;
-    outputH = outH;
-    cam.screenCenterX = outW / 2;
-    cam.screenCenterY = outH / 2;
-  }
+  SDL_GetRendererOutputSize(renderer, &outW, &outH);
+  SDL_Rect view = this->viewRect.w > 0 && this->viewRect.h > 0
+                      ? this->viewRect
+                      : SDL_Rect{0, 0, outW, outH};
+  outputW = view.w;
+  outputH = view.h;
+  cam.screenCenterX = view.w / 2;
+  cam.screenCenterY = view.h / 2;
 
-  // Apply zoom. Zoomed in past 1x, GPU FSR draws the map at 1:1 into a
-  // layer and upscales it to the window; without it the map's art is drawn
-  // from its upscaled textures.
-  float zoom = cam.zoom > 0.0f ? cam.zoom : 1.0f;
+  // The camera's zoom times the view's scale, while drawing
+  const float userZoom = cam.zoom > 0.0f ? cam.zoom : 1.0f;
+  const float zoom = userZoom * this->viewScale;
+  cam.zoom = zoom;
+
+  // Zoomed in past 1x, GPU FSR draws the map at 1:1 into a layer and
+  // upscales it into the view; without it the map's art is drawn from its
+  // upscaled textures.
   const bool gpuFsr = GpuFsr::upscales(zoom);
   if (gpuFsr) {
     GpuFsr::beginLayer(renderer, GpuFsr::Layer::World,
-                       static_cast<int>(std::ceil(outputW / zoom)),
-                       static_cast<int>(std::ceil(outputH / zoom)),
+                       static_cast<int>(std::ceil(view.w / zoom)),
+                       static_cast<int>(std::ceil(view.h / zoom)),
                        SDL_Color{0, 0, 0, 255});
   } else {
+    SDL_RenderSetViewport(renderer, &view); // in pixels (scale is 1 here)
     SDL_RenderSetScale(renderer, zoom, zoom);
   }
   RenderSettings::worldZoomedIn =
@@ -273,12 +281,14 @@ void World::draw(SDL_Renderer *renderer) {
                      static_cast<int>(cam.screenCenterY / zoom));
 
   if (gpuFsr)
-    GpuFsr::endLayer(renderer, GpuFsr::Layer::World, outputW / zoom,
-                     outputH / zoom, false);
+    GpuFsr::endLayer(renderer, GpuFsr::Layer::World, view.w / zoom,
+                     view.h / zoom, false, &view);
 
-  // Reset scale
+  // Reset
   SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+  SDL_RenderSetViewport(renderer, nullptr);
   RenderSettings::worldZoomedIn = false;
+  cam.zoom = userZoom;
 }
 
 void World::setCameraPosition(int x, int y) {
@@ -410,7 +420,7 @@ void World::drawMiniMap(SDL_Renderer *renderer, const SDL_Rect &box) {
   float cu, cv;
   worldRenderer.getViewCentre(cu, cv);
   const Camera &cam = worldRenderer.getCamera();
-  float zoom = cam.zoom > 0 ? cam.zoom : 1.0f;
+  float zoom = (cam.zoom > 0 ? cam.zoom : 1.0f) * this->viewScale;
   float halfDiff = outputW / zoom * 0.5f / (worldRenderer.getTileWidth() * 0.5f);
   float halfSum = outputH / zoom * 0.5f / (worldRenderer.getTileHeight() * 0.5f);
   float d = cu - cv, s = cu + cv;

@@ -4,11 +4,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <vector>
 #include <string>
 
 #include "ArtScaler.hpp"
 #include "GpuFsr.hpp"
+#include "ItemCatalog.hpp"
 #include "Config.hpp"
 #include "RenderSettings.hpp"
 #include "IniReader.hpp"
@@ -25,6 +27,7 @@
 #include "ui/UiImage.hpp"
 #include "ui/UiLayout.hpp"
 #include "ui/UiListBox.hpp"
+#include "ui/UiGameScreen.hpp"
 #include "ui/UiMiniMap.hpp"
 #include "ui/UiStatusImage.hpp"
 #include "ui/UiText.hpp"
@@ -245,6 +248,7 @@ static void setFreeformPreview(UiImage *img, ResourceManager *rm,
 // ============================================================================
 
 static float g_uiScaleSetting = 0.0f; // 0 = fit the window
+static bool g_widescreen = false;     // in-game screen fills the window
 static const int UI_LAYOUT_W = 800;
 static const int UI_LAYOUT_H = 600;
 
@@ -337,7 +341,7 @@ static void drawLayoutCentered(SDL_Renderer *renderer, UiLayout *layout,
 // whole window at the menus' UI scale; the map is drawn underneath.
 // ============================================================================
 
-static UiLayout *g_hud = nullptr;
+static UiGameScreen *g_hud = nullptr;
 
 static std::string formatMoney(int amount) {
   std::string digits = std::to_string(amount);
@@ -372,12 +376,8 @@ static void destroyHud() {
 
 static void createHud(ResourceManager *rm, World *world, int startingCash) {
   destroyHud();
-  IniReader *reader = rm->getIniReader("ui/main.lyt");
-  if (!reader) {
-    SDL_Log("[HUD] ui/main.lyt not found");
-    return;
-  }
-  g_hud = new UiLayout(reader, rm);
+  // The HUD and its panels, as the original's in-game screen
+  g_hud = new UiGameScreen(rm, "ui/main.lyt", "ui/gamescrn.lyt");
 
   if (UiText *date = dynamic_cast<UiText *>(g_hud->getElementById(1030)))
     date->setText("Jan, Year 1");
@@ -425,20 +425,49 @@ static SDL_Rect hudLayoutRect(SDL_Renderer *renderer, const UiTransform &t) {
           static_cast<int>(std::lround(h / t.scale))};
 }
 
+// The in-game screen's area on the window: like the original (and the
+// menus), its 800x600 screen scaled to fit and centred; with the
+// widescreen option, the whole window
+static SDL_Rect gameViewRect(SDL_Renderer *renderer) {
+  int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
+  SDL_GetRendererOutputSize(renderer, &w, &h);
+  if (g_widescreen)
+    return {0, 0, w, h};
+  UiTransform t = getUiTransform(renderer);
+  return {static_cast<int>(std::lround(t.offsetX)),
+          static_cast<int>(std::lround(t.offsetY)),
+          static_cast<int>(std::lround(UI_LAYOUT_W * t.scale)),
+          static_cast<int>(std::lround(UI_LAYOUT_H * t.scale))};
+}
+
 static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
   if (!g_hud)
     return;
   UiTransform t = getUiTransform(renderer);
-  SDL_Rect rect = hudLayoutRect(renderer, t);
-  drawUiScaled(renderer, rm, t,
-               [&](SDL_Renderer *r) { g_hud->draw(r, &rect); });
+  if (g_widescreen) {
+    SDL_Rect rect = hudLayoutRect(renderer, t);
+    drawUiScaled(renderer, rm, t,
+                 [&](SDL_Renderer *r) { g_hud->draw(r, &rect); });
+    return;
+  }
+  // Centred at 800x600, exactly like the menus
+  drawUiScaled(renderer, rm, t, [&](SDL_Renderer *r) {
+    SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
+                         static_cast<int>(std::lround(t.offsetY / t.scale)),
+                         UI_LAYOUT_W, UI_LAYOUT_H};
+    SDL_RenderSetViewport(r, &viewport);
+    SDL_Rect layoutRect = {0, 0, UI_LAYOUT_W, UI_LAYOUT_H};
+    g_hud->draw(r, &layoutRect);
+    SDL_RenderSetViewport(r, nullptr);
+  });
 }
 
 static UiAction hudInputs(SDL_Renderer *renderer, std::vector<Input> inputs) {
   if (!g_hud)
     return UiAction::NONE;
   UiTransform t = getUiTransform(renderer);
-  t.offsetX = t.offsetY = 0; // the HUD covers the whole window
+  if (g_widescreen)
+    t.offsetX = t.offsetY = 0; // the HUD covers the whole window
   mapInputsToLayout(inputs, t);
   return g_hud->handleInputs(inputs);
 }
@@ -789,6 +818,66 @@ static int runMapRenderCheck(SDL_Renderer *renderer, ResourceManager *rm,
   return count > 0 ? 0 : 1;
 }
 
+// --panel-shots <outDir> [mapStem]: start a freeform game (default Death
+// Mountain), open every toolbar panel and buy tab in turn and save each
+// frame as <outDir>/<name>.bmp, then quit. For comparing with the original
+// without driving the mouse.
+static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
+                         ScenarioManager *sm, World *world,
+                         const std::string &outDir, const std::string &stem) {
+  const FreeformMap *chosen = nullptr;
+  for (int i = 0; const FreeformMap *map = sm->getFreeformMap(i); i++)
+    if (getFileStem(map->path) == stem)
+      chosen = map;
+  if (!chosen || !world->loadFreeform(chosen->path)) {
+    SDL_Log("[PanelShots] map %s not found", stem.c_str());
+    return 1;
+  }
+  createHud(rm, world, CASH_START);
+  if (!g_hud)
+    return 1;
+  std::filesystem::create_directories(outDir);
+
+  struct Shot {
+    int panel;
+    const char *tab; // the buy tab's category ("" = none)
+    const char *name;
+  };
+  const Shot shots[] = {
+      {0, "", "none"},           {3, "animals", "animals"},
+      {3, "shelters", "shelters"}, {3, "toys", "toys"},
+      {3, "showtoys", "showtoys"}, {4, "structures", "structures"},
+      {4, "scenery", "scenery"},   {8, "fence", "fence"},
+      {8, "paths", "paths"},       {8, "foliage", "foliage"},
+      {8, "rocks", "rocks"},       {10, "", "staff"},
+      {15, "", "research"},        {5, "", "gameopts"}};
+  for (const Shot &shot : shots) {
+    g_hud->showPanel(shot.panel, shot.tab);
+    for (int frame = 0; frame < 3; frame++) { // let art load and settle
+      SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+      SDL_RenderClear(renderer);
+      world->setView(gameViewRect(renderer),
+                     g_widescreen ? 1.0f : getUiTransform(renderer).scale);
+      world->draw(renderer);
+      drawHud(renderer, rm);
+      if (frame < 2)
+        SDL_RenderPresent(renderer);
+    }
+    int w = 0, h = 0;
+    SDL_GetRendererOutputSize(renderer, &w, &h);
+    SDL_Surface *s =
+        SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (s && SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
+                                  s->pixels, s->pitch) == 0)
+      SDL_SaveBMP(s, (outDir + "/" + shot.name + ".bmp").c_str());
+    if (s)
+      SDL_FreeSurface(s);
+    SDL_RenderPresent(renderer);
+    SDL_Log("[PanelShots] %s", shot.name);
+  }
+  return 0;
+}
+
 int main(int argc, char *argv[]) {
   SDL_SetMainReady();
 
@@ -800,6 +889,7 @@ int main(int argc, char *argv[]) {
 
   Config config;
   g_uiScaleSetting = config.getUiScale();
+  g_widescreen = config.getWidescreen();
   ResourceManager resource_manager(&config);
 
   // FSR runs on the GPU, which needs SDL's OpenGL renderer (shaders). If
@@ -816,6 +906,13 @@ int main(int argc, char *argv[]) {
   window.set_cursor(resource_manager.getCursor(9));
 
   LoadScreen::run(&window, &config, &resource_manager);
+
+  // ZT_DUMP_CATALOG=1: log every buy tab's list and quit (for comparing
+  // with the original)
+  if (std::getenv("ZT_DUMP_CATALOG")) {
+    ItemCatalog::get().load(&resource_manager);
+    return 0;
+  }
 
   g_scenarioManager = new ScenarioManager(&resource_manager);
   g_scenarioManager->loadScenarios();
@@ -844,6 +941,10 @@ int main(int argc, char *argv[]) {
   g_currentState = LayoutState::MAIN_MENU;
 
   for (int i = 1; i + 1 < argc; i++) {
+    if (std::string(argv[i]) == "--panel-shots")
+      return runPanelShots(window.renderer, &resource_manager,
+                           g_scenarioManager, g_world, argv[i + 1],
+                           i + 2 < argc ? argv[i + 2] : "deathmtn");
     if (std::string(argv[i]) == "--render-maps") {
       if (i + 2 < argc)
         g_world->getRenderer().setElevationScale(std::atoi(argv[i + 2]));
@@ -1058,6 +1159,9 @@ int main(int argc, char *argv[]) {
       // SDL_Log("MainLoop: Post-Update");
 
       // SDL_Log("MainLoop: Pre-Draw");
+      g_world->setView(gameViewRect(window.renderer),
+                       g_widescreen ? 1.0f
+                                    : getUiTransform(window.renderer).scale);
       g_world->draw(window.renderer);
       updateZoomButtons(g_world); // the mouse wheel zooms too
       drawHud(window.renderer, &resource_manager);

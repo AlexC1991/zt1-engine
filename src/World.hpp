@@ -40,6 +40,15 @@ public:
     // Render world (isometric terrain + entities)
     void draw(SDL_Renderer* renderer);
 
+    // Where on the window the map is shown, and how much bigger than 1:1.
+    // Like the original, the in-game screen is its 800x600 screen scaled to
+    // fit and centred (rect = that area, scale = the UI scale); with the
+    // widescreen option it is the whole window at 1:1.
+    void setView(const SDL_Rect& rect, float scale) {
+        viewRect = rect;
+        viewScale = scale > 0.0f ? scale : 1.0f;
+    }
+
     // Access subsystems
     WorldMap& getMap() { return worldMap; }
     WorldRenderer& getRenderer() { return worldRenderer; }
@@ -72,7 +81,9 @@ private:
     void handleDebugInput(const Uint8* state);
 
     bool paused = false;
-    int outputW = 1280, outputH = 720;
+    int outputW = 1280, outputH = 720; // the map's area on the window
+    SDL_Rect viewRect = {0, 0, 0, 0};  // empty = the whole window
+    float viewScale = 1.0f;
 
     // Minimap picture, rebuilt when the map, rotation or box size changes
     SDL_Texture* miniMapTexture = nullptr;

@@ -21,6 +21,10 @@ public:
   std::string getArtUpscale();
   int getArtUpscaleFactor();
   float getArtSharpness();
+  // [user] widescreen: 1 = the in-game screen fills a wide window (the HUD
+  // stretches across it); 0 (default) = like the original, its 800x600
+  // screen scaled to fit and centred, the same as the menus
+  bool getWidescreen();
   std::string getMenuMusic();
   bool getPlayMenuMusic();
   int getScreenWidth();

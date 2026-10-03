@@ -17,6 +17,11 @@ UiButton::UiButton(IniReader *ini_reader, ResourceManager *resource_manager,
   this->layer = ini_reader->getInt(name, "layer", 1);
   this->anchor = ini_reader->getInt(name, "anchor", 0);
   this->transparent = ini_reader->getInt(name, "transparent", 0) != 0;
+  this->action_type = ini_reader->getInt(name, "action", 0);
+  this->action_target = ini_reader->getInt(name, "target", 0);
+  // Buttons that open a panel start off (the panel closed)
+  if (this->action_type == 3)
+    this->toggled_on = false;
 
   this->has_select_color = !ini_reader->get(name, "selectcolor", "").empty();
 
@@ -68,19 +73,27 @@ UiAction UiButton::handleInputs(std::vector<Input> &inputs) {
     switch (input.event) {
     case InputEvent::LEFT_CLICK:
       if (this->isToggle()) {
-        bool on = !this->toggled_on;
+        // A radio choice (4096) stays chosen; other toggles flip
+        bool on = (this->state_flags & 4096) ? true : !this->toggled_on;
         if (this->radio_group)
           for (UiButton *b : *this->radio_group)
             b->toggled_on = false;
         this->toggled_on = on;
       }
-      if (this->ini_reader->getInt(this->name, "action", 0) == 1) {
-        int target = this->ini_reader->getInt(this->name, "target", 0);
-        if (target != 0) {
-          action = (UiAction)target;
+      if (this->action_type == 1) {
+        if (this->action_target != 0) {
+          action = (UiAction)this->action_target;
         }
-      } else if (this->ini_reader->getInt(this->name, "action", 0) == 2) {
-        action = UiAction::CREDITS_EXIT;
+      } else if (this->action_type == 2) {
+        // Close a panel, or (no target) leave the credits
+        if (this->action_target == 0)
+          action = UiAction::CREDITS_EXIT;
+        else
+          action = (UiAction)(kPanelCloseAction + (this->action_target < 0
+                                                       ? kPanelSelf
+                                                       : this->action_target));
+      } else if (this->action_type == 3 && this->action_target != 0) {
+        action = (UiAction)(kPanelToggleAction + this->action_target);
       } else {
         action = this->getActionBasedOnName();
       }
