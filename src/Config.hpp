@@ -25,6 +25,10 @@ public:
   // stretches across it); 0 (default) = like the original, its 800x600
   // screen scaled to fit and centred, the same as the menus
   bool getWidescreen();
+  // [user] timedunlocks: 1 = freeform items come out month by month as in
+  // the original (freeform/unlock*.scn); 0 (default) = all of them from
+  // the start
+  bool getTimedUnlocks();
   std::string getMenuMusic();
   bool getPlayMenuMusic();
   int getScreenWidth();

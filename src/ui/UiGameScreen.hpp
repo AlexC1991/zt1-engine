@@ -1,16 +1,20 @@
 #ifndef UI_GAME_SCREEN_HPP
 #define UI_GAME_SCREEN_HPP
 
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
 
 #include "UiElement.hpp"
+#include "../Staff.hpp"
 
 class UiButton;
 class UiImage;
 class UiLayout;
 class UiListBox;
+class ZooSim;
+class Fences;
 class UiScrollingRegion;
 class UiText;
 struct CatalogItem;
@@ -38,6 +42,83 @@ public:
 
   // Searches the HUD, then the panels
   UiElement *getElementById(int id);
+
+  // The Zoo Status panel (zooinfo.lyt): what it shows about the zoo
+  struct ZooInfo {
+    std::string name;        // the entrance's
+    double admission = 22.0; // adult; children pay half
+    long cash = 0;
+    long placedValue = 0;    // purchase cost of everything on the map
+    int rating = 0;          // zoo rating, 0-100
+    std::string month;       // the current month ("Jan")
+    int staffCount = 0;
+  };
+  void setZooInfo(const ZooInfo &info);
+  // The game clock and books the panels show and charge funding to
+  void setSim(ZooSim *sim);
+
+  // Whether a point (layout units) is on the HUD, a panel or a dialog (the
+  // map doesn't get the mouse there)
+  bool isOverHud(int x, int y) const;
+  // The fence picked in Buy Habitat while it is open (its .ai file; empty:
+  // none)
+  std::string fenceToolFile() const;
+  // The staff picked in Hire Staff while it is open (its .ai file)
+  std::string staffToolFile() const;
+  // The path picked on Buy Habitat's Paths tab while it is open
+  std::string pathToolFile() const;
+  // Staff: their panels (Staff Information, ui/infostf.lyt; Staff List,
+  // ui/mulstaff.lyt) and what their buttons ask of the world
+  enum class StaffRequest { PickUp, Fire, Assign, Track, Select };
+  void setStaff(Staff *staff, std::function<void(StaffRequest, int)> request);
+  void showStaff(int id);
+  int shownStaffId() const { return this->shownStaff; }
+  void refreshStaff();
+  // The bulldozer is on (the HUD's Clear Objects button)
+  bool bulldozerOn() const;
+
+  // Modal dialogs: ui/newname.lyt (a name to type, OK) and ui/confirm.lyt
+  // (a question, Yes / No)
+  void askName(const std::string &prompt, const std::string &initial,
+               std::function<void(const std::string &)> done);
+  void askConfirm(const std::string &message, std::function<void()> yes);
+  bool hasDialog() const { return this->dialog.layout != nullptr; }
+  void drawDialog(SDL_Renderer *renderer, SDL_Rect *layout_rect);
+
+  // The exhibits (Exhibit/Show List, ui/mulhab.lyt)
+  void setFences(Fences *fences, std::function<void(float, float)> centreOn);
+  // The buy panels list again (a new month unlocked things), keeping what
+  // is picked
+  void refreshCatalog();
+  // Opens the Exhibit/Show List on an exhibit (clicked on the map)
+  void showExhibit(int id);
+  // Opens a tank filter's panel (filter.lyt: its name, Sell, its status
+  // and upkeep)
+  void showFilter(int index);
+  int shownFilterIndex() const { return this->shownFilter; }
+  // The message bar at the top: a warning for a few seconds (red, as the
+  // original's "Zoo objects can only be placed inside the main zoo
+  // wall."), and "The game is paused." while it is
+  void showMessage(const std::string &text, SDL_Color color = {255, 40, 40, 255},
+                   Uint32 ms = 4000);
+  void setPausedMessage(bool paused) { this->pausedMessage = paused; }
+  // Tooltips, as the original: resting the cursor on a button shows its
+  // help (lang string 30000 + its helpid: "Adjust wall up. Some animals
+  // prefer a deep tank."); over the map, the tool's hint set here ("Click
+  // to place a single fence piece, ...")
+  void setWorldTip(const std::string &tip) { this->worldTip = tip; }
+  // The tooltip that would show now (for tests): its text
+  std::string tooltipText() const;
+  void setMouse(int x, int y, Uint32 since) {
+    this->mouseX = x;
+    this->mouseY = y;
+    this->mouseStill = since;
+  }
+  // A buy panel's grid scrolled to a row (for comparing pages with the
+  // original); its last row it can scroll to
+  int scrollBuyPanel(int panelId, int row);
+  void refreshExhibits();
+  const ZooInfo &zooInfo() const { return this->zoo; }
 
   bool isPanelOpen(int id) const;
   // Whether a point (layout units) is on an open panel (the wheel scrolls
@@ -73,6 +154,16 @@ private:
   };
   std::vector<Entry> entries; // in drawing order
   UiLayout *hud = nullptr;
+  UiImage *messageBar = nullptr;
+  std::string message;
+  SDL_Color messageColor = {255, 255, 255, 255};
+  Uint32 messageUntil = 0;
+  bool pausedMessage = false;
+  void drawMessage(SDL_Renderer *renderer, SDL_Rect *layout_rect);
+  int mouseX = -1, mouseY = -1;
+  Uint32 mouseStill = 0;
+  std::string worldTip;
+  void drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect);
   std::vector<UiButton *> panelButtons; // HUD buttons with action=3
 
   SDL_Rect panelRect(SDL_Renderer *renderer, const Entry &e,
@@ -171,6 +262,52 @@ private:
   }
   void setupResearch();
   void refreshResearch();
+
+  struct Dialog {
+    UiLayout *layout = nullptr;
+    int textId = 0;          // the editable box (newname)
+    std::string typed;
+    std::function<void(const std::string &)> done;
+    std::function<void()> yes;
+    bool submit = false, cancel = false;
+  } dialog;
+  std::vector<std::function<void()>> dialogQueue; // waiting their turn
+  void closeDialog();
+  void handleDialog(std::vector<Input> &inputs);
+
+  Fences *fences = nullptr;
+  std::function<void(float, float)> centreOn;
+  UiLayout *exhibitPanel = nullptr;
+  UiLayout *filterPanel = nullptr;
+  Staff *staff = nullptr;
+  std::function<void(StaffRequest, int)> staffRequest;
+  UiLayout *staffPanel = nullptr, *staffList = nullptr;
+  int shownStaff = -1, staffFilter = 0, staffListCount = -1;
+  std::vector<int> listedStaff;
+  bool tracking = false;
+  void setupStaffPanels();
+  void drawStaffPortrait(SDL_Renderer *renderer);
+  int shownFilter = -1;
+  void setupFilterPanel();
+  void refreshFilterPanel();
+  std::vector<int> listedExhibits;
+  std::vector<std::string> listedIcons; // each one's mini icon
+  int shownExhibit = -1, shownListCount = -1;
+  void setupExhibits();
+
+  // Zoo Status: its pages' texts, graphs, marketing and admission
+  ZooInfo zoo;
+  ZooSim *sim = nullptr;
+  UiLayout *zooPanel = nullptr;
+  void chargeFunding(); // research, conservation, marketing a day
+  struct MarketingLevel {
+    std::string name; // "%s none"
+    int cost = 0;     // a month
+  };
+  std::vector<MarketingLevel> marketing;
+  int marketingLevel = 0;
+  void setupZooStatus();
+  void refreshZooStatus();
 };
 
 #endif // UI_GAME_SCREEN_HPP

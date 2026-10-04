@@ -64,6 +64,7 @@ private:
 
   std::vector<Item> items;
   std::vector<Animation *> icons; // loaded as drawn
+  std::vector<bool> iconTried;     // (an icon not in the data: a blank cell)
   int selected = -1;
   int hover = -1;
   int first_row = 0;

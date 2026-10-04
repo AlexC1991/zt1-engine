@@ -82,6 +82,10 @@ public:
 private:
   int action_type = 0;
   int action_target = 0;
+  bool repeating = false; // repeating=1: held down, it keeps clicking
+  bool pressed = false;
+  Uint32 press_time = 0, last_repeat = 0;
+  static constexpr Uint32 kRepeatDelay = 400, kRepeatInterval = 100;
   bool toggled_on = true;
   std::shared_ptr<std::vector<UiButton *>> radio_group;
   std::string text_string = "";

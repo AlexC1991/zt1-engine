@@ -51,7 +51,10 @@ UiImage::UiImage(IniReader *ini_reader, ResourceManager *resource_manager,
   this->name = name;
 
   this->id = ini_reader->getInt(name, "id");
-  this->layer = ini_reader->getInt(name, "layer", 1);
+  // An image without a layer is at the bottom (the five that have none are
+  // backgrounds: the Zoo Profit page's overlay must not cover its Line /
+  // Bar buttons)
+  this->layer = ini_reader->getInt(name, "layer", 0);
   this->anchor = ini_reader->getInt(name, "anchor", 0);
 
   // --- FIX: LAYER ORDER ---

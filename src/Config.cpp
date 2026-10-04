@@ -96,6 +96,10 @@ int Config::getArtUpscaleFactor() {
   return reader->getInt("user", "artupscalefactor", 0);
 }
 
+bool Config::getTimedUnlocks() {
+  return reader->getInt("user", "timedunlocks", 0) != 0;
+}
+
 bool Config::getWidescreen() {
   return reader->getInt("user", "widescreen", 0) != 0;
 }

@@ -78,11 +78,18 @@ public:
                                               bool availableOnly = true) const;
 
   const CatalogItem *find(const std::string &file) const;
+  // The game's month (January of year 1 = 1): freeform unlocks of "value
+  // 6" are there from the 6th month (measured: the Tank Filter in June)
+  void setMonth(int month) { this->month = month; }
+  int getMonth() const { return this->month; }
+  // Every item read (available or not)
+  const std::vector<CatalogItem> &all() const { return this->items; }
   // By cNameID (what research programs and unlock lists name items by)
   const CatalogItem *findName(int nameId) const;
 
 private:
   std::vector<CatalogItem> items;
+  int month = 1;
   bool loaded = false;
 };
 

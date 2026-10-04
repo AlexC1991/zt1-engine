@@ -14,10 +14,27 @@ Pallet *PalletManager::getPallet(char *file_name_c) {
   return this->getPallet(file_name);
 }
 
+static thread_local std::unordered_map<std::string, std::string> g_overrides;
+
+void PalletManager::setOverride(const std::string &from, const std::string &to) {
+  g_overrides[Utils::string_to_lower(from)] = Utils::string_to_lower(to);
+}
+
+void PalletManager::clearOverrides() { g_overrides.clear(); }
+
+void PalletManager::addPallet(const std::string &name, const Pallet &pallet) {
+  this->pallet_map[Utils::string_to_lower(name)] = pallet;
+}
+
 Pallet *PalletManager::getPallet(std::string &file_name_raw) {
   // Resource names are indexed lower case; frames name their palette in
   // any case (e.g. fences/castiron/SE/SE.pal)
   std::string file_name = Utils::string_to_lower(file_name_raw);
+  if (!g_overrides.empty()) {
+    auto o = g_overrides.find(file_name);
+    if (o != g_overrides.end())
+      file_name = o->second;
+  }
   if (this->pallet_map.contains(file_name)) {
     return &this->pallet_map[file_name];
   }

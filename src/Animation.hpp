@@ -33,6 +33,18 @@ public:
 
   void queryTexture(CompassDirection direction, int *w, int *h);
 
+  // World art: draws the frame with its anchor point (where the object
+  // stands) at x, y (logical pixels). False when it has no such frame.
+  // frame >= 0 picks the frame (counted round), for art that plays (a bird
+  // flapping)
+  bool drawAnchored(SDL_Renderer *renderer, float x, float y,
+                    CompassDirection direction, const SDL_Color *tint = nullptr,
+                    int frame = -1);
+  // Its frames' time (ms; 0 when the file gives none)
+  uint32_t frameTimeMs() const { return this->frame_time_in_ms; }
+  // How many frames it plays (its first direction's)
+  int frameCount() const { return this->frame_count; }
+
   // Returns true if animation has at least one valid surface or texture
   // Returns true if animation has at least one valid surface or texture
   bool isValid() const {
@@ -91,6 +103,7 @@ private:
 
   uint32_t frame_time_in_ms = 0;
   bool has_background = 0;
+  int frame_count = 0;
 
   std::unordered_map<std::string, std::vector<SDL_Surface *>> surfaces;
   std::unordered_map<std::string, std::vector<SDL_Texture *>> textures;
@@ -102,6 +115,8 @@ private:
   std::string convertCompassDirectionToString(
       CompassDirection direction); // TODO: Figure out if this should be here
 
+  // Each direction's anchor point in its frames (frame 0)
+  std::unordered_map<std::string, SDL_Point> anchor_points;
   void loadSurfaces(std::string direction_string, AnimationData *data);
 };
 

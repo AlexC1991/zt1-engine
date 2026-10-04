@@ -4,6 +4,7 @@
 #include <sstream>
 
 #include "../Animation.hpp"
+#include "../ArtScaler.hpp"
 #include "../CompassDirection.hpp"
 
 UiListBox::UiListBox(IniReader* ini_reader, ResourceManager* resource_manager, std::string name) {
@@ -43,6 +44,12 @@ UiListBox::UiListBox(IniReader* ini_reader, ResourceManager* resource_manager, s
     this->toggle_select = ini_reader->getInt(name, "toggleselect", 0) == 1;
     this->minicon_width = ini_reader->getInt(name, "miniconwidth", 0);
     this->line_height = resource_manager->getFontLineHeight(font_id, font_size_id);
+    // Lists with mini icons (the exhibit list's tank icons, 30 x 30) have
+    // rows tall enough for them (measured: 30 px with its frame)
+    if (this->minicon_width >= 30 && !this->toggle_select) {
+        this->item_height = std::max(this->item_height, 30);
+        this->visible_items = std::max(1, (dy - border * 2) / item_height);
+    }
     if (this->toggle_select)
         this->checkbox = resource_manager->getAnimation("ui/sharedui/checkbx/checkbx");
 
@@ -353,18 +360,23 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
             item.loadAttempted = true; // Stop asking if it fails!
         }
 
-        int text_x_offset = 2;
+        int text_x_offset = minicon_width > 0 ? minicon_width + 2 : 2;
         if (item.iconTex) {
+            // Its own size where the list has a mini icon column, else small
+            int iw = 18, ih = 18;
+            if (minicon_width >= 30)
+                ArtScaler::querySize(item.iconTex, &iw, &ih);
             SDL_Rect iconRect = {
-                item_rect.x + 2,
-                item_rect.y + (item_height - 18) / 2,
-                18, 18
+                item_rect.x + 3,
+                item_rect.y + (item_height - ih) / 2,
+                iw, ih
             };
             SDL_SetTextureBlendMode(item.iconTex, SDL_BLENDMODE_BLEND);
             RenderSettings::applyArtScaleMode(item.iconTex);
             if (art)
                 SDL_RenderCopy(renderer, item.iconTex, nullptr, &iconRect);
-            text_x_offset = 24;
+            if (minicon_width <= 0)
+                text_x_offset = 24;
         }
 
         if (!item.text.empty()) {

@@ -19,7 +19,9 @@ std::vector<Input> InputManager::getInputs() {
       .event = InputEvent::NONE,
       .position = {0, 0},
       .x = 0,
-      .y = 0
+      .y = 0,
+      .key = 0,
+      .text = {0}
     };
     
     switch (event.type) {
@@ -37,13 +39,32 @@ std::vector<Input> InputManager::getInputs() {
           g_showDiagnostics = !g_showDiagnostics;
           input.event = InputEvent::NONE;
         } else {
-          input.event = InputEvent::NONE;
+          input.event = InputEvent::KEY_DOWN;
+          input.key = event.key.keysym.sym;
         }
+        break;
+
+      case SDL_TEXTINPUT:
+        input.type = InputType::BUTTON;
+        input.event = InputEvent::TEXT_INPUT;
+        SDL_strlcpy(input.text, event.text.text, sizeof(input.text));
+        break;
+
+      case SDL_MOUSEBUTTONUP:
+        input.type = InputType::POSITIONED;
+        // Where it happened (the mouse may have moved on since: a press
+        // and a drag can arrive in the same frame)
+        input.position = {event.button.x, event.button.y};
+        input.x = input.position.x;
+        input.y = input.position.y;
+        input.event = event.button.button == SDL_BUTTON_LEFT    ? InputEvent::LEFT_RELEASE
+                      : event.button.button == SDL_BUTTON_RIGHT ? InputEvent::RIGHT_RELEASE
+                                                                : InputEvent::NONE;
         break;
         
       case SDL_MOUSEBUTTONDOWN:
         input.type = InputType::POSITIONED;
-        SDL_GetMouseState(&input.position.x, &input.position.y);
+        input.position = {event.button.x, event.button.y};
         input.x = input.position.x;
         input.y = input.position.y;
         input.event = getEventFromMouseButton(event.button.button);
@@ -52,7 +73,7 @@ std::vector<Input> InputManager::getInputs() {
       case SDL_MOUSEMOTION:
         input.type = InputType::POSITIONED;
         input.event = InputEvent::CURSOR_MOVE;
-        SDL_GetMouseState(&input.position.x, &input.position.y);
+        input.position = {event.motion.x, event.motion.y};
         input.x = input.position.x;
         input.y = input.position.y;
         break;

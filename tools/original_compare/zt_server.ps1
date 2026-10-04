@@ -1,6 +1,7 @@
 # Long-running version of zt.ps1: reads one command per line on stdin,
 # replies with one line ("ok ..." or "err ...") per command.
 #   shot <file.png> | click <x> <y> | move <x> <y> | front
+#   down <x> <y> | up <x> <y> (left button, for drags) | rclick <x> <y>
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
@@ -52,6 +53,18 @@ while ($true) {
           Start-Sleep -Milliseconds 60
           [W]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 50
           [W]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero)
+        }
+        $msg = "ok"
+      }
+      { $_ -in "down", "up", "rclick" } {
+        $xy = $parts[1].Split(" "); $o = Origin
+        [W]::SetCursorPos($o.X + [int]$xy[0], $o.Y + [int]$xy[1]) | Out-Null
+        Start-Sleep -Milliseconds 40
+        if ($parts[0] -eq "down") { [W]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero) }
+        elseif ($parts[0] -eq "up") { [W]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero) }
+        else {
+          [W]::mouse_event(0x0008, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 50
+          [W]::mouse_event(0x0010, 0, 0, 0, [IntPtr]::Zero)
         }
         $msg = "ok"
       }

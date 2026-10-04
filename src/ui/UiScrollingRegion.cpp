@@ -54,6 +54,7 @@ void UiScrollingRegion::setItems(const std::vector<Item> &items) {
     delete icon;
   this->items = items;
   this->icons.assign(items.size(), nullptr);
+  this->iconTried.assign(items.size(), false);
   this->selected = -1;
   this->hover = -1;
   this->first_row = 0;
@@ -66,6 +67,7 @@ void UiScrollingRegion::setItemIcon(int index, const std::string &icon) {
   this->items[index].icon = icon;
   delete this->icons[index]; // loaded again as drawn
   this->icons[index] = nullptr;
+  this->iconTried[index] = false;
 }
 
 void UiScrollingRegion::setSelected(int index) {
@@ -166,8 +168,11 @@ void UiScrollingRegion::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       std::min((int)this->items.size(), first + this->visibleRows() * cols);
   for (int i = first; i < last; i++) {
     SDL_Rect cell = this->cellRect(i);
-    if (!this->icons[i] && !this->items[i].icon.empty())
+    if (!this->icons[i] && !this->items[i].icon.empty() && !this->iconTried[i]) {
+      this->iconTried[i] = true;
+      if (this->resource_manager->hasResource(this->items[i].icon + ".ani"))
       this->icons[i] = this->resource_manager->getAnimation(this->items[i].icon);
+    }
 
     auto drawIcon = [&]() {
       Animation *icon = this->icons[i];
