@@ -9,6 +9,7 @@
 
 // [STATE MANAGER]
 static std::map<UiText*, int> scroll_y_map;
+static UiText *s_editing = nullptr; // the box being edited
 
 static int getScroll(UiText* ptr) { return scroll_y_map[ptr]; }
 static void setScroll(UiText* ptr, int v) { scroll_y_map[ptr] = v; }
@@ -30,9 +31,41 @@ UiText::UiText(IniReader * ini_reader, ResourceManager * resource_manager, std::
   if(raw.empty()) raw = (name == "version_label") ? "Version: ZT1-Engine 0.1" : "";
   
   this->setText(raw);
+
+  this->editable = ini_reader->get(name, "type") == "UIEditableText";
+  this->numeric = ini_reader->getInt(name, "numeric", 0) == 1;
+  this->char_limit = ini_reader->getInt(name, "charlimit", 0);
+}
+
+bool UiText::isEditing() { return s_editing != nullptr; }
+bool UiText::isBeingEdited() const { return s_editing == this; }
+
+void UiText::beginEdit() {
+  if (s_editing == this)
+    return;
+  if (s_editing)
+    s_editing->endEdit(true);
+  s_editing = this;
+  this->before_edit = this->text_string;
+  if (this->onBeginEdit)
+    this->setText(this->onBeginEdit());
+  SDL_StartTextInput();
+}
+
+void UiText::endEdit(bool keep) {
+  if (s_editing != this)
+    return;
+  s_editing = nullptr;
+  SDL_StopTextInput();
+  std::string typed = this->text_string;
+  this->setText(this->before_edit);
+  if (keep && this->onCommit)
+    this->onCommit(typed);
 }
 
 UiText::~UiText() {
+  if (s_editing == this)
+    s_editing = nullptr;
   scroll_y_map.erase(this);
   if (text) SDL_DestroyTexture(text);
 }
@@ -81,8 +114,49 @@ void UiText::setText(const std::string& newText) {
   }
 }
 
+void UiText::setMessage(const std::string& newText) {
+  text_string = newText;
+  this->cached_lines = {newText};
+  setScroll(this, 0);
+}
+
 // [INPUT] Mouse Wheel Support
 UiAction UiText::handleInputs(std::vector<Input> &inputs) {
+  if (this->editable) {
+    for (const Input &input : inputs) {
+      if (input.event == InputEvent::LEFT_CLICK) {
+        SDL_Point p = {input.x, input.y};
+        if (SDL_PointInRect(&p, &this->last_rect))
+          this->beginEdit();
+        else if (s_editing == this)
+          this->endEdit(true);
+      } else if (s_editing != this) {
+        continue;
+
+      } else if (input.event == InputEvent::TEXT_INPUT) {
+        std::string add;
+        for (const char *c = input.text; *c; c++)
+          if (!this->numeric || (*c >= '0' && *c <= '9') || *c == '.')
+            add += *c;
+        std::string next = this->text_string + add;
+        if (this->char_limit <= 0 || (int)next.size() <= this->char_limit)
+          this->setText(next);
+      } else if (input.event == InputEvent::KEY_DOWN) {
+        if (input.key == SDLK_BACKSPACE && !this->text_string.empty()) {
+          std::string s = this->text_string;
+          s.pop_back();
+          while (!s.empty() && (s.back() & 0xC0) == 0x80) // whole UTF-8 chars
+            s.pop_back();
+          this->setText(s);
+        } else if (input.key == SDLK_RETURN || input.key == SDLK_KP_ENTER) {
+          this->endEdit(true);
+        }
+      } else if (input.event == InputEvent::KEY_ESCAPE) {
+        this->endEdit(false);
+      }
+    }
+    return UiAction::NONE;
+  }
   if (cached_lines.size() <= 1) return UiAction::NONE; // Don't scroll single lines
 
   // [FIX] Add +15 pixels buffer to account for padding
@@ -118,6 +192,19 @@ UiAction UiText::handleInputs(std::vector<Input> &inputs) {
 }
 
 void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
+  // Being edited: the text with a blinking caret after it
+  if (s_editing == this) {
+    std::vector<std::string> saved = this->cached_lines;
+    this->cached_lines = {this->text_string +
+                          ((SDL_GetTicks() / 500) % 2 ? " " : "|")};
+    this->drawLines(renderer, layout_rect);
+    this->cached_lines = saved;
+    return;
+  }
+  this->drawLines(renderer, layout_rect);
+}
+
+void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
   if (this->cached_lines.empty()) return;
 
   // 1. Calculate Container
@@ -142,6 +229,11 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
     dest_rect.w -= 2 * border;
     dest_rect.h -= 2 * border;
   }
+  // Where it is, for getLastRect and clicks: a fitfont box is a line tall
+  this->last_rect = dest_rect;
+  if (this->last_rect.h <= 0)
+    this->last_rect.h = resource_manager->getFontLineHeight(
+        font, ini_reader->getInt(name, "fontsize", 0));
 
   bool is_multiline = (this->cached_lines.size() > 1);
 

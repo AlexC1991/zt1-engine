@@ -4,6 +4,7 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <vector>
 
 // ============================================================================
@@ -280,6 +281,19 @@ void WorldRenderer::centreViewOn(float u, float v) {
   camera.y = static_cast<int>(std::lround(-(u + v) * tileHeight * 0.5f));
 }
 
+void WorldRenderer::centreOnWorld(float x, float y, float height) {
+  const float W = static_cast<float>(mapWidthCache), H = static_cast<float>(mapHeightCache);
+  float pu, pv;
+  switch (viewRotation) {
+  case 0: pu = y; pv = W - x; break;
+  case 1: pu = W - x; pv = H - y; break;
+  case 2: pu = H - y; pv = x; break;
+  default: pu = x; pv = y; break;
+  }
+  this->centreViewOn(pu, pv);
+  camera.y += static_cast<int>(std::lround(height * getHeightUnitPixels())); // (as startViewAt)
+}
+
 float WorldRenderer::logicalCenterX() const {
   float zoom = camera.zoom > 0.0f ? camera.zoom : 1.0f;
   return camera.screenCenterX / zoom;
@@ -294,6 +308,96 @@ void WorldRenderer::projectTile(int tileX, int tileY, float &screenX,
                                 float &screenY) const {
   screenX = (tileX - tileY) * (tileWidth * 0.5f) + camera.x + logicalCenterX();
   screenY = (tileX + tileY) * (tileHeight * 0.5f) + camera.y + logicalCenterY();
+}
+
+void WorldRenderer::worldToScreenF(float x, float y, float height,
+                                   float &screenX, float &screenY,
+                                   float &depth) const {
+  const float W = static_cast<float>(mapWidthCache), H = static_cast<float>(mapHeightCache);
+  float pu, pv;
+  switch (viewRotation) {
+  case 0: pu = y; pv = W - x; break;
+  case 1: pu = W - x; pv = H - y; break;
+  case 2: pu = H - y; pv = x; break;
+  default: pu = x; pv = y; break;
+  }
+  screenX = (pu - pv) * (tileWidth * 0.5f) + camera.x + logicalCenterX();
+  screenY = (pu + pv) * (tileHeight * 0.5f) + camera.y + logicalCenterY() -
+            height * getHeightUnitPixels();
+  depth = pu + pv;
+}
+
+bool WorldRenderer::screenToWorld(float sx, float sy, const WorldMap &map,
+                                  float &x, float &y) const {
+  const float W = static_cast<float>(mapWidthCache), H = static_cast<float>(mapHeightCache);
+  // The world point under the screen point at height h
+  auto at = [&](float h, float &wx, float &wy) {
+    float a = (sx - camera.x - logicalCenterX()) / (tileWidth * 0.5f);
+    float b = (sy + h * getHeightUnitPixels() - camera.y - logicalCenterY()) /
+              (tileHeight * 0.5f);
+    float pu = (a + b) * 0.5f, pv = (b - a) * 0.5f;
+    switch (viewRotation) {
+    case 0: wx = W - pv; wy = pu; break;
+    case 1: wx = W - pu; wy = H - pv; break;
+    case 2: wx = pv; wy = H - pu; break;
+    default: wx = pu; wy = pv; break;
+    }
+  };
+  // The ground's height at a world point (its tile's corners blended); no
+  // tile: far below
+  auto ground = [&](float wx, float wy, bool &on) {
+    const MapTile *t = map.getTile(static_cast<int>(std::floor(wx)),
+                                   static_cast<int>(std::floor(wy)));
+    on = t != nullptr;
+    if (!t)
+      return -1e9f;
+    float fx = wx - std::floor(wx), fy = wy - std::floor(wy);
+    float top = t->cornerHeight[CORNER_X0Y0] * (1 - fx) + t->cornerHeight[CORNER_X1Y0] * fx;
+    float bottom = t->cornerHeight[CORNER_X0Y1] * (1 - fx) + t->cornerHeight[CORNER_X1Y1] * fx;
+    return top * (1 - fy) + bottom * fy;
+  };
+  // Along the line of sight from the highest ground down: the first place
+  // it meets the ground is what is seen there (the nearest to the viewer)
+  const float step = 0.125f;
+  float hi = map.getMaxHeight() + 1.0f, lo = map.getMinHeight() - 1.0f;
+  bool on = false;
+  for (float h = hi; h >= lo; h -= step) {
+    float wx, wy;
+    at(h, wx, wy);
+    float g = ground(wx, wy, on);
+    if (on && g >= h) {
+      // Narrow it down between h and h + step
+      float a = h, b = h + step;
+      for (int i = 0; i < 8; i++) {
+        float m = (a + b) * 0.5f;
+        at(m, wx, wy);
+        bool o;
+        if (ground(wx, wy, o) >= m && o)
+          a = m;
+        else
+          b = m;
+      }
+      at(a, x, y);
+      return true;
+    }
+  }
+  // Off the map: where it would be at height 0
+  at(0, x, y);
+  return false;
+}
+
+CompassDirection WorldRenderer::screenSide(float dx, float dy) const {
+  // The world direction in view terms (u down-right, v down-left)
+  float du, dv;
+  switch (viewRotation) {
+  case 0: du = dy; dv = -dx; break;
+  case 1: du = -dx; dv = -dy; break;
+  case 2: du = -dy; dv = dx; break;
+  default: du = dx; dv = dy; break;
+  }
+  if (std::fabs(du) >= std::fabs(dv))
+    return du > 0 ? CompassDirection::SE : CompassDirection::NW;
+  return dv > 0 ? CompassDirection::SW : CompassDirection::NE;
 }
 
 void WorldRenderer::tileToScreen(int tileX, int tileY, int height,
@@ -821,7 +925,7 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
       // heights so it follows slopes and sits on top of cliffs. Same lines
       // as the original's tiles.ztd grid bitmaps (n*.bmp / e*.bmp): 2 px,
       // an upper and a lower tone, under any objects on the tile
-      if (gridVisible) {
+      if (gridVisible || toolGrid) {
         auto edge = [&](SDL_FPoint a, SDL_FPoint b, SDL_Color upper,
                         SDL_Color lower) {
           auto band = [&](float top, SDL_Color c) {
@@ -845,4 +949,154 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
   flushBatch(renderer);
   batchTexture = nullptr;
   SDL_SetRenderDrawBlendMode(renderer, previousBlend);
+}
+
+void WorldRenderer::drawPathPiece(SDL_Renderer *renderer, SpriteDatabase &spriteDB,
+                                  const std::string &type, int tileX, int tileY,
+                                  const int cornerH[4],
+                                  const std::function<bool(int nx, int ny)> &connected,
+                                  const SDL_Color *tint) const {
+  enum { VT = 0, VR, VB, VL };
+  // Each world corner's place in view terms (top, right, bottom, left)
+  const int dx[4] = {0, 1, 1, 0}, dy[4] = {0, 0, 1, 1}; // X0Y0, X1Y0, X1Y1, X0Y1
+  int pu[4], pv[4];
+  for (int c = 0; c < 4; c++)
+    worldToViewVertex(tileX + dx[c], tileY + dy[c], pu[c], pv[c]);
+  int u0 = *std::min_element(pu, pu + 4), v0 = *std::min_element(pv, pv + 4);
+  int h[4] = {0, 0, 0, 0};
+  for (int c = 0; c < 4; c++) {
+    int du = pu[c] - u0, dv = pv[c] - v0;
+    int slot = du == 0 ? (dv == 0 ? VT : VL) : (dv == 0 ? VR : VB);
+    h[slot] = cornerH[c];
+  }
+  int lowest = *std::min_element(h, h + 4);
+  bool raised[4];
+  for (int i = 0; i < 4; i++)
+    raised[i] = h[i] > lowest;
+  int frame;
+  if (raised[VB] && raised[VL] && !raised[VT] && !raised[VR])
+    frame = 1;
+  else if (raised[VR] && raised[VB] && !raised[VT] && !raised[VL])
+    frame = 2;
+  else if (raised[VT] && raised[VL] && !raised[VR] && !raised[VB])
+    frame = 3;
+  else if (raised[VT] && raised[VR] && !raised[VB] && !raised[VL])
+    frame = 4;
+  else {
+    // Kerbs: each world neighbour's view side
+    int kerbs = 0;
+    const int nx[4] = {0, 1, 0, -1}, ny[4] = {-1, 0, 1, 0};
+    for (int n = 0; n < 4; n++) {
+      int qu, qv, ru, rv;
+      worldToViewVertex(tileX + nx[n], tileY + ny[n], qu, qv);
+      worldToViewVertex(tileX + nx[n] + 1, tileY + ny[n] + 1, ru, rv);
+      int nu = std::min(qu, ru), nv = std::min(qv, rv);
+      // (the neighbour's view top corner, from two of its corners)
+      int a, b;
+      worldToViewVertex(tileX + nx[n] + 1, tileY + ny[n], a, b);
+      nu = std::min(nu, a);
+      nv = std::min(nv, b);
+      worldToViewVertex(tileX + nx[n], tileY + ny[n] + 1, a, b);
+      nu = std::min(nu, a);
+      nv = std::min(nv, b);
+      if (connected(tileX + nx[n], tileY + ny[n]))
+        continue;
+      if (nu < u0)
+        kerbs |= 8; // NW
+      else if (nv < v0)
+        kerbs |= 4; // NE
+      else if (nu > u0)
+        kerbs |= 2; // SE
+      else
+        kerbs |= 1; // SW
+    }
+    frame = 5 + (15 - kerbs);
+  }
+  const bool hires = RenderSettings::worldZoomedIn;
+  const SpriteDatabase::Sprite &art = spriteDB.getPathSprite(renderer, type, frame, hires);
+  SDL_Texture *texture = hires && art.hiTexture ? art.hiTexture : art.texture;
+  if (!texture)
+    return;
+  float centreH = (h[0] + h[1] + h[2] + h[3]) * 0.25f;
+  float cx, cy, depth;
+  worldToScreenF(tileX + 0.5f, tileY + 0.5f, centreH, cx, cy, depth);
+  float k = tileWidth / 64.0f;
+  float x0 = cx - art.anchorX * k, y0 = cy - art.anchorY * k;
+  float x1 = x0 + art.width * k, y1 = y0 + art.height * k;
+  SDL_Color c = tint ? *tint : SDL_Color{255, 255, 255, 255};
+  SDL_FRect dst = {x0, y0, x1 - x0, y1 - y0};
+  SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+  if (tint) {
+    SDL_SetTextureColorMod(texture, tint->r, tint->g, tint->b);
+    SDL_SetTextureAlphaMod(texture, tint->a);
+  }
+  SDL_RenderCopyF(renderer, texture, nullptr, &dst);
+  if (tint) {
+    SDL_SetTextureColorMod(texture, 255, 255, 255);
+    SDL_SetTextureAlphaMod(texture, 255);
+  }
+}
+
+void WorldRenderer::drawBox(SDL_Renderer *renderer, SpriteDatabase &spriteDB, float x0, float y0,
+                            float x1, float y1, float z0, float z1, int terrain, bool top,
+                            Uint8 alpha) const {
+  if (z1 <= z0)
+    return;
+  const bool hires = RenderSettings::worldZoomedIn;
+  SDL_Texture *tex = spriteDB.getTerrainTexture(renderer, terrain, hires);
+  if (!tex && hires)
+    tex = spriteDB.getTerrainTexture(renderer, terrain);
+  float tpt = 1.0f;
+  if (tex) {
+    int texW = 0;
+    ArtScaler::querySize(tex, &texW, nullptr);
+    tpt = std::max(1.0f, std::round(texW / kTexelsPerTile));
+  }
+  // The base's corners in order round it, on screen
+  const float wx[4] = {x0, x1, x1, x0}, wy[4] = {y0, y0, y1, y1};
+  SDL_FPoint lo[4], hi[4];
+  float d;
+  for (int i = 0; i < 4; i++) {
+    worldToScreenF(wx[i], wy[i], z0, lo[i].x, lo[i].y, d);
+    worldToScreenF(wx[i], wy[i], z1, hi[i].x, hi[i].y, d);
+  }
+  // The front corner (lowest on screen) and the two beside it
+  int b = 0;
+  for (int i = 1; i < 4; i++)
+    if (lo[i].y > lo[b].y)
+      b = i;
+  int p = (b + 3) % 4, n = (b + 1) % 4;
+  int left = lo[p].x < lo[n].x ? p : n, right = left == p ? n : p;
+  auto face = [&](int a, int c, float light) {
+    SDL_Color col = shade(SDL_Color{255, 255, 255, 255}, light);
+    col.a = alpha;
+    float len = std::hypot(wx[a] - wx[c], wy[a] - wy[c]);
+    float u = std::min(1.0f, len / tpt);
+    float units = z1 - z0;
+    float vPerUnit = kHeightUnitInTiles / tpt;
+    // Bands of at most one texture repeat (UVs must stay in 0..1)
+    for (float t = 0; t < units; t += std::max(0.25f, 1.0f / vPerUnit)) {
+      float t1 = std::min(units, t + std::max(0.25f, 1.0f / vPerUnit));
+      float ya = (t1 - t) * vPerUnit;
+      SDL_FPoint pa0, pa1, pc0, pc1;
+      worldToScreenF(wx[a], wy[a], z1 - t, pa0.x, pa0.y, d);
+      worldToScreenF(wx[a], wy[a], z1 - t1, pa1.x, pa1.y, d);
+      worldToScreenF(wx[c], wy[c], z1 - t, pc0.x, pc0.y, d);
+      worldToScreenF(wx[c], wy[c], z1 - t1, pc1.x, pc1.y, d);
+      SDL_Vertex v[4] = {{pa0, col, {0, 0}}, {pc0, col, {u, 0}}, {pc1, col, {u, std::min(1.0f, ya)}},
+                         {pa1, col, {0, std::min(1.0f, ya)}}};
+      int idx[6] = {0, 1, 2, 0, 2, 3};
+      SDL_RenderGeometry(renderer, tex, v, 4, idx, 6);
+    }
+  };
+  face(left, b, kLeftCliffLight);
+  face(b, right, kRightCliffLight);
+  if (top) {
+    SDL_Color col{255, 255, 255, alpha};
+    SDL_Vertex v[4];
+    for (int i = 0; i < 4; i++)
+      v[i] = {hi[i], col, {i == 1 || i == 2 ? 1.0f / tpt : 0.0f, i >= 2 ? 1.0f / tpt : 0.0f}};
+    int idx[6] = {0, 1, 2, 0, 2, 3};
+    SDL_RenderGeometry(renderer, tex, v, 4, idx, 6);
+  }
 }

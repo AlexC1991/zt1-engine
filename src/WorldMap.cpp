@@ -2,6 +2,7 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <climits>
+#include <cstdlib>
 
 // ============================================================================
 // WORLD MAP IMPLEMENTATION
@@ -86,6 +87,33 @@ bool WorldMap::loadFromZooReader(const ZooReader &reader) {
     pathTile[static_cast<size_t>(ty) * width + tx] = static_cast<int16_t>(index);
   }
 
+  // ZT_DUMP_OBJECTS=1: every object the map places, with its payload
+  if (std::getenv("ZT_DUMP_OBJECTS")) {
+    for (const ZooReader::ZooObject &obj : reader.getObjects()) {
+      std::string hex;
+      for (size_t i = 0; i < obj.payload.size() && i < 96; i++) {
+        char b[4];
+        snprintf(b, sizeof(b), "%02x ", obj.payload[i]);
+        hex += b;
+      }
+      SDL_Log("[OBJ] %s/%s/%s at %d,%d z %d id %u '%s' payload %zu: %s",
+              obj.className.c_str(), obj.subClass.c_str(), obj.typeName.c_str(),
+              obj.x, obj.y, obj.z, obj.id, obj.name.c_str(), obj.payload.size(),
+              hex.c_str());
+    }
+  }
+
+  // The zoo's name, and what is placed on the map
+  zooName.clear();
+  placed.clear();
+  for (const ZooReader::ZooObject &obj : reader.getObjects()) {
+    placed.push_back({obj.className, obj.subClass, obj.typeName});
+    const std::string &t = obj.typeName;
+    if (zooName.empty() && obj.className == "building" && t.size() > 4 &&
+        t.compare(t.size() - 4, 4, "gate") == 0 && !obj.name.empty())
+      zooName = obj.name;
+  }
+
   generation++;
   SDL_Log("[WorldMap] Loaded %dx%d, heights %d..%d", width, height, minHeight,
           maxHeight);
@@ -95,6 +123,56 @@ bool WorldMap::loadFromZooReader(const ZooReader &reader) {
               terrainCounts[i]);
   }
   return true;
+}
+
+void WorldMap::setPath(int x, int y, const std::string &type) {
+  if (x < 0 || y < 0 || x >= width || y >= height || pathTile.empty())
+    return;
+  int16_t index = -1;
+  if (!type.empty()) {
+    auto it = std::find(pathTypes.begin(), pathTypes.end(), type);
+    index = static_cast<int16_t>(it - pathTypes.begin());
+    if (it == pathTypes.end())
+      pathTypes.push_back(type);
+  }
+  pathTile[static_cast<size_t>(y) * width + x] = index;
+  touch();
+}
+
+bool WorldMap::pathShapeOk(int x, int y) const {
+  const MapTile *t = getTile(x, y);
+  if (!t)
+    return false;
+  const int *c = t->cornerHeight;
+  int lo = *std::min_element(c, c + 4), hi = *std::max_element(c, c + 4);
+  if (hi == lo)
+    return true;
+  if (hi - lo != 1)
+    return false;
+  // Two raised, side by side (not opposite corners)
+  int raised = 0;
+  for (int i = 0; i < 4; i++)
+    raised += c[i] > lo ? 1 : 0;
+  if (raised != 2)
+    return false;
+  return !((c[CORNER_X0Y0] > lo && c[CORNER_X1Y1] > lo) || (c[CORNER_X1Y0] > lo && c[CORNER_X0Y1] > lo));
+}
+
+void WorldMap::raiseVertex(int vx, int vy, int by) {
+  // The four tiles round the vertex, each its corner there
+  const int dx[4] = {0, -1, -1, 0}, dy[4] = {0, 0, -1, -1};
+  const TileCorner corner[4] = {CORNER_X0Y0, CORNER_X1Y0, CORNER_X1Y1, CORNER_X0Y1};
+  for (int i = 0; i < 4; i++) {
+    int x = vx + dx[i], y = vy + dy[i];
+    if (x < 0 || y < 0 || x >= width || y >= height)
+      continue;
+    MapTile &t = tiles[y][x];
+    t.cornerHeight[corner[i]] += by;
+    t.height = t.cornerHeight[CORNER_X0Y0];
+    minHeight = std::min(minHeight, t.cornerHeight[corner[i]]);
+    maxHeight = std::max(maxHeight, t.cornerHeight[corner[i]]);
+  }
+  touch();
 }
 
 int WorldMap::getPathType(int x, int y) const {

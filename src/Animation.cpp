@@ -65,6 +65,7 @@ Animation &Animation::operator=(Animation &&other) noexcept {
     this->renderer_flip = other.renderer_flip;
     this->frame_start_time = other.frame_start_time;
     this->frame_time_in_ms = other.frame_time_in_ms;
+    this->frame_count = other.frame_count;
     this->has_background = other.has_background;
     this->upscale = other.upscale;
     this->hd_dir = other.hd_dir;
@@ -177,6 +178,47 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
     SDL_RenderCopyEx(renderer, texture, NULL, dest_rect, 0, NULL,
                      this->renderer_flip);
   }
+}
+
+bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
+                             CompassDirection direction, const SDL_Color *tint,
+                             int frame) {
+  if (!renderer)
+    return false;
+  // (sets renderer_flip when a mirrored direction stands in)
+  std::string key =
+      convertCompassDirectionToExistingAnimationString(direction, this->anchor_points);
+  if (key.empty())
+    return false;
+  SDL_RendererFlip flip = this->renderer_flip;
+  bool hi = this->world_art && RenderSettings::worldZoomedIn &&
+            ArtScaler::worldFactor() > 1;
+  std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, hi);
+  if (!frames || frames->empty())
+    return false;
+  if (static_cast<size_t>(this->current_frame) >= frames->size())
+    this->current_frame = 0;
+  size_t index = frame >= 0 ? static_cast<size_t>(frame) % frames->size()
+                            : static_cast<size_t>(this->current_frame);
+  SDL_Texture *texture = (*frames)[index];
+  if (!texture)
+    return false;
+  int w = 0, h = 0;
+  ArtScaler::querySize(texture, &w, &h);
+  SDL_Point a = this->anchor_points[key];
+  float ax = flip == SDL_FLIP_HORIZONTAL ? static_cast<float>(w - a.x) : a.x;
+  SDL_FRect dest = {x - ax, y - a.y, static_cast<float>(w), static_cast<float>(h)};
+  RenderSettings::applyArtScaleMode(texture);
+  if (tint) {
+    SDL_SetTextureColorMod(texture, tint->r, tint->g, tint->b);
+    SDL_SetTextureAlphaMod(texture, tint->a);
+  }
+  SDL_RenderCopyExF(renderer, texture, nullptr, &dest, 0, nullptr, flip);
+  if (tint) {
+    SDL_SetTextureColorMod(texture, 255, 255, 255);
+    SDL_SetTextureAlphaMod(texture, 255);
+  }
+  return true;
 }
 
 // Textures for one direction, made on first use. UI art is upscaled per the
@@ -411,12 +453,9 @@ static void calculateOffset(AnimationData *data, int16_t *offset_x,
             data->frames[0].offset_y;
   }
 
-  // CLAMP: Max 200 pixels up or down
-  if (raw_y < -200)
-    raw_y = -200;
-  if (raw_y > 200)
-    raw_y = 200;
-
+  // (No clamp: the frame header's offset_y holds the x anchor, half the
+  // width for centred art, so a cap of 200 shifted every frame wider than
+  // 400 px up - the Zoo Status panel's art by 50 rows)
   *offset_x = (int16_t)raw_x;
   *offset_y = (int16_t)raw_y;
 }
@@ -427,6 +466,7 @@ void Animation::loadSurfaces(std::string direction_string,
     return;
   this->frame_time_in_ms = data->frame_time_in_ms;
   this->has_background = data->has_background;
+  this->frame_count = std::max(this->frame_count, static_cast<int>(data->frame_count));
 
   int16_t offset_x = 0;
   int16_t offset_y = 0;
@@ -441,6 +481,10 @@ void Animation::loadSurfaces(std::string direction_string,
     int placedX = offset_x - f.offset_x;
     this->anchor_offsets[direction_string] = {
         f.width / 2 - f.offset_y - placedX, f.height / 2 - f.offset_x};
+    // Where the anchor lands in the surface: the frame is placed at
+    // (placedX, offset_y - f.offset_y)
+    this->anchor_points[direction_string] = {placedX + f.offset_y,
+                                             offset_y - f.offset_y + f.offset_x};
   }
 
   int loop_limit = (int)data->frame_count + (int)data->has_background;

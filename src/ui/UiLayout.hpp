@@ -34,6 +34,7 @@ public:
     this->has_anchor_rect = true;
   }
   UiElement* getElementById(int id);  // [PATCH] Find element by ID
+  IniReader* getIniReader() const { return this->ini_reader; }
   // Shows each tab's sub-layout while a button for it is on
   void syncTabs();
   void draw(SDL_Renderer * renderer, SDL_Rect * layout_rect);

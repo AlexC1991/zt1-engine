@@ -24,6 +24,7 @@ UiButton::UiButton(IniReader *ini_reader, ResourceManager *resource_manager,
     this->toggled_on = false;
 
   this->has_select_color = !ini_reader->get(name, "selectcolor", "").empty();
+  this->repeating = ini_reader->getInt(name, "repeating", 0) == 1;
 
   this->font = ini_reader->getInt(name, "font");
 
@@ -44,6 +45,25 @@ UiButton::~UiButton() {
 
 UiAction UiButton::handleInputs(std::vector<Input> &inputs) {
   UiAction action = UiAction::NONE;
+
+  // repeating=1 (the admission and cash arrows): held down on the button,
+  // it clicks again after a moment, then steadily
+  if (this->pressed) {
+    bool down = (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) != 0;
+    Uint32 now = SDL_GetTicks();
+    if (!down || this->isDisabled()) {
+      this->pressed = false;
+    } else if (this->selected && now - this->press_time >= kRepeatDelay &&
+               now - this->last_repeat >= kRepeatInterval) {
+      this->last_repeat = now;
+      if (this->onClick)
+        this->onClick();
+      if (this->action_type == 1 && this->action_target != 0)
+        action = (UiAction)this->action_target;
+      else if (this->action_type == 0)
+        action = this->getActionBasedOnName();
+    }
+  }
 
   for (Input input : inputs) {
     if (input.type != InputType::POSITIONED) {
@@ -99,6 +119,10 @@ UiAction UiButton::handleInputs(std::vector<Input> &inputs) {
       }
       if (this->onClick)
         this->onClick();
+      if (this->repeating) {
+        this->pressed = true;
+        this->press_time = this->last_repeat = SDL_GetTicks();
+      }
       break;
 
     default:

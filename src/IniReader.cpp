@@ -7,17 +7,21 @@
 void IniReader::printContent() {} 
 
 IniReader::IniReader(const std::string &filename) {
-  FILE * fd = fopen(filename.c_str(), "r");
+  // Binary, and only the bytes read: in text mode Windows turns each CRLF
+  // into LF, so fewer bytes arrive than the file's size, and parsing the
+  // whole buffer took in leftover memory (a loose ui/zoofin4.lyt picked up
+  // another layout's "yIsMoney=1")
+  FILE * fd = fopen(filename.c_str(), "rb");
   if (fd == NULL) return;
   fseek(fd, 0L, SEEK_END);
-  size_t size = ftell(fd) + 1;
+  long size = ftell(fd);
   fseek(fd, 0, SEEK_SET);
-  void * buffer = malloc(size);
-  if (!buffer) { fclose(fd); return; }
-  fread(buffer, sizeof(char), size, fd);
+  if (size <= 0) { fclose(fd); return; }
+  std::string buffer(static_cast<size_t>(size), '\0');
+  size_t got = fread(buffer.data(), 1, buffer.size(), fd);
   fclose(fd);
-  load(std::string((char *) buffer, size));
-  free(buffer);
+  buffer.resize(got);
+  load(buffer);
 }
 
 IniReader::IniReader(void *buffer, size_t size) { load(std::string((char *) buffer, size)); }

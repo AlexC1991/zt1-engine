@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "UiButton.hpp"
+#include "UiGraph.hpp"
 #include "UiImage.hpp"
 #include "UiListBox.hpp"
 #include "UiMiniMap.hpp"
@@ -82,7 +83,15 @@ void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   SDL_Rect own_rect;
   if (this->nested) {
     SDL_Rect *base = this->has_anchor_rect ? &this->anchor_rect : layout_rect;
-    own_rect = this->getRect(this->ini_reader->getSection("layoutinfo"), base);
+    auto info = this->ini_reader->getSection("layoutinfo");
+    own_rect = this->getRect(info, base);
+    // Negative x / y count from the right / bottom (Tank Adjustment's
+    // x=-213 sits in the Exhibit panel's information, 213 from its right)
+    int nx = std::atoi(info["x"].c_str()), ny = std::atoi(info["y"].c_str());
+    if (nx < 0)
+      own_rect.x = base->x + base->w + nx;
+    if (ny < 0)
+      own_rect.y = base->y + base->h + ny;
     layout_rect = &own_rect;
   }
   this->last_rect = *layout_rect;
@@ -120,7 +129,8 @@ void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   // the elements that have text
   auto hasText = [](UiElement *e) {
     return dynamic_cast<UiText *>(e) || dynamic_cast<UiButton *>(e) ||
-           dynamic_cast<UiListBox *>(e) || dynamic_cast<UiLayout *>(e);
+           dynamic_cast<UiListBox *>(e) || dynamic_cast<UiLayout *>(e) ||
+           dynamic_cast<UiGraph *>(e);
   };
   for (int layer = 0; layer <= maxLayer; layer++) {
     for (int depth = maxDepth; depth >= 0; depth--)
@@ -198,6 +208,9 @@ void UiLayout::process_sections(IniReader *ini_reader,
     } else if (element_type == "UIScrollingRegion") {
       new_element = (UiElement *)new UiScrollingRegion(ini_reader,
                                                        resource_manager, section);
+    } else if (element_type == "UIGraph") {
+      new_element =
+          (UiElement *)new UiGraph(ini_reader, resource_manager, section);
     } else if (element_type == "UIScrollBar") {
       new_element =
           (UiElement *)new UiScrollBar(ini_reader, resource_manager, section);
@@ -343,6 +356,14 @@ void UiLayout::process_sections(IniReader *ini_reader,
 
 UiAction UiLayout::handleInputs(std::vector<Input> &inputs) {
   UiAction action = handleInputChildren(inputs);
+  // Any tab of a radio set may have gone off (a plain category tab picked
+  // after the terraform one): its page goes with it
+  if (!this->tabs.empty())
+    for (const Input &in : inputs)
+      if (in.event == InputEvent::LEFT_CLICK) {
+        this->syncTabs();
+        break;
+      }
   if (isPanelToggle(action)) {
     for (auto &tab : this->tabs) {
       if (tab.first->getActionTarget() == panelOf(action)) {
@@ -363,6 +384,10 @@ void UiLayout::syncTabs() {
         on = true;
     tab.second->setHidden(!on);
   }
+  // Sub-layouts have tabs of their own (the Zoo Status graphs page)
+  for (UiElement *c : this->children)
+    if (UiLayout *sub = dynamic_cast<UiLayout *>(c))
+      sub->syncTabs();
 }
 
 // Find element by ID recursively

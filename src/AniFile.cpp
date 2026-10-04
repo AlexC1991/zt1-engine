@@ -187,6 +187,9 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
     // EOF / Garbage check
     if (frame.size == 0 || frame.size > 10000000)
       break;
+    // The size counts from here: this header (10 bytes) and the pixels (a
+    // seagull's six flapping frames read end to end this way)
+    long frame_header_start = SDL_RWtell(rw);
 
     frame.height = SDL_ReadLE16(rw);
     frame.width = SDL_ReadLE16(rw);
@@ -203,8 +206,7 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
       break;
     }
 
-    long frame_data_start = SDL_RWtell(rw);
-    long frame_data_end = frame_data_start + frame.size;
+    long frame_data_end = frame_header_start + frame.size;
 
     // [SAFETY] Clamp end to actual file size (Truncation Fix)
     if (frame_data_end > file_size) {

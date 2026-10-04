@@ -62,10 +62,31 @@ public:
     // "asphpath", art under paths/<type>/)
     int getPathType(int x, int y) const;
     const std::vector<std::string>& getPathTypes() const { return pathTypes; }
+    // Laying a path of a type ("path", "dirtpath"; empty: lifting it)
+    void setPath(int x, int y, const std::string &type);
+    bool isPath(int x, int y) const { return getPathType(x, y) >= 0; }
+    // A tile a path can lie on: flat, or a ramp (two corners side by side
+    // raised a unit: the path art's ramp pieces)
+    bool pathShapeOk(int x, int y) const;
+    // (dev console) a corner raised or lowered, its neighbours' matching
+    // corners with it (so the ground stays joined: a ramp, not a cliff)
+    void raiseVertex(int vx, int vy, int by);
 
     // Incremented on every successful load, so renderers can tell when
     // cached per-map data is stale
     uint32_t getGeneration() const { return generation; }
+    // The ground was changed (terraform, a tank sinking): redraw it
+    void touch() { generation++; }
+
+    // The zoo's name: its entrance's (a building named in the map, e.g.
+    // "Death Mountain Zoo" on fgate, "Airport Dinosaur Zoo" on dgate)
+    const std::string& getZooName() const { return zooName; }
+    // Everything placed on the map, by type (and subclass: fences are
+    // named by it), for the zoo's value
+    struct Placed {
+        std::string className, subClass, typeName;
+    };
+    const std::vector<Placed>& getPlaced() const { return placed; }
 
     // Get substrate material for wall rendering
     static uint8_t getSubstrateMaterial(uint8_t floorTerrainType);
@@ -78,6 +99,8 @@ private:
     uint32_t generation = 0;
     std::vector<int16_t> pathTile;        // width * height
     std::vector<std::string> pathTypes;
+    std::string zooName;
+    std::vector<Placed> placed;
 
     // Tile grid (row-major: [y][x])
     std::vector<std::vector<MapTile>> tiles;

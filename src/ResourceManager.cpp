@@ -219,18 +219,30 @@ void ResourceManager::load_resource_map(std::atomic<float> *progress,
       continue;
 
     try {
+      // A folder's archives in name order, a later one overriding an earlier
+      // one (as the original: updates/asian_elephant01.ztd's icon over
+      // asian_elephant.ztd's, mountainlion01 over mountainlion); an earlier
+      // folder in the path still wins over a later folder
+      std::vector<std::string> archives;
       for (std::filesystem::directory_entry archive :
            std::filesystem::directory_iterator(path)) {
         std::string ext = Utils::getFileExtension(archive.path().string());
-        if (ext != "ZTD" && ext != "ZIP")
-          continue;
-
-        const std::string archivePath = archive.path().string();
+        if (ext == "ZTD" || ext == "ZIP")
+          archives.push_back(archive.path().string());
+      }
+      std::sort(archives.begin(), archives.end(), [](const std::string &a, const std::string &b) {
+        return Utils::string_to_lower(std::filesystem::path(a).filename().string()) <
+               Utils::string_to_lower(std::filesystem::path(b).filename().string());
+      });
+      for (const std::string &archivePath : archives) {
         std::vector<std::string> listed = ZtdFile::getFileList(archivePath);
         archive_priority.emplace(archivePath, pathIndex);
         resource_map.reserve(resource_map.size() + listed.size());
-        for (const std::string &file_raw : listed)
-          resource_map.try_emplace(normalizePath(file_raw), archivePath);
+        for (const std::string &file_raw : listed) {
+          auto [it, added] = resource_map.try_emplace(normalizePath(file_raw), archivePath);
+          if (!added && archive_priority[it->second] == pathIndex)
+            it->second = archivePath; // the same folder: the later archive
+        }
       }
     } catch (std::exception &e) {
       SDL_Log("Warning: Could not scan path %s: %s", path.c_str(), e.what());

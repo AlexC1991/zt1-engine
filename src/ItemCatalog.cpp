@@ -118,12 +118,12 @@ void ItemCatalog::load(ResourceManager *rm) {
     }
   }
 
-  // Downloaded content (e.g. the yeti): .uca/.ucb/.ucs entity files in the
-  // entity folders, outside the registry, always available
+  // Downloaded content (e.g. the yeti): .uca/.ucb/.ucs entity files
+  // anywhere in the data (dlupdate's test/scenery/other/632db827.ucs too),
+  // outside the registry, always available
   std::set<std::string> downloaded;
-  for (const char *dir : {"animals/", "scenery/", "fences/", "paths/", "staff/"})
-    for (const char *ext : {".uca", ".ucb", ".ucs"})
-      for (const std::string &file : rm->listResources(dir, ext))
+  for (const char *ext : {".uca", ".ucb", ".ucs"})
+      for (const std::string &file : rm->listResources("", ext))
         if (seen.insert(file).second) {
           files.push_back(file);
           downloaded.insert(file);
@@ -191,7 +191,14 @@ void ItemCatalog::load(ResourceManager *rm) {
       return std::string();
     };
     item.icon = value("icon", "icon");
-    for (const std::string &p : prefixes) {
+    // Staff show their female icon (measured: every staff icon in the
+    // original's Hire Staff panel is the f/ one); animals their male
+    if (file.rfind("staff/", 0) == 0 && !ai.get("f/icon", "icon").empty())
+      item.icon = ai.get("f/icon", "icon");
+    std::vector<std::string> iconPrefixes = prefixes;
+    if (file.rfind("staff/", 0) == 0)
+      iconPrefixes.insert(iconPrefixes.begin(), "f/");
+    for (const std::string &p : iconPrefixes) {
       auto section = ai.entries.find(p + "icon");
       if (section == ai.entries.end())
         continue;
@@ -203,10 +210,9 @@ void ItemCatalog::load(ResourceManager *rm) {
     }
     if (item.icons.empty())
       item.icons.push_back(item.icon);
-    // Items whose icon art isn't in the game data can't be shown
-    if (item.icon.empty() ||
-        !rm->hasResource(Utils::string_to_lower(item.icon) + ".ani"))
-      continue;
+    // Items whose icon art isn't in the game data are still listed, with
+    // an empty cell (as the original lists the test entity "First
+    // user-created entity" in Scenery)
     auto integer = [&](const std::string &key) {
       return std::atoi(value("characteristics/integers", key).c_str());
     };
@@ -263,7 +269,8 @@ ItemCatalog::inCategory(const std::string &category, bool availableOnly) const {
   std::string c = Utils::string_to_lower(category);
   std::vector<const CatalogItem *> list;
   for (const CatalogItem &item : this->items)
-    if (item.members.count(c) && (!availableOnly || item.unlockMonth == 0))
+    if (item.members.count(c) &&
+        (!availableOnly || (item.unlockMonth >= 0 && item.unlockMonth <= this->month)))
       list.push_back(&item);
 
   // Registry order, then the category's own order
@@ -279,12 +286,22 @@ ItemCatalog::inCategory(const std::string &category, bool availableOnly) const {
                      [&](const CatalogItem *a, const CatalogItem *b) {
                        return work(a) < work(b);
                      });
+  } else if (c == "toys") {
+    // Toys by price alone (measured: the Sunken Log, the one toy with a
+    // habitat, sits between the $600 Lion Rock and the $700 Jungle Gym)
+    std::stable_sort(list.begin(), list.end(),
+                     [](const CatalogItem *a, const CatalogItem *b) {
+                       return a->cost < b->cost;
+                     });
   } else if (c == "fence") {
     // Habitat fences (tank walls, dinosaur and chain-link fences ...) first,
     // tallest then cheapest; the zoo's own fences after, as listed
+    // Things listed with the fences that aren't fences (the Tank Filter, a
+    // building) come first (measured in June)
     auto key = [](const CatalogItem *i) {
+      bool fence = i->file.rfind("fences/", 0) == 0;
       bool habitat = i->members.count("habitatfences") > 0;
-      return std::make_tuple(habitat ? 0 : 1, habitat ? -i->height : 0,
+      return std::make_tuple(fence ? 1 : 0, habitat ? 0 : 1, habitat ? -i->height : 0,
                              habitat ? i->cost : 0);
     };
     std::stable_sort(list.begin(), list.end(),
