@@ -1705,10 +1705,10 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           float px = mx, py = my;
           const float sh = 0.0f, lf = 0.5f;
           float lift = 0.0f;
-          // (checked in all four turns of the view: facing up-right, its NE
-          // art puts the floor along the wall; the SE art lies inside)
-          if (in == CompassDirection::NE)
-            in = CompassDirection::SE;
+          // (its NE art - on a back wall facing up-right - sits 8 px lower
+          // than the other three: lifted onto the rim as they are; swapped
+          // for the SE art instead, it lay along the wall)
+          const float neLift = in == CompassDirection::NE ? 8.0f : 0.0f;
           if (ts.front) {
             // On a front wall: just inside it, up at its rim, behind its
             // rail (as the original: its floor hidden, the handles over the
@@ -1718,6 +1718,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
             lift = lf;
           }
           view.worldToScreenF(px, py, top - 1.0f + lift, sx, sy, depth);
+          sy -= neLift;
           // (its handles over the ladder's rails: on a front wall they stood
           // 7 px along from them, the ladder not meeting them)
           if (ts.front) {
@@ -1729,7 +1730,9 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           view.worldToScreenF(mx, my, static_cast<float>(top - 2), wx, wy, wallDepth);
           bool lit = !tinted && this->hoverPlatform == ex->id;
           SDL_Color yellow{255, 255, 80, 255};
-          Drawable plat{ts.front ? wallDepth - 0.05f : wallDepth + 0.1f, sx, sy, t.platform, in,
+          // (on a back wall: over the tank's inside, drawn in strips - sorted at
+          // the wall's middle, the strips beside it covered half its board)
+          Drawable plat{ts.front ? wallDepth - 0.05f : wallDepth + 0.6f, sx, sy, t.platform, in,
                         lit ? yellow : tint, tinted || lit};
           // (on a front wall down by the ground: the ground in front hides
           // it, only what's over the ground shows - the handles' tips)
