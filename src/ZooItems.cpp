@@ -44,7 +44,10 @@ int ZooItems::add(Kind kind, int exhibit, float x, float y) {
 int ZooItems::addFood(int exhibit, float x, float y, int animals, const std::string &food) {
   int id = add(Kind::Food, exhibit, x, y);
   Item &i = this->list.back();
-  i.units = i.full = std::max(1, animals) * kFoodPerAnimal;
+  // A pile of chow is cFoodUnits (1000); the fake animals' food as before
+  i.units = i.full = food.size() > 4 && food.compare(food.size() - 4, 4, "chow") == 0
+                         ? kChowUnits
+                         : std::max(1, animals) * kFoodPerAnimal;
   i.food = food;
   return id;
 }
@@ -67,6 +70,20 @@ float ZooItems::foodIn(int exhibit) const {
     if (i.kind == Kind::Food && i.exhibit == exhibit)
       n += i.units;
   return n;
+}
+
+float ZooItems::eat(int id, float units) {
+  for (size_t k = 0; k < this->list.size(); k++) {
+    Item &i = this->list[k];
+    if (i.id != id || i.kind != Kind::Food)
+      continue;
+    float got = std::min(units, std::max(0.0f, i.units));
+    i.units -= got;
+    if (i.units <= 0)
+      this->list.erase(this->list.begin() + k);
+    return got;
+  }
+  return 0;
 }
 
 std::vector<int> ZooItems::ofKind(Kind kind, int exhibit) const {

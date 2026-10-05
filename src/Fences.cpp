@@ -1,5 +1,7 @@
 #include <cstdlib>
 #include "Fences.hpp"
+#include <random>
+#include "Sound.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -18,7 +20,7 @@
 
 namespace {
 // tanks.cfg
-constexpr int kTankSink = 4;       // initialSink
+constexpr int kTankSink = 4;       // initialSink (subtiles: 2 height units)
 constexpr int kTankHeight = 5;     // initialHeight
 constexpr int kTankTerrain = 2;    // tankTerrain (sand)
 constexpr float kFillSeconds = 8.0f;
@@ -40,6 +42,8 @@ std::string fileStem(const std::string &file) {
 // ----------------------------------------------------------------------------
 void Fences::loadTypes(ResourceManager *rm) {
   this->rm = rm;
+  if (!this->selectArrow && rm->hasResource("ui/select/selsmall/selsmall.ani"))
+    this->selectArrow = rm->getAnimation("ui/select/selsmall/selsmall");
   if (!this->typeList.empty())
     return;
   std::map<std::string, Animation *> loaded;
@@ -108,11 +112,24 @@ void Fences::loadTypes(ResourceManager *rm) {
       t.tankLow[3] = t.tankLow[1];
       t.platform = artOf("g", "platform");
       t.ladder = artOf("g", "ladder");
+      {
+        std::string v = Utils::string_to_lower(ai->get("g/animations", "ladder"));
+        size_t at = v.find("ladrin");
+        if (at != std::string::npos) {
+          v = v.substr(0, at) + "ladrout/ladrout";
+          t.ladderOut = anim(v);
+        }
+      }
     }
     const std::string fints = "f/characteristics/integers";
     t.life = ai->getInt(fints, "clife", 10);
     t.decayedLife = ai->getInt(fints, "cdecayedlife", 5);
     t.decayDelta = ai->getInt(fints, "cdecaydelta", 25);
+    t.strength = ai->getInt(fints, "cstrength", 200);
+    t.jumpable = ai->getInt(fints, "cisjumpable", 0) != 0;
+    t.climbable = ai->getInt(fints, "cisclimbable", 0) != 0;
+    t.seeThrough = ai->getInt(fints, "cseethrough", 0) != 0;
+    t.electrified = ai->getInt(fints, "ciselectrified", 0) != 0;
     t.indestructible = ai->getInt(fints, "cindestructible", 0) != 0 || t.zooWall || t.tank;
     t.det[0] = artOf("f", "det");
     t.det[1] = artOf("f", "det30p");
@@ -358,8 +375,17 @@ Fences::Fit Fences::fit(const Edge &e, const WorldMap &map) const {
     if (e.y < 0 || e.y >= H || e.x < 1 || e.x > W - 1)
       return Fit::Outside;
   }
-  // A fence there already
-  if (this->edges.find(e) != this->edges.end())
+  // A fence there already: the fence tool's kind replaces it (zoo.exe
+  // 0x486965: any kind, a gate staying a gate; not the zoo's wall, not a
+  // tank's, not with a tank wall)
+  if (auto have = this->edges.find(e); have != this->edges.end()) {
+    const Piece &p = have->second;
+    if (!replaceable(p, this->previewType))
+      return Fit::InTheWay;
+    return Fit::Ok;
+  }
+  // Something standing across it
+  if (this->edgeBlocked && this->edgeBlocked(e))
     return Fit::InTheWay;
   // The tiles either side: inside the zoo, not water, no building
   int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
@@ -374,7 +400,27 @@ Fences::Fit Fences::fit(const Edge &e, const WorldMap &map) const {
   return worst;
 }
 
+bool Fences::replaceable(const Piece &p, int type) const {
+  if (type < 0 || type >= static_cast<int>(this->typeList.size()) || p.tank >= 0)
+    return false;
+  if (p.type >= 0 && p.type < static_cast<int>(this->typeList.size()) && this->typeList[p.type].zooWall)
+    return false;
+  return !this->typeList[type].zooWall && !this->typeList[type].tankArt[1][0];
+}
+
 void Fences::place(const Edge &e, int type, int drag, const WorldMap &map) {
+  if (auto have = this->edges.find(e); have != this->edges.end()) {
+    // Over one already: replaced by a new one of this kind (a gate stays a
+    // gate)
+    if (!replaceable(have->second, type))
+      return;
+    have->second.type = type;
+    have->second.life = static_cast<float>(this->typeList[type].life);
+    have->second.order = this->placed++;
+    have->second.drag = drag;
+    have->second.open = 0;
+    return;
+  }
   if (!this->canPlace(e, map))
     return;
   Piece p = ownerFor(e, map);
@@ -398,6 +444,136 @@ int Fences::exhibitOf(const Edge &e) const {
   return a >= 0 ? a : this->exhibitAt(e.x, e.y);
 }
 
+void Fences::updateGates(float seconds, const std::function<bool(const Edge &)> &someoneNear) {
+  for (auto &[e, p] : this->edges) {
+    if (!p.gate || p.tank >= 0)
+      continue;
+    bool near = someoneNear(e);
+    const float frames = 12.0f;
+    p.open = near ? std::min(frames, p.open + 20.0f * seconds) : std::max(0.0f, p.open - 20.0f * seconds);
+  }
+}
+
+bool Fences::broken(const Edge &e) const {
+  const Piece *p = this->at(e);
+  return p && p->life == 0.0f && !p->gate;
+}
+
+int Fences::condition(int exhibit) const {
+  const Exhibit *ex = this->exhibit(exhibit);
+  if (!ex)
+    return 0;
+  int worst = 0;
+  for (auto [x, y] : ex->tiles) {
+    const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (auto &dd : d) {
+      int nx = x + dd[0], ny = y + dd[1];
+      if (ex->tiles.count({nx, ny}))
+        continue;
+      Edge e;
+      if (nx != x) {
+        e.alongX = false;
+        e.x = std::max(x, nx);
+        e.y = y;
+      } else {
+        e.alongX = true;
+        e.x = x;
+        e.y = std::max(y, ny);
+      }
+      const Piece *p = this->at(e);
+      if (!p || p->gate)
+        continue;
+      const FenceType &t = this->typeList[p->type];
+      float life = p->life < 0 ? static_cast<float>(t.life) : p->life;
+      if (life <= 0)
+        return 2;
+      if (!t.indestructible && life <= t.decayedLife)
+        worst = 1;
+    }
+  }
+  return worst;
+}
+
+bool Fences::passable(const Edge &e, bool climber, bool jumper, int bash, int crush) const {
+  const Piece *p = this->at(e);
+  if (!p)
+    return true;
+  const FenceType &t = this->typeList[p->type];
+  if (t.zooWall || p->gate || p->tank >= 0)
+    return false;
+  float life = p->life < 0 ? static_cast<float>(t.life) : p->life;
+  if (life <= 0)
+    return true;
+  if (t.electrified && life > t.decayedLife)
+    return false;
+  if (climber && t.climbable)
+    return true;
+  if (jumper && t.jumpable)
+    return true;
+  int strength = std::max(1, t.strength - t.decayDelta * static_cast<int>(t.life - life));
+  if (bash > strength)
+    return true;
+  return crush > 0 && crush >= t.height;
+}
+
+void Fences::breakPiece(const Edge &e) {
+  auto it = this->edges.find(e);
+  if (it == this->edges.end())
+    return;
+  const FenceType &t = this->typeList[it->second.type];
+  if (t.zooWall || t.indestructible || it->second.gate || it->second.tank >= 0)
+    return;
+  it->second.life = 0;
+  Sound::get().play("sounds/brokfenc");
+}
+
+void Fences::dropOrphanGates() {
+  // A gate that's no exhibit's, or between two exhibits, or a second gate
+  // of an exhibit (joined): a plain fence again
+  std::set<int> gated;
+  for (auto &[e, p] : this->edges) {
+    if (!p.gate || p.tank >= 0)
+      continue;
+    int a = e.alongX ? this->exhibitAt(e.x, e.y - 1) : this->exhibitAt(e.x - 1, e.y);
+    int b = this->exhibitAt(e.x, e.y);
+    int ex = a >= 0 ? a : b;
+    if (ex < 0 || (a >= 0 && b >= 0) || !gated.insert(ex).second)
+      p.gate = false;
+  }
+}
+
+bool Fences::canGate(const Edge &e) const {
+  const Piece *p = this->at(e);
+  if (!p || p->gate || p->tank >= 0 || this->typeList[p->type].zooWall)
+    return false;
+  int a = e.alongX ? this->exhibitAt(e.x, e.y - 1) : this->exhibitAt(e.x - 1, e.y);
+  int b = this->exhibitAt(e.x, e.y);
+  return (a >= 0) != (b >= 0); // exactly one side an exhibit, the other open zoo
+}
+
+int Fences::gateCostOf(const Edge &e) const {
+  const Piece *p = this->at(e);
+  if (!p)
+    return 0;
+  const FenceType &t = this->typeList[p->type];
+  float life = p->life < 0 ? static_cast<float>(t.life) : p->life;
+  return life > t.decayedLife ? 0 : t.gateCost;
+}
+
+void Fences::moveGate(const Edge &e) {
+  if (!this->canGate(e))
+    return;
+  int a = e.alongX ? this->exhibitAt(e.x, e.y - 1) : this->exhibitAt(e.x - 1, e.y);
+  int ex = a >= 0 ? a : this->exhibitAt(e.x, e.y);
+  for (auto &[o, p] : this->edges)
+    if (p.gate && p.tank < 0 && this->exhibitOf(o) == ex)
+      p.gate = false;
+  auto it = this->edges.find(e);
+  it->second.gate = true;
+  if (it->second.life >= 0)
+    it->second.life = static_cast<float>(this->typeList[it->second.type].life);
+}
+
 int Fences::tankOf(const Edge &e) const {
   const Piece *p = this->at(e);
   return p ? p->tank : -1;
@@ -409,6 +585,12 @@ void Fences::remove(const Edge &e, WorldMap &map) {
   auto it = this->edges.find(e);
   if (it == this->edges.end())
     return;
+  // For the exhibits' rebuild: whose gate this was, and whose side it stood on
+  this->lastRemovedGateOf = it->second.gate ? this->exhibitOf(e) : -1;
+  {
+    int ox = it->second.ownerX, oy = it->second.ownerY;
+    this->lastRemovedOwner = this->exhibitAt(ox, oy);
+  }
   // A tank's wall piece takes the whole tank with it (as the original:
   // every wall piece and the gate's platform go, the water too); the hole
   // it was sunk into stays
@@ -489,6 +671,91 @@ std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int y
   // Exhibits whose ground is no longer shut off as it was are gone
   std::vector<int> created;
   std::vector<bool> taken(regions.size(), false);
+  // Exhibits reshaped (zoo.exe 0x50c3d8, 0x58a009): one split by a new
+  // fence keeps itself (name, gate, keepers) on the side with its gate;
+  // two joined by taking out the wall between: the one whose gate was in
+  // that wall goes, else the one nested inside the other (reached only
+  // through it), else the smaller; the survivor keeps its name and gate,
+  // the other's gate becomes a plain fence again
+  if (!loading) {
+    this->lastRemovedGateOf = this->lastRemovedGateOf; // (set by remove)
+    auto gateTile = [&](const Exhibit &ex, int &gx, int &gy) {
+      for (const auto &[e, p] : this->edges)
+        if (p.gate && p.tank < 0) {
+          int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
+          if (ex.tiles.count({ax, ay})) { gx = ax; gy = ay; return true; }
+          if (ex.tiles.count({e.x, e.y})) { gx = e.x; gy = e.y; return true; }
+        }
+      return false;
+    };
+    // Which closed ground each old exhibit's tiles lie in
+    std::map<int, std::vector<Exhibit *>> claims; // region -> exhibits overlapping it
+    for (Exhibit &ex : this->exhibitList) {
+      if (ex.tank || !ex.named || ex.tiles.empty())
+        continue;
+      std::set<int> seen;
+      for (auto [x, y] : ex.tiles)
+        if (x >= 0 && y >= 0 && x < W && y < H) {
+          int id = region[y * W + x];
+          if (!open[id] && seen.insert(id).second)
+            claims[id].push_back(&ex);
+        }
+    }
+    for (auto &[id, exs] : claims) {
+      if (taken[id])
+        continue;
+      Exhibit *keep = nullptr;
+      if (exs.size() == 1) {
+        // One exhibit's ground (made bigger, or a part of it split off):
+        // its gate's side keeps it (no gate: the part with most of it)
+        Exhibit *ex = exs[0];
+        int gx, gy;
+        bool hasGate = gateTile(*ex, gx, gy);
+        bool gateHere = hasGate && region[gy * W + gx] == id;
+        bool gateElsewhere = false;
+        if (hasGate && !gateHere) {
+          int gid = region[gy * W + gx];
+          gateElsewhere = !open[gid];
+        }
+        if (gateHere || !gateElsewhere) {
+          // (no gate anywhere closed: the part with most of its tiles)
+          if (!gateHere) {
+            int mine = 0, best = 0;
+            std::map<int, int> overlap;
+            for (auto [x, y] : ex->tiles)
+              overlap[region[y * W + x]]++;
+            for (auto [rid, n] : overlap)
+              if (!open[rid]) {
+                best = std::max(best, n);
+                if (rid == id) mine = n;
+              }
+            if (mine < best)
+              continue;
+          }
+          keep = ex;
+        }
+      } else {
+        // Joined: whose gate was in the wall that went? (now inside the
+        // joined ground, not on its edge)
+        std::vector<Exhibit *> alive = exs;
+        if (this->lastRemovedGateOf >= 0)
+          for (Exhibit *ex : exs)
+            if (ex->id == this->lastRemovedGateOf && alive.size() > 1)
+              alive.erase(std::find(alive.begin(), alive.end(), ex));
+        // Else the larger (ties: the side the wall piece stood on)
+        keep = alive[0];
+        for (Exhibit *ex : alive)
+          if (ex->tiles.size() > keep->tiles.size() ||
+              (ex->tiles.size() == keep->tiles.size() && ex->id == this->lastRemovedOwner))
+            keep = ex;
+      }
+      if (!keep)
+        continue;
+      keep->tiles = regions[id];
+      taken[id] = true;
+    }
+  }
+  this->lastRemovedGateOf = this->lastRemovedOwner = -1;
   for (auto it = this->exhibitList.begin(); it != this->exhibitList.end();) {
     bool still = false;
     if (!it->tiles.empty()) {
@@ -589,12 +856,25 @@ int Fences::finishExhibit(int id, const std::string &name, WorldMap &map) {
     return 0;
   ex->name = name;
   ex->named = true;
-  // The gate: in the middle of the first-laid stretch of the loop
+  // Already has one (a reshaped exhibit keeps its gate)
+  for (const Edge &e : boundaryOf(*ex)) {
+    auto it = this->edges.find(e);
+    if (it != this->edges.end() && it->second.gate)
+      return 0;
+  }
+  // The gate: in the middle of the first-laid stretch of the loop, on a
+  // wall to the open zoo (never one shared with another exhibit)
   std::vector<std::pair<Edge, Piece *>> round;
   for (const Edge &e : boundaryOf(*ex)) {
     auto it = this->edges.find(e);
-    if (it != this->edges.end())
-      round.push_back({e, &it->second});
+    if (it == this->edges.end())
+      continue;
+    int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
+    bool aIn = ex->tiles.count({ax, ay}) > 0;
+    int ox = aIn ? e.x : ax, oy = aIn ? e.y : ay;
+    if (this->exhibitAt(ox, oy) >= 0 || this->typeList[it->second.type].zooWall)
+      continue;
+    round.push_back({e, &it->second});
   }
   if (round.empty())
     return 0;
@@ -624,7 +904,7 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
       for (int c = 0; c < 4; c++)
         ground = std::max(ground, static_cast<int>(t->cornerHeight[c]));
   ex.groundHeight = ground;
-  ex.floorHeight = ground - kTankSink;
+  ex.floorHeight = ground - kTankSink / 2;
   for (auto [x, y] : ex.tiles)
     if (MapTile *t = map.getTileMutable(x, y)) {
       for (int c = 0; c < 4; c++)
@@ -637,23 +917,34 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
           ex.groundHeight, ex.floorHeight);
   for (const Edge &e : boundaryOf(ex)) {
     auto it = this->edges.find(e);
-    if (it != this->edges.end())
+    if (it == this->edges.end())
+      continue;
+    // (a wall of the tank next door: the two share it)
+    if (it->second.tank >= 0 && it->second.tank != ex.id && this->exhibit(it->second.tank))
+      it->second.tank2 = ex.id;
+    else
       it->second.tank = ex.id;
   }
   ex.water = 0;
-  ex.wallTop = ex.floorHeight + kTankHeight; // a unit above the ground
+  ex.wallSub = kTankHeight; // a subtile above the ground
   ex.salt = true;                            // initialSalinity 100
   ex.filling = true;                         // initialFillState 1
   ex.water = 1;                              // full at once, as the original
+  ex.level = -1e9f;
 }
 
 // The water and the tall walls go; the hole stays
 void Fences::drainTank(Exhibit &ex) {
   ex.water = 0;
   ex.tank = false;
-  for (auto &kv : this->edges)
-    if (kv.second.tank == ex.id)
-      kv.second.tank = -1;
+  for (auto &kv : this->edges) {
+    if (kv.second.tank2 == ex.id)
+      kv.second.tank2 = -1;
+    if (kv.second.tank == ex.id) {
+      kv.second.tank = kv.second.tank2;
+      kv.second.tank2 = -1;
+    }
+  }
 }
 
 // Draining and filling happen at once, paused or not (as the original)
@@ -672,12 +963,17 @@ void Fences::fillExhibit(int id, bool salt) {
   ex->salt = salt;
   ex->filling = true;
   ex->water = 1;
+  ex->level = -1e9f;
   ex->purity = 100;
-  if (ex->wallTop <= ex->floorHeight)
-    ex->wallTop = ex->floorHeight + kTankHeight;
+  if (ex->wallSub <= 0)
+    ex->wallSub = kTankHeight;
   for (const Edge &e : boundaryOf(*ex)) {
     auto it = this->edges.find(e);
-    if (it != this->edges.end() && this->typeList[it->second.type].tank)
+    if (it == this->edges.end() || !this->typeList[it->second.type].tank)
+      continue;
+    if (it->second.tank >= 0 && it->second.tank != ex->id && this->exhibit(it->second.tank))
+      it->second.tank2 = ex->id;
+    else if (it->second.tank2 != ex->id)
       it->second.tank = ex->id;
   }
 }
@@ -688,7 +984,7 @@ double Fences::wallStepCost(int id) const {
     return 0;
   double walls = 0;
   for (const auto &kv : this->edges)
-    if (kv.second.tank == id)
+    if (kv.second.tank == id || kv.second.tank2 == id)
       walls += static_cast<double>(this->typeList[kv.second.type].cost) / kWallPriceDivisor;
   // (the water only while it has some: drained, the original shows $200)
   double water = ex->filling ? static_cast<double>(ex->tiles.size()) *
@@ -706,23 +1002,25 @@ bool Fences::canAdjustWall(int id, int step) const {
   const Exhibit *ex = this->exhibit(id);
   if (!ex || !ex->tank)
     return false;
-  int top = ex->wallTop + step;
-  return top - ex->floorHeight <= kTankMaxHeight && top >= ex->groundHeight &&
-         top - ex->floorHeight >= 2;
+  // (as the original: down to two subtiles over the floor - under the
+  // ground round it - up to maximumTankHeight)
+  int sub = ex->wallSub + step;
+  return sub <= kTankMaxHeight && sub >= 2;
 }
 
 void Fences::adjustWall(int id, int step) {
   if (!this->canAdjustWall(id, step))
     return;
-  this->exhibit(id)->wallTop += step;
+  this->exhibit(id)->wallSub += step;
+  // (silent, as the original: no sound for the walls, filling or draining)
 }
 
 bool Fences::canAdjustBase(int id, int step) const {
   const Exhibit *ex = this->exhibit(id);
   if (!ex || !ex->tank || !this->mapEdit)
     return false;
-  int floor = ex->floorHeight + step, top = ex->wallTop + step;
-  return floor < ex->groundHeight && top >= ex->groundHeight;
+  int floor = ex->floorHeight + step;
+  return floor < ex->groundHeight;
 }
 
 void Fences::adjustBase(int id, int step) {
@@ -730,7 +1028,6 @@ void Fences::adjustBase(int id, int step) {
     return;
   Exhibit *ex = this->exhibit(id);
   ex->floorHeight += step;
-  ex->wallTop += step;
   for (auto [x, y] : ex->tiles)
     if (MapTile *t = this->mapEdit->getTileMutable(x, y)) {
       for (int c = 0; c < 4; c++)
@@ -746,12 +1043,13 @@ int Fences::fillCost(int id, bool salt) const {
     return 0;
   // The tank's whole height (measured: a 2 x 2 tank 5 deep fills for
   // $30 salt, $20 fresh)
-  int depth = std::max(0, ex->wallTop - ex->floorHeight);
+  int depth = std::max(0, ex->wallSub);
   double units = static_cast<double>(ex->tiles.size()) * depth;
   return static_cast<int>(std::lround(units * (salt ? kSaltWaterPrice : kFreshWaterPrice)));
 }
 
 void Fences::update(float seconds) {
+  this->rippleClock += seconds * 1000.0f;
   // Wear: a point every cDecayDelta game days (12 s a day)
   for (auto &kv : this->edges) {
     Piece &p = kv.second;
@@ -765,6 +1063,33 @@ void Fences::update(float seconds) {
   for (Exhibit &ex : this->exhibitList) {
     if (!ex.tank)
       continue;
+    // The water shown follows the walls and the base: up a unit a second
+    // (as the original after the base is raised), down at once
+    {
+      float target = ex.floorHeight + ex.water * (ex.wallTop() - 0.5f - ex.floorHeight);
+      if (ex.level < -1e8f || ex.level > target)
+        ex.level = target;
+      else
+        ex.level = std::min(target, ex.level + seconds);
+    }
+    // Waves now and then, while the water's clean (murkyWaterPurity 60)
+    for (Exhibit::Wave &w : ex.waves)
+      w.age += seconds * 1000.0f;
+    ex.waves.erase(std::remove_if(ex.waves.begin(), ex.waves.end(),
+                                  [](const Exhibit::Wave &w) { return w.age >= 4000.0f; }),
+                   ex.waves.end());
+    if (ex.water > 0 && ex.purity >= 60 && !ex.tiles.empty()) {
+      ex.waveIn -= seconds * 1000.0f;
+      if (ex.waveIn <= 0) {
+        ex.waveIn = 40000.0f / static_cast<float>(ex.tiles.size());
+        static std::mt19937 waveRng(12345);
+        auto it = ex.tiles.begin();
+        std::advance(it, std::uniform_int_distribution<size_t>(0, ex.tiles.size() - 1)(waveRng));
+        ex.waves.push_back({it->first, it->second, std::uniform_int_distribution<int>(0, 7)(waveRng), 0.0f});
+      }
+    } else {
+      ex.waves.clear();
+    }
     if (ex.filling && ex.water < 1.0f)
       ex.water = std::min(1.0f, ex.water + seconds / kFillSeconds);
     else if (!ex.filling && ex.water > 0.0f)
@@ -813,7 +1138,25 @@ int Fences::refundOf(const Edge &e) const {
   if (!p)
     return 0;
   const FenceType &t = this->typeList[p->type];
-  return static_cast<int>(std::lround((p->gate ? t.gateCost : t.cost) * 0.8));
+  // (zoo.exe 0x4f945b: broken, nothing; worn, half of the 80%)
+  float life = p->life < 0 ? static_cast<float>(t.life) : p->life;
+  if (life <= 0)
+    return 0;
+  float rate = life <= t.decayedLife ? 0.4f : 0.8f;
+  return static_cast<int>(std::lround((p->gate ? t.gateCost : t.cost) * rate));
+}
+
+int Fences::layCost(const Edge &e, int type) const {
+  if (type < 0 || type >= static_cast<int>(this->typeList.size()))
+    return 0;
+  // (zoo.exe 0x4e05f7: over one of the same kind not yet worn, free)
+  if (const Piece *p = this->at(e))
+    if (p->type == type) {
+      float life = p->life < 0 ? static_cast<float>(this->typeList[type].life) : p->life;
+      if (life > this->typeList[type].decayedLife)
+        return 0;
+    }
+  return this->typeList[type].cost;
 }
 
 bool Fences::worn(const Edge &e) const {
@@ -979,6 +1322,12 @@ void Fences::newMonth() {
     f.upkeepLast = f.upkeepCurrent;
     f.upkeepCurrent = 0;
   }
+  for (Exhibit &ex : this->exhibitList) {
+    ex.donationsLast = ex.donationsNow;
+    ex.donationsNow = 0;
+    ex.upkeepLast = ex.upkeepNow;
+    ex.upkeepNow = 0;
+  }
 }
 
 void Fences::removeFilter(int index) {
@@ -1029,6 +1378,50 @@ bool Fences::pieceAt(float px, float py, const WorldRenderer &view, const WorldM
                      Edge &found) const {
   float best = 20.0f * 20.0f; // within 20 logical pixels of its middle
   bool any = false;
+  // A tank's wall: anywhere on its face, from the floor up to its top (a
+  // raised one's middle was far from where it was looked for); of two in
+  // the way, the nearer
+  float nearest = -1e30f;
+  for (const auto &kv : this->edges) {
+    if (kv.second.tank < 0)
+      continue;
+    const Exhibit *x = this->exhibit(kv.second.tank);
+    if (!x)
+      continue;
+    int ax, ay, bx, by, h0, h1;
+    this->edgeGeometry(kv.first, kv.second, map, ax, ay, bx, by, h0, h1);
+    // (a front one - its outside toward the viewer - only above the ground:
+    // under it is the ground in front of the tank)
+    const Edge &e = kv.first;
+    int ox = e.alongX ? e.x : e.x - 1, oy = e.alongX ? e.y - 1 : e.y;
+    if (x->tiles.count({ox, oy}))
+      ox = e.x, oy = e.y;
+    int ix = ox == e.x && oy == e.y ? (e.alongX ? e.x : e.x - 1) : e.x;
+    int iy = ox == e.x && oy == e.y ? (e.alongX ? e.y - 1 : e.y) : e.y;
+    float tx, ty, outD, inD;
+    view.worldToScreenF(ox + 0.5f, oy + 0.5f, 0, tx, ty, outD);
+    view.worldToScreenF(ix + 0.5f, iy + 0.5f, 0, tx, ty, inD);
+    const float low = static_cast<float>(outD > inD ? x->groundHeight : x->floorHeight);
+    float s0x, s0y, s1x, s1y, t0x, t0y, t1x, t1y, d0, d1;
+    view.worldToScreenF(static_cast<float>(ax), static_cast<float>(ay), low, s0x, s0y, d0);
+    view.worldToScreenF(static_cast<float>(bx), static_cast<float>(by), low, s1x, s1y, d1);
+    view.worldToScreenF(static_cast<float>(ax), static_cast<float>(ay), x->wallTop(), t0x, t0y, d0);
+    view.worldToScreenF(static_cast<float>(bx), static_cast<float>(by), x->wallTop(), t1x, t1y, d1);
+    if (std::fabs(s1x - s0x) < 0.5f || px < std::min(s0x, s1x) || px > std::max(s0x, s1x))
+      continue;
+    float f = (px - s0x) / (s1x - s0x);
+    float top = t0y + (t1y - t0y) * f - 4.0f, bottom = s0y + (s1y - s0y) * f;
+    if (py < top || py > bottom)
+      continue;
+    float depth = (d0 + d1) * 0.5f;
+    if (depth > nearest) {
+      nearest = depth;
+      found = kv.first;
+      any = true;
+    }
+  }
+  if (any)
+    return true;
   for (const auto &kv : this->edges) {
     int ax, ay, bx, by, h0, h1;
     this->edgeGeometry(kv.first, kv.second, map, ax, ay, bx, by, h0, h1);
@@ -1036,7 +1429,7 @@ bool Fences::pieceAt(float px, float py, const WorldRenderer &view, const WorldM
     if (kv.second.tank >= 0)
       for (const Exhibit &x : this->exhibitList)
         if (x.id == kv.second.tank)
-          h = x.wallTop - 0.5f;
+          h = x.wallTop() - 0.25f;
     float sx, sy, d;
     view.worldToScreenF((ax + bx) * 0.5f, (ay + by) * 0.5f, h, sx, sy, d);
     float dist = (sx - px) * (sx - px) + (sy - py) * (sy - py);
@@ -1049,73 +1442,332 @@ bool Fences::pieceAt(float px, float py, const WorldRenderer &view, const WorldM
   return any;
 }
 
+// A tank wall's edge: the tank tile inside it, the way out, whether it's at
+// the front (its outside toward the viewer, down-left or down-right: the
+// tank is seen through it) and the ground just outside it
+namespace {
+struct TankSide {
+  int ix = 0, iy = 0, dx = 0, dy = 0;
+  bool front = false;
+  int outside = 0;
+};
+} // namespace
+
+static bool tankSide(const Fences::Exhibit &ex, const Fences::Edge &e, const WorldMap &map,
+                     const WorldRenderer &view, TankSide &s) {
+  int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
+  bool aIn = ex.tiles.count({ax, ay}) > 0, bIn = ex.tiles.count({e.x, e.y}) > 0;
+  if (aIn == bIn)
+    return false;
+  s.ix = aIn ? ax : e.x;
+  s.iy = aIn ? ay : e.y;
+  int ox = aIn ? e.x : ax, oy = aIn ? e.y : ay;
+  s.dx = ox - s.ix;
+  s.dy = oy - s.iy;
+  CompassDirection side = view.screenSide(static_cast<float>(s.dx), static_cast<float>(s.dy));
+  s.front = side == CompassDirection::SW || side == CompassDirection::SE;
+  s.outside = ex.floorHeight;
+  if (const MapTile *t = map.getTile(ox, oy)) {
+    // The outside tile's corners along the edge
+    int c0, c1;
+    if (s.dx > 0) {
+      c0 = CORNER_X0Y0; c1 = CORNER_X0Y1;
+    } else if (s.dx < 0) {
+      c0 = CORNER_X1Y0; c1 = CORNER_X1Y1;
+    } else if (s.dy > 0) {
+      c0 = CORNER_X0Y0; c1 = CORNER_X1Y0;
+    } else {
+      c0 = CORNER_X0Y1; c1 = CORNER_X1Y1;
+    }
+    s.outside = std::min(t->cornerHeight[c0], t->cornerHeight[c1]);
+  }
+  return true;
+}
+
+// The water's and glass's art sets for how clean a tank is (tanks.cfg
+// murkyWaterPurity 60, veryMurky 20, extremelyMurky 1)
+static std::string scumSuffix(float purity) {
+  return purity < 1 ? "es" : purity < 20 ? "hs" : purity < 60 ? "ls" : "";
+}
+
+// How see-through the original draws a tank's water and glass
+constexpr Uint8 kWaterAlpha = 120; // (the floor's sand shows through, as the original)
+constexpr Uint8 kGlassAlpha = 96;
+
+// A tank wall's pieces, bottom to top. A wall L units high has its bottom
+// rail's piece at the floor and its top rail's two units under the top (that
+// art reaches up to the rim, the posts' caps past it), the rows between
+// glass only but for the posts; at two units high one piece has both rails
+// ("low"). Its glass, a pane a unit (anchored at the unit's foot), from the
+// floor to the top. The ends of a run of wall get the corner posts.
+void Fences::tankPieces(const Edge &e, const Piece &p, const Exhibit &ex, const WorldRenderer &view,
+                        bool front, std::vector<TankPiece> &out) const {
+  const FenceType &t = this->typeList[p.type];
+  int ax = e.x, ay = e.y, bx = e.alongX ? e.x + 1 : e.x, by = e.alongX ? e.y : e.y + 1;
+  Edge prev = e, next = e;
+  if (e.alongX) { prev.x--; next.x++; } else { prev.y--; next.y++; }
+  auto isTankWall = [&](const Edge &n) {
+    const Piece *q = this->at(n);
+    return q && (q->tank == ex.id || q->tank2 == ex.id);
+  };
+  float s0x, s0y, s1x, s1y, d;
+  view.worldToScreenF(static_cast<float>(ax), static_cast<float>(ay), 0, s0x, s0y, d);
+  view.worldToScreenF(static_cast<float>(bx), static_cast<float>(by), 0, s1x, s1y, d);
+  bool prevLeft = s0x < s1x; // prev joins the edge at (ax, ay)
+  bool left = isTankWall(prevLeft ? prev : next);
+  bool right = isTankWall(prevLeft ? next : prev);
+  // A back wall's art is drawn from inside the tank: its left and right
+  // are the screen's the other way round
+  if (!front)
+    std::swap(left, right);
+  int column = left && right ? 1 : right ? 0 : left ? 2 : 3;
+  const int levels = ex.wallSub; // (subtiles: a piece every 8 px)
+  const int rows = std::max(1, levels - 1);
+  // (each a subtile under the one above it from the top: the top one's rail
+  // reaches the walls' height - measured against the original at default,
+  // flush, and one and two under the ground)
+  // (the back walls' art, seen from inside, sits a subtile lower than the
+  // front walls' seen from outside)
+  const float drop = front ? 0.0f : 0.5f;
+  for (int k = 0; k < rows; k++) {
+    int level = rows == 1 ? -1 : k == 0 ? 0 : k == rows - 1 ? 2 : 1;
+    Animation *a = level < 0 ? (t.tankLow[column] ? t.tankLow[column] : t.tankLow[1])
+                             : t.tankArt[column][level];
+    if (!a && level >= 0)
+      a = t.tankArt[1][level];
+    // The gate: the wall as everywhere, its ladder's rungs over it (as the
+    // original: a back wall's on its inside face, a front wall's on its
+    // outside face down to the ground)
+    if (a)
+      out.push_back({a, ex.floorHeight + k * 0.5f - drop, false, k == rows - 1});
+    if (p.gate && t.ladder)
+      out.push_back({t.ladder, ex.floorHeight + k * 0.5f - drop, false, k == rows - 1, true});
+  }
+  // The glass: "\" edges (facing down-left / up-right) and "/" ones
+  bool falling = (s1y - s0y) * (s1x - s0x) > 0;
+  Animation *glass = this->waterPart("glass" + scumSuffix(ex.purity),
+                                     falling ? (front ? "fgrey" : "bgrey") : (front ? "rgrey" : "lgrey"));
+  // (only as high as the water: the rail over it isn't tinted)
+  float level = ex.level > -1e8f ? ex.level : ex.floorHeight + ex.water * (ex.wallTop() - 0.5f - ex.floorHeight);
+  // (a pane a height unit tall, the top one down to the water's height -
+  // a glass wall's up to its rail, as the original: over the water it
+  // showed the sand floor through it, untinted)
+  const float glassTop = t.seeThrough ? std::max(level, ex.wallTop() - 0.5f) : level;
+  // (from the top down: an overlap under the ground, not a dark band)
+  // (a solid wall's outside isn't tinted: only its inside, seen through
+  // the water)
+  if (glass && (t.seeThrough || !front))
+    for (float h = glassTop - 1.0f; h > ex.floorHeight - 1.0f + 0.01f; h -= 1.0f)
+      out.push_back({glass, h, true, false});
+}
+
+int Fences::drawnWith(const Edge &e, const Piece &p, const WorldMap &map, const WorldRenderer &view) const {
+  if (p.tank2 < 0)
+    return p.tank;
+  for (int id : {p.tank, p.tank2}) {
+    TankSide ts;
+    const Exhibit *ex = this->exhibit(id);
+    if (ex && tankSide(*ex, e, map, view, ts) && !ts.front)
+      return id;
+  }
+  return p.tank;
+}
+
+// The way a tank wall's art faces: from where it is (in or out of the
+// tank), not the way it happened to be dragged (one dragged the other way
+// put its corner posts at the wrong ends)
+static CompassDirection tankSide(const WorldRenderer &view, const TankSide &ts) {
+  return view.screenSide(static_cast<float>(ts.dx), static_cast<float>(ts.dy));
+}
+
+static CompassDirection ladderSide(const WorldRenderer &view, const TankSide &ts) {
+  return tankSide(view, ts);
+}
+
+int Fences::platformAt(float px, float py, const WorldRenderer &view) const {
+  for (const auto &kv : this->edges) {
+    const Piece &p = kv.second;
+    if (!p.gate || p.tank < 0)
+      continue;
+    const Exhibit *ex = this->exhibit(p.tank);
+    if (!ex || !this->typeList[p.type].platform)
+      continue;
+    const Edge &e = kv.first;
+    float mx = e.alongX ? e.x + 0.5f : static_cast<float>(e.x);
+    float my = e.alongX ? static_cast<float>(e.y) : e.y + 0.5f;
+    TankSide ts;
+    if (this->mapEdit && tankSide(*ex, e, *this->mapEdit, view, ts) && ts.front) {
+      mx -= ts.dx * 0.5f;
+      my -= ts.dy * 0.5f;
+    }
+    float sx, sy, d;
+    view.worldToScreenF(mx, my, ex->wallTop() - 1.0f, sx, sy, d);
+    // (the platform stands about 20 px over its anchor, the ladder under)
+    if (std::fabs(px - sx) <= 16.0f && py >= sy - 34.0f && py <= sy + 6.0f)
+      return ex->id;
+  }
+  return -1;
+}
+
 void Fences::collect(const WorldRenderer &view, const WorldMap &map,
                      std::vector<Drawable> &out) const {
   auto add = [&](const Edge &e, const Piece &p, int type, bool tinted, SDL_Color tint) {
     const FenceType &t = this->typeList[type];
+    if (p.gate && !tinted && e == this->hoverGate) {
+      tinted = true;
+      tint = SDL_Color{255, 255, 110, 255};
+    }
     int ax, ay, bx, by, h0, h1;
     this->edgeGeometry(e, p, map, ax, ay, bx, by, h0, h1);
     float angle = p.facing * 3.14159265f / 4.0f;
     CompassDirection side = view.screenSide(std::sin(angle), -std::cos(angle));
     float mx = (ax + bx) * 0.5f, my = (ay + by) * 0.5f;
 
-    // A tank's walls: stacked from its floor to a unit above the ground;
-    // its gate is wall too, with the platform and ladder on it
+    // A tank's walls: stacked from its floor to the top. A front one (the
+    // tank seen through it) here, sorted with everything else, from the
+    // ground outside it up (its top rail always); what's under that, and
+    // the back ones, go with the tank's inside, under the ground in front
+    // and the water. Its gate is wall too, the diver platform on it (the
+    // ladder's with the inside).
     if (p.tank >= 0) {
-      const Exhibit *ex = nullptr;
-      for (const Exhibit &x : this->exhibitList)
-        if (x.id == p.tank)
-          ex = &x;
-      if (ex && t.tankArt[1][0]) {
-        // Which end it is: collinear tank neighbours to its screen left and
-        // right
-        Edge prev = e, next = e;
-        if (e.alongX) { prev.x--; next.x++; } else { prev.y--; next.y++; }
-        auto isTankWall = [&](const Edge &n) {
-          const Piece *q = this->at(n);
-          return q && q->tank == p.tank;
+      const Exhibit *ex = this->exhibit(this->drawnWith(e, p, map, view));
+      TankSide ts;
+      if (ex && t.tankArt[1][0] && tankSide(*ex, e, map, view, ts)) {
+        const float top = ex->wallTop();
+        // The ground line along its outside: what's under it isn't seen (as
+        // the original: the ground in front hides the wall, the posts too)
+        float g0x, g0y, g1x, g1y, gd;
+        view.worldToScreenF(static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(ts.outside), g0x, g0y, gd);
+        view.worldToScreenF(static_cast<float>(bx), static_cast<float>(by), static_cast<float>(ts.outside), g1x, g1y, gd);
+        if (g0x > g1x) {
+          std::swap(g0x, g1x);
+          std::swap(g0y, g1y);
+        }
+        // (past its ends: at the tank's front corner the ground turns back
+        // up along the other front wall - the corner post cut there too; at
+        // a side corner it stays level: never lower than the end, or
+        // slivers of the posts showed in the grass)
+        auto groundY = [&](float x) {
+          float slope = (g1y - g0y) / std::max(0.001f, g1x - g0x);
+          if (x <= g0x)
+            return std::min(g0y, g0y - slope * (x - g0x));
+          if (x >= g1x)
+            return std::min(g1y, g1y - slope * (x - g1x));
+          return g0y + slope * (x - g0x);
         };
-        float s0x, s0y, s1x, s1y, d;
-        view.worldToScreenF(static_cast<float>(ax), static_cast<float>(ay), 0, s0x, s0y, d);
-        view.worldToScreenF(static_cast<float>(bx), static_cast<float>(by), 0, s1x, s1y, d);
-        bool prevLeft = s0x < s1x; // prev joins the edge at (ax, ay)
-        bool left = isTankWall(prevLeft ? prev : next);
-        bool right = isTankWall(prevLeft ? next : prev);
-        int column = left && right ? 1 : right ? 0 : left ? 2 : 3;
-        int top = ex->wallTop;
-        int levels = top - ex->floorHeight;
-        // The ground outside hides the wall below it: the original shows
-        // the rows from a unit under the ground up (the cap and the glass
-        // under it, as made; more as the wall is raised or the tank comes
-        // up out of the ground)
-        for (int k = std::max(0, ex->groundHeight - 1 - ex->floorHeight); k < levels; k++) {
-          int level = k == 0 ? 0 : k == levels - 1 ? 2 : 1;
-          Animation *a = t.tankArt[column][level];
-          if (!a)
-            a = t.tankArt[1][level];
-          if (!a)
+        // (drawn in narrow strips, each cut at the ground under it)
+        // (only across the art's own width: across the whole wall, every
+        // piece by the ground made thousands of strips - a big raised tank
+        // slowed the game to 20 frames a second)
+        // (only a piece that crosses the ground line is cut, in narrow
+        // strips across its own width - across the whole wall, every piece
+        // by the ground made thousands of them, a big raised tank slowing the
+        // game to 20 frames a second; one wholly over the line is drawn
+        // whole, one wholly under it not at all)
+        auto pushCut = [&](const Drawable &d) {
+          float L, T, R, B;
+          if (!d.art || !d.art->anchoredBounds(d.sx, d.sy, d.side, L, T, R, B)) {
+            out.push_back(d);
+            return;
+          }
+          float lo = 1e9f, hi = -1e9f;
+          for (float x : {L, R, std::clamp(g0x, L, R), std::clamp(g1x, L, R)}) {
+            lo = std::min(lo, groundY(x));
+            hi = std::max(hi, groundY(x));
+          }
+          if (B <= lo) {
+            out.push_back(d);
+            return;
+          }
+          if (T >= hi)
+            return;
+          const float step = 4.0f; // (the line moves 2 px in 4: cut within a pixel)
+          for (float x = std::floor(L); x < R; x += step) {
+            Drawable strip = d;
+            strip.clip = true;
+            strip.clipX0 = x;
+            strip.clipX1 = x + step;
+            strip.clipY1 = groundY(x + step * 0.5f);
+            if (strip.clipY1 > T)
+              out.push_back(strip);
+          }
+        };
+        if (p.gate && t.platform) {
+          // Facing into the tank (its art is named a quarter turn round from
+          // the way it faces: NE, SE, SW, NW in turn)
+          // (its art lines up with a wall facing its way: the wall's own)
+          CompassDirection in = tankSide(view, ts);
+          float sx, sy, depth;
+          // With the top rail's piece, two units under the rim. On a front
+          // wall, inside the tank behind its rail (as the original: only
+          // the handles show over it); on a back one its art already sits
+          // inside.
+          float px = mx, py = my;
+          const float sh = 0.0f, lf = 0.5f;
+          float lift = 0.0f;
+          // (checked in all four turns of the view: facing up-right, its NE
+          // art puts the floor along the wall; the SE art lies inside)
+          if (in == CompassDirection::NE)
+            in = CompassDirection::SE;
+          if (ts.front) {
+            // On a front wall: just inside it, up at its rim, behind its
+            // rail (as the original: its floor hidden, the handles over the
+            // rim)
+            px -= ts.dx * sh;
+            py -= ts.dy * sh;
+            lift = lf;
+          }
+          view.worldToScreenF(px, py, top - 1.0f + lift, sx, sy, depth);
+          // (its handles over the ladder's rails: on a front wall they stood
+          // 7 px along from them, the ladder not meeting them)
+          if (ts.front) {
+            const float nudge = 7.0f;
+            sx += view.screenSide(static_cast<float>(ts.dx), static_cast<float>(ts.dy)) == CompassDirection::SW ? -nudge
+                                                                                                                : nudge;
+          }
+          float wx, wy, wallDepth;
+          view.worldToScreenF(mx, my, static_cast<float>(top - 2), wx, wy, wallDepth);
+          bool lit = !tinted && this->hoverPlatform == ex->id;
+          SDL_Color yellow{255, 255, 80, 255};
+          Drawable plat{ts.front ? wallDepth - 0.05f : wallDepth + 0.1f, sx, sy, t.platform, in,
+                        lit ? yellow : tint, tinted || lit};
+          // (on a front wall down by the ground: the ground in front hides
+          // it, only what's over the ground shows - the handles' tips)
+          if (ts.front && top < ts.outside + 1.0f)
+            pushCut(plat);
+          else
+            out.push_back(plat);
+          if (!tinted && this->selectedTank == ex->id && this->selectArrow)
+            out.push_back({wallDepth + 0.101f, sx, sy - 40.0f, this->selectArrow, CompassDirection::N,
+                           SDL_Color{255, 255, 255, 255}, false});
+        }
+        if (!ts.front && !tinted)
+          return;
+        std::vector<TankPiece> pieces;
+        this->tankPieces(e, p, *ex, view, ts.front, pieces);
+        side = tankSide(view, ts);
+        for (const TankPiece &tp : pieces) {
+          // (one whose art doesn't reach over the ground outside: with the
+          // inside only, hidden by the ground in front)
+          if (tinted ? tp.glass : tp.height + 1.75f <= ts.outside)
             continue;
           float sx, sy, depth;
-          view.worldToScreenF(mx, my, static_cast<float>(ex->floorHeight + k), sx, sy, depth);
-          out.push_back({depth + k * 0.001f, sx, sy, a, side, tint, tinted});
-        }
-        if (p.gate) {
-          // Facing into the tank: toward the tile on its side of the edge
-          int ix = e.alongX ? e.x : e.x - 1, iy = e.alongX ? e.y - 1 : e.y;
-          bool firstInside = ex->tiles.count({ix, iy}) > 0;
-          float dx = e.alongX ? 0.0f : (firstInside ? -1.0f : 1.0f);
-          float dy = e.alongX ? (firstInside ? -1.0f : 1.0f) : 0.0f;
-          // (its art is named a quarter turn round from the way it faces:
-          // NE, SE, SW, NW in turn)
-          CompassDirection in = static_cast<CompassDirection>(
-              (static_cast<int>(view.screenSide(dx, dy)) + 1) % 4);
-          float sx, sy, depth;
-          // At the water, a level under the rim (its rails reach up to it)
-          view.worldToScreenF(mx, my, static_cast<float>(top - 2), sx, sy, depth);
-          if (t.ladder)
-            out.push_back({depth + levels * 0.001f + 0.0005f, sx, sy, t.ladder, in, tint, tinted});
-          if (t.platform)
-            out.push_back({depth + levels * 0.001f + 0.001f, sx, sy, t.platform, in, tint, tinted});
+          view.worldToScreenF(mx, my, tp.height, sx, sy, depth);
+          // (the wall from the floor up; then the water's tint over all of it,
+          // then the ladder's rungs - in among the wall's pieces, the ones above
+          // cut them into bands, moving as the water rose)
+          float order = depth + (tp.glass ? 0.02f : tp.ladder ? 0.03f : 0.0f) +
+                        (tp.height - ex->floorHeight) * ((tp.glass || tp.ladder) ? 0.0001f : 0.001f);
+          bool litLadder = tp.ladder && !tinted && this->hoverPlatform == ex->id;
+          Drawable d = tp.glass ? Drawable{order, sx, sy, tp.art, CompassDirection::N,
+                                           SDL_Color{255, 255, 255, kGlassAlpha}, true}
+                                : Drawable{order, sx, sy, tp.art, tp.ladder ? ladderSide(view, ts) : side,
+                                           litLadder ? SDL_Color{255, 255, 80, 255} : tint, tinted || litLadder};
+          if (tinted || tp.height >= ts.outside + 0.01f) {
+            out.push_back(d);
+            continue;
+          }
+          pushCut(d);
         }
         return;
       }
@@ -1146,8 +1798,347 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       return;
     float sx, sy, depth;
     view.worldToScreenF(mx, my, (h0 + h1) * 0.5f, sx, sy, depth);
-    out.push_back({depth, sx, sy, art, side, tint, tinted});
+    Drawable d{depth, sx, sy, art, side, tint, tinted};
+    // (a gate: as far open as it is)
+    if (p.gate)
+      d.frame = static_cast<int>(p.open);
+    // In two halves, each sorted at its own middle: a building's strips
+    // are a quarter tile wide, sorted the same way, so one standing against
+    // the fence goes behind all of it (sorted as a whole at its middle,
+    // every other strip of the wall came over the fence)
+    float s0x, s0y, d0, s1x, s1y, d1;
+    view.worldToScreenF(static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(h0), s0x, s0y, d0);
+    view.worldToScreenF(static_cast<float>(bx), static_cast<float>(by), static_cast<float>(h1), s1x, s1y, d1);
+    if (s0x > s1x) {
+      std::swap(s0x, s1x);
+      std::swap(d0, d1);
+    }
+    Drawable left = d, right = d;
+    left.clip = right.clip = true;
+    left.depth = (3 * d0 + d1) / 4;
+    left.clipX0 = -1e9f;
+    left.clipX1 = sx;
+    right.depth = (d0 + 3 * d1) / 4;
+    right.clipX0 = sx;
+    right.clipX1 = 1e9f;
+    out.push_back(left);
+    out.push_back(right);
   };
+
+  // Each tank's inside: its back walls from the floor up (glazed), the
+  // diver's ladder down into it, then the water over them, see-through:
+  // the surface at the water's height, its sides behind the front glass.
+  // Sorted at the back of the tank.
+  for (const Exhibit &ex : this->exhibitList) {
+    if (!ex.tank)
+      continue;
+    std::string set = (ex.salt ? "salt" : "fresh") + scumSuffix(ex.purity);
+    Animation *surfaceArt = this->waterPart(set, "top");
+    if (!surfaceArt)
+      continue; // (drawn plain in drawWater)
+    struct Sprite {
+      float depth, sx, sy;
+      Animation *art;
+      CompassDirection side;
+      SDL_Color tint;
+      bool tinted;
+      int frame = -1;
+    };
+    std::vector<Sprite> back, water, frontLow;
+    // Its edges (for the waterline and the outline at the ground)
+    struct Rim {
+      float ax, ay, bx, by;
+      bool front;
+      int outside;
+    };
+    std::vector<Rim> rims;
+    float backDepth = 1e30f;
+    for (const auto &kv : this->edges) {
+      const Piece &p = kv.second;
+      if (p.tank != ex.id && p.tank2 != ex.id)
+        continue;
+      // (a wall shared with the tank next door: drawn once, with the tank
+      // it's the back wall of)
+      if (this->drawnWith(kv.first, p, map, view) != ex.id)
+        continue;
+      const FenceType &t = this->typeList[p.type];
+      TankSide ts;
+      if (!t.tankArt[1][0] || !tankSide(ex, kv.first, map, view, ts))
+        continue;
+      const Edge &e = kv.first;
+      float mx = e.alongX ? e.x + 0.5f : static_cast<float>(e.x);
+      float my = e.alongX ? static_cast<float>(e.y) : e.y + 0.5f;
+      float sx, sy, depth;
+      view.worldToScreenF(mx, my, static_cast<float>(ex.floorHeight), sx, sy, depth);
+      backDepth = std::min(backDepth, depth);
+      rims.push_back({static_cast<float>(e.x), static_cast<float>(e.y),
+                      e.alongX ? e.x + 1.0f : static_cast<float>(e.x),
+                      e.alongX ? static_cast<float>(e.y) : e.y + 1.0f, ts.front, ts.outside});
+      CompassDirection side = tankSide(view, ts);
+      std::vector<TankPiece> pieces;
+      this->tankPieces(e, p, ex, view, ts.front, pieces);
+      for (const TankPiece &tp : pieces) {
+        // (a front wall: drawn with everything else, cut at the ground; what's
+        // under the ground isn't drawn at all, as the original - drawn here
+        // under the ground in front, its top showed through a glass wall as
+        // a band of concrete)
+        if (ts.front)
+          continue;
+        float rx, ry, rd;
+        view.worldToScreenF(mx, my, tp.height, rx, ry, rd);
+        // (the wall from the floor up; then the water's tint over all of it,
+          // then the ladder's rungs - in among the wall's pieces, the ones above
+          // cut them into bands, moving as the water rose)
+          float order = depth + (tp.glass ? 0.02f : tp.ladder ? 0.03f : 0.0f) +
+                        (tp.height - ex.floorHeight) * ((tp.glass || tp.ladder) ? 0.0001f : 0.001f);
+        Sprite sp = tp.glass ? Sprite{order, rx, ry, tp.art, CompassDirection::N,
+                                      SDL_Color{255, 255, 255, kGlassAlpha}, true}
+                             : Sprite{order, rx, ry, tp.art, tp.ladder ? ladderSide(view, ts) : side,
+                                      SDL_Color{255, 255, 80, 255},
+                                      tp.ladder && this->hoverPlatform == ex.id};
+        (ts.front ? frontLow : back).push_back(sp);
+      }
+    }
+    if (backDepth > 1e29f)
+      continue;
+    std::stable_sort(back.begin(), back.end(),
+                     [](const Sprite &p, const Sprite &q) { return p.depth < q.depth; });
+    // The water: up to a unit under the walls' top (tanks.cfg waterOffset
+    // -1), as it's shown rising
+    float level = ex.level > -1e8f ? ex.level
+                                   : ex.floorHeight + ex.water * (ex.wallTop() - 0.5f - ex.floorHeight);
+    if (ex.water > 0 && level > ex.floorHeight + 0.01f) {
+      const bool scum = !scumSuffix(ex.purity).empty();
+      auto variant = [&](const std::string &part, const std::string &scumPart, int x, int y) {
+        if (!scum)
+          return this->waterPart(set, part);
+        unsigned h = static_cast<unsigned>(x * 73856093) ^ static_cast<unsigned>(y * 19349663);
+        int n = h % 4;
+        Animation *a = n == 0 ? nullptr : this->waterPart(set, scumPart + std::to_string(n));
+        return a ? a : this->waterPart(set, part);
+      };
+      const SDL_Color see{255, 255, 255, kWaterAlpha};
+      for (auto [x, y] : ex.tiles) {
+        float cx, cy, cd;
+        view.worldToScreenF(x + 0.5f, y + 0.5f, level, cx, cy, cd);
+        // Its sides on the front edges, from a unit under the ground there
+        const int dd[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (auto &o : dd) {
+          if (ex.tiles.count({x + o[0], y + o[1]}))
+            continue;
+          CompassDirection side = view.screenSide(static_cast<float>(o[0]), static_cast<float>(o[1]));
+          bool left = side == CompassDirection::SW, right = side == CompassDirection::SE;
+          if (!left && !right)
+            continue;
+          Animation *face = variant(left ? "front" : "right", left ? "fscum" : "rscum", x, y);
+          if (!face)
+            continue;
+          Edge e = o[0] ? Edge{false, x + (o[0] > 0 ? 1 : 0), y} : Edge{true, x, y + (o[1] > 0 ? 1 : 0)};
+          (void)e;
+          // A unit a piece, anchored at its foot, from the water's height
+          // down (stacked from the floor up, the top one overlapped the one
+          // under it, see-through twice: a dark band; two units apart they
+          // left gaps of sand); what the ground hides is drawn over again
+          float mx = x + 0.5f + o[0] * 0.5f, my = y + 0.5f + o[1] * 0.5f;
+          for (float h = level - 1.0f; h > ex.floorHeight - 1.0f + 0.01f; h -= 1.0f) {
+            float sx, sy, dep;
+            view.worldToScreenF(mx, my, h, sx, sy, dep);
+            water.push_back({cd + 0.25f, sx, sy, face, CompassDirection::N, see, true});
+          }
+        }
+        if (Animation *surface = variant("top", "tscum", x, y))
+          water.push_back({cd, cx, cy, surface, CompassDirection::N, see, true});
+        // The ripple along each wall on the surface (tankripl: edgrip, 19
+        // frames of 83 ms, each started 0-2 s in; clean water only)
+        if (ex.purity >= 60)
+          if (Animation *rip = this->objectArt("objects/edgrip/idle/idle"))
+            for (auto &o : dd) {
+              if (ex.tiles.count({x + o[0], y + o[1]}))
+                continue;
+              float ex2, ey2, ed;
+              view.worldToScreenF(x + 0.5f + o[0] * 0.5f, y + 0.5f + o[1] * 0.5f, level, ex2, ey2, ed);
+              unsigned h = static_cast<unsigned>(x * 92821 + y * 68917 + (o[0] + 2) * 131 + (o[1] + 2) * 17);
+              int frame = static_cast<int>((this->rippleClock + static_cast<float>(h % 2000)) / 83.0f) % 19;
+              Sprite sp{cd + 0.3f, ex2, ey2, rip, view.screenSide(static_cast<float>(o[0]), static_cast<float>(o[1])),
+                        SDL_Color{255, 255, 255, 255}, false};
+              sp.frame = frame;
+              water.push_back(sp);
+            }
+      }
+      // Waves: salt twaterwv (waterwv1, 125 ms a frame), fresh frshwav (83 ms)
+      if (ex.purity >= 60)
+        if (Animation *wv = this->objectArt(ex.salt ? "objects/waterwv1/idle/idle" : "objects/frshwav/idle/idle"))
+          for (const Exhibit::Wave &w : ex.waves) {
+            int frames = std::max(1, wv->frameCount());
+            int frame = static_cast<int>(w.age / (ex.salt ? 125.0f : 83.0f));
+            if (frame >= frames)
+              continue; // (played once)
+            float wx, wy, wd;
+            view.worldToScreenF(w.x + 0.5f, w.y + 0.5f, level, wx, wy, wd);
+            static const CompassDirection four[4] = {CompassDirection::NE, CompassDirection::SE, CompassDirection::SW,
+                                                     CompassDirection::NW};
+            Sprite sp{wd + 0.3f, wx, wy, wv, four[(w.facing / 2) % 4], SDL_Color{255, 255, 255, 255}, false};
+            sp.frame = frame;
+            water.push_back(sp);
+          }
+      std::stable_sort(water.begin(), water.end(),
+                       [](const Sprite &p, const Sprite &q) { return p.depth < q.depth; });
+    }
+    // The ground in front of the tank (as far as the pit's depth reaches
+    // down the screen), drawn again over the pit: it hides the walls, the
+    // ladder and the water below its rim
+    // (in front: below one of the tank's tiles in its screen column or the
+    // next - not merely nearer than its back corner, which took in the
+    // ground behind its back walls on a big tank and drew it over them)
+    std::set<std::pair<int, int>> cover;
+    {
+      struct Spot {
+        float sx, d;
+      };
+      std::vector<Spot> spots;
+      for (auto [x, y] : ex.tiles) {
+        float sx, sy, d;
+        view.worldToScreenF(x + 0.5f, y + 0.5f, 0, sx, sy, d);
+        spots.push_back({sx, d});
+      }
+      // (a little wider than a tile's half: the corner posts at the tank's
+      // sides reach past its last column)
+      const float column = view.getTileWidth() * 0.75f + 1.0f;
+      const int reach = std::max(1, ex.groundHeight - ex.floorHeight) + 1;
+      for (auto [x, y] : ex.tiles)
+        for (int dy = -reach; dy <= reach; dy++)
+          for (int dx = -reach; dx <= reach; dx++) {
+            int nx = x + dx, ny = y + dy;
+            if (ex.tiles.count({nx, ny}) || cover.count({nx, ny}) || !map.getTile(nx, ny))
+              continue;
+            float sx, sy, d;
+            view.worldToScreenF(nx + 0.5f, ny + 0.5f, 0, sx, sy, d);
+            for (const Spot &s : spots)
+              if (std::fabs(s.sx - sx) <= column && d > s.d) {
+                cover.insert({nx, ny});
+                break;
+              }
+          }
+    }
+    Drawable inside{backDepth - 0.01f, 0, 0, nullptr, CompassDirection::N, SDL_Color{255, 255, 255, 255}, false};
+    std::stable_sort(frontLow.begin(), frontLow.end(),
+                     [](const Sprite &p, const Sprite &q) { return p.depth < q.depth; });
+    // (the waterline is the ripples' art, with the water; here only the
+    // thin line where the front glass meets the ground)
+    const bool wet = ex.water > 0 && level > ex.floorHeight + 0.01f;
+    const WorldRenderer *vp = &view;
+    // In vertical strips across the screen, each sorted at the tank's back
+    // wall in that column (as one piece at its back corner, a tank beside
+    // it came wrongly in front of or behind its walls); each strip draws
+    // only what reaches into it
+    struct Strip {
+      float x0, x1, depth;
+      float y1 = 1e9f; // (nothing under this row)
+    };
+    std::vector<Strip> strips;
+    {
+      float minX = 1e30f, maxX = -1e30f, minY = 0, maxY = 0, minD = 0, maxD = 0;
+      for (const Rim &m : rims)
+        for (int k = 0; k < 2; k++) {
+          float sx, sy, d;
+          view.worldToScreenF(k ? m.bx : m.ax, k ? m.by : m.ay, static_cast<float>(ex.groundHeight), sx, sy, d);
+          if (sx < minX) {
+            minX = sx;
+            minY = sy;
+            minD = d;
+          }
+          if (sx > maxX) {
+            maxX = sx;
+            maxY = sy;
+            maxD = d;
+          }
+        }
+      // (a tile wide: narrower, every sprite drawn in more of them - a
+      // frame took twice as long with four big tanks)
+      const float step = view.getTileWidth();
+      for (float x = minX; x < maxX - 0.5f; x += step) {
+        float mid = std::min(x + step * 0.5f, maxX), depth = 1e30f;
+        for (const Rim &m : rims) {
+          if (m.front)
+            continue;
+          float ax, ay, da, bx, by, db;
+          view.worldToScreenF(m.ax, m.ay, 0, ax, ay, da);
+          view.worldToScreenF(m.bx, m.by, 0, bx, by, db);
+          if (mid < std::min(ax, bx) - 0.5f || mid > std::max(ax, bx) + 0.5f || std::fabs(bx - ax) < 0.01f)
+            continue;
+          depth = std::min(depth, da + (db - da) * (mid - ax) / (bx - ax));
+        }
+        if (depth > 1e29f)
+          depth = backDepth;
+        strips.push_back({x, std::min(x + step, maxX), depth - 0.01f});
+      }
+      // (past its side corners, only what's over the ground there: its
+      // corner posts above it - under it they're hidden, the tank not seen
+      // through the ground; reaching out under it, specks of the posts
+      // showed in the grass beside a sunk tank)
+      if (!strips.empty()) {
+        strips.insert(strips.begin(), {-1e9f, minX, minD - 0.01f, minY});
+        strips.push_back({maxX, 1e9f, maxD - 0.01f, maxY});
+      }
+    }
+    auto bounds = [](const Sprite &s, float &l, float &rr) {
+      float t, b;
+      if (!s.art->anchoredBounds(s.sx, s.sy, s.side, l, t, rr, b)) {
+        l = s.sx - 64;
+        rr = s.sx + 64;
+      }
+    };
+    auto within = [&](const std::vector<Sprite> &all, const Strip &st) {
+      std::vector<Sprite> some;
+      for (const Sprite &sp : all) {
+        float l, rr;
+        bounds(sp, l, rr);
+        if (rr > st.x0 && l < st.x1)
+          some.push_back(sp);
+      }
+      return some;
+    };
+    for (const Strip &st : strips) {
+      std::vector<Sprite> back1 = within(back, st), water1 = within(water, st), front1 = within(frontLow, st);
+      std::set<std::pair<int, int>> cover1;
+      for (auto [cx, cy] : cover) {
+        float sx, sy, d;
+        view.worldToScreenF(cx + 0.5f, cy + 0.5f, 0, sx, sy, d);
+        if (sx + view.getTileWidth() * 0.5f > st.x0 && sx - view.getTileWidth() * 0.5f < st.x1)
+          cover1.insert({cx, cy});
+      }
+      Drawable part = inside;
+      part.depth = st.depth;
+      part.clip = true;
+      part.clipX0 = st.x0;
+      part.clipX1 = st.x1;
+      part.clipY1 = st.y1;
+      part.custom = [this, back = back1, water = water1, frontLow = front1, cover = cover1, rims, wet, level,
+                     vp](SDL_Renderer *r) {
+      for (const Sprite &s : back)
+        s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr);
+      for (const Sprite &s : water)
+        s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr, s.frame);
+      (void)wet;
+      (void)level;
+      for (const Sprite &s : frontLow)
+        s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr);
+      if (this->redrawGround)
+        this->redrawGround(r, cover);
+      SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(r, 176, 96, 40, 230);
+      for (const Rim &m : rims) {
+        if (!m.front)
+          continue;
+        float x0, y0, x1, y1, d;
+        vp->worldToScreenF(m.ax, m.ay, static_cast<float>(m.outside), x0, y0, d);
+        vp->worldToScreenF(m.bx, m.by, static_cast<float>(m.outside), x1, y1, d);
+        SDL_RenderDrawLineF(r, x0, y0, x1, y1);
+      }
+      };
+      out.push_back(part);
+    }
+  }
 
   for (const auto &kv : this->edges)
     add(kv.first, kv.second, kv.second.type, false, SDL_Color{255, 255, 255, 255});
@@ -1168,7 +2159,8 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     Animation *a = f.health <= 0                ? fk.off
                    : f.health <= fk.decayedHealth ? fk.decayed
                                                   : fk.idle;
-    addFilter(f, a ? a : fk.idle, false, SDL_Color{255, 255, 255, 255});
+    bool red = this->highlightFilter == static_cast<int>(&f - this->filterList.data());
+    addFilter(f, a ? a : fk.idle, red, red ? SDL_Color{255, 60, 60, 255} : SDL_Color{255, 255, 255, 255});
   }
   if (this->previewFilterX >= 0) {
     Filter f;
@@ -1209,6 +2201,15 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     }
 }
 
+Animation *Fences::objectArt(const std::string &path) const {
+  auto it = this->waterArt.find(path);
+  if (it != this->waterArt.end())
+    return it->second;
+  Animation *a = this->rm && this->rm->hasResource(path + ".ani") ? this->rm->getAnimation(path) : nullptr;
+  this->waterArt[path] = a;
+  return a;
+}
+
 Animation *Fences::waterPart(const std::string &set, const std::string &part) const {
   std::string path = "water/" + set + "/" + part + "/" + part;
   auto it = this->waterArt.find(path);
@@ -1234,7 +2235,7 @@ void Fences::drawWater(SDL_Renderer *renderer, const WorldRenderer &view,
     if (!ex.tank || ex.water <= 0)
       continue;
     // Up to a unit below the walls' top (tanks.cfg waterOffset -1)
-    float level = ex.floorHeight + ex.water * (ex.wallTop - 1 - ex.floorHeight);
+    float level = ex.floorHeight + ex.water * (ex.wallTop() - 0.5f - ex.floorHeight);
     std::string set = ex.salt ? "salt" : "fresh";
     if (ex.purity < 1)
       set += "es";
@@ -1244,7 +2245,9 @@ void Fences::drawWater(SDL_Renderer *renderer, const WorldRenderer &view,
       set += "ls";
     const bool scum = set.size() > (ex.salt ? 4u : 5u);
     Animation *top = this->waterPart(set, "top");
-    if (!top) {
+    if (top)
+      continue; // (with the art: the tank's inside, in collect)
+    {
       // No art (Marine Mania missing): plain water
       std::vector<SDL_Vertex> v;
       std::vector<int> idx;
@@ -1264,55 +2267,6 @@ void Fences::drawWater(SDL_Renderer *renderer, const WorldRenderer &view,
       SDL_RenderGeometry(renderer, nullptr, v.data(), static_cast<int>(v.size()), idx.data(),
                          static_cast<int>(idx.size()));
       continue;
-    }
-    // Back to front
-    struct TileAt {
-      int x, y;
-      float depth;
-    };
-    std::vector<TileAt> tiles;
-    for (auto [x, y] : ex.tiles) {
-      float sx, sy, d;
-      view.worldToScreenF(x + 0.5f, y + 0.5f, level, sx, sy, d);
-      tiles.push_back({x, y, d});
-    }
-    std::sort(tiles.begin(), tiles.end(),
-              [](const TileAt &p, const TileAt &q) { return p.depth < q.depth; });
-    auto variant = [&](const std::string &part, const std::string &scumPart, int x, int y) {
-      if (!scum)
-        return this->waterPart(set, part);
-      unsigned h = static_cast<unsigned>(x * 73856093) ^ static_cast<unsigned>(y * 19349663);
-      int n = h % 4;
-      Animation *a = n == 0 ? nullptr : this->waterPart(set, scumPart + std::to_string(n));
-      return a ? a : this->waterPart(set, part);
-    };
-    const int lowest = std::max(ex.floorHeight, ex.groundHeight - 1);
-    for (const TileAt &t : tiles) {
-      // Its sides on the front edges (neighbours outside the tank)
-      const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-      for (auto &dd : d) {
-        if (ex.tiles.count({t.x + dd[0], t.y + dd[1]}))
-          continue;
-        CompassDirection side = view.screenSide(static_cast<float>(dd[0]), static_cast<float>(dd[1]));
-        bool left = side == CompassDirection::SW, right = side == CompassDirection::SE;
-        if (!left && !right)
-          continue;
-        Animation *face = variant(left ? "front" : "right", left ? "fscum" : "rscum", t.x, t.y);
-        if (!face)
-          continue;
-        // The edge's middle
-        float mx = t.x + 0.5f + dd[0] * 0.5f, my = t.y + 0.5f + dd[1] * 0.5f;
-        for (float h = static_cast<float>(lowest); h < level - 0.01f; h += 1.0f) {
-          float sx, sy, dep;
-          view.worldToScreenF(mx, my, std::min(h + 1.0f, level), sx, sy, dep);
-          face->drawAnchored(renderer, sx, sy, CompassDirection::N, nullptr);
-        }
-      }
-      Animation *surface = variant("top", "tscum", t.x, t.y);
-      float sx, sy, dep;
-      view.worldToScreenF(t.x + 0.5f, t.y + 0.5f, level, sx, sy, dep);
-      if (surface)
-        surface->drawAnchored(renderer, sx, sy, CompassDirection::N, nullptr);
     }
   }
 }

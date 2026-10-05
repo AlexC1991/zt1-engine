@@ -38,6 +38,7 @@ struct MapTile {
 };
 
 class WorldMap {
+  friend class SaveGame; // (saving and loading a game)
 public:
     WorldMap();
     ~WorldMap();

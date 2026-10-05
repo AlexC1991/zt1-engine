@@ -24,6 +24,7 @@
 //   Net income is this month's total. The graphs show one point a month.
 // ============================================================================
 class ZooSim {
+  friend class SaveGame; // (saving and loading a game)
 public:
   // The Income / Expenses rows (zoofin1.lyt's order)
   enum Line {
@@ -55,6 +56,13 @@ public:
   // Spending and earning: positive amounts; costs are recorded negative
   void spend(Line line, double amount);
   void earn(Line line, double amount);
+  // A count kept on the books (Admissions), not money
+  void count(Line line, int n) {
+    if (!this->months.empty()) {
+      this->months.back().lines[line] += n;
+      this->dirty = true;
+    }
+  }
   // A monthly cost (research, conservation, marketing funding), spread
   // over the month's days as they pass
   void setMonthlyCost(Line line, int key, double perMonth);

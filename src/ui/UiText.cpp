@@ -47,6 +47,16 @@ void UiText::beginEdit() {
     s_editing->endEdit(true);
   s_editing = this;
   this->before_edit = this->text_string;
+  // (keys already held when it opened - dragging a fence, the camera - aren't
+  // typed in: typing counts once they're let go, or after a moment)
+  this->edit_started = SDL_GetTicks();
+  this->held_at_start = false;
+  {
+    int n = 0;
+    const Uint8 *keys = SDL_GetKeyboardState(&n);
+    for (int k = 0; k < n && !this->held_at_start; k++)
+      this->held_at_start = keys[k] != 0;
+  }
   if (this->onBeginEdit)
     this->setText(this->onBeginEdit());
   SDL_StartTextInput();
@@ -133,6 +143,9 @@ UiAction UiText::handleInputs(std::vector<Input> &inputs) {
       } else if (s_editing != this) {
         continue;
 
+      } else if (input.event == InputEvent::TEXT_INPUT && this->held_at_start &&
+                 SDL_GetTicks() - this->edit_started < 400) {
+        continue;
       } else if (input.event == InputEvent::TEXT_INPUT) {
         std::string add;
         for (const char *c = input.text; *c; c++)
@@ -223,6 +236,22 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
   // border: the text sits that far inside its box on every side (the HUD's
   // date and money use 2; measured 2 px lower than without it)
   int border = this->ini_reader->getInt(this->name, "border", 0);
+  if (this->input_box) {
+    int lineH = resource_manager->getFontLineHeight(font, ini_reader->getInt(name, "fontsize", 0));
+    SDL_Rect box = {dest_rect.x - 3, dest_rect.y - 2, dest_rect.w + 6, std::max(dest_rect.h, lineH) + 4};
+    SDL_SetRenderDrawColor(renderer, 30, 30, 18, 255);
+    SDL_RenderFillRect(renderer, &box);
+    // (sunken: dark top and left, light bottom and right, a gold edge)
+    SDL_SetRenderDrawColor(renderer, 12, 12, 6, 255);
+    SDL_RenderDrawLine(renderer, box.x, box.y, box.x + box.w - 1, box.y);
+    SDL_RenderDrawLine(renderer, box.x, box.y, box.x, box.y + box.h - 1);
+    SDL_SetRenderDrawColor(renderer, 150, 140, 90, 255);
+    SDL_RenderDrawLine(renderer, box.x, box.y + box.h - 1, box.x + box.w - 1, box.y + box.h - 1);
+    SDL_RenderDrawLine(renderer, box.x + box.w - 1, box.y, box.x + box.w - 1, box.y + box.h - 1);
+    SDL_Rect edge = {box.x - 1, box.y - 1, box.w + 2, box.h + 2};
+    SDL_SetRenderDrawColor(renderer, 255, 186, 16, 255);
+    SDL_RenderDrawRect(renderer, &edge);
+  }
   if (border > 0) {
     dest_rect.x += border;
     dest_rect.y += border;

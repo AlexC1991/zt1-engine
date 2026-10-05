@@ -1,20 +1,60 @@
 # ZT1-Engine
 
-ZT1-Engine is an open source engine for Zoo Tycoon 1 that is still very much a work in progress.
+An open source engine for **Zoo Tycoon 1 (Complete Collection)**, in the spirit of OpenRCT2: the original game is the spec. Behaviour is checked side by side against the original running, and the exact rules (animal happiness, guest needs, zoo rating, research, escapes, predators and more) are recovered from `zoo.exe` rather than guessed. You need your own copy of Zoo Tycoon; the engine reads its files and ships none of its art or sound.
 
-## Current Features
+> **Status:** a playable base-game **freeform** zoo, being polished against the original before moving on to Marine Mania and Dinosaur Digs. Expect rough edges, and please report anything that differs from the original.
 
-- ✅ Read `zoo.ini` configuration
-- ✅ Display the loading screen
-- ✅ Map resources from ZTD files
-- ✅ Map strings from lang*.dll files
-- ✅ Load and play intro music
-- ✅ Display the main menu with animations
-- ✅ Scenario selection screen with list population
-- ✅ Freeform map selection screen with list population
-- ✅ Dynamic scenario/map descriptions loaded from game files
-- ✅ Scrollable list boxes with mouse wheel support
-- ✅ Credits screen
+## Screenshots
+
+| | |
+|---|---|
+| ![Marine Mania tanks of four wall types](docs/screenshots/tanks.jpg) | ![The same tanks from another side](docs/screenshots/tanks_rotated.jpg) |
+| Tanks: four wall types, raised, with water, ripples and divers' platforms | The view turned: every tank, wall and ladder sorts correctly |
+| ![A lioness catching a zebra](docs/screenshots/lion_hunt.jpg) | ![A gazelle jumping its fence](docs/screenshots/gazelle_jump.jpg) |
+| Predators hunt the prey they list (the original's fight cloud) | Escapes: jumpers jump, climbers climb, bashers break the fence |
+| ![Guests walking the zoo](docs/screenshots/guests.jpg) | ![Raised walkways and stairs](docs/screenshots/walkways.jpg) |
+| Guests, keepers and the zoo at work | Raised walkways with stairs (an optional addition) |
+| ![The Zoo Status finances](docs/screenshots/zoo_status.jpg) | ![The research panel](docs/screenshots/research.jpg) |
+| The original's panels: Zoo Status, finances, graphs, awards | Research and conservation programs |
+
+## What's usable now
+
+The base game's freeform mode is the focus, and most of it works as in the original:
+
+- **Menus and screens:** loading screen, main menu, freeform and scenario selection with the original descriptions, credits, the in-game HUD and its panels, tooltips, the message list.
+- **Saving and loading:** Save Game / Load Game (the original's "Save a zoo..." dialogs) and Continue Saved Game. Saves keep the whole zoo, the view and the way it's turned. (Our own format: the original's `.zoo` saves aren't read yet.)
+- **Building:** terraforming (raise, lower, smooth, paint), paths, every fence type and its gates, exhibits and their names, scenery, foliage, rocks, buildings and shops (paintable), shelters and toys, all rotatable; the bulldozer and undo.
+- **Animals:** adopting and selling, the original's behaviour sets and animations, eating, drinking, sleeping, shelters and toys, swimming, exhibit suitability and happiness worked out as `zoo.exe` does, breeding, illness, old age.
+- **Escapes and predators:** animals get out over or through fences they can jump, climb or break, and through broken or missing pieces. Loose meat-eaters go after guests, guests flee, and keepers dart and crate them. In exhibits, predators hunt the animals they list as prey.
+- **Guests:** arriving by the zoo's rating, their needs (hunger, thirst, bathrooms, energy), shops and buildings, tours, donations, thoughts, litter, fleeing escaped animals.
+- **Staff:** zookeepers (feeding, cleaning, healing, darting), maintenance workers (litter, trash cans, fence repair), tour guides; hiring, firing and duties.
+- **The zoo's business:** the zoo rating as the original works it out, admissions, marketing, finances, graphs, research and conservation programs, freeform goals and awards.
+- **Marine Mania tanks** (in progress): every tank wall type, raising and lowering the walls, filling and draining, salt and fresh water, filters, the water's ripples and waves.
+- **Sound:** music, ambience, the crowd, guests, animals and buildings.
+
+### Additions beyond the original
+
+Every change from the original is a switch; switched off, the game does what the original does. They're listed and flipped in the in-game dev console (`features`, `set <name> on|off`):
+
+| Switch | What it does |
+|---|---|
+| `allUnlocked` | every item available in freeform from day one |
+| `fenceModes` / `pathModes` | fence and path drags that bend once; Tab cycles the shape |
+| `elevatedPaths` | raised walkways and stairs, built from the original's path art |
+| `staffPaths` / `smoothRoutes` | staff keep to paths; walkers take straighter routes |
+| `mapTooltips` | hints over the map, not only on buttons |
+| `hotkeys` | Esc / right-click put tools away, Ctrl+Z undoes, Q/E rotate |
+
+Also: a resizable window at any size with the UI scaled cleanly, and optional GPU FSR upscaling when zoomed in.
+
+## Roadmap
+
+1. **Base Zoo Tycoon freeform, one to one with the original.** Nearly there: now polishing the details players notice.
+2. **Marine Mania:** tanks (in progress), marine animals, show tanks and shows, marine specialists.
+3. **Dinosaur Digs:** dinosaurs, the Dinosaur Recovery Team, rampages and fence testing.
+4. **Scenarios:** every scenario's goals and events.
+5. **The original's `.zoo` saves:** loading them.
+6. **An options menu** for the additions; then **Linux and macOS**.
 
 ## Platforms
 
@@ -31,15 +71,15 @@ Future planned support:
 
 - **Windows 10/11** (64-bit)
 - **Python 3.8+** (for build scripts)
-- **Visual Studio 2022** with C++ Desktop Development workload
+- **Visual Studio 2022** (or newer) with C++ Desktop Development workload
 - **CMake 3.16+**
-- **Zoo Tycoon 1** game files (original game required)
+- **Zoo Tycoon 1** game files (the original game is required; the Complete Collection for Marine Mania and Dinosaur Digs content)
 
 ### Quick Build (Windows)
 
 1. Clone the repository:
 ```bash
-git clone --recurse-submodules --remote-submodules https://github.com/openztcc/zt1-engine.git
+git clone --recurse-submodules --remote-submodules https://github.com/AlexC1991/zt1-engine.git
 cd zt1-engine
 ```
 
@@ -77,25 +117,33 @@ cd build/Release
 zt1-engine.exe
 ```
 
+Saved zoos go to `Documents\zt1-engine\Saved Games`, snapshots to `Documents\zt1-engine\screenshots`.
+
+### Testing
+
+`zt1-engine.exe --panel-shots <folder>` runs the test suite: it plays a freeform zoo by itself, checks over 230 behaviours against what the original does, and saves a screenshot of each step, with the results in `<folder>/timings.txt`. Switches for reproducing problems:
+
+- `ZT_FLAT_LAB=1` makes the zoo one level of plain grass to test on
+- `ZT_TANK_LAB=<wall type>,<wall type>` builds two tanks and shoots them at four heights from all four sides
+- `ZT_VIEW_SAVE=<file.zt1save>` loads a saved zoo and shoots it from all four sides
+
 ## Project Structure
 
 ```
 zt1-engine/
 ├── src/                    # C++ source code
+│   └── ui/                 # The original's UI layouts and widgets
+├── docs/                   # File formats, findings, screenshots
 ├── platform/               # Platform-specific code
 ├── vendor/                 # Third-party libraries
 ├── engine-build-resources/ # Build system and patches
-│   ├── patches/           # Modular source patches
-│   └── build_all.py       # Main build orchestrator
 ├── fonts/                  # Font files
 └── BUILD_ENGINE.bat        # Windows build launcher
 ```
 
 ## Contributing
 
-Please do not use this unless you want to help make an open source engine for Zoo Tycoon a reality. This is very far from playable.
-
-Contributions welcome! The patch system in `engine-build-resources/patches/` makes it easy to add new features modularly.
+Contributions and bug reports are welcome. The most useful report is a difference from the original game: what you did, what the original does and what the engine does, with screenshots or a saved zoo.
 
 ## License
 

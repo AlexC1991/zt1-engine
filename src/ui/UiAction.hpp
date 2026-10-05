@@ -8,6 +8,8 @@ enum class UiAction {
     STARTUP_ZOO_ITEMS=35,
     STARTUP_PLAY_FREEFORM=39,
     STARTUP_CREDITS=40,
+    STARTUP_LOAD_GAME=7112,     // "Load Saved Game"
+    STARTUP_CONTINUE_GAME=7113, // "Continue Saved Game" (the latest save)
     SCENARIO_BACK_TO_MAIN_MENU,
     
     // [PATCH] List selection actions
@@ -31,6 +33,8 @@ enum class UiAction {
     HUD_PLAY = 1072,
 
     // The game menu's File Options page (ui/gameopt1.lyt button ids)
+    GAME_LOAD = 1501,
+    GAME_SAVE = 1502,
     GAME_MAIN_MENU = 1503,
     GAME_EXIT = 1504,
 };

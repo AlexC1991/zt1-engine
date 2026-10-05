@@ -3,6 +3,7 @@
 
 #include <random>
 #include <string>
+#include <functional>
 #include <vector>
 
 #include <SDL2/SDL.h>
@@ -39,8 +40,9 @@ public:
   // One at a place, going a way (tiles, tiles a second) for a while
   void spawnAt(int kind, float x, float y, float vx, float vy, float life) {
     if (kind >= 0 && kind < static_cast<int>(this->kinds.size()))
-      this->flyers.push_back({kind, x, y, vx, vy, 0.0f, life});
+      this->flyers.push_back({kind, x, y, vx, vy, 0.0f, life, 0.0f, -1});
   }
+  std::function<bool(float x, float y, float &dx, float &dy)> viewOffset;
   int kindIndex(const std::string &key) const {
     for (size_t i = 0; i < this->kinds.size(); i++)
       if (this->kinds[i].key == key)
@@ -55,6 +57,11 @@ private:
     int frequency = 0;  // cFrequency: how often, against the others
     bool blackShadow = true;
     Animation *idle = nullptr, *shadow = nullptr;
+    // Its call (cSoundName: hawk.cfg etc., a 1 in chance try a second),
+    // or a loop while it flies (cSoundLoop: the biplane, the witch)
+    int chance = 0;
+    bool loop = false;
+    std::vector<std::pair<std::string, int>> calls;
   };
   struct Flyer {
     int kind = 0;
@@ -62,6 +69,8 @@ private:
     float vx = 0, vy = 0; // tiles a second
     float age = 0;
     float life = 0;       // seconds until it's off the map
+    float soundClock = 0;
+    int channel = -1;
   };
   std::vector<Kind> kinds;
   std::vector<Flyer> flyers;

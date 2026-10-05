@@ -62,11 +62,17 @@ void WorldIndex::rebuild(const WorldMap &map, const PlacedObjects &objects, cons
       std::swap(fx, fy);
     float hx = fx / 4.0f, hy = fy / 4.0f; // half the footprint, in tiles
     What what = o.className == "building" ? What::Building : What::Object;
-    for (int y = static_cast<int>(std::floor(o.y - hy)); y <= static_cast<int>(o.y + hy); y++)
-      for (int x = static_cast<int>(std::floor(o.x - hx)); x <= static_cast<int>(o.x + hx); x++)
-        if (x + 0.5f > o.x - hx && x + 0.5f < o.x + hx && y + 0.5f > o.y - hy &&
-            y + 0.5f < o.y + hy)
-          this->addBlock(x, y, 1, 1, what);
+    // The quarter-tiles it covers (zoo.exe keeps four object slots a tile:
+    // a quarter is taken when its middle is under the footprint), and a
+    // tile with any taken is blocked - a one-tile rock on a tile corner
+    // takes a quarter of four tiles (by tile middles alone it blocked
+    // nothing, and animals walked into it); a small one, one quarter
+    for (int qy = static_cast<int>(std::floor((o.y - hy) * 2)); qy <= static_cast<int>(std::floor((o.y + hy) * 2)); qy++)
+      for (int qx = static_cast<int>(std::floor((o.x - hx) * 2)); qx <= static_cast<int>(std::floor((o.x + hx) * 2)); qx++) {
+        float mx = qx * 0.5f + 0.25f, my = qy * 0.5f + 0.25f;
+        if (mx > o.x - hx && mx < o.x + hx && my > o.y - hy && my < o.y + hy)
+          this->addBlock(static_cast<int>(std::floor(mx)), static_cast<int>(std::floor(my)), 1, 1, what);
+      }
   }
   // Tank filters
   const Fences::FilterType &k = fences.filterType();

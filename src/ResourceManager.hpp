@@ -52,7 +52,7 @@ public:
                              const std::string &raw_name,
                              const std::string &pal_name);
 
-  SDL_Cursor *getCursor(uint32_t cursor_id);
+  SDL_Cursor *getCursor(uint32_t cursor_id, int hotX = 0, int hotY = 0);
   Mix_Music *getMusic(const std::string &file_name);
   IniReader *getIniReader(const std::string &file_name);
   Animation *getAnimation(const std::string &file_name);
@@ -71,6 +71,15 @@ public:
   std::string getString(uint32_t string_id);
 
   bool hasResource(const std::string &resource_name_raw);
+  // A file's bytes (malloc'd: free them), or null
+  void *getFileBytes(const std::string &name, int *size);
+  // The menus' music (sounds/mainmenu.wav, looped): started again, or
+  // faded out as a game starts (the original takes about 6 s)
+  void playMenuMusic() {
+    if (this->intro_music && !Mix_PlayingMusic())
+      Mix_PlayMusic(this->intro_music, -1);
+  }
+  void fadeMenuMusic() { Mix_FadeOutMusic(6000); }
 
   // Every resource name (lower case, '/' separated) that starts with
   // prefix and ends with suffix

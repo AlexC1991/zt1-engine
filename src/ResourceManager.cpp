@@ -726,6 +726,14 @@ SDL_Texture *ResourceManager::getZt1Texture(SDL_Renderer *renderer,
   return t;
 }
 
+void *ResourceManager::getFileBytes(const std::string &name_raw, int *size) {
+  std::string name = fixDoubleName(name_raw);
+  std::string loc = getResourceLocation(name);
+  if (loc.empty())
+    return nullptr;
+  return ZtdFile::getFileContent(loc, findActualResourceKey(name), size);
+}
+
 Mix_Music *ResourceManager::getMusic(const std::string &name_raw) {
   std::string name = fixDoubleName(name_raw);
   std::string actual_key = findActualResourceKey(name);
@@ -868,13 +876,13 @@ Animation *ResourceManager::getAnimation(const std::string &name_raw) {
   return nullptr;
 }
 
-SDL_Cursor *ResourceManager::getCursor(uint32_t id) {
+SDL_Cursor *ResourceManager::getCursor(uint32_t id, int hotX, int hotY) {
   try {
     PeFile pe(config->getResDllName());
     SDL_Surface *s = pe.getCursor(id);
     if (!s)
       return nullptr;
-    SDL_Cursor *c = SDL_CreateColorCursor(s, 0, 0);
+    SDL_Cursor *c = SDL_CreateColorCursor(s, hotX, hotY);
     SDL_FreeSurface(s);
     return c;
   } catch (...) {

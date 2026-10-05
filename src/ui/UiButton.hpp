@@ -29,7 +29,19 @@ public:
   // (a choice in a radio set, e.g. a panel's tabs)
   bool isToggle() const { return (this->state_flags & (2048 | 4096)) != 0; }
   bool isToggledOn() const { return this->toggled_on; }
+  // A colour shown inside the button's frame (the paint tab's swatches,
+  // iconfirst=1: the colour drawn first, the frame over it); alpha 0 none
+  void setFillColor(SDL_Color c) { this->fill_color = c; }
+  // A picture drawn inside the frame (iconfirst=1: under it), centred
+  void setIcon(Animation *icon) { this->icon = icon; }
   void setToggledOn(bool on) { this->toggled_on = on; }
+  // Made a latching toggle by the game (the layout's state=2048 hidden)
+  void setToggle(bool on) {
+    if (on)
+      this->state_flags |= 2048;
+    else
+      this->state_flags &= ~2048;
+  }
 
   // Buttons of a UIRadioSet: turning one on turns the others off. They
   // start off unless the layout selects one (state 8, e.g. a panel's first
@@ -50,6 +62,10 @@ public:
   // itself, like the terraform brush's + and -)
   std::function<void()> onClick;
 
+  // Played as any button is pressed (the original's uiclick.wav)
+  static std::function<void()> clickSound;
+  // A button whose layout lists several animations: show that one
+  void chooseAnimation(size_t index);
   // The layout's animation= and stringData= (e.g. a tab's category)
   std::string getAnimationPath() const {
     return this->ini_reader->get(this->name, "animation");
@@ -87,6 +103,8 @@ private:
   Uint32 press_time = 0, last_repeat = 0;
   static constexpr Uint32 kRepeatDelay = 400, kRepeatInterval = 100;
   bool toggled_on = true;
+  SDL_Color fill_color = {0, 0, 0, 0};
+  Animation *icon = nullptr;
   std::shared_ptr<std::vector<UiButton *>> radio_group;
   std::string text_string = "";
   SDL_Texture *text = nullptr;

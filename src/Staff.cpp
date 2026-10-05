@@ -1,4 +1,6 @@
 #include "Staff.hpp"
+#include "Guests.hpp"
+#include "PlacedObjects.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -7,6 +9,8 @@
 #include "IniReader.hpp"
 #include "Pathfinder.hpp"
 #include "Features.hpp"
+#include "Animals.hpp"
+#include "Sound.hpp"
 #include "ResourceManager.hpp"
 #include "Utils.hpp"
 #include "WorldMap.hpp"
@@ -17,6 +21,10 @@ constexpr float kIdleSeconds = 2.0f;   // fPlayTime(idle,2)
 constexpr int kWanderRadius = 5;       // tiles, for a walk about
 // Lang strings: what they're doing
 constexpr int kMonitoring = 10304, kGuideMonitoring = 10402, kMaintMonitoring = 10506;
+constexpr int kGoingToExhibit = 10400, kSpeaking = 10401; // a tour guide's
+constexpr int kGoingToCan = 10502, kEmptyingCan = 10503;
+constexpr int kGoingToCleanUp = 10504, kCleaningUp = 10505; // (dung outside exhibits)
+constexpr double kZooDooRecycling = 50.0; // economy.cfg cZooDooRecyclingAmount
 constexpr int kGoingToFix = 10509, kFixing = 10510;
 constexpr int kGoingToFilter = 10515, kServicing = 10516;
 constexpr int kWaitingAtBase = 10316;
@@ -64,6 +72,16 @@ void Staff::loadTypes(ResourceManager *rm) {
       t.nameId = ai->getInt(ints, "cnameid", 0);
       t.salary = ai->getInt(ints, "cpurchasecost", ai->getInt(ints, "cmonthlycost", 0));
       t.dutiesText = ai->getInt(ints, "cdutiestextid", 0);
+      t.slowRate = ai->getInt(ints, "cslowrate", 33);
+      t.speed = t.slowRate / 60.0f;
+      if (t.kind == Kind::Guide) {
+        t.tourBonus = ai->getInt(ints, "ctourguidebonus", 30);
+        t.followChance = ai->getInt(ints, "cfollowchance", 60);
+        t.maxGroup = ai->getInt(ints, "cmaxgroupsize", 15);
+        t.crowdCheck = std::max(1, ai->getInt(ints, "ccrowdcheck", 5));
+        t.crowdRadius = ai->getInt(ints, "ccrowdradius", 1);
+        t.informTime = ai->getInt(ints, "cinformguesttime", 5);
+      }
       // The subtypes it comes in
       std::vector<std::string> subs;
       for (const auto &s : cfg->getSection(kv.first + "/subtypes"))
@@ -104,6 +122,13 @@ void Staff::loadTypes(ResourceManager *rm) {
       // Colour replacement: hair and skin palettes swapped in
       t.fullPal = Utils::string_to_lower(ai->get("cr_color", "fullpal"));
       t.hair = ai->getList("cr_hair", "pal");
+      for (const auto &kv : ai->getSection("sounds")) {
+        std::string v = kv.second;
+        size_t semi = v.find(';');
+        t.sounds[Utils::string_to_lower(kv.first)] = {
+            Utils::string_to_lower(v.substr(0, semi)),
+            semi == std::string::npos ? 0 : std::atoi(v.substr(semi + 1).c_str())};
+      }
       t.skin = ai->getList("cr_skin", "pal");
       delete ai;
       if (t.kind == Kind::Helicopter) {
@@ -629,7 +654,24 @@ void Staff::wander(Member &m, const WorldMap &map, const Fences &fences) {
   findPath(m, gx, gy, map, fences, gx + 0.5f, gy + 0.5f);
 }
 
+// The sound its work plays (fPlayWithSound in its behaviour sets: sweep,
+// fix, feed_herb, feed_carn, rake), once a go, heard from where it is
+void Staff::workSound(const Member &m, const std::string &anim) const {
+  static const std::map<std::string, std::string> keyOf = {
+      {"sweep", "sweep"}, {"fix", "fix"}, {"feedh", "feed_herb"}, {"feedc", "feed_carn"},
+      {"clean", "rake"}, {"bag", "sweep"}, {"heal", "heal_animal"}, {"empty", "empty_trash"}};
+  auto k = keyOf.find(anim);
+  if (k == keyOf.end())
+    return;
+  const Type &t = this->typeList[m.type];
+  auto s = t.sounds.find(k->second);
+  float dx = 0, dy = 0;
+  if (s != t.sounds.end() && this->viewOffset && this->viewOffset(m.x, m.y, dx, dy))
+    Sound::get().playAt(s->second.first, dx, dy, s->second.second);
+}
+
 void Staff::play(Member &m, const std::string &anim, int times) {
+  workSound(m, anim);
   m.anim = anim;
   m.animTime = 0;
   m.playsLeft = times;
@@ -640,8 +682,13 @@ void Staff::play(Member &m, const std::string &anim, int times) {
 // the nearest it can reach
 bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
   const Type &t = this->typeList[m.type];
+  // Any zookeeper goes after an escaped animal first (zoo.exe 0x423dae)
+  if (t.kind == Kind::Keeper && catchWork(m, map, fences))
+    return true;
   if (t.kind == Kind::Keeper || t.kind == Kind::Scientist || t.kind == Kind::Trainer)
     return keeperWork(m, map, fences);
+  if (t.kind == Kind::Guide)
+    return tourWork(m, map, fences);
   if (t.kind != Kind::Maint)
     return false;
   struct Spot {
@@ -692,6 +739,55 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
         }
     }
   }
+  // Trash cans over half full (Empty trash): the nearest, give or take
+  // (zoo.exe 0x61b146: dx^2 + dy^2 + rand(60) - fill, lowest)
+  if (m.duties[0] && this->objects) {
+    const auto &objs = this->objects->objects();
+    int bestCan = -1;
+    float bestScore = 1e30f;
+    for (size_t i = 0; i < objs.size(); i++) {
+      const PlacedObjects::Object &o = objs[i];
+      if (o.typeName != "trshcan" || o.fill <= 12)
+        continue;
+      bool taken = false;
+      for (const Member &w : this->list)
+        taken = taken || (w.id != m.id && w.job == Job::Trash && w.jobItem == o.id);
+      if (taken)
+        continue;
+      float dx = o.x - m.x, dy = o.y - m.y;
+      float score = dx * dx + dy * dy + std::uniform_int_distribution<int>(0, 59)(this->rng) - o.fill;
+      if (score < bestScore) {
+        bestScore = score;
+        bestCan = static_cast<int>(i);
+      }
+    }
+    if (bestCan >= 0) {
+      const PlacedObjects::Object &o = objs[bestCan];
+      int cx = static_cast<int>(std::floor(o.x)), cy = static_cast<int>(std::floor(o.y));
+      const int d[5][2] = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+      for (auto &dd : d)
+        if (walkable(cx + dd[0], cy + dd[1], map, fences) &&
+            findPath(m, cx + dd[0], cy + dd[1], map, fences, cx + dd[0] + 0.5f, cy + dd[1] + 0.5f)) {
+          m.job = Job::Trash;
+          m.jobItem = o.id;
+          m.dutyId = kGoingToCan;
+          return true;
+        }
+    }
+  }
+  // Dung on the grounds (a loose animal's), bagged up: "Going to clean up"
+  if (m.duties[1] && this->items)
+    for (int id : this->items->ofKind(ZooItems::Kind::Dung, -1)) {
+      const ZooItems::Item *it = this->items->item(id);
+      if (it->exhibit >= 0)
+        continue;
+      bool taken = false;
+      for (const Member &o : this->list)
+        taken = taken || (o.id != m.id && o.job == Job::Dung && o.jobItem == id);
+      int tx = static_cast<int>(std::floor(it->x)), ty = static_cast<int>(std::floor(it->y));
+      if (!taken && walkable(tx, ty, map, fences))
+        spots.push_back({near(tx, ty), Job::Dung, {false, -1, -1}, id, tx, ty});
+    }
   // Litter on the grounds (Sweep and clean zoo)
   if (m.duties[1] && this->items)
     for (int id : this->items->ofKind(ZooItems::Kind::Litter, -1)) {
@@ -707,12 +803,12 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
     }
   std::sort(spots.begin(), spots.end(), [](const Spot &a, const Spot &b) { return a.dist < b.dist; });
   for (const Spot &s : spots) {
-    if (s.job == Job::Litter) {
+    if (s.job == Job::Litter || s.job == Job::Dung) {
       const ZooItems::Item *it = this->items->item(s.filter);
       if (it && findPath(m, s.tx, s.ty, map, fences, it->x, it->y)) {
-        m.job = Job::Litter;
+        m.job = s.job;
         m.jobItem = s.filter;
-        m.dutyId = kGoingToSweep;
+        m.dutyId = s.job == Job::Dung ? kGoingToCleanUp : kGoingToSweep;
         return true;
       }
       continue;
@@ -754,11 +850,45 @@ void Staff::face(Member &m, float x, float y) {
   }
 }
 
+std::string Staff::foodFor(int exhibit, const Fences &fences, bool &carnivore) const {
+  const Fences::Exhibit *ex = fences.exhibit(exhibit);
+  carnivore = ex && ex->testCarnivore;
+  if (!ex)
+    return "herbchow";
+  // Real animals: the first one's keeper food (food.cfg's order)
+  if (this->animals)
+    for (const Animals::Member &a : this->animals->members())
+      if (a.exhibit == exhibit) {
+        static const char *chows[6] = {"herbchow", "carnchow", "fruichow", "bambchow", "graschow", "fishchow"};
+        int k = std::clamp(this->animals->types()[a.type].keeperFood, 0, 5);
+        carnivore = k == 1;
+        return chows[k];
+      }
+  return ex->tank ? "fish" : ex->testDino ? (ex->testCarnivore ? "dinocarn" : "dinogras")
+                                          : (ex->testCarnivore ? "carnchow" : "herbchow");
+}
+
 bool Staff::needsVisit(const Member &m, int exhibit, const Fences &fences) const {
   const Fences::Exhibit *ex = fences.exhibit(exhibit);
-  if (!ex || ex->testAnimals <= 0 || !this->items)
+  if (!ex || ex->animalCount() <= 0 || !this->items)
     return false;
-  bool hungry = this->items->foodIn(exhibit) < ex->testAnimals * ZooItems::kFoodPerAnimal * 0.5f;
+  // Real animals (zoo.exe 0x49d202): one to heal (health 85% or less), one
+  // hungry with no food, any poo, or not visited for a while
+  if (ex->animals > 0 && this->animals) {
+    bool heal = false, starving = false;
+    float food = this->items->foodIn(exhibit);
+    for (const Animals::Member &a : this->animals->members())
+      if (a.exhibit == exhibit && !a.boxed) {
+        heal = heal || this->animals->needsHealing(a);
+        starving = starving || (a.hunger >= this->animals->types()[a.type].hungerThreshold && food <= 0);
+      }
+    bool poo = !this->items->ofKind(ZooItems::Kind::Dung, exhibit).empty();
+    auto last = this->lastVisit.find(exhibit);
+    bool due = last == this->lastVisit.end() || this->clock - last->second > kRevisitSeconds;
+    return heal || starving || poo || (due && food <= 0);
+  }
+  float low = ex->animalCount() * ZooItems::kFoodPerAnimal * 0.5f;
+  bool hungry = this->items->foodIn(exhibit) < low;
   if (ex->tank)
     return hungry || (ex->water > 0 && ex->purity < 90.0f);
   (void)m;
@@ -770,7 +900,30 @@ bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences) {
   m.exhibits.erase(std::remove_if(m.exhibits.begin(), m.exhibits.end(),
                                   [&](int ex) { return !fences.exhibit(ex); }),
                    m.exhibits.end());
-  for (int ex : m.exhibits) {
+  // Its own exhibits; unassigned, every exhibit it can look after (as the
+  // original: "Going to Exhibit 2" with no assignment), nearest first
+  std::vector<int> list = m.exhibits;
+  if (list.empty()) {
+    const Type &t = this->typeList[m.type];
+    for (const Fences::Exhibit &e : fences.exhibits()) {
+      if (!e.named || e.animalCount() <= 0)
+        continue;
+      bool fits = t.kind == Kind::Trainer ? e.tank
+                  : t.kind == Kind::Scientist ? (!e.tank && e.animals == 0 && e.testDino)
+                                              : (!e.tank && (e.animals > 0 || !e.testDino));
+      if (fits)
+        list.push_back(e.id);
+    }
+    auto dist = [&](int id) {
+      const Fences::Exhibit *e = fences.exhibit(id);
+      float best = 1e9f;
+      for (auto [x, y] : e->tiles)
+        best = std::min(best, std::fabs(x + 0.5f - m.x) + std::fabs(y + 0.5f - m.y));
+      return best;
+    };
+    std::sort(list.begin(), list.end(), [&](int a, int b) { return dist(a) < dist(b); });
+  }
+  for (int ex : list) {
     if (!needsVisit(m, ex, fences))
       continue;
     // Not one another keeper is on
@@ -828,10 +981,38 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     done();
     return;
   }
-  bool hungry = this->items->foodIn(m.visit) < ex->testAnimals * ZooItems::kFoodPerAnimal * 0.5f;
-  std::string food = ex->tank ? "fish"
-                     : ex->testDino ? (ex->testCarnivore ? "dinocarn" : "dinogras")
-                                    : (ex->testCarnivore ? "carnchow" : "herbchow");
+  // Food down when what its animals need (cNeededFood each) is more than
+  // what's there and there's none of it left (one pile: zoo.exe 0x507ff8)
+  bool hungry;
+  if (ex->animals > 0 && this->animals) {
+    float need = 0;
+    for (const Animals::Member &a : this->animals->members())
+      if (a.exhibit == m.visit && !a.boxed)
+        need += static_cast<float>(this->animals->types()[a.type].neededFood);
+    float have = this->items->foodIn(m.visit);
+    hungry = have <= 0 && need - have > 0;
+  } else {
+    hungry = this->items->foodIn(m.visit) < ex->animalCount() * ZooItems::kFoodPerAnimal * 0.5f;
+  }
+  bool carnivore = false;
+  std::string food = foodFor(m.visit, fences, carnivore);
+  // What a pile costs (its cPurchaseCost), paid as it goes down
+  auto buy = [&] {
+    auto it = this->chowPrice.find(food);
+    if (it == this->chowPrice.end()) {
+      int price = 0;
+      if (this->rm)
+        if (IniReader *ai = this->rm->getIniReader("scenery/other/" + food + ".ai")) {
+          price = ai->getInt("characteristics/integers", "cpurchasecost", 0);
+          delete ai;
+        }
+      it = this->chowPrice.emplace(food, price).first;
+    }
+    double price = this->foodPrice ? this->foodPrice(food, it->second) : it->second;
+    this->upkeep += price;
+    ex->upkeepNow += price;
+    ex->upkeepTotal += price;
+  };
   // A tank, from the platform
   if (ex->tank) {
     switch (m.phase) {
@@ -846,7 +1027,8 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
       [[fallthrough]];
     case 1: // (food thrown in)
       if (m.phase == 1) {
-        this->items->addFood(m.visit, m.inX, m.inY, ex->testAnimals, food);
+        this->items->addFood(m.visit, m.inX, m.inY, ex->animalCount(), food);
+        buy();
       }
       if (ex->water > 0 && ex->purity < 100.0f) {
         m.phase = 2;
@@ -873,28 +1055,104 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     m.access = m.visit;
     m.phase = 1;
     m.dutyId = kEntering;
+    if (this->animals)
+      this->animals->keeperArrives(m.visit);
     if (!findPath(m, static_cast<int>(m.inX), static_cast<int>(m.inY), map, fences, m.inX, m.inY))
       done();
     return;
-  case 1: // just inside: food, if it's low
+  case 1: // just inside: food, if it's low - to a free tile within 3 of
+    // it, at random (zoo.exe 0x4e7a7d: nothing on it, not the gate's own
+    // tile, reachable), else the nearest free one
     if (hungry) {
-      m.phase = 2;
-      m.dutyId = kPlacingFood;
-      m.dutyArg.clear();
-      face(m, m.inX + (m.inX - m.outX), m.inY + (m.inY - m.outY));
-      play(m, ex->testCarnivore ? "feedc" : "feedh", 3);
-      return;
+      int kx = static_cast<int>(std::floor(m.x)), ky = static_cast<int>(std::floor(m.y));
+      int gx = static_cast<int>(std::floor(m.inX)), gy = static_cast<int>(std::floor(m.inY));
+      std::vector<std::pair<int, int>> near, all;
+      for (auto [x, y] : ex->tiles) {
+        if ((x == gx && y == gy) || !walkable(x, y, map, fences, m.visit))
+          continue;
+        bool taken = false;
+        for (int id : this->items->ofKind(ZooItems::Kind::Food, m.visit))
+          if (const ZooItems::Item *it = this->items->item(id))
+            taken = taken || (static_cast<int>(std::floor(it->x)) == x && static_cast<int>(std::floor(it->y)) == y);
+        for (int id : this->items->ofKind(ZooItems::Kind::Dung, m.visit))
+          if (const ZooItems::Item *it = this->items->item(id))
+            taken = taken || (static_cast<int>(std::floor(it->x)) == x && static_cast<int>(std::floor(it->y)) == y);
+        if (taken)
+          continue;
+        all.push_back({x, y});
+        if ((x - kx) * (x - kx) + (y - ky) * (y - ky) < 10)
+          near.push_back({x, y});
+      }
+      std::shuffle(near.begin(), near.end(), this->rng);
+      std::sort(all.begin(), all.end(), [&](const std::pair<int, int> &a, const std::pair<int, int> &b) {
+        return (a.first - kx) * (a.first - kx) + (a.second - ky) * (a.second - ky) <
+               (b.first - kx) * (b.first - kx) + (b.second - ky) * (b.second - ky);
+      });
+      near.insert(near.end(), all.begin(), all.end());
+      for (auto [x, y] : near) {
+        if (!findPath(m, x, y, map, fences, x + 0.5f, y + 0.5f))
+          continue;
+        m.dropX = x + 0.5f;
+        m.dropY = y + 0.5f;
+        m.phase = 9;
+        m.dutyId = kPlacingFood;
+        m.dutyArg.clear();
+        return;
+      }
     }
     m.phase = 3;
     visitStep(m, map, fences);
     return;
-  case 2: // food down, a step further in
-    this->items->addFood(m.visit, m.inX + (m.inX - m.outX) * 0.6f, m.inY + (m.inY - m.outY) * 0.6f,
-                         ex->testAnimals, food);
+  case 9: // at the spot: the food down (bFeedHerb / bFeedCarn)
+    m.phase = 2;
+    play(m, carnivore ? "feedc" : "feedh", 3);
+    return;
+  case 2: // food down where it stands
+    this->items->addFood(m.visit, m.dropX, m.dropY, ex->animalCount(), food);
+    buy();
     m.phase = 3;
     visitStep(m, map, fences);
     return;
-  case 3: { // dung to rake: the nearest pile
+  case 7: { // healed (bHeal): health full; its price's 20% charged
+    if (this->animals)
+      if (const Animals::Member *a = this->animals->member(m.jobAnimal)) {
+        double vet = this->animals->types()[a->type].cost * 0.2;
+        this->upkeep += vet;
+        ex->upkeepNow += vet;
+        ex->upkeepTotal += vet;
+        this->animals->heal(a->id);
+      }
+    m.jobAnimal = -1;
+    m.phase = 3;
+    visitStep(m, map, fences);
+    return;
+  }
+  case 8: // beside the one to heal
+    if (const Animals::Member *a = this->animals ? this->animals->member(m.jobAnimal) : nullptr)
+      face(m, a->x, a->y);
+    m.phase = 7;
+    m.dutyId = 10301; // "Healing animal"
+    play(m, "heal", 1);
+    return;
+  case 3: { // one to heal first, then dung to rake: the nearest pile
+    if (this->animals) {
+      const Animals::Member *sickest = nullptr;
+      for (const Animals::Member &a : this->animals->members())
+        if (a.exhibit == m.visit && !a.boxed && this->animals->needsHealing(a) &&
+            (!sickest || a.health < sickest->health))
+          sickest = &a;
+      if (sickest) {
+        m.jobAnimal = sickest->id;
+        m.phase = 8;
+        m.dutyId = 10301;
+        if (findPath(m, static_cast<int>(std::floor(sickest->x)), static_cast<int>(std::floor(sickest->y)), map,
+                     fences, sickest->x + 0.3f, sickest->y + 0.3f))
+          return;
+        m.phase = 7; // (beside it already)
+        visitStep(m, map, fences);
+        return;
+      }
+    }
     m.jobItem = -1;
     float best = 1e9f;
     for (int id : this->items->ofKind(ZooItems::Kind::Dung, m.visit)) {
@@ -932,15 +1190,136 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     play(m, t.kind == Kind::Scientist ? "clean" : "clean", 4);
     return;
   case 5: // raked
+    if (const ZooItems::Item *it = this->items->item(m.jobItem))
+      this->dungRecycled(it->x, it->y);
     this->items->remove(m.jobItem);
     m.jobItem = -1;
     m.phase = 3;
     visitStep(m, map, fences);
     return;
   default: // out
+    this->lastVisit[m.visit] = this->clock;
     done();
     return;
   }
+}
+
+// ----------------------------------------------------------------------------
+// Tour guides (zoo.exe 0x58ce7e): a trip to an exhibit - one of its
+// assigned ones at random, else any exhibit with animals at random - to
+// its nearest or a random viewing area (50/50); on the way, every
+// cCrowdCheck ticks, guests within cCrowdRadius may follow (cFollowChance,
+// +15 a man to a woman guide, +10 a woman to a man; cMaxGroupSize at most);
+// there with a group, two talks (speak, speak2: cInformGuestTime each), and
+// its followers' happiness up cTourGuideBonus
+// ----------------------------------------------------------------------------
+bool Staff::tourWork(Member &m, const WorldMap &map, Fences &fences) {
+  if (!this->guests)
+    return false;
+  std::vector<int> choices;
+  if (!m.exhibits.empty()) {
+    choices = m.exhibits;
+  } else {
+    for (const Fences::Exhibit &ex : fences.exhibits())
+      if (ex.named && !ex.tank && ex.animals > 0)
+        choices.push_back(ex.id);
+  }
+  if (choices.empty())
+    return false;
+  int pick = choices[std::uniform_int_distribution<size_t>(0, choices.size() - 1)(this->rng)];
+  std::vector<std::pair<int, int>> view = this->guests->viewingTiles(pick);
+  if (view.empty())
+    return false;
+  std::pair<int, int> spot = view[std::uniform_int_distribution<size_t>(0, view.size() - 1)(this->rng)];
+  if (std::uniform_int_distribution<int>(0, 1)(this->rng) == 0) {
+    float best = 1e30f;
+    for (auto [tx, ty] : view) {
+      float d = (tx + 0.5f - m.x) * (tx + 0.5f - m.x) + (ty + 0.5f - m.y) * (ty + 0.5f - m.y);
+      if (d < best) {
+        best = d;
+        spot = {tx, ty};
+      }
+    }
+  }
+  if (!findPath(m, spot.first, spot.second, map, fences, spot.first + 0.5f, spot.second + 0.5f))
+    return false;
+  // A new trip: the last group goes, a new one gathers
+  this->guests->releaseTour(m.id);
+  m.followers.clear();
+  m.job = Job::Tour;
+  m.visit = pick;
+  m.goalX = spot.first;
+  m.goalY = spot.second;
+  m.speaking = false;
+  m.dutyId = kGoingToExhibit;
+  const Fences::Exhibit *ex = fences.exhibit(pick);
+  m.dutyArg = ex ? ex->name : "";
+  m.crowdClock = static_cast<float>(std::uniform_int_distribution<int>(0, this->typeList[m.type].crowdCheck - 1)(this->rng));
+  this->gatherFollowers(m);
+  return true;
+}
+
+void Staff::gatherFollowers(Member &m) {
+  const Type &t = this->typeList[m.type];
+  if (!this->guests || static_cast<int>(m.followers.size()) >= t.maxGroup)
+    return;
+  int gx = static_cast<int>(std::floor(m.x)), gy = static_cast<int>(std::floor(m.y));
+  for (const Guests::Guest &g : this->guests->guests()) {
+    if (static_cast<int>(m.followers.size()) >= t.maxGroup)
+      break;
+    int x = static_cast<int>(std::floor(g.x)), y = static_cast<int>(std::floor(g.y));
+    if (std::abs(x - gx) > t.crowdRadius || std::abs(y - gy) > t.crowdRadius)
+      continue;
+    bool woman = this->guests->types()[g.type].female;
+    int chance = t.followChance + (m.female && !woman ? 15 : 0) + (!m.female && woman ? 10 : 0);
+    if (std::uniform_int_distribution<int>(0, 99)(this->rng) >= chance)
+      continue;
+    if (this->guests->joinTour(g.id, m.id, m.visit, m.goalX, m.goalY))
+      m.followers.push_back(g.id);
+  }
+}
+
+// Dung taken away: paid for (Recycling) if there's a compost anywhere, and
+// the nearest compost's takings (its Building Information) up its price
+void Staff::dungRecycled(float x, float y) {
+  if (!this->objects)
+    return;
+  PlacedObjects::Object *nearest = nullptr;
+  float best = 1e30f;
+  for (PlacedObjects::Object &o : this->objects->all()) {
+    if (o.typeName != "compost")
+      continue;
+    float d = std::fabs(o.x - x) + std::fabs(o.y - y);
+    if (d < best) {
+      best = d;
+      nearest = &o;
+    }
+  }
+  if (!nearest)
+    return;
+  nearest->income += std::max(0.0f, nearest->price);
+  nearest->visitorsNow++;
+  nearest->visitorsTotal++;
+  this->recycling += kZooDooRecycling;
+}
+
+bool Staff::guideSpeaking(int id) const {
+  for (const Member &m : this->list)
+    if (m.id == id)
+      return m.job == Job::Tour && m.speaking;
+  return false;
+}
+
+int Staff::guideBonusAt(const std::vector<std::pair<int, int>> &tiles) const {
+  for (const Member &m : this->list) {
+    const Type &t = this->typeList[m.type];
+    if (t.kind != Kind::Guide || m.id == this->carried)
+      continue;
+    std::pair<int, int> at = {static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y))};
+    if (std::find(tiles.begin(), tiles.end(), at) != tiles.end())
+      return t.tourBonus;
+  }
+  return 0;
 }
 
 int Staff::assign(int id, int exhibit, const Fences &fences) {
@@ -953,15 +1332,21 @@ int Staff::assign(int id, int exhibit, const Fences &fences) {
     if (!ex->tank)
       return 10328; // "Marine specialists can only be assigned to tank exhibits with marine animals."
   } else if (k == Kind::Scientist) {
-    if (ex->tank || (ex->testAnimals > 0 && !ex->testDino))
+    if (ex->tank || (ex->animals > 0 || (ex->testAnimals > 0 && !ex->testDino)))
       return 10324; // "Scientists can only be assigned to land exhibits with dinosaurs."
   } else if (k == Kind::Keeper) {
-    if (ex->tank || (ex->testAnimals > 0 && ex->testDino))
+    if (ex->tank || (ex->animals == 0 && ex->testAnimals > 0 && ex->testDino))
       return 10320; // "Zookeepers can only be assigned to land exhibits with zoo animals."
+  } else if (k == Kind::Guide) {
+    // (no checks for tour guides: zoo.exe 0x423e01)
+    if (std::find(m->exhibits.begin(), m->exhibits.end(), exhibit) == m->exhibits.end())
+      m->exhibits.push_back(exhibit);
+    m->workCheck = 0;
+    return 0;
   } else {
     return 0;
   }
-  if (ex->testAnimals <= 0)
+  if (ex->animalCount() <= 0)
     return 10329; // "Zoo staff cannot be assigned to empty exhibits."
   if (std::find(m->exhibits.begin(), m->exhibits.end(), exhibit) == m->exhibits.end())
     m->exhibits.push_back(exhibit);
@@ -978,6 +1363,91 @@ bool Staff::walkTo(int id, int x, int y, const WorldMap &map, const Fences &fenc
   m->walksLeft = 0;
   m->workCheck = 30.0f; // (not straight off to other work)
   return findPath(*m, x, y, map, fences, x + 0.5f, y + 0.5f);
+}
+
+// ----------------------------------------------------------------------------
+// Escaped animals (zoo.exe 0x50d05f, 0x50da26, 0x50d345): the nearest
+// unclaimed one, run to within 5 tiles (cWeaponRange), dart it ("Tranquilizing
+// %s", gun.wav), run to it and crate it where it lies ("Containing %s"); the
+// crate waits for the player to put it in an exhibit
+// ----------------------------------------------------------------------------
+bool Staff::catchWork(Member &m, const WorldMap &map, const Fences &fences) {
+  if (!this->animals)
+    return false;
+  const Animals::Member *target = nullptr;
+  float best = 1e9f;
+  for (const Animals::Member &a : this->animals->members()) {
+    if (!a.escaped || a.boxed || a.id == this->animals->carried)
+      continue;
+    if (a.claimedBy >= 0 && a.claimedBy != m.id && this->member(a.claimedBy))
+      continue;
+    const MapTile *t = map.getTile(static_cast<int>(a.x), static_cast<int>(a.y));
+    if (t && (t->terrainType == 9 || t->terrainType == 10))
+      continue;
+    float d = std::fabs(a.x - m.x) + std::fabs(a.y - m.y);
+    if (d < best) {
+      best = d;
+      target = &a;
+    }
+  }
+  if (!target)
+    return false;
+  if (Animals::Member *a = this->animals->member(target->id))
+    a->claimedBy = m.id;
+  m.job = Job::Catch;
+  m.jobAnimal = target->id;
+  m.phase = target->tranquilised ? 1 : 0;
+  m.dutyId = m.phase ? 10309 : 10308;
+  m.dutyArg = target->name;
+  m.repath = 0;
+  m.walksLeft = 0;
+  catchStep(m, 0, map, fences);
+  return true;
+}
+
+void Staff::catchStep(Member &m, float seconds, const WorldMap &map, const Fences &fences) {
+  Animals::Member *a = this->animals ? this->animals->member(m.jobAnimal) : nullptr;
+  if (!a || a->boxed || (!a->escaped && !a->tranquilised)) {
+    if (a && a->claimedBy == m.id)
+      a->claimedBy = -1;
+    m.job = Job::None;
+    m.path.clear();
+    m.anim = "idle";
+    m.idleLeft = 0.5f;
+    m.dutyId = kMonitoring;
+    return;
+  }
+  float d2 = (a->x - m.x) * (a->x - m.x) + (a->y - m.y) * (a->y - m.y);
+  if (m.phase == 0 && d2 <= 25.0f) {
+    // In range: stop, face it, fire
+    face(m, a->x, a->y);
+    m.dutyId = 10308;
+    play(m, "fire", 1);
+    Sound::get().play("staff/gun", 1000);
+    return;
+  }
+  if (m.phase == 1 && d2 <= 1.0f) {
+    this->animals->box(a->id);
+    m.job = Job::None;
+    m.path.clear();
+    m.anim = "idle";
+    m.idleLeft = 0.5f;
+    m.dutyId = kMonitoring;
+    return;
+  }
+  // Running after it (a fresh route now and then, as it moves)
+  m.repath -= seconds;
+  if (m.repath <= 0 || m.pathAt >= m.path.size()) {
+    m.repath = 1.0f;
+    int gx = static_cast<int>(std::floor(a->x)), gy = static_cast<int>(std::floor(a->y));
+    if (!findPath(m, gx, gy, map, fences, a->x, a->y)) {
+      // Nowhere to run to it: give up for now
+      a->claimedBy = -1;
+      m.job = Job::None;
+      m.idleLeft = 2.0f;
+      m.dutyId = kMonitoring;
+    }
+  }
 }
 
 std::string Staff::dutyText(const Member &m) const {
@@ -1023,6 +1493,8 @@ int Staff::hire(int type, float x, float y, const WorldMap &map, const Fences &f
 }
 
 void Staff::fire(int id) {
+  if (this->guests)
+    this->guests->releaseTour(id);
   this->list.erase(std::remove_if(this->list.begin(), this->list.end(),
                                   [&](const Member &m) { return m.id == id; }),
                    this->list.end());
@@ -1051,8 +1523,13 @@ void Staff::moveTo(int id, float x, float y) {
 // Each one's day: walk about, stand a while, go to work when there is some
 // ----------------------------------------------------------------------------
 void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
+  this->clock += seconds;
   for (Member &m : this->list) {
     const Type &t = this->typeList[m.type];
+    // Exhibits that are gone (opened up, bulldozed) come off its list
+    m.exhibits.erase(std::remove_if(m.exhibits.begin(), m.exhibits.end(),
+                                    [&](int ex) { return fences.exhibit(ex) == nullptr; }),
+                     m.exhibits.end());
     m.animTime += seconds;
     m.workCheck -= seconds;
     if (m.id == this->carried)
@@ -1066,18 +1543,56 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
       float len = animSeconds(m, m.anim);
       if (m.animTime >= len) {
         m.animTime -= len;
+        if (m.playsLeft > 1)
+          workSound(m, m.anim);
         if (--m.playsLeft == 0) {
           // The work's done
           if (m.job == Job::Visit) {
             visitStep(m, map, fences);
             continue;
           }
+          if (m.job == Job::Catch) {
+            // The dart's in: asleep; now to crate it
+            if (this->animals)
+              this->animals->tranquilise(m.jobAnimal);
+            m.phase = 1;
+            m.dutyId = 10309;
+            m.anim = "idle";
+            catchStep(m, 0, map, fences);
+            continue;
+          }
           if (m.job == Job::Fence)
             fences.repair(m.jobEdge);
           else if (m.job == Job::Filter)
             fences.serviceFilter(m.jobFilter);
-          else if (m.job == Job::Litter && this->items)
+          else if (m.job == Job::Litter && this->items) {
+            // The litter on its tile and the four beside it (all eight round
+            // it with cCleanTrashRadius: zoo.exe 0x52d76a)
+            if (const ZooItems::Item *it = this->items->item(m.jobItem)) {
+              int lx = static_cast<int>(std::floor(it->x)), ly = static_cast<int>(std::floor(it->y));
+              bool all = t.cleanTrashRadius > 0;
+              for (int id : this->items->ofKind(ZooItems::Kind::Litter, -1)) {
+                const ZooItems::Item *o = this->items->item(id);
+                int dx = std::abs(static_cast<int>(std::floor(o->x)) - lx), dy = std::abs(static_cast<int>(std::floor(o->y)) - ly);
+                if (id != m.jobItem && dx <= 1 && dy <= 1 && (all || dx + dy <= 1))
+                  this->items->remove(id);
+              }
+            }
             this->items->remove(m.jobItem);
+          }
+          else if (m.job == Job::Dung && this->items) {
+            if (const ZooItems::Item *it = this->items->item(m.jobItem))
+              this->dungRecycled(it->x, it->y);
+            this->items->remove(m.jobItem);
+          } else if (m.job == Job::Trash && this->objects) {
+            if (PlacedObjects::Object *can = this->objects->byId(m.jobItem)) {
+              int cx = static_cast<int>(std::floor(can->x)), cy = static_cast<int>(std::floor(can->y));
+              for (PlacedObjects::Object &o : this->objects->all())
+                if (o.typeName == "trshcan" && static_cast<int>(std::floor(o.x)) == cx &&
+                    static_cast<int>(std::floor(o.y)) == cy)
+                  o.fill = 0;
+            }
+          }
           m.job = Job::None;
           m.anim = "idle";
           m.idleLeft = 0.5f;
@@ -1086,13 +1601,49 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
       }
       continue;
     }
+    // A tour guide: a look for followers every cCrowdCheck ticks (on the way
+    // and while talking); the talk (speak, then speak2)
+    if (m.job == Job::Tour) {
+      m.crowdClock -= seconds;
+      if (m.crowdClock <= 0 && (m.pathAt < m.path.size() || m.speaking)) {
+        m.crowdClock += static_cast<float>(t.crowdCheck);
+        this->gatherFollowers(m);
+      }
+      if (m.speaking) {
+        m.speakLeft -= seconds;
+        const char *talk = m.speakLeft > t.informTime ? "speak" : "speak2";
+        if (m.anim != talk) {
+          m.anim = talk;
+          m.animTime = 0;
+        }
+        if (m.speakLeft <= 0) {
+          m.speaking = false;
+          m.job = Job::None;
+          m.anim = "idle";
+          m.idleLeft = 0.5f;
+          m.dutyId = kGuideMonitoring;
+          m.dutyArg.clear();
+          m.workCheck = 0;
+        }
+        continue;
+      }
+    }
+    // After an escaped animal: running, checking how near it is
+    if (m.job == Job::Catch) {
+      catchStep(m, seconds, map, fences);
+      if (m.job != Job::Catch || m.playsLeft > 0)
+        continue;
+    }
     // Walking a path
     if (m.pathAt < m.path.size()) {
       auto [tx, ty] = m.path[m.pathAt];
       float dx = tx - m.x, dy = ty - m.y, dist = std::hypot(dx, dy);
-      float step = t.speed * seconds;
-      if (m.anim != "walk") {
-        m.anim = "walk";
+      // (running after an animal: cFastRate 66)
+      bool running = m.job == Job::Catch;
+      float step = (running ? 66.0f / 60.0f : t.speed) * seconds;
+      const char *moving = running ? "run" : "walk";
+      if (m.anim != moving) {
+        m.anim = moving;
         m.animTime = 0;
       }
       if (dist > 0.0001f) {
@@ -1134,6 +1685,52 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
         m.pathAt = 0;
         if (m.job == Job::Visit) {
           visitStep(m, map, fences);
+        } else if (m.job == Job::Tour) {
+          // There: with a group, the talk; without, the trip's over
+          if (m.followers.empty()) {
+            m.job = Job::None;
+            m.anim = "idle";
+            m.idleLeft = 0.5f;
+            m.dutyId = kGuideMonitoring;
+            m.dutyArg.clear();
+          } else {
+            m.speaking = true;
+            m.speakLeft = 2.0f * t.informTime;
+            m.dutyId = kSpeaking;
+            m.dutyArg.clear();
+            // (facing the exhibit)
+            if (const Fences::Exhibit *ex = fences.exhibit(m.visit)) {
+              float cx = 0, cy = 0;
+              for (auto [x, y] : ex->tiles) {
+                cx += x + 0.5f;
+                cy += y + 0.5f;
+              }
+              cx /= ex->tiles.size();
+              cy /= ex->tiles.size();
+              float d = std::hypot(cx - m.x, cy - m.y);
+              if (d > 0.001f) {
+                m.fx = (cx - m.x) / d;
+                m.fy = (cy - m.y) / d;
+              }
+            }
+            if (this->guests)
+              this->guests->tourTalk(m.id, t.tourBonus);
+          }
+        } else if (m.job == Job::Dung) {
+          // bBag: sweep twice, bagging it
+          m.dutyId = kCleaningUp;
+          play(m, "sweep", 2);
+        } else if (m.job == Job::Trash) {
+          if (this->objects)
+            if (PlacedObjects::Object *can = this->objects->byId(m.jobItem)) {
+              float d = std::hypot(can->x - m.x, can->y - m.y);
+              if (d > 0.001f) {
+                m.fx = (can->x - m.x) / d;
+                m.fy = (can->y - m.y) / d;
+              }
+            }
+          m.dutyId = kEmptyingCan;
+          play(m, "empty", 2);
         } else if (m.job == Job::Litter) {
           // bSweep: sweep twice
           m.dutyId = kSweeping;

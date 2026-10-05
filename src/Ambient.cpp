@@ -1,4 +1,5 @@
 #include "Ambient.hpp"
+#include "Sound.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -39,6 +40,19 @@ void Ambient::load(ResourceManager *rm) {
     k.frequency = ai->getInt(ints, "cfrequency", 0);
     k.blackShadow = ai->getInt(ints, "cforceshadowblack", 1) != 0;
     k.idle = anim(ai->get("animations", "idle"));
+    k.loop = ai->getInt(ints, "csoundloop", 0) != 0;
+    std::string scfg = ai->get("characteristics/strings", "csoundname");
+    if (scfg.empty())
+      scfg = ai->get(ints, "csoundname");
+    if (!scfg.empty())
+      if (IniReader *sc = rm->getIniReader(Utils::string_to_lower(scfg))) {
+        std::string group = sc->get("ambientlevels", "group", "happy");
+        k.chance = sc->getInt(group, "chance", 0);
+        std::vector<std::string> sounds = sc->getList(group, "sound"), probs = sc->getList(group, "prob");
+        for (size_t i = 0; i < sounds.size(); i++)
+          k.calls.push_back({Utils::string_to_lower(sounds[i]), i < probs.size() ? std::atoi(probs[i].c_str()) : 100});
+        delete sc;
+      }
     k.shadow = ai->getInt(ints, "chasshadowimages", 0) ? anim(ai->get("animations", "shadowidle"))
                                                        : nullptr;
     delete ai;
@@ -103,6 +117,36 @@ void Ambient::update(float seconds, const WorldMap &map) {
     f.x += f.vx * seconds;
     f.y += f.vy * seconds;
     f.age += seconds;
+    // Its sound, heard from where it is
+    const Kind &k = this->kinds[f.kind];
+    float dx = 0, dy = 0;
+    bool seen = this->viewOffset && this->viewOffset(f.x, f.y, dx, dy);
+    if (k.loop && !k.calls.empty()) {
+      if (f.channel < 0 && seen)
+        f.channel = Sound::get().loopAt(k.calls[0].first, dx, dy, 0);
+      else if (f.channel >= 0 && !(seen && Sound::get().place(f.channel, dx, dy, 0)))
+        f.channel = -1;
+    } else if (k.chance > 0 && !k.calls.empty() && seen) {
+      f.soundClock += seconds;
+      while (f.soundClock >= 1.0f) {
+        f.soundClock -= 1.0f;
+        if (std::uniform_int_distribution<int>(0, k.chance - 1)(this->rng) != 0)
+          continue;
+        int total = 0;
+        for (auto &c : k.calls)
+          total += c.second;
+        int roll = std::uniform_int_distribution<int>(0, std::max(1, total) - 1)(this->rng);
+        for (auto &c : k.calls)
+          if ((roll -= c.second) < 0) {
+            Sound::get().playAt(c.first, dx, dy);
+            break;
+          }
+      }
+    }
+    if (f.age >= f.life && f.channel >= 0) {
+      Sound::get().stop(f.channel);
+      f.channel = -1;
+    }
   }
   this->flyers.erase(std::remove_if(this->flyers.begin(), this->flyers.end(),
                                     [](const Flyer &f) { return f.age >= f.life; }),

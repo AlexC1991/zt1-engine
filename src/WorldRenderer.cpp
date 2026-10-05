@@ -713,10 +713,30 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
     centreV = (b - a) * 0.5f;
   }
 
+  // (only some tiles - the ground over a tank's pit, again: just their
+  // part of the grid, not the whole map's)
+  int uLo = 0, uHi = viewU - 1, vLo = 0, vHi = viewV - 1;
+  if (onlyTiles) {
+    uLo = vLo = 1 << 30;
+    uHi = vHi = -1;
+    for (auto [tx, ty] : *onlyTiles) {
+      int a0, b0, a1, b1;
+      worldToViewVertex(tx, ty, a0, b0);
+      worldToViewVertex(tx + 1, ty + 1, a1, b1);
+      uLo = std::min(uLo, std::min(a0, a1));
+      uHi = std::max(uHi, std::min(a0, a1));
+      vLo = std::min(vLo, std::min(b0, b1));
+      vHi = std::max(vHi, std::min(b0, b1));
+    }
+    uLo = std::max(uLo, 0);
+    vLo = std::max(vLo, 0);
+    uHi = std::min(uHi, viewU - 1);
+    vHi = std::min(vHi, viewV - 1);
+  }
   // Back-to-front, one view diagonal (u + v = d) at a time
-  for (int d = 0; d <= viewU + viewV - 2; d++) {
-    int uStart = std::max(0, d - (viewV - 1));
-    int uEnd = std::min(d, viewU - 1);
+  for (int d = uLo + vLo; d <= uHi + vHi; d++) {
+    int uStart = std::max(uLo, d - vHi);
+    int uEnd = std::min(d - vLo, uHi);
 
     for (int u = uStart; u <= uEnd; u++) {
       int v = d - u;
@@ -726,6 +746,8 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
       ViewTile vt = viewTile(u, v);
       const MapTile *tile = vt.tile;
       if (!tile)
+        continue;
+      if (onlyTiles && !onlyTiles->count({vt.x, vt.y}))
         continue;
 
       const int *h = vt.h;
@@ -951,6 +973,16 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
   SDL_SetRenderDrawBlendMode(renderer, previousBlend);
 }
 
+void WorldRenderer::renderTerrainTiles(SDL_Renderer *renderer, const WorldMap &map,
+                                       SpriteDatabase &spriteDB,
+                                       const std::set<std::pair<int, int>> &tiles) {
+  if (tiles.empty())
+    return;
+  this->onlyTiles = &tiles;
+  this->renderTerrain(renderer, map, spriteDB);
+  this->onlyTiles = nullptr;
+}
+
 void WorldRenderer::drawPathPiece(SDL_Renderer *renderer, SpriteDatabase &spriteDB,
                                   const std::string &type, int tileX, int tileY,
                                   const int cornerH[4],
@@ -1035,6 +1067,77 @@ void WorldRenderer::drawPathPiece(SDL_Renderer *renderer, SpriteDatabase &sprite
     SDL_SetTextureColorMod(texture, 255, 255, 255);
     SDL_SetTextureAlphaMod(texture, 255);
   }
+}
+
+void WorldRenderer::drawSolid(SDL_Renderer *renderer, SpriteDatabase &spriteDB, int x, int y,
+                              const float top[4], const float bottom[4], int terrain,
+                              Uint8 alpha) const {
+  const bool hires = RenderSettings::worldZoomedIn;
+  SDL_Texture *tex = spriteDB.getTerrainTexture(renderer, terrain, hires);
+  if (!tex && hires)
+    tex = spriteDB.getTerrainTexture(renderer, terrain);
+  float tpt = 1.0f;
+  if (tex) {
+    int texW = 0;
+    ArtScaler::querySize(tex, &texW, nullptr);
+    tpt = std::max(1.0f, std::round(texW / kTexelsPerTile));
+  }
+  const float wx[4] = {static_cast<float>(x), x + 1.0f, x + 1.0f, static_cast<float>(x)};
+  const float wy[4] = {static_cast<float>(y), static_cast<float>(y), y + 1.0f, y + 1.0f};
+  SDL_FPoint lo[4];
+  float d;
+  for (int i = 0; i < 4; i++)
+    worldToScreenF(wx[i], wy[i], bottom[i], lo[i].x, lo[i].y, d);
+  // The front corner (lowest on screen at the ground) and those beside it
+  int b = 0;
+  float best = -1e30f;
+  for (int i = 0; i < 4; i++) {
+    float sx, sy;
+    worldToScreenF(wx[i], wy[i], 0, sx, sy, d);
+    if (sy > best) {
+      best = sy;
+      b = i;
+    }
+  }
+  int p = (b + 3) % 4, n = (b + 1) % 4;
+  int left = lo[p].x < lo[n].x ? p : n, right = left == p ? n : p;
+  const float vPerUnit = kHeightUnitInTiles / tpt;
+  const float band = std::max(0.25f, 1.0f / vPerUnit);
+  auto face = [&](int a, int c, float light) {
+    SDL_Color col = shade(SDL_Color{255, 255, 255, 255}, light);
+    col.a = alpha;
+    const int strips = 8;
+    float zMin = std::min(bottom[a], bottom[c]), zMax = std::max(top[a], top[c]);
+    for (int k = 0; k < strips; k++) {
+      float s0 = k / float(strips), s1 = (k + 1) / float(strips);
+      float b0 = bottom[a] + (bottom[c] - bottom[a]) * s0, b1 = bottom[a] + (bottom[c] - bottom[a]) * s1;
+      float t0 = top[a] + (top[c] - top[a]) * s0, t1 = top[a] + (top[c] - top[a]) * s1;
+      float x0 = wx[a] + (wx[c] - wx[a]) * s0, y0 = wy[a] + (wy[c] - wy[a]) * s0;
+      float x1 = wx[a] + (wx[c] - wx[a]) * s1, y1 = wy[a] + (wy[c] - wy[a]) * s1;
+      for (float bl = std::floor(zMin); bl < zMax; bl += band) {
+        float bh = bl + band;
+        float lo0 = std::max(b0, bl), hi0 = std::min(t0, bh);
+        float lo1 = std::max(b1, bl), hi1 = std::min(t1, bh);
+        if (hi0 <= lo0 && hi1 <= lo1)
+          continue;
+        hi0 = std::max(hi0, lo0);
+        hi1 = std::max(hi1, lo1);
+        SDL_FPoint q[4];
+        worldToScreenF(x0, y0, hi0, q[0].x, q[0].y, d);
+        worldToScreenF(x1, y1, hi1, q[1].x, q[1].y, d);
+        worldToScreenF(x1, y1, lo1, q[2].x, q[2].y, d);
+        worldToScreenF(x0, y0, lo0, q[3].x, q[3].y, d);
+        auto v = [&](float z) { return std::clamp((bh - z) * vPerUnit, 0.0f, 1.0f); };
+        float u0 = s0 / tpt, u1 = s1 / tpt;
+        SDL_Vertex vx[4] = {{q[0], col, {u0, v(hi0)}}, {q[1], col, {u1, v(hi1)}},
+                            {q[2], col, {u1, v(lo1)}}, {q[3], col, {u0, v(lo0)}}};
+        int idx[6] = {0, 1, 2, 0, 2, 3};
+        SDL_RenderGeometry(renderer, tex, vx, 4, idx, 6);
+      }
+    }
+  };
+  face(left, b, kLeftCliffLight);
+  face(b, right, kRightCliffLight);
 }
 
 void WorldRenderer::drawBox(SDL_Renderer *renderer, SpriteDatabase &spriteDB, float x0, float y0,

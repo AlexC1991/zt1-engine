@@ -128,7 +128,11 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   if (timing_or_height == 0x5A544146) {
     // SDL_Log("AniFile: Detected FATZ header");
     SDL_ReadLE32(rw);           // Skip unknown 0x00000000
-    SDL_ReadLE32(rw);           // Skip Timing (shifted)
+    // The byte after it: 1 when the art has a background frame (its last:
+    // a building's whole picture, the others drawn over it), then the
+    // timing (shifted)
+    uint32_t flagAndTiming = SDL_ReadLE32(rw);
+    animation_data->has_background = (flagAndTiming & 0xFF) != 0;
     str_len = SDL_ReadLE32(rw); // Read Length (shifted)
     str_len >>= 8;              // Fix shift
     SDL_ReadU8(rw);             // Skip padding byte (0x00)
@@ -266,10 +270,13 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   }
 
   // --- CONVERT VECTOR TO ARRAY ---
-  animation_data->frame_count = (uint32_t)temp_frames.size();
-  if (animation_data->frame_count > 0) {
+  // (a background frame is kept after the others, not counted as one)
+  if (animation_data->has_background && temp_frames.size() < 2)
+    animation_data->has_background = false;
+  animation_data->frame_count = (uint32_t)temp_frames.size() - (animation_data->has_background ? 1 : 0);
+  if (!temp_frames.empty()) {
     animation_data->frames = (AnimationFrameData *)calloc(
-        animation_data->frame_count, sizeof(AnimationFrameData));
+        temp_frames.size(), sizeof(AnimationFrameData));
     for (size_t i = 0; i < temp_frames.size(); i++) {
       animation_data->frames[i] = temp_frames[i];
     }
@@ -285,7 +292,7 @@ void AniFile::freeAnimationData(AnimationData *data) {
     return;
 
   if (data->frames) {
-    for (uint32_t i = 0; i < data->frame_count; i++) {
+    for (uint32_t i = 0; i < data->frame_count + (data->has_background ? 1u : 0u); i++) {
       if (data->frames[i].lines) {
         for (int y = 0; y < data->frames[i].height; y++) {
           if (data->frames[i].lines[y].instructions) {

@@ -1,4 +1,6 @@
 #include "Animation.hpp"
+#include <algorithm>
+#include <iterator>
 #include "AniFile.hpp"
 #include "ArtScaler.hpp"
 #include "RenderSettings.hpp"
@@ -11,8 +13,14 @@ Animation::Animation(std::unordered_map<std::string, AnimationData *> *data)
     : current_frame(0), last_direction(CompassDirection::S),
       renderer_flip(SDL_FLIP_NONE), has_background(false),
       frame_time_in_ms(100), frame_start_time(0) {
+  // (one view named for itself - the dust ball's "animation = dust" - is
+  // its N: art the same from every side)
+  static const char *compass[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW", "G", "H"};
+  bool single = data->size() == 1 &&
+                std::none_of(std::begin(compass), std::end(compass),
+                             [&](const char *c) { return data->begin()->first == c; });
   for (auto map_entry : *data) {
-    this->loadSurfaces(map_entry.first, map_entry.second);
+    this->loadSurfaces(single ? std::string("N") : map_entry.first, map_entry.second);
   }
 }
 
@@ -218,6 +226,25 @@ bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
     SDL_SetTextureColorMod(texture, 255, 255, 255);
     SDL_SetTextureAlphaMod(texture, 255);
   }
+  return true;
+}
+
+bool Animation::anchoredBounds(float x, float y, CompassDirection direction, float &left, float &top,
+                               float &right, float &bottom) {
+  std::string key = convertCompassDirectionToExistingAnimationString(direction, this->anchor_points);
+  if (key.empty())
+    return false;
+  SDL_RendererFlip flip = this->renderer_flip;
+  SDL_Point a = this->anchor_points[key];
+  int w = 0, h = 0;
+  this->queryTexture(direction, &w, &h);
+  if (w <= 0 || h <= 0)
+    return false;
+  float ax = flip == SDL_FLIP_HORIZONTAL ? static_cast<float>(w - a.x) : a.x;
+  left = x - ax;
+  top = y - a.y;
+  right = left + w;
+  bottom = top + h;
   return true;
 }
 
@@ -474,6 +501,68 @@ void Animation::loadSurfaces(std::string direction_string,
 
   this->surfaces[direction_string] = std::vector<SDL_Surface *>();
 
+  // A building with a background frame (zoo.exe's FATZ flag): every frame
+  // is the background with that frame drawn over it, each placed by its
+  // anchor (the header's offset_y the x anchor, offset_x the y) in a
+  // surface big enough for them all
+  if (data->has_background) {
+    const int count = static_cast<int>(data->frame_count);
+    int minX = 0, minY = 0, maxX = 0, maxY = 0;
+    // (here the frame header's offset_x is its x anchor, offset_y its y -
+    // the other way round from art without a background)
+    for (int i = 0; i <= count; i++) {
+      const AnimationFrameData &f = data->frames[i];
+      int l = -f.offset_x, t = -f.offset_y;
+      if (i == 0 || l < minX) minX = l;
+      if (i == 0 || t < minY) minY = t;
+      if (i == 0 || l + f.width > maxX) maxX = l + f.width;
+      if (i == 0 || t + f.height > maxY) maxY = t + f.height;
+    }
+    const int W = std::max(1, maxX - minX), H = std::max(1, maxY - minY);
+    const SDL_Point anchor = {-minX, -minY};
+    this->anchor_points[direction_string] = anchor;
+    this->anchor_offsets[direction_string] = {W / 2 - anchor.x, H / 2 - anchor.y};
+    auto paint = [&](SDL_Surface *s, const AnimationFrameData &f) {
+      if (!f.lines)
+        return;
+      const int left = anchor.x - f.offset_x, top = anchor.y - f.offset_y;
+      uint32_t *pixels = static_cast<uint32_t *>(s->pixels);
+      const int pitch = s->pitch / 4;
+      for (int y = 0; y < f.height; y++) {
+        int x = left;
+        if (!f.lines[y].instructions)
+          continue;
+        for (int k = 0; k < f.lines[y].instruction_count; k++) {
+          const auto &ins = f.lines[y].instructions[k];
+          x += ins.offset;
+          for (int p = 0; p < ins.color_count; p++, x++) {
+            int yy = y + top;
+            if (x < 0 || x >= W || yy < 0 || yy >= H)
+              continue;
+            uint32_t color = 0xFF000000;
+            if (!f.is_shadow) {
+              if (!data->pallet || !data->pallet->colors || !ins.colors)
+                continue;
+              color = data->pallet->colors[ins.colors[p]] | 0xFF000000;
+            }
+            pixels[yy * pitch + x] = color;
+          }
+        }
+      }
+    };
+    for (int i = 0; i < count; i++) {
+      SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, W, H, 0, SDL_PIXELFORMAT_RGBA32);
+      if (s) {
+        SDL_FillRect(s, NULL, 0x00000000);
+        paint(s, data->frames[count]);
+        paint(s, data->frames[i]);
+      }
+      this->surfaces[direction_string].push_back(s);
+    }
+    AniFile::freeAnimationData(data);
+    return;
+  }
+
   // Frame 0 lands in its surface at (offset_x - its offset_x, 0). Note the
   // frame header's fields: offset_x holds the y anchor, offset_y the x one.
   {
@@ -499,8 +588,20 @@ void Animation::loadSurfaces(std::string direction_string,
     SDL_FillRect(new_surface, NULL, 0x00000000);
     this->surfaces[direction_string].push_back(new_surface);
 
+    // Each frame placed by its own anchor (the header's offset_x is its y
+    // anchor, offset_y its x anchor), lined up on frame 0's: frames whose
+    // anchors differ (a zebra's walk: x anchor 11 to 15) no longer shift
+    // about (they shook)
+    const AnimationFrameData &f0 = data->frames[0];
+    const int anchorX = offset_x - f0.offset_x + f0.offset_y;
+    const int anchorY = offset_y - f0.offset_y + f0.offset_x;
+    // (art with a background frame, the UI's, kept as it was: matched)
+    const int left = data->has_background ? offset_x - data->frames[i].offset_x
+                                          : anchorX - data->frames[i].offset_y;
+    const int top = data->has_background ? offset_y - data->frames[i].offset_y
+                                         : anchorY - data->frames[i].offset_x;
     for (int y = 0; y < data->frames[i].height; y++) {
-      int x = offset_x - data->frames[i].offset_x;
+      int x = left;
       if (!data->frames[i].lines)
         continue;
 
@@ -552,7 +653,7 @@ void Animation::loadSurfaces(std::string direction_string,
           }
           int pitch = new_surface->pitch / 4;
           uint32_t *pixels = (uint32_t *)new_surface->pixels;
-          int y_final = y + offset_y - data->frames[i].offset_y;
+          int y_final = y + top;
           int x_final = x;
           if (y_final >= 0 && y_final < data->height && x_final >= 0 &&
               x_final < data->width) {

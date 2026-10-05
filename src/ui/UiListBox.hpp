@@ -19,6 +19,12 @@ struct ListBoxItem {
     bool loadAttempted = false; // [FIX] Prevents lag if file is missing
     bool checked = true;        // toggleselect lists: the item's checkbox
     std::vector<std::string> lines; // toggleselect lists: wrapped text
+    bool hasColor = false;          // its own text colour (a warning in red)
+    SDL_Color color = {0, 0, 0, 255};
+    // Column lists: its cells, each with its colour (alpha 0: the list's)
+    std::vector<std::string> cells;
+    std::vector<SDL_Color> cellColors;
+    Animation* iconArt = nullptr; // an icon drawn from art (a guest's, in its colours)
 };
 
 class Animation;
@@ -34,6 +40,20 @@ public:
     void addItem(const std::string& text, const std::string& data = "", const std::string& icon = "");
     void addItem(uint32_t textId, const std::string& data = "", const std::string& icon = "");
     void clear();
+    // Paragraph lists (the Zookeeper Recommendations): each item wrapped
+    // to the width, the layout's spacing= between them, in its own colour
+    void setWrapped(bool on) { wrapped = on; }
+    void addItem(const std::string& text, SDL_Color color);
+    // Lists with column= offsets (the Commerce Building List): a row of
+    // cells, the first from its column's left, the rest right-aligned to
+    // the next column (the last to the list's edge), as measured
+    void addRow(const std::vector<std::string>& cells, const std::vector<SDL_Color>& colors = {});
+    // An item whose mini icon is art (not owned)
+    void addItem(const std::string& text, Animation* iconArt);
+    // An item's own text colour (the Message List's red news)
+    void setItemColor(int index, SDL_Color color) {
+        if (index >= 0 && index < (int)items.size()) { items[index].hasColor = true; items[index].color = color; }
+    }
 
     int getSelectedIndex() const { return selected_index; }
     void setSelectedIndex(int index) { selected_index = index; }
@@ -59,7 +79,7 @@ public:
     int getScrollPosition() const override { return scroll_offset; }
     int getScrollMaximum() const override;
     int getScrollPage() const override {
-        return toggle_select ? fittingFrom(scroll_offset) : visible_items;
+        return toggle_select || wrapped ? fittingFrom(scroll_offset) : visible_items;
     }
     void setScrollPosition(int position) override;
     SDL_Rect getScrollBounds() const override { return cached_rect; }
@@ -89,7 +109,10 @@ private:
 
     bool centered = false; // justify=center (the content filter's list)
     bool toggle_select = false;
+    bool wrapped = false;
+    int spacing = 0;
     int minicon_width = 0;
+    std::vector<int> columns; // column= (the first is the icon's)
     Animation* checkbox = nullptr;
     int line_height = 16;
     int itemHeight(const ListBoxItem& item) const;

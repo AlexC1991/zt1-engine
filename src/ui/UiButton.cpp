@@ -31,10 +31,21 @@ UiButton::UiButton(IniReader *ini_reader, ResourceManager *resource_manager,
   uint32_t string_id = (uint32_t)ini_reader->getUnsignedInt(name, "textid");
   this->text_string = this->resource_manager->getString(string_id);
 
+  // Some buttons list several (Animal Information's recommendations:
+  // the zookeeper's, the scientist's, the marine specialist's): the first,
+  // until the game picks
   std::string animation_path = ini_reader->get(name, "animation");
+  animation_path = animation_path.substr(0, animation_path.find(';'));
   if (!animation_path.empty()) {
     this->animation = resource_manager->getAnimation(animation_path);
   }
+}
+
+void UiButton::chooseAnimation(size_t index) {
+  std::vector<std::string> all = this->ini_reader->getList(this->name, "animation");
+  if (index < all.size() && !all[index].empty())
+    if (Animation *a = this->resource_manager->getAnimation(all[index]))
+      this->animation = a;
 }
 
 UiButton::~UiButton() {
@@ -42,6 +53,8 @@ UiButton::~UiButton() {
     delete child;
   }
 }
+
+std::function<void()> UiButton::clickSound;
 
 UiAction UiButton::handleInputs(std::vector<Input> &inputs) {
   UiAction action = UiAction::NONE;
@@ -92,6 +105,8 @@ UiAction UiButton::handleInputs(std::vector<Input> &inputs) {
 
     switch (input.event) {
     case InputEvent::LEFT_CLICK:
+      if (UiButton::clickSound)
+        UiButton::clickSound();
       if (this->isToggle()) {
         // A radio choice (4096) stays chosen; other toggles flip
         bool on = (this->state_flags & 4096) ? true : !this->toggled_on;
@@ -305,6 +320,17 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     this->animation->anchorOffset(state, &ax, &ay);
     this->dest_rect.x += ax;
     this->dest_rect.y += ay;
+    if (this->fill_color.a && RenderSettings::drawsUiArt()) {
+      SDL_Rect in = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4, dest_rect.h - 4};
+      SDL_SetRenderDrawColor(renderer, this->fill_color.r, this->fill_color.g, this->fill_color.b, 255);
+      SDL_RenderFillRect(renderer, &in);
+    }
+    if (this->icon && RenderSettings::drawsUiArt()) {
+      int iw = 0, ih = 0;
+      this->icon->queryTexture(CompassDirection::N, &iw, &ih);
+      SDL_Rect ir = {dest_rect.x + (dest_rect.w - iw) / 2, dest_rect.y + (dest_rect.h - ih) / 2, iw, ih};
+      this->icon->draw(renderer, &ir, CompassDirection::N);
+    }
     if (RenderSettings::drawsUiArt())
       this->animation->draw(renderer, &dest_rect, state);
   } else if (this->is_static) {
@@ -450,7 +476,7 @@ UiAction UiButton::getActionBasedOnName() {
     action = UiAction::SCENARIO_BACK_TO_MAIN_MENU;
     } else {
     // In-game HUD buttons (ui/main.lyt, ids 1000-1099) report their id
-    if (this->id == 11511 || this->id == 11512 || this->id == 50008 ||
+    if (this->id == 7112 || this->id == 7113 || this->id == 11511 || this->id == 11512 || this->id == 50008 ||
         this->id == 11513 || (this->id >= 1000 && this->id < 1100)) {
       action = static_cast<UiAction>(this->id);
     }
