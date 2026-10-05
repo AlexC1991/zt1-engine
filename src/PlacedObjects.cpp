@@ -452,33 +452,45 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
   std::stable_sort(drawn.begin(), drawn.end(),
                    [](const Drawn &a, const Drawn &b) { return a.depth < b.depth; });
 
-  SDL_Rect oldClip;
-  SDL_RenderGetClipRect(renderer, &oldClip);
-  bool hadClip = SDL_RenderIsClipEnabled(renderer);
+  // Clip rects set in the screen's own pixels (at scale 1), each edge
+  // rounded once: set in logical pixels, SDL floors each strip's left edge
+  // and width apart - at most zooms a column fell between two strips (the
+  // ground showing through as a line), and rounding out by hand drew a
+  // column twice (see-through water darker there)
   float sxScale = 1, syScale = 1;
   SDL_RenderGetScale(renderer, &sxScale, &syScale);
+  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+  SDL_Rect oldClip;
+  SDL_RenderGetClipRect(renderer, &oldClip);
+  SDL_RenderSetScale(renderer, sxScale, syScale);
+  bool hadClip = SDL_RenderIsClipEnabled(renderer);
+  auto setDeviceClip = [&](const SDL_Rect *r) {
+    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+    SDL_RenderSetClipRect(renderer, r);
+    SDL_RenderSetScale(renderer, sxScale, syScale);
+  };
   for (const Drawn &d : drawn) {
     if (d.clip) {
       // (the strip's columns, the whole height; within any clip there was)
-      int x0 = d.clipX0 < -1e8f ? -100000 : static_cast<int>(std::floor(d.clipX0));
-      int x1 = d.clipX1 > 1e8f ? 100000 : static_cast<int>(std::ceil(d.clipX1));
-      int y1 = d.clipY1 > 1e8f ? 100000 : static_cast<int>(std::ceil(d.clipY1));
-      SDL_Rect r = {x0, -100000, x1 - x0, y1 + 100000};
+      int x0 = d.clipX0 < -1e8f ? -1000000 : static_cast<int>(std::lround(d.clipX0 * sxScale));
+      int x1 = d.clipX1 > 1e8f ? 1000000 : static_cast<int>(std::lround(d.clipX1 * sxScale));
+      int y1 = d.clipY1 > 1e8f ? 1000000 : static_cast<int>(std::lround(d.clipY1 * syScale));
+      SDL_Rect r = {x0, -1000000, x1 - x0, y1 + 1000000};
+      if (r.w <= 0)
+        continue;
       if (hadClip) {
         SDL_Rect both;
         if (!SDL_IntersectRect(&r, &oldClip, &both))
           continue;
         r = both;
       }
-      SDL_RenderSetClipRect(renderer, &r);
+      setDeviceClip(&r);
     }
     if (d.custom)
       (*d.custom)(renderer);
     else if (d.art)
       d.art->drawAnchored(renderer, d.sx, d.sy, d.side, d.tint, d.frame);
     if (d.clip)
-      SDL_RenderSetClipRect(renderer, hadClip ? &oldClip : nullptr);
+      setDeviceClip(hadClip ? &oldClip : nullptr);
   }
-  (void)sxScale;
-  (void)syScale;
 }

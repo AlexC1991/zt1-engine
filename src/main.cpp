@@ -3093,6 +3093,16 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
               world->rotateView(1);
             }
           }
+          // Zoomed in (1.5x, 2x, 1.37x): no lines on the water
+          for (float z : {1.5f, 2.0f, 1.37f}) {
+            float saved = world->getRenderer().getCamera().zoom;
+            world->getRenderer().getCamera().zoom = z;
+            world->centreOn(lx + 2.0f, ly + 2.0f);
+            char nm[32];
+            std::snprintf(nm, sizeof nm, "tankzoom_%d", static_cast<int>(z * 100));
+            capture(nm);
+            world->getRenderer().getCamera().zoom = saved;
+          }
           // Raised, the water rising from near the floor (as after the
           // walls go up)
           for (const Fences::Exhibit &x : fences.exhibits())
