@@ -1,3 +1,4 @@
+#include <cmath>
 #include "UiMiniMap.hpp"
 
 #include <algorithm>
@@ -21,8 +22,13 @@ UiAction UiMiniMap::handleInputs(std::vector<Input> &inputs) {
   for (const Input &input : inputs) {
     if (input.type != InputType::POSITIONED)
       continue;
-    bool inside = input.x >= rect.x && input.x < rect.x + rect.w &&
-                  input.y >= rect.y && input.y < rect.y + rect.h;
+    // (the map's diamond, not its box: the view toggles sit in the box's
+    // corner and take their own clicks)
+    bool inside = false;
+    if (rect.w > 0 && rect.h > 0) {
+      float ux = (input.x - rect.x) / float(rect.w) - 0.5f, uy = (input.y - rect.y) / float(rect.h) - 0.5f;
+      inside = std::fabs(ux) + std::fabs(uy) <= 0.5f;
+    }
     if (input.event == InputEvent::LEFT_CLICK && inside)
       dragging = true;
     if (dragging && !(SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) &&

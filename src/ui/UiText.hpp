@@ -27,6 +27,9 @@ public:
   // type, Enter (or a click elsewhere) keeps it, Esc puts it back.
   // numeric=1 takes digits and a point; charlimit= caps the length.
   bool isEditable() const { return editable; }
+  // Drawn in a box of its own (the name dialog's field: a dark sunken box
+  // with a frame, so it reads as a place to type)
+  void setInputBox(bool on) { input_box = on; }
   // What the box holds while being edited (e.g. "22.00" for "$22.00"),
   // and what to do with the text kept
   std::function<std::string()> onBeginEdit;
@@ -57,6 +60,9 @@ private:
   std::vector<std::string> cached_lines;
 
   bool editable = false;
+  Uint32 edit_started = 0;
+  bool held_at_start = false;
+  bool input_box = false;
   bool numeric = false;
   int char_limit = 0;
   std::string before_edit;

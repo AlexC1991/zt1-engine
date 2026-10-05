@@ -20,6 +20,8 @@ inline bool staffPaths = true;    // staff keep to paths, idle on them (off: roa
 inline bool smoothRoutes = true;  // walkers' routes straightened (off: tile to tile)
 inline bool mapTooltips = true;   // tool hints over the map (off: buttons only)
 inline bool elevatedPaths = true; // ZT2-style walkways and stairs (off: none, as ZT1)
+inline bool pathModes = true;     // path drags bend once, Tab cycles (off: follows the mouse)
+inline bool hotkeys = true;       // Esc / right-click put the bulldozer away, Ctrl+Z undoes (off: the button only)
 
 inline std::vector<Switch> &all() {
   static std::vector<Switch> list = {
@@ -28,7 +30,9 @@ inline std::vector<Switch> &all() {
       {"staffpaths", "staff take paths and idle on them (off: wander open ground)", &staffPaths},
       {"smoothroutes", "routes straightened where the way is clear (off: tile by tile)", &smoothRoutes},
       {"maptooltips", "tool hints shown over the map (off: only on buttons)", &mapTooltips},
-      {"elevatedpaths", "raised walkways and stairs, PageUp/PageDown sets the height (off: none, as ZT1)", &elevatedPaths},
+      {"elevatedpaths", "raised walkways and stairs, the wheel sets the height (off: none, as ZT1)", &elevatedPaths},
+      {"pathmodes", "path and walkway drags bend once, Tab to cycle (off: the path follows the mouse)", &pathModes},
+      {"hotkeys", "Esc or right-click puts the bulldozer away, Ctrl+Z undoes, Q / E turn an object being placed (off: their buttons only)", &hotkeys},
   };
   return list;
 }

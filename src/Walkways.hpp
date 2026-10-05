@@ -18,6 +18,7 @@ class Fences;
 // down. Walkers use the stairs to get on and off. Behind the
 // 'elevatedpaths' switch.
 class Walkways {
+  friend class SaveGame; // (saving and loading a game)
 public:
   struct Deck {
     std::string type;  // the path type whose art it uses

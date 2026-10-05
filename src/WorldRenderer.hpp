@@ -7,6 +7,7 @@
 #include <SDL2/SDL.h>
 #include <functional>
 #include <string>
+#include <set>
 #include <vector>
 
 // ============================================================================
@@ -36,9 +37,18 @@ public:
   void setCamera(const Camera &cam);
   Camera &getCamera() { return camera; }
 
+  // World grid vertex for view grid vertex (pu, pv), and back
+  int getRotation() const { return viewRotation; }
+  void viewToWorldVertex(int pu, int pv, int &x, int &y) const;
+  void worldToViewVertex(int x, int y, int &pu, int &pv) const;
+
   // Render terrain layer
   void renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
                      SpriteDatabase &spriteDB);
+  // Some tiles' ground again, over what's been drawn since (a tank's pit
+  // hidden by the ground in front of it)
+  void renderTerrainTiles(SDL_Renderer *renderer, const WorldMap &map, SpriteDatabase &spriteDB,
+                          const std::set<std::pair<int, int>> &tiles);
 
   // Isometric coordinate conversion. Returns the screen position of world
   // grid vertex (tileX, tileY) at the given height, in logical (pre-zoom)
@@ -86,6 +96,11 @@ public:
   // A box standing in the world (walkway pillars, a deck slab's edge): its
   // two faces toward the viewer, in a terrain's texture (concrete: the one
   // ZT1 faces its cliffs with) lit as the cliffs are; the top too if asked
+  // A solid block under a walkway piece: its two front faces from the
+  // ground (bottom, per corner) up to its top (per corner: X0Y0, X1Y0,
+  // X1Y1, X0Y1), lit and textured as a cliff
+  void drawSolid(SDL_Renderer *renderer, SpriteDatabase &spriteDB, int x, int y, const float top[4],
+                 const float bottom[4], int terrain = 14, Uint8 alpha = 255) const;
   void drawBox(SDL_Renderer *renderer, SpriteDatabase &spriteDB, float x0, float y0, float x1,
                float y1, float z0, float z1, int terrain = 14, bool top = false,
                Uint8 alpha = 255) const;
@@ -147,10 +162,6 @@ private:
   int mapWidthCache = 0;
   int mapHeightCache = 0;
 
-  // World grid vertex for view grid vertex (pu, pv), and back
-  void viewToWorldVertex(int pu, int pv, int &x, int &y) const;
-  void worldToViewVertex(int x, int y, int &pu, int &pv) const;
-
   // Debug flags
   bool debugTerrainIds;
 
@@ -201,6 +212,7 @@ private:
                    const SDL_Vertex &a, const SDL_Vertex &b,
                    const SDL_Vertex &c);
   void flushBatch(SDL_Renderer *renderer);
+  const std::set<std::pair<int, int>> *onlyTiles = nullptr; // (renderTerrainTiles)
 };
 
 #endif // WORLD_RENDERER_HPP

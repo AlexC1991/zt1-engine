@@ -1,6 +1,7 @@
 #ifndef FENCES_HPP
 #define FENCES_HPP
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <set>
@@ -48,6 +49,7 @@ struct FenceType {
   int cost = 0, gateCost = 0;
   int height = 0;
   bool tank = false;    // [TankFence]
+  bool seeThrough = false; // cSeeThrough: a glass wall (the tank seen through it)
   bool zooWall = false; // the zoo's own walls (not an exhibit's)
   // [f|g][flat, rising, falling]
   Animation *art[2][3] = {{nullptr, nullptr, nullptr}, {nullptr, nullptr, nullptr}};
@@ -57,15 +59,21 @@ struct FenceType {
   Animation *tankLow[4] = {};
   // A tank's gate: the platform keepers stand on, its ladder into the water
   Animation *platform = nullptr, *ladder = nullptr;
+  Animation *ladderOut = nullptr; // (its ladrout beside ladrin: the .ai names only ladrin)
   // Wear (f/Characteristics: cLife, cDecayedLife, cDecayDelta; tank walls
   // cIndestructible): worn down to cDecayedLife it shows its "det" art, at
   // nothing its "broke" art; [flat, rising, falling]
   int life = 10, decayedLife = 5, decayDelta = 25;
   bool indestructible = false;
+  // What keeps animals in (cStrength: an animal stronger than it gets
+  // through; cIsJumpable, cIsClimbable, cIsElectrified)
+  int strength = 200;
+  bool jumpable = false, climbable = false, electrified = false;
   Animation *det[3] = {}, *broke[3] = {};
 };
 
 class Fences {
+  friend class SaveGame; // (saving and loading a game)
 public:
   // An edge of the tile grid: along x at line y (horizontal) or along y at
   // line x (vertical)
@@ -91,7 +99,9 @@ public:
     long order = 0;  // when it was placed (for the gate)
     int drag = 0;    // which drag laid it
     int tank = -1;   // the tank exhibit it walls, raised (-1: none)
+    int tank2 = -1;  // a second tank, on its other side (a wall two share)
     float life = -1; // its wear left (cLife when new; -1: not set yet)
+    float open = 0;  // a gate: how far open (its art's frames, 0 shut)
   };
   struct Exhibit {
     int id = 0;
@@ -104,19 +114,53 @@ public:
     // Tanks: the ground they sank from, and the water (0-1 full)
     int groundHeight = 0, floorHeight = 0;
     float water = 0;
-    // Tanks: the walls' top (raised and lowered on Tank Adjustment), salt
-    // or fresh water, and whether it is filling (else draining)
-    int wallTop = 0;
+    // Tanks: the walls' height over the floor in the original's subtiles
+    // (tanks.cfg's units: half a height unit, 8 px - measured, a wall step
+    // moves the rim 8 px), raised and lowered on Tank Adjustment; salt or
+    // fresh water, and whether it is filling (else draining)
+    int wallSub = 0;
+    float wallTop() const { return this->floorHeight + this->wallSub * 0.5f; }
+    // The water's height as shown: it follows the walls and base up a
+    // unit a second (down at once); unset until first drawn
+    float level = -1e9f;
     bool salt = true;
     bool filling = true;
     // How clean its water is (tanks.cfg: initialWaterPurity 100, a point
     // lost every waterPurityDecayTime; murky under 60, very under 20)
     float purity = 100;
+    // Waves on the surface (zoo.exe 0x496382: twaterwv / frshwav, one on a
+    // random tile every 40000 / tiles ms while the water's clean, gone
+    // after 4 s): where, which way, how old (ms); the countdown to the next
+    struct Wave {
+      int x, y, facing;
+      float age;
+    };
+    std::vector<Wave> waves;
+    float waveIn = 0;
     float purityClock = 0;
     // DEV CONSOLE fake stats (no animals yet): how many animals it "has"
     // and what kind, for the staff to look after
     int testAnimals = 0;
     bool testDino = false, testCarnivore = false;
+    // Its real animals (set each frame); with the fake ones, what the
+    // staff look after
+    int animals = 0;
+    int animalCount() const { return testAnimals + animals; }
+    // Its books (zoo.exe hab+0xfc..0x110, rolled over monthly at
+    // 0x48430c): guests' donations, and upkeep (keepers' food piles at
+    // their cPurchaseCost, vet visits at 20% of the animal's price): this
+    // month, last month, all told
+    double donationsNow = 0, donationsLast = 0, donationsTotal = 0;
+    double upkeepNow = 0, upkeepLast = 0, upkeepTotal = 0;
+    // Popularity (0x468732): guests' viewing time since it was built (game
+    // seconds on the guests' clock; builtAt unset until first seen)
+    double viewed = 0, builtAt = -1;
+    // 0-100: 15 x the guests watching it at once, on average
+    int popularity(double now) const {
+      if (builtAt < 0 || now - builtAt <= 0)
+        return 0;
+      return static_cast<int>(std::clamp(viewed / (now - builtAt) * 15.0, 0.0, 100.0));
+    }
   };
 
   void loadTypes(ResourceManager *rm);
@@ -145,11 +189,56 @@ public:
   // A piece that can't go because it's outside the main zoo wall (on land)
   bool outsideZooWall(const Edge &e, const WorldMap &map) const;
   void place(const Edge &e, int type, int drag, const WorldMap &map);
+  // The tank a wall is drawn with: its own, or of two sharing it the one
+  // it's the back wall of (from the other it's the front: one face)
+  int drawnWith(const Edge &e, const Piece &p, const WorldMap &map, const WorldRenderer &view) const;
+  // A piece a fence can be laid over, replacing it
+  bool replaceable(const Piece &p, int type) const;
+  // What laying a piece of this kind there costs (over the same kind not
+  // yet worn: nothing)
+  int layCost(const Edge &e, int type) const;
   // Taking a piece away (bulldozer); a tank it walled drains first
   void remove(const Edge &e, WorldMap &map);
 
   // After fence changes: ground newly shut off becomes an exhibit (returned,
   // waiting to be named); exhibits opened up are gone
+  // A gate no exhibit is behind any more is a plain piece again (as the
+  // original, when an exhibit is opened up)
+  void dropOrphanGates();
+  // Buy Habitat's gate button ("Click to manually choose where to place the
+  // entrance along an exhibit."): a piece between an exhibit and the open
+  // zoo becomes its gate (the old one a plain fence), free unless worn
+  // (then the gate's price)
+  bool canGate(const Edge &e) const;
+  int gateCostOf(const Edge &e) const;
+  void moveGate(const Edge &e);
+  // Whether an animal inside an exhibit can get out over the piece on an
+  // edge (zoo.exe 0x414a73): no piece, or a broken one; else not the zoo's
+  // walls or a gate, not a live electric fence; a climber over a climbable
+  // one, a jumper over a jumpable one, a stronger one through it (its
+  // strength worn down a cDecayDelta for each life it has lost)
+  bool passable(const Edge &e, bool climber, bool jumper, int bash, int crush) const;
+  bool broken(const Edge &e) const;
+  // Gates swing open as someone comes to them (their art's frames, about
+  // 20 a second) and shut after
+  void updateGates(float seconds, const std::function<bool(const Edge &)> &someoneNear);
+  // (tests) a piece made another type, as new
+  void setPieceType(const Edge &e, int type) {
+    auto it = this->edges.find(e);
+    if (it != this->edges.end() && type >= 0 && type < static_cast<int>(this->typeList.size())) {
+      it->second.type = type;
+      it->second.life = static_cast<float>(this->typeList[type].life);
+    }
+  }
+  // Something standing across an edge (a building, rock or tree's
+  // footprint): no fence there
+  std::function<bool(const Edge &)> edgeBlocked;
+  // The state of an exhibit's fence (zoo.exe 0x449920, the Exhibit/Show
+  // List's icon): 2 a piece broken, 1 a piece worn to its cDecayedLife
+  // (one that wears), else 0
+  int condition(int exhibit) const;
+  // Broken through (life 0): anything can pass it until it's repaired
+  void breakPiece(const Edge &e);
   std::vector<int> updateExhibits(WorldMap &map, int day, int month, int year,
                                  bool loading = false);
   Exhibit *exhibit(int id);
@@ -268,12 +357,35 @@ public:
     int frame = -1; // which frame (art that plays: staff walking); -1 its own
     // Drawn by code instead of art (a walkway deck with its posts)
     std::function<void(SDL_Renderer *)> custom;
+    // Half a fence piece: only the screen columns from clipX0 to clipX1
+    // (clip: all of it)
+    bool clip = false;
+    float clipX0 = 0, clipX1 = 0;
+    float clipY1 = 1e9f; // (and nothing under this row: a tank wall's piece
+                         // under the ground in front of it)
   };
   void collect(const WorldRenderer &view, const WorldMap &map,
                std::vector<Drawable> &out) const;
-  // Water surfaces of the tanks (drawn with the terrain)
+  // Water surfaces of tanks without the water art (drawn with the terrain;
+  // with the art a tank's inside is drawn in collect)
   void drawWater(SDL_Renderer *renderer, const WorldRenderer &view,
                  const WorldMap &map) const;
+  // A tank's diver platform under window-logical pixels: its tank, or -1
+  int platformAt(float px, float py, const WorldRenderer &view) const;
+  // The platform the cursor's over (drawn yellow), the tank whose panel is
+  // open (its arrow over the platform)
+  int hoverPlatform = -1;
+  // The bulldozer over a filter: drawn red
+  int highlightFilter = -1;
+  // Game time (ms) for the water's ripples along the walls
+  float rippleClock = 0;
+  // The exhibit gate under the cursor: lit, as an animal is
+  Edge hoverGate{false, -1, -1};
+  // Draws some tiles' ground again (the world's terrain), over a tank's
+  // inside where the ground in front of it hides the pit
+  std::function<void(SDL_Renderer *, const std::set<std::pair<int, int>> &)> redrawGround;
+  int selectedTank = -1;
+  Animation *selectArrow = nullptr;
 
   // The placement preview: edges and whether they can be built
   std::vector<std::pair<Edge, bool>> preview;
@@ -289,13 +401,25 @@ private:
   double upkeepOwed = 0;
   float filterGround(const Filter &f, const WorldMap &map) const;
   std::vector<Exhibit> exhibitList;
+  int lastRemovedGateOf = -1, lastRemovedOwner = -1;
   long placed = 0;
   int made = 0; // exhibits ever made (for "Exhibit N")
   ResourceManager *rm = nullptr;
   Animation *water = nullptr;
   // The tank water's art (water/<salt|fresh><scum>/<part>), loaded as used
   mutable std::map<std::string, Animation *> waterArt;
+  Animation *objectArt(const std::string &path) const; // (cached, as waterPart)
   Animation *waterPart(const std::string &set, const std::string &part) const;
+  // A tank wall's pieces (see Fences.cpp), and which end of its run it is
+  struct TankPiece {
+    Animation *art;
+    float height; // what it's anchored at (height units)
+    bool glass; // a pane of glass (drawn see-through) rather than wall
+    bool top;   // the top rail's piece
+    bool ladder = false; // the gate's ladder (lit with the platform)
+  };
+  void tankPieces(const Edge &e, const Piece &p, const Exhibit &ex, const WorldRenderer &view,
+                  bool front, std::vector<TankPiece> &out) const;
   std::vector<uint8_t> inside; // per tile: within the main zoo wall
   std::vector<uint8_t> building; // per tile: under a building (the entrance)
   int mapW = 0, mapH = 0;

@@ -49,6 +49,14 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   // tank filter's
   targets.insert(46);
   targets.insert(17); // a staff member's, clicked on the map or the list
+  targets.insert(6);  // an animal's, clicked on the map
+  targets.insert(28); // its Zookeeper Recommendations
+  targets.insert(9);  // a guest's, clicked on the map
+  targets.insert(21); // a stand's Building Information
+  targets.insert(20); // another building's
+  targets.insert(29); // the Message List (the Messages button, 1006)
+  targets.insert(302); // a building's paint tab (infocomC.lyt)
+  targets.insert(37);  // its colour picker (color.lyt)
 
   // The panels are the screen layout's sub-layouts with those ids
   IniReader *screen = resource_manager->getIniReader(screenLayout);
@@ -96,6 +104,9 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   this->setupExhibits();
   this->setupFilterPanel();
   this->setupStaffPanels();
+  this->setupLists();
+  this->setupColours();
+  this->setupAnimalPanel();
 
   // The bulldozer (Clear Objects) is a toggle that starts off: only the
   // view toggles (trees, guests, buildings) start on
@@ -104,7 +115,7 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
 
   // The game menu's Main Menu and Exit Game (their layout gives them no
   // action; the game does it)
-  for (UiAction a : {UiAction::GAME_MAIN_MENU, UiAction::GAME_EXIT})
+  for (UiAction a : {UiAction::GAME_LOAD, UiAction::GAME_SAVE, UiAction::GAME_MAIN_MENU, UiAction::GAME_EXIT})
     if (UiButton *b = dynamic_cast<UiButton *>(
             this->getElementById(static_cast<int>(a))))
       b->onClick = [this, a] { this->pendingAction = a; };
@@ -260,14 +271,67 @@ void UiGameScreen::setupBuyPanels() {
   }
   for (BuyPanel &p : this->buyPanels) {
     BuyPanel *self = &p;
-    p.region->onSelect = [this, self](int index) { this->showItem(*self, index); };
+    p.region->onSelect = [this, self](int index) {
+      // An animal picked: ready to put down at once, the gender last chosen
+      // (male to start; the gender buttons change it)
+      if (self->id == 3) {
+        this->animalPick.clear();
+        if (self->category == "animals" && index >= 0 && index < (int)self->items.size()) {
+          this->animalPick = self->items[index]->file;
+          for (int sex = 0; sex < 2; sex++)
+            if (UiButton *g = dynamic_cast<UiButton *>((sex ? self->female : self->male)
+                                                           ? self->layout->getElementById(sex ? self->female : self->male)
+                                                           : nullptr))
+              g->setToggledOn((sex == 1) == this->animalPickFemale);
+        }
+      }
+      // Picking a fence leaves gate mode
+      if (self->id == 8 && index >= 0 && self->gate)
+        if (UiButton *g = dynamic_cast<UiButton *>(self->layout->getElementById(self->gate)))
+          g->setToggledOn(false);
+      this->showItem(*self, index);
+    };
+    // Buy Habitat's gate button: a toggle (gate mode)
+    if (p.id == 8 && p.gate)
+      if (UiButton *g = dynamic_cast<UiButton *>(p.layout->getElementById(p.gate))) {
+        g->setToggle(true);
+        g->setToggledOn(false); // (off to start: toggles start on)
+        g->onClick = [this, g] { this->setGateMode(g->isToggledOn()); };
+      }
+    // Adopt Animals: the male or female button takes the animal picked
+    for (int sex = 0; sex < 2; sex++)
+      if (UiButton *b = dynamic_cast<UiButton *>(
+              (sex ? p.female : p.male) ? p.layout->getElementById(sex ? p.female : p.male) : nullptr))
+        b->onClick = [this, self, sex] {
+          int i = self->region ? self->region->getSelected() : -1;
+          if (i >= 0 && i < (int)self->items.size() && self->category == "animals") {
+            this->animalPick = self->items[i]->file;
+            this->animalPickFemale = sex == 1;
+          }
+          // (one gender lit at a time)
+          for (int other = 0; other < 2; other++)
+            if (UiButton *g = dynamic_cast<UiButton *>((other ? self->female : self->male)
+                                                           ? self->layout->getElementById(other ? self->female : self->male)
+                                                           : nullptr))
+              g->setToggledOn(other == sex);
+        };
     // Right turns it clockwise (SE, SW, NW, NE), left back
     if (UiButton *left = dynamic_cast<UiButton *>(
             p.rotateLeft ? p.layout->getElementById(p.rotateLeft) : nullptr))
-      left->onClick = [this] { this->rotateItems(-1); };
+      left->onClick = [this, self] {
+        if (self->category == "paths" && this->walkwayHeight)
+          this->walkwayHeight(-1);
+        else
+          this->rotateItems(-1);
+      };
     if (UiButton *right = dynamic_cast<UiButton *>(
             p.rotateRight ? p.layout->getElementById(p.rotateRight) : nullptr))
-      right->onClick = [this] { this->rotateItems(+1); };
+      right->onClick = [this, self] {
+        if (self->category == "paths" && this->walkwayHeight)
+          this->walkwayHeight(+1);
+        else
+          this->rotateItems(+1);
+      };
     this->refreshBuyPanel(p);
   }
 }
@@ -297,6 +361,10 @@ void UiGameScreen::refreshBuyPanel(BuyPanel &p) {
   p.region->setItems(cells);
   p.region->setSelected(p.items.empty() ? -1 : 0);
   this->showItem(p, p.items.empty() ? -1 : 0);
+  // "No items to display." (ZUPDATE's NoItemText) over an empty list
+  for (int id : {2009, 3009, 3609})
+    if (UiElement *none = p.layout ? p.layout->getElementById(id) : nullptr)
+      none->setHidden(!p.items.empty());
 }
 
 // An item's icon for the current facing (items with fewer icons than
@@ -305,6 +373,31 @@ const std::string &UiGameScreen::facingIcon(const CatalogItem *item) const {
   if (item->icons.empty())
     return item->icon;
   return item->icons[this->facing % item->icons.size()];
+}
+
+bool UiGameScreen::selectBuyItem(int panel, const std::string &file) {
+  for (BuyPanel &p : this->buyPanels) {
+    if (p.id != panel || !p.region)
+      continue;
+    for (int i = 0; i < (int)p.items.size(); i++)
+      if (p.items[i]->file == file) {
+        p.region->setSelected(i);
+        this->showItem(p, i);
+        return true;
+      }
+  }
+  return false;
+}
+
+void UiGameScreen::setWalkwayLabel(const std::string &text) {
+  if (text == this->walkwayText)
+    return;
+  this->walkwayText = text;
+  for (BuyPanel &p : this->buyPanels)
+    if (p.id == 8 && p.category == "paths" && p.fenceLabel)
+      if (UiText *t = dynamic_cast<UiText *>(p.layout->getElementById(p.fenceLabel)))
+        if (!t->isHidden())
+          t->setText(text);
 }
 
 void UiGameScreen::rotateItems(int step) {
@@ -363,8 +456,11 @@ void UiGameScreen::showDetails(BuyPanel &p, const CatalogItem *item) {
   show(p.male, animals);
   show(p.female, animals);
   show(p.info, animals || c == "staff");
-  show(p.rotateLeft, rotates);
-  show(p.rotateRight, rotates);
+  // Paths: the walkway height arrows, for the path types that can be raised
+  const bool raises = c == "paths" && item && this->walkwayHeight && this->canRaise &&
+                      this->canRaise(item->file);
+  show(p.rotateLeft, rotates || raises);
+  show(p.rotateRight, rotates || raises);
   show(p.era, false);
 
   image(p.location, 0, places && item ? infoImage(item->locationId) : "");
@@ -380,7 +476,17 @@ void UiGameScreen::showDetails(BuyPanel &p, const CatalogItem *item) {
       t->setText(std::to_string(item->capacity));
 
   bool fence = c == "fence";
-  show(p.fenceLabel, fence);
+  show(p.fenceLabel, fence || raises);
+  if (raises)
+    if (UiText *t = dynamic_cast<UiText *>(element(p.fenceLabel)))
+      t->setText(this->walkwayText);
+  // (the fence tab's own words back)
+  if (UiText *t = dynamic_cast<UiText *>(element(p.fenceLabel))) {
+    if (this->fenceLabelText.empty() && !raises)
+      this->fenceLabelText = t->getText();
+    if (fence && !this->fenceLabelText.empty())
+      t->setText(this->fenceLabelText);
+  }
   show(p.fenceType, fence && item);
   if (fence && item)
     if (UiText *t = dynamic_cast<UiText *>(element(p.fenceType)))
@@ -389,8 +495,33 @@ void UiGameScreen::showDetails(BuyPanel &p, const CatalogItem *item) {
           : item->members.count("habitatfences") ? 3298
                                                   : 3297));
   show(p.gate, fence);
+  // Enabled while there's an exhibit to put a gate on
   if (UiElement *gate = element(p.gate))
-    gate->setDisabled(true);
+    gate->setDisabled(!this->exhibitsExist || !this->exhibitsExist());
+}
+
+bool UiGameScreen::gateMode() const {
+  if (!this->isPanelOpen(8))
+    return false;
+  for (const BuyPanel &p : this->buyPanels)
+    if (p.id == 8 && p.category == "fence" && p.gate)
+      if (UiButton *b = dynamic_cast<UiButton *>(p.layout->getElementById(p.gate)))
+        return b->isToggledOn() && !b->isDisabled();
+  return false;
+}
+
+void UiGameScreen::setGateMode(bool on) {
+  for (BuyPanel &p : this->buyPanels)
+    if (p.id == 8 && p.gate)
+      if (UiButton *b = dynamic_cast<UiButton *>(p.layout->getElementById(p.gate))) {
+        b->setToggledOn(on);
+        // (the fence picked is let go, as the original)
+        if (on && p.region && p.category == "fence") {
+          p.region->setSelected(-1);
+          this->showItem(p, -1);
+          b->setToggledOn(true);
+        }
+      }
 }
 
 // ----------------------------------------------------------------------------
@@ -426,7 +557,18 @@ void UiGameScreen::setupTerraform() {
   // The first height tool (hills and valleys) starts chosen
   if (UiButton *b = dynamic_cast<UiButton *>(t.panel->getElementById(3315)))
     b->choose();
-  t.brushIndex = t.brushes.empty() ? 0 : (int)t.brushes.size() - 1;
+  // (the original opens on the 2 x 2 brush)
+  t.brushIndex = t.brushes.size() > 1 ? 1 : 0;
+  if (UiButton *b = dynamic_cast<UiButton *>(t.panel->getElementById(3302)))
+    b->onClick = [this] {
+      if (this->terraformCommand)
+        this->terraformCommand(true);
+    };
+  if (UiButton *b = dynamic_cast<UiButton *>(t.panel->getElementById(3303)))
+    b->onClick = [this] {
+      if (this->terraformCommand)
+        this->terraformCommand(false);
+    };
   if (t.plus)
     t.plus->onClick = [this] {
       if (this->terraform.brushIndex + 1 < (int)this->terraform.brushes.size())
@@ -471,6 +613,40 @@ void UiGameScreen::setupTerraform() {
     t.region->onSelect = [this](int index) { this->terraform.selected = index; };
   }
   this->refreshTerraform();
+}
+
+UiGameScreen::TerraformState UiGameScreen::terraformState() const {
+  TerraformState s;
+  const TerraformPage &t = this->terraform;
+  if (!t.panel || !this->isPanelOpen(8))
+    return s;
+  bool types = t.typesTab && t.typesTab->isToggledOn();
+  bool height = t.heightTab && t.heightTab->isToggledOn();
+  s.active = types || height;
+  s.painting = types;
+  if (t.selected >= 0 && t.selected < (int)t.terrains.size())
+    s.type = t.terrains[t.selected].type;
+  s.size = t.brushIndex + 1;
+  const int modes[4] = {3315, 3316, 3317, 3318};
+  for (int i = 0; i < 4; i++)
+    if (UiButton *b = dynamic_cast<UiButton *>(t.panel->getElementById(modes[i])))
+      if (b->isToggledOn())
+        s.mode = i;
+  return s;
+}
+
+// Modification Cost: the total so far; Accept while there's something the
+// zoo can pay for, Undo while there's anything
+void UiGameScreen::setTerraformCost(float cost) {
+  TerraformPage &t = this->terraform;
+  if (!t.panel)
+    return;
+  if (UiText *e = dynamic_cast<UiText *>(t.panel->getElementById(3305)))
+    e->setText("$" + std::to_string(static_cast<int>(std::fabs(cost))));
+  if (UiElement *e = t.panel->getElementById(3302))
+    e->setDisabled(cost <= 0);
+  if (UiElement *e = t.panel->getElementById(3303))
+    e->setDisabled(cost == 0);
 }
 
 void UiGameScreen::refreshTerraform() {
@@ -526,10 +702,7 @@ void UiGameScreen::refreshTerraform() {
   for (int id : {3315, 3316, 3317, 3318})
     show(id, height);
   show(3304, types);
-  text(3305, "$0");
-  for (int id : {3302, 3303}) // accept, undo: nothing to accept yet
-    if (UiElement *e = element(id))
-      e->setDisabled(true);
+  show(3321, types);
 
   int n = t.brushIndex + 1; // brushN covers N x N tiles
   if (t.brush && t.brushIndex < (int)t.brushes.size())
@@ -730,7 +903,7 @@ void UiGameScreen::setupZooStatus() {
         int nameId = levels->getInt(key, "name", 0);
         this->marketing.push_back(
             {nameId ? this->resource_manager->getString(nameId) : key,
-             levels->getInt(key, "cost", 0)});
+             levels->getInt(key, "cost", 0), levels->getInt(key, "benefit", 0)});
       }
       delete levels;
     }
@@ -833,7 +1006,12 @@ void UiGameScreen::refreshZooStatus() {
   text(4194, formatCents((adult + 1) / 2));
   for (int id : {4115, 4117, 4119, 4121, 4122, 4171})
     text(id, "0");
+  text(4115, std::to_string(this->zoo.animalCount));
+  text(4117, std::to_string(this->zoo.exhibitCount));
+  text(4119, std::to_string(this->zoo.attractionCount));
+  text(4121, std::to_string(this->zoo.guestCount));
   text(4122, std::to_string(this->zoo.staffCount));
+  text(4171, std::to_string(this->zoo.benefactorCount));
   if (!this->marketing.empty()) {
     this->marketingLevel =
         std::clamp(this->marketingLevel, 0, (int)this->marketing.size() - 1);
@@ -944,6 +1122,109 @@ void UiGameScreen::refreshZooStatus() {
     else
       label->clearTextColor();
   }
+  // Completed Research and Conservation (list 4164): each program finished
+  // (not those costing nothing), its icon and name
+  if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(4164))) {
+    std::vector<const ResearchProgram *> done;
+    for (ResearchBranch &b : Research::get().branches())
+      for (ResearchCategory &c : b.categories)
+        for (ResearchProgram &p : c.programs)
+          if (p.done && p.cost > 0)
+            done.push_back(&p);
+    if (static_cast<int>(done.size()) != this->researchListed) {
+      list->clear();
+      for (const ResearchProgram *p : done)
+        list->addItem(p->name, "", p->icon);
+      this->researchListed = static_cast<int>(done.size());
+    }
+  }
+  // Zoo Awards (zoo.exe 0x53167f): each award received, its icon
+  // (awards/awardN/awardN) and name (29000 + N)
+  if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(4124)))
+    if (this->awardsListed != static_cast<int>(this->awards.size())) {
+      list->clear();
+      for (int a : this->awards)
+        list->addItem(this->resource_manager->getString(29000 + a), "",
+                      "awards/award" + std::to_string(a) + "/award" + std::to_string(a));
+      this->awardsListed = static_cast<int>(this->awards.size());
+    }
+  // Commerce Building List (measured against the original's: "Snack
+  // Machine 1  1  2  -$5.50  -$5.50"): every stand and shop, its months
+  // open, visitors, profit (takings less upkeep, red under nothing) and
+  // profit a month, in the chosen order; picking one centres the view on
+  // it and opens its Building Information
+  if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(4172))) {
+    struct Row {
+      int id;
+      std::string name, type;
+      int months, visitors;
+      double profit, average;
+    };
+    std::vector<Row> rows;
+    if (this->objects)
+      for (const PlacedObjects::Object &o : this->objects->objects()) {
+        if (o.label.empty() || o.price < 0)
+          continue;
+        int months = std::max(1, this->monthNumber - o.openedMonth + 1);
+        double profit = o.income - o.upkeep;
+        rows.push_back({o.id, o.label, o.typeName, months, o.visitorsTotal, profit, profit / months});
+      }
+    int sortBy = 0;
+    for (int i = 0; i < 5; i++)
+      if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(4175 + i)))
+        if (b->isToggledOn())
+          sortBy = i;
+    std::stable_sort(rows.begin(), rows.end(), [sortBy](const Row &a, const Row &b) {
+      switch (sortBy) {
+      case 1: return a.months > b.months;
+      case 2: return a.visitors > b.visitors;
+      case 3: return a.profit > b.profit;
+      case 4: return a.average > b.average;
+      default: return a.type != b.type ? a.type < b.type : a.name < b.name;
+      }
+    });
+    auto cents = [](double v) {
+      char b[32];
+      std::snprintf(b, sizeof b, v < 0 ? "-$%.2f" : "$%.2f", std::fabs(v));
+      return std::string(b);
+    };
+    std::string shown;
+    std::vector<int> ids;
+    for (const Row &r : rows) {
+      shown += r.name + "|" + std::to_string(r.months) + "|" + std::to_string(r.visitors) + "|" + cents(r.profit) + "\n";
+      ids.push_back(r.id);
+    }
+    if (shown != this->commerceShown) {
+      int row = list->getScrollPosition();
+      list->clear();
+      const SDL_Color none = {0, 0, 0, 0}, loss = {255, 0, 0, 255};
+      for (const Row &r : rows)
+        list->addRow({r.name, std::to_string(r.months), std::to_string(r.visitors), cents(r.profit), cents(r.average)},
+                     {none, none, none, r.profit < 0 ? loss : none, r.average < 0 ? loss : none});
+      this->commerceShown = shown;
+      this->listedCommerce = ids;
+      list->setSelectedIndex(-1);
+      for (size_t i = 0; i < ids.size(); i++)
+        if (ids[i] == this->commercePicked)
+          list->setSelectedIndex(static_cast<int>(i));
+      list->setScrollPosition(row);
+    }
+    int sel = list->getSelectedIndex();
+    int id = sel >= 0 && sel < static_cast<int>(this->listedCommerce.size()) ? this->listedCommerce[sel] : -1;
+    if (id >= 0 && id != this->commercePicked) {
+      this->commercePicked = id;
+      if (const PlacedObjects::Object *o = this->objects->byId(id)) {
+        if (this->centreOn)
+          this->centreOn(o->x, o->y);
+        this->showBuilding(id);
+        // (Zoo Status stays open beside it, as the original)
+        this->setPanelOpen(14, true);
+        for (UiButton *b : this->panelButtons)
+          if (b->getActionTarget() == 14)
+            b->setToggledOn(true);
+      }
+    }
+  }
 }
 
 UiGameScreen::~UiGameScreen() {
@@ -1012,8 +1293,55 @@ void UiGameScreen::showTab(int panelId, int buttonId) {
 
 void UiGameScreen::setPanelOpen(int id, bool open) {
   for (Entry &e : this->entries)
-    if (e.panel && e.id == id)
+    if (e.panel && e.id == id) {
+      if (open && !e.open)
+        e.openedAt = ++this->openCount;
       e.open = open;
+    }
+}
+
+// An information window opens: the toolbar's panels close but an open
+// list at the bottom right stays (the window goes above it), and only one
+// information window shows at a time
+void UiGameScreen::openInfo(int id) {
+  std::vector<int> lists;
+  for (int l : {30, 31, 16, 12})
+    if (this->isPanelOpen(l))
+      lists.push_back(l);
+  this->showPanel(0, "");
+  for (int l : lists) {
+    this->setPanelOpen(l, true);
+    for (UiButton *b : this->panelButtons)
+      if (b->getActionTarget() == l)
+        b->setToggledOn(true);
+  }
+  for (int p : {6, 9, 17, 20, 21})
+    this->setPanelOpen(p, p == id);
+}
+
+bool UiGameScreen::closeTopmost() {
+  if (this->filter.open) {
+    this->filter.open = false;
+    return true;
+  }
+  if (this->dialog.layout) {
+    // A question is answered No; a name to type has to be given
+    if (!this->dialog.textId)
+      this->closeDialog();
+    return true;
+  }
+  Entry *top = nullptr;
+  for (Entry &e : this->entries)
+    if (e.panel && e.open && (!top || e.openedAt > top->openedAt))
+      top = &e;
+  if (!top)
+    return false;
+  int id = top->id;
+  this->setPanelOpen(id, false);
+  for (UiButton *b : this->panelButtons)
+    if (b->getActionTarget() == id)
+      b->setToggledOn(false);
+  return true;
 }
 
 // A panel sits where its [LayoutInfo] says, inside the HUD element it is
@@ -1033,16 +1361,30 @@ SDL_Rect UiGameScreen::anchorRect(const Entry &e, SDL_Rect *screen) {
 SDL_Rect UiGameScreen::panelRect(SDL_Renderer *renderer, const Entry &e,
                                  SDL_Rect *screen) {
   SDL_Rect parent = this->anchorRect(e, screen);
-  SDL_Rect r = e.layout->computeRect(renderer, &parent);
-  // Staff Information with the Staff List open: above the list
-  if (e.id == 17 && this->isPanelOpen(31))
+  // The paint tab and colour picker sit on the open Building Information
+  // (anchor=21)
+  if (e.id == 302 || e.id == 37)
     for (const Entry &o : this->entries)
-      if (o.panel && o.id == 31) {
-        SDL_Rect lr = this->panelRect(renderer, o, screen);
-        r.x = parent.x + parent.w - r.w;
-        r.y = lr.y - r.h;
-        return r;
+      if (o.panel && o.open && (o.id == 21 || o.id == 20)) {
+        SDL_Rect pr = this->panelRect(renderer, o, screen);
+        return e.layout->computeRect(renderer, &pr);
       }
+  SDL_Rect r = e.layout->computeRect(renderer, &parent);
+  // An information window (animal, guest, staff, building) with a list
+  // open at the bottom right (Exhibit/Show List, Staff List: x=right,
+  // y=-366): just above the list, as the original stacks them
+  if (e.id == 6 || e.id == 9 || e.id == 17 || e.id == 20 || e.id == 21)
+    for (const Entry &o : this->entries) {
+      if (!o.panel || !o.open || &o == &e)
+        continue;
+      IniReader *oi = o.layout->getIniReader();
+      if (!oi || oi->get("layoutinfo", "x") != "right" || oi->get("layoutinfo", "y") != "-366")
+        continue;
+      SDL_Rect lr = this->panelRect(renderer, o, screen);
+      r.x = parent.x + parent.w - r.w;
+      r.y = lr.y - r.h;
+      return r;
+    }
   // A negative x or y counts from the right or bottom edge (the Exhibit
   // List's y=-366 puts it 366 above the bottom of the screen, at 234)
   IniReader *ini = e.layout->getIniReader();
@@ -1057,6 +1399,16 @@ SDL_Rect UiGameScreen::panelRect(SDL_Renderer *renderer, const Entry &e,
 }
 
 void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
+  // The gate button, live: enabled the moment there's an exhibit (the first
+  // one finished with the panel open left it greyed until it was opened
+  // again)
+  if (this->isPanelOpen(8))
+    for (BuyPanel &p : this->buyPanels)
+      if (p.id == 8 && p.gate)
+        if (UiElement *gate = p.layout->getElementById(p.gate)) {
+          gate->setHidden(p.category != "fence");
+          gate->setDisabled(!this->exhibitsExist || !this->exhibitsExist());
+        }
   for (Entry &e : this->entries) {
     if (!e.open)
       continue;
@@ -1070,6 +1422,7 @@ void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     e.layout->draw(renderer, &r);
   }
   this->drawStaffPortrait(renderer);
+  this->drawAnimalPortrait(renderer);
   this->drawMessage(renderer, layout_rect);
   this->drawTooltip(renderer, layout_rect);
 }
@@ -1096,7 +1449,18 @@ std::string UiGameScreen::tooltipText() const {
     if (it->open && (!it->panel || SDL_PointInRect(&p, &it->rect)))
       search(it->layout);
   if (found) {
-    std::string tip = this->resource_manager->getString(30000 + found->getHelpId());
+    // The view toggles say what a click does: "Click to hide foliage in
+    // the game area." on, "Click to show ..." off
+    int help = found->getHelpId();
+    if (!found->isToggledOn()) {
+      if (help == 1066)
+        return this->resource_manager->getString(31065);
+      if (help == 1067)
+        return this->resource_manager->getString(31069);
+      if (help == 1068)
+        return this->resource_manager->getString(31070);
+    }
+    std::string tip = this->resource_manager->getString(30000 + help);
     return tip;
   }
   if (this->isOverHud(this->mouseX, this->mouseY))
@@ -1185,6 +1549,20 @@ void UiGameScreen::drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   }
 }
 
+void UiGameScreen::postMessage(const std::string &text, int kind, Subject subject, int id) {
+  Uint32 now = SDL_GetTicks();
+  if (kind <= 2)
+    for (const LoggedMessage &m : this->messageLog)
+      if (m.text == text && now - m.at < 60000)
+        return;
+  static const SDL_Color colours[3] = {{255, 255, 255, 255}, {0, 255, 0, 255}, {255, 0, 0, 255}};
+  this->showMessage(text, colours[kind % 3]);
+  this->messageLog.insert(this->messageLog.begin(), {text, kind, subject, id, now});
+  if (this->messageLog.size() > 25)
+    this->messageLog.resize(25);
+  this->messageSerial++;
+}
+
 void UiGameScreen::showMessage(const std::string &text, SDL_Color color, Uint32 ms) {
   this->message = text;
   this->messageColor = color;
@@ -1194,7 +1572,7 @@ void UiGameScreen::showMessage(const std::string &text, SDL_Color color, Uint32 
 // The bar's art is drawn with the screen (shown while there's a message);
 // the message goes on it, centred (gamescrn.lyt: font 7002, size 7003)
 void UiGameScreen::drawMessage(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
-  if (!this->messageBar)
+  if (!this->messageBar || this->isPanelOpen(29)) // (the list shows it instead)
     return;
   std::string text;
   SDL_Color color = {255, 255, 255, 255};
@@ -1304,6 +1682,10 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
   this->refreshExhibits();
   this->refreshFilterPanel();
   this->refreshStaff();
+  this->refreshAnimal();
+  this->refreshGuest();
+  this->refreshBuilding();
+  this->refreshLists();
 
   if (isPanelToggle(action)) {
     // The panel buttons are toggles in one radio set: each open panel is
@@ -1378,6 +1760,63 @@ std::string UiGameScreen::staffToolFile() const {
   return "";
 }
 
+void UiGameScreen::dropPicks() {
+  this->animalPick.clear();
+  this->setGateMode(false);
+  static const char *placed[] = {"animals", "shelters", "toys", "showtoys", "structures", "scenery", "foliage", "rocks"};
+  for (BuyPanel &p : this->buyPanels) {
+    bool drop = false;
+    for (const char *c : placed)
+      drop = drop || p.category == c;
+    if (!drop || !p.region || p.region->getSelected() < 0)
+      continue;
+    p.region->setSelected(-1);
+    this->showItem(p, -1);
+  }
+}
+
+std::string UiGameScreen::objectToolFile(int &cost, int &facing) const {
+  cost = 0;
+  facing = this->facing;
+  static const char *placed[] = {"shelters", "toys", "showtoys", "structures", "scenery", "foliage", "rocks"};
+  for (const BuyPanel &p : this->buyPanels) {
+    if (!this->isPanelOpen(p.id) || !p.region)
+      continue;
+    bool objects = false;
+    for (const char *c : placed)
+      objects = objects || p.category == c;
+    if (!objects)
+      continue;
+    int i = p.region->getSelected();
+    if (i >= 0 && i < (int)p.items.size()) {
+      cost = p.items[i]->cost;
+      return p.items[i]->file;
+    }
+  }
+  return "";
+}
+
+std::string UiGameScreen::animalToolFile(bool &female) const {
+  female = this->animalPickFemale;
+  if (!this->isPanelOpen(3))
+    return "";
+  for (const BuyPanel &p : this->buyPanels)
+    if (p.id == 3 && p.category == "animals")
+      return this->animalPick;
+  return "";
+}
+
+bool UiGameScreen::viewShown(int id) const {
+  UiButton *b = this->hud ? dynamic_cast<UiButton *>(this->hud->getElementById(id)) : nullptr;
+  return !b || b->isToggledOn();
+}
+
+// (picking something from a list puts the bulldozer away first)
+void UiGameScreen::bulldozerOff() {
+  if (UiButton *b = this->hud ? dynamic_cast<UiButton *>(this->hud->getElementById(1028)) : nullptr)
+    b->setToggledOn(false);
+}
+
 bool UiGameScreen::bulldozerOn() const {
   UiButton *b = this->hud ? dynamic_cast<UiButton *>(this->hud->getElementById(1028)) : nullptr;
   return b && b->isToggledOn();
@@ -1423,10 +1862,56 @@ void UiGameScreen::askName(const std::string &prompt, const std::string &initial
   if (UiButton *ok = dynamic_cast<UiButton *>(d->getElementById(45312)))
     ok->onClick = [this] { this->dialog.submit = true; };
   if (UiText *t = dynamic_cast<UiText *>(d->getElementById(45308))) {
+    t->setInputBox(true);
     t->setText(initial);
     t->onCommit = [this](const std::string &typed) { this->dialog.typed = typed; };
     t->beginEdit();
   }
+}
+
+void UiGameScreen::tell(const std::string &message) {
+  if (this->dialog.layout) {
+    this->dialogQueue.push_back([=] { this->tell(message); });
+    return;
+  }
+  IniReader *ini = this->resource_manager->getIniReader("ui/confirm.lyt");
+  if (!ini)
+    return;
+  this->dialog.layout = new UiLayout(ini, this->resource_manager);
+  this->dialog.yes = nullptr;
+  UiLayout *d = this->dialog.layout;
+  if (UiText *m = dynamic_cast<UiText *>(d->getElementById(45006)))
+    m->setMessage(message);
+  if (UiImage *icon = dynamic_cast<UiImage *>(d->getElementById(45002)))
+    icon->setImage("ui/sharedui/exclaim/exclaim");
+  for (int id : {45010, 45011, 45013}) // just OK
+    if (UiElement *e = d->getElementById(id))
+      e->setHidden(true);
+  if (UiButton *ok = dynamic_cast<UiButton *>(d->getElementById(45012)))
+    ok->onClick = [this] { this->dialog.submit = true; };
+}
+
+void UiGameScreen::popup(const std::string &image, const std::string &message) {
+  if (this->dialog.layout) {
+    this->dialogQueue.push_back([=] { this->popup(image, message); });
+    return;
+  }
+  IniReader *ini = this->resource_manager->getIniReader("ui/confirmm.lyt");
+  if (!ini)
+    return;
+  this->dialog.layout = new UiLayout(ini, this->resource_manager);
+  this->dialog.yes = nullptr;
+  UiLayout *d = this->dialog.layout;
+  if (UiText *m = dynamic_cast<UiText *>(d->getElementById(45206)))
+    m->setMessage(message);
+  if (UiImage *icon = dynamic_cast<UiImage *>(d->getElementById(45204)))
+    if (!image.empty())
+      icon->setImage(image);
+  for (int id : {45210, 45211, 45213}) // just OK
+    if (UiElement *e = d->getElementById(id))
+      e->setHidden(true);
+  if (UiButton *ok = dynamic_cast<UiButton *>(d->getElementById(45212)))
+    ok->onClick = [this] { this->dialog.submit = true; };
 }
 
 void UiGameScreen::askConfirm(const std::string &message, std::function<void()> yes) {
@@ -1776,16 +2261,14 @@ void UiGameScreen::showStaff(int id) {
   const Staff::Member *m = this->staff->member(id);
   if (!m)
     return;
-  bool fromList = this->isPanelOpen(31);
-  if (!fromList)
-    this->showPanel(0, "");
-  this->setPanelOpen(17, true);
+  this->openInfo(17);
   this->shownStaff = id;
   this->staff->selected = id;
   this->tracking = false;
   const Staff::Type &t = this->staff->types()[m->type];
+  // (tour guides can be given exhibits too: their tours go to those)
   bool keeperLike = t.kind == Staff::Kind::Keeper || t.kind == Staff::Kind::Scientist ||
-                    t.kind == Staff::Kind::Trainer;
+                    t.kind == Staff::Kind::Trainer || t.kind == Staff::Kind::Guide;
   bool maint = t.kind == Staff::Kind::Maint;
   UiLayout *z = this->staffPanel;
   auto show = [&](int eid, bool on) {
@@ -1913,6 +2396,268 @@ void UiGameScreen::refreshStaff() {
   }
 }
 
+// ----------------------------------------------------------------------------
+// Animal List and Guest List (measured against the original's: "All
+// Animals", each one's mini icon and name, the filters' counts: all,
+// angry, sick, hungry, unhappy with its exhibit, escaped; "All Guests":
+// all, angry, thirsty, hungry, restroom, tired). Picking one opens its
+// information (above the list) and centres the view on it.
+// ----------------------------------------------------------------------------
+static const int kAnimalFilters[6] = {3815, 3817, 3819, 3821, 3823, 3838};
+static const int kAnimalCounts[6] = {3816, 3818, 3820, 3822, 3824, 3839};
+static const int kAnimalNames[6] = {3825, 3826, 3827, 3828, 3829, 3840};
+static const int kGuestFilters[6] = {3715, 3717, 3719, 3721, 3723, 3725};
+static const int kGuestCounts[6] = {3716, 3718, 3720, 3722, 3724, 3726};
+static const int kGuestNames[6] = {3727, 3728, 3729, 3730, 3731, 3732};
+
+void UiGameScreen::setupLists() {
+  for (Entry &e : this->entries) {
+    if (e.panel && e.id == 16)
+      this->animalListPanel = e.layout;
+    if (e.panel && e.id == 12)
+      this->guestListPanel = e.layout;
+  }
+  auto hook = [](UiLayout *z, const int *buttons, int *chosen) {
+    if (!z)
+      return;
+    for (int i = 0; i < 6; i++)
+      if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(buttons[i]))) {
+        b->setHidden(false);
+        b->onClick = [chosen, i] { *chosen = i; };
+      }
+  };
+  // The Messages button (a toggle with no target) shows the Message List
+  // (its list and scrollbar hidden in the layout, state=1)
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 29)
+      for (int id : {7201, 7202})
+        if (UiElement *el = e.layout->getElementById(id))
+          el->setHidden(false);
+  if (UiButton *b = this->hud ? dynamic_cast<UiButton *>(this->hud->getElementById(1006)) : nullptr) {
+    b->setToggledOn(false);
+    b->onClick = [this, b] { this->setPanelOpen(29, b->isToggledOn()); };
+  }
+  // (the filter's name: hidden in the layouts, state=1; the game shows it)
+  for (UiLayout *z : {this->animalListPanel, this->guestListPanel})
+    if (z)
+      for (int id : {3835, 3727})
+        if (UiElement *e = z->getElementById(id))
+          e->setHidden(false);
+  hook(this->animalListPanel, kAnimalFilters, &this->animalFilter);
+  hook(this->guestListPanel, kGuestFilters, &this->guestFilter);
+}
+
+// The filters (zoo.exe 0x4537fe, 0x4f5d7f), T = cUIThreshold (75 in both
+// animals.ai and guests.ai): angry at happiness 2T - 201 or less (-51 on
+// the -100..100 scale), hungry and the other needs over T; unhappy below
+// its species' cHabitatPreference (outside an exhibit: 0, so unhappy)
+static constexpr int kUiThreshold = 75;
+
+bool UiGameScreen::animalPasses(const Animals::Member &m, int filter) const {
+  const Animals::Type &t = this->animals->types()[m.type];
+  switch (filter) {
+  case 1: return m.happiness <= 2 * kUiThreshold - 201;
+  case 2: return m.sick;
+  case 3: return m.hunger > kUiThreshold;
+  case 4: {
+    if (m.boxed || m.dying || m.id == this->animals->carried)
+      return false;
+    int s = m.exhibit >= 0 && !m.escaped && this->animalSuitability ? this->animalSuitability(m.id) : 0;
+    return s < t.habitatPreference;
+  }
+  case 5: return m.escaped;
+  default: return true;
+  }
+}
+
+bool UiGameScreen::guestPasses(const Guests::Guest &g, int filter) const {
+  switch (filter) {
+  case 1: return g.happiness <= 2 * kUiThreshold - 201;
+  case 2: return g.thirst > kUiThreshold;
+  case 3: return g.hunger > kUiThreshold;
+  case 4: return g.bathroom > kUiThreshold;
+  case 5: return g.tired > kUiThreshold;
+  default: return true;
+  }
+}
+
+void UiGameScreen::refreshLists() {
+  auto text = [](UiLayout *z, int id, const std::string &s) {
+    if (UiText *t = dynamic_cast<UiText *>(z->getElementById(id)))
+      t->setText(s);
+  };
+  // The list itself: rows as the filter has them, the one selected in the
+  // zoo lit; a pick shows it
+  auto fill = [](UiListBox *list, const std::vector<int> &ids, std::vector<int> &listed, int &lit, int selected,
+                 const std::function<std::pair<std::string, std::string>(int)> &row,
+                 const std::function<Animation *(int)> &art = nullptr) -> int {
+    int want = -1;
+    for (size_t i = 0; i < ids.size(); i++)
+      if (ids[i] == selected)
+        want = static_cast<int>(i);
+    if (ids != listed) {
+      int top = list->getScrollPosition();
+      list->clear();
+      for (int id : ids) {
+        auto [name, icon] = row(id);
+        if (Animation *a = art ? art(id) : nullptr)
+          list->addItem(name, a);
+        else
+          list->addItem(name, "", icon);
+      }
+      listed = ids;
+      lit = want;
+      list->setSelectedIndex(want);
+      list->setScrollPosition(top);
+      return -1;
+    }
+    int pick = list->getSelectedIndex();
+    if (pick != lit && pick >= 0 && pick < static_cast<int>(ids.size())) {
+      lit = pick;
+      return ids[pick];
+    }
+    if (want != lit) {
+      lit = want;
+      list->setSelectedIndex(want);
+    }
+    return -1;
+  };
+  // The Message List: every message kept, newest at the top, each with its
+  // arrow; the Messages button lit while it's open
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 29) {
+      if (UiButton *b = this->hud ? dynamic_cast<UiButton *>(this->hud->getElementById(1006)) : nullptr)
+        b->setToggledOn(e.open);
+      if (!e.open)
+        break;
+      if (UiListBox *list = dynamic_cast<UiListBox *>(e.layout->getElementById(7201)))
+      {
+        // (measured: "The game is paused." first while it is, white and
+        // without a mark, then the news, newest first, in its colour; news
+        // about something has the crosshair: ui/sharedui/mescros)
+        std::string current = this->pausedMessage ? this->resource_manager->getString(400) : std::string();
+        int offset = current.empty() ? 0 : 1;
+        if (this->messagesListedSerial != this->messageSerial || current != this->messageListTop) {
+          list->clear();
+          if (!current.empty())
+            list->addItem(current, SDL_Color{255, 255, 255, 255});
+          static const SDL_Color colours[3] = {{255, 255, 255, 255}, {0, 255, 0, 255}, {255, 0, 0, 255}};
+          for (const LoggedMessage &m : this->messageLog) {
+            list->addItem(m.text, "", m.subject != Subject::None ? "ui/sharedui/mescros/mescros" : "");
+            list->setItemColor(static_cast<int>(list->getItemCount()) - 1, colours[m.kind % 3]);
+          }
+          this->messagesListedSerial = this->messageSerial;
+          this->messageListTop = current;
+          list->setSelectedIndex(-1);
+        }
+        // A click on news about something: the view goes there and it's
+        // picked (zoo.exe 0x47fa78)
+        int pick = list->getSelectedIndex() - offset;
+        if (pick >= 0 && pick < static_cast<int>(this->messageLog.size())) {
+          const LoggedMessage &m = this->messageLog[pick];
+          list->setSelectedIndex(-1);
+          if (m.subject != Subject::None)
+            this->bulldozerOff();
+          if (m.subject == Subject::Animal && this->animals && this->animals->member(m.id)) {
+            this->showAnimal(m.id);
+            if (this->animalRequest)
+              this->animalRequest(AnimalRequest::Select, m.id);
+          } else if (m.subject == Subject::Guest && this->guests) {
+            if (const Guests::Guest *g = this->guests->guest(m.id)) {
+              this->showGuest(m.id);
+              if (this->centreOn)
+                this->centreOn(g->x, g->y);
+            }
+          } else if (m.subject == Subject::Staff && this->staff && this->staff->member(m.id)) {
+            if (this->staffRequest)
+              this->staffRequest(StaffRequest::Select, m.id);
+            this->showStaff(m.id);
+          }
+        } else if (pick < 0 && list->getSelectedIndex() >= 0) {
+          list->setSelectedIndex(-1);
+        }
+      }
+    }
+  // (the chosen filter's count in white, the rest in their own colour)
+  auto countColour = [](UiLayout *z, int id, bool chosen) {
+    if (UiText *t = dynamic_cast<UiText *>(z->getElementById(id))) {
+      if (chosen)
+        t->setTextColor(SDL_Color{255, 255, 255, 255});
+      else
+        t->clearTextColor();
+    }
+  };
+  if (UiLayout *z = this->animalListPanel; z && this->animals && this->isPanelOpen(16)) {
+    std::vector<int> ids;
+    for (int f = 0; f < 6; f++) {
+      int n = 0;
+      for (const Animals::Member &m : this->animals->members())
+        if (this->animalPasses(m, f)) {
+          n++;
+          if (f == this->animalFilter)
+            ids.push_back(m.id);
+        }
+      text(z, kAnimalCounts[f], std::to_string(n));
+      countColour(z, kAnimalCounts[f], f == this->animalFilter);
+    }
+    // (by species, then name, then when it came: zoo.exe 0x453643)
+    std::stable_sort(ids.begin(), ids.end(), [this](int a, int b) {
+      const Animals::Member *x = this->animals->member(a), *y = this->animals->member(b);
+      std::string sx = this->resource_manager->getString(this->animals->types()[x->type].nameId);
+      std::string sy = this->resource_manager->getString(this->animals->types()[y->type].nameId);
+      if (sx != sy)
+        return sx < sy;
+      if (x->name != y->name)
+        return x->name < y->name;
+      return a < b;
+    });
+    text(z, 3835, this->resource_manager->getString(kAnimalNames[this->animalFilter]));
+    if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(3805))) {
+      int picked = fill(list, ids, this->listedAnimals, this->litAnimal, this->animals->selected, [this](int id) {
+        const Animals::Member *m = this->animals->member(id);
+        return std::make_pair(m->name, this->animals->types()[m->type].listImage);
+      });
+      if (picked >= 0) {
+        this->bulldozerOff();
+        this->showAnimal(picked);
+        if (this->animalRequest)
+          this->animalRequest(AnimalRequest::Select, picked);
+      }
+    }
+  }
+  if (UiLayout *z = this->guestListPanel; z && this->guests && this->isPanelOpen(12)) {
+    std::vector<int> ids;
+    for (int f = 0; f < 6; f++) {
+      int n = 0;
+      for (const Guests::Guest &g : this->guests->guests())
+        if (g.x > -999 && this->guestPasses(g, f)) {
+          n++;
+          if (f == this->guestFilter)
+            ids.push_back(g.id);
+        }
+      text(z, kGuestCounts[f], std::to_string(n));
+      countColour(z, kGuestCounts[f], f == this->guestFilter);
+    }
+    text(z, 3727, this->resource_manager->getString(kGuestNames[this->guestFilter]));
+    if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(3705))) {
+      int picked = fill(list, ids, this->listedGuests, this->litGuest, this->guests->selected, [this](int id) {
+        const Guests::Guest *g = this->guests->guest(id);
+        static const char *icons[4] = {"guests/lsmguest/lsmguest", "guests/lsfguest/lsfguest",
+                                       "guests/lsbguest/lsbguest", "guests/lsgguest/lsgguest"};
+        int kind = static_cast<int>(this->guests->types()[g->type].kind);
+        return std::make_pair(g->name, std::string(icons[std::clamp(kind, 0, 3)]));
+      }, [this](int id) { return this->guests->listIcon(*this->guests->guest(id)); });
+      if (picked >= 0)
+        if (const Guests::Guest *g = this->guests->guest(picked)) {
+          this->bulldozerOff();
+          this->showGuest(picked);
+          if (this->centreOn)
+            this->centreOn(g->x, g->y);
+        }
+    }
+  }
+}
+
 // The round portrait at the panel's top left: the staff member itself, in
 // its colours
 void UiGameScreen::drawStaffPortrait(SDL_Renderer *renderer) {
@@ -1924,6 +2669,571 @@ void UiGameScreen::drawStaffPortrait(SDL_Renderer *renderer) {
   for (const Entry &e : this->entries)
     if (e.panel && e.id == 17 && e.open)
       if (Animation *a = this->staff->art(*m, "idle"))
+        a->drawAnchored(renderer, static_cast<float>(e.rect.x + 34),
+                        static_cast<float>(e.rect.y + 62), CompassDirection::SE, nullptr, 0);
+}
+
+// ----------------------------------------------------------------------------
+// Animal Information (measured in the original): its name (edit to
+// rename), Move, Exhibit Information, Sell (asks first: "Are you sure you
+// want to sell Plains Zebra 1? Refund: $528"), Zookeeper Recommendations;
+// Status: happiness, hunger, health and exhibit suitability bars; General:
+// gender, when it last ate and slept; Thoughts: what guests think of it.
+// ----------------------------------------------------------------------------
+void UiGameScreen::setAnimals(Animals *animals, std::function<void(AnimalRequest, int)> request) {
+  this->animals = animals;
+  this->animalRequest = request;
+}
+
+void UiGameScreen::setupAnimalPanel() {
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 6)
+      this->animalPanel = e.layout;
+  UiLayout *z = this->animalPanel;
+  if (!z)
+    return;
+  if (UiElement *name = z->getElementById(3102))
+    name->setHidden(false);
+  // The layout hides Zookeeper Recommendations (state=2048); the game
+  // shows it. Track starts off.
+  if (UiButton *keeper = dynamic_cast<UiButton *>(z->getElementById(3122))) {
+    keeper->setHidden(false);
+    // (a plain button in the original, not a lit toggle)
+    keeper->setToggle(false);
+    keeper->setToggledOn(false);
+  }
+  if (UiButton *track = dynamic_cast<UiButton *>(z->getElementById(3114)))
+    track->setToggledOn(false);
+  if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3115)))
+    b->onClick = [this] {
+      if (this->animalRequest && this->shownAnimal >= 0)
+        this->animalRequest(AnimalRequest::PickUp, this->shownAnimal);
+    };
+  if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3197)))
+    b->onClick = [this] {
+      const Animals::Member *m = this->animals ? this->animals->member(this->shownAnimal) : nullptr;
+      if (m && m->exhibit >= 0)
+        this->showExhibit(m->exhibit);
+    };
+  if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3122)))
+    b->onClick = [this] {
+      if (this->shownAnimal >= 0)
+        this->showAdvice(this->shownAnimal);
+    };
+  if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3111)))
+    b->onClick = [this] {
+      const Animals::Member *m = this->animals ? this->animals->member(this->shownAnimal) : nullptr;
+      if (!m)
+        return;
+      int id = m->id;
+      std::string ask = this->resource_manager->getString(154);
+      size_t at = ask.find("%s");
+      if (at != std::string::npos)
+        ask.replace(at, 2, m->name);
+      ask += formatPrice(this->animals->refund(id));
+      this->askConfirm(ask, [this, id] {
+        if (this->animalRequest)
+          this->animalRequest(AnimalRequest::Sell, id);
+        if (this->shownAnimal == id) {
+          this->shownAnimal = -1;
+          this->setPanelOpen(6, false);
+        }
+      });
+    };
+  if (UiText *name = dynamic_cast<UiText *>(z->getElementById(3102)))
+    name->onCommit = [this](const std::string &typed) {
+      if (!this->animals || typed.empty())
+        return;
+      if (Animals::Member *m = this->animals->member(this->shownAnimal))
+        m->name = typed;
+    };
+}
+
+void UiGameScreen::showBuilding(int id) {
+  PlacedObjects::Object *o = this->objects ? this->objects->byId(id) : nullptr;
+  if (!o)
+    return;
+  bool commerce = o->price >= 0;
+  UiLayout *z = nullptr;
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == (commerce ? 21 : 20))
+      z = e.layout;
+  if (!z)
+    return;
+  this->openInfo(commerce ? 21 : 20);
+  this->shownBuilding = id;
+  int nameId = commerce ? 4502 : 4602;
+  if (UiElement *n = z->getElementById(nameId))
+    n->setHidden(false);
+  // (no move hand on a building's panel, as the original)
+  for (int hid : commerce ? std::vector<int>{4580} : std::vector<int>{})
+    if (UiElement *hand = z->getElementById(hid))
+      hand->setHidden(true);
+  // Its picture (cInfoImageName: scenery/building/inbldg for most)
+  if (UiImage *pic = dynamic_cast<UiImage *>(z->getElementById(commerce ? 4550 : 4650))) {
+    std::string img = "scenery/building/inbldg/inbldg";
+    if (IniReader *ai = this->resource_manager->getIniReader(PlacedObjects::fileOf(*o))) {
+      std::string v = ai->get("characteristics/strings", "cinfoimagename");
+      if (!v.empty())
+        img = v;
+      delete ai;
+    }
+    pic->setImage(img);
+    pic->setHidden(false);
+  }
+  if (UiButton *tab = dynamic_cast<UiButton *>(z->getElementById(commerce ? 4575 : 4675)))
+    tab->choose();
+  z->syncTabs();
+  if (commerce) {
+    // Price up / down, $0.25 a step; sell
+    // (its cLowCost to cHighCost, $30 at most: zoo.exe 0x611b43, 0x5a5bbc)
+    float lo = 1, hi = 1;
+    if (IniReader *ai = this->resource_manager->getIniReader(PlacedObjects::fileOf(*o))) {
+      std::string l = ai->get("characteristics/floats", "clowcost"), h = ai->get("characteristics/floats", "chighcost");
+      lo = l.empty() ? 1.0f : static_cast<float>(std::atof(l.c_str()));
+      hi = h.empty() ? 1.0f : static_cast<float>(std::atof(h.c_str()));
+      delete ai;
+    }
+    if (UiButton *up = dynamic_cast<UiButton *>(z->getElementById(4557)))
+      up->onClick = [this, hi] {
+        if (PlacedObjects::Object *b = this->objects->byId(this->shownBuilding))
+          b->price = std::min({b->price + 0.25f, 30.0f, hi});
+      };
+    if (UiButton *dn = dynamic_cast<UiButton *>(z->getElementById(4556)))
+      dn->onClick = [this, lo] {
+        if (PlacedObjects::Object *b = this->objects->byId(this->shownBuilding))
+          b->price = std::max({b->price - 0.25f, 0.0f, lo});
+      };
+  }
+  if (UiButton *sell = dynamic_cast<UiButton *>(z->getElementById(commerce ? 4516 : 4616)))
+    sell->onClick = [this, commerce] {
+      int id = this->shownBuilding;
+      if (this->sellBuilding)
+        this->sellBuilding(id);
+      this->setPanelOpen(commerce ? 21 : 20, false);
+      this->shownBuilding = -1;
+    };
+  this->refreshBuilding();
+}
+
+void UiGameScreen::setupColours() {
+  UiLayout *paint = nullptr, *picker = nullptr;
+  for (Entry &e : this->entries) {
+    if (e.panel && e.id == 302)
+      paint = e.layout;
+    if (e.panel && e.id == 37)
+      picker = e.layout;
+  }
+  if (paint)
+    for (int part : {0, 1})
+      if (UiButton *b = dynamic_cast<UiButton *>(paint->getElementById(2461 + part)))
+        b->onClick = [this, part] {
+          this->colourPart = part;
+          this->setPanelOpen(302, false);
+          this->setPanelOpen(37, true);
+        };
+  if (picker)
+    for (int k = 0; k < 24; k++)
+      if (UiButton *b = dynamic_cast<UiButton *>(picker->getElementById(2401 + k))) {
+        b->setToggle(false);
+        b->onClick = [this, k] {
+          PlacedObjects::Object *o = this->objects ? this->objects->byId(this->shownBuilding) : nullptr;
+          if (o && k < static_cast<int>(this->colourChoices.size()))
+            this->objects->setColour(*o, this->colourPart, this->colourChoices[k]);
+          this->setPanelOpen(37, false);
+          this->setPanelOpen(302, true);
+        };
+      }
+}
+
+// The paint tab (measured against the original's hot dog stand: "Roof"
+// and its colour; clicked, the panel shows the 24 colours, ordered by
+// red, then green, then blue; a pick paints it and the tab comes back).
+// Only buildings that can be painted (cIsColorReplaced) have the tab.
+void UiGameScreen::refreshColours(UiLayout *z, PlacedObjects::Object *o, bool commerce) {
+  UiLayout *paint = nullptr, *picker = nullptr;
+  for (Entry &e : this->entries) {
+    if (e.panel && e.id == 302)
+      paint = e.layout;
+    if (e.panel && e.id == 37)
+      picker = e.layout;
+  }
+  const PlacedObjects::Colouring *c = o ? this->objects->colouringOf(PlacedObjects::fileOf(*o)) : nullptr;
+  UiButton *tab = z ? dynamic_cast<UiButton *>(z->getElementById(commerce ? 4577 : 4677)) : nullptr;
+  if (tab) {
+    tab->setHidden(!c);
+    if (!c && tab->isToggledOn())
+      if (UiButton *first = dynamic_cast<UiButton *>(z->getElementById(commerce ? 4575 : 4675))) {
+        first->choose();
+        z->syncTabs();
+      }
+  }
+  bool on = c && tab && tab->isToggledOn();
+  if (!on) {
+    this->setPanelOpen(302, false);
+    this->setPanelOpen(37, false);
+    return;
+  }
+  if (!this->isPanelOpen(37))
+    this->setPanelOpen(302, true);
+  if (paint) {
+    for (int part = 0; part < 2; part++) {
+      bool has = part < static_cast<int>(c->parts.size());
+      if (UiText *label = dynamic_cast<UiText *>(paint->getElementById(2451 + part))) {
+        label->setHidden(!has);
+        if (has)
+          label->setText(this->resource_manager->getString(c->parts[part].title));
+      }
+      if (UiButton *b = dynamic_cast<UiButton *>(paint->getElementById(2461 + part))) {
+        b->setHidden(!has);
+        int pick = has ? this->objects->colourOf(*o, part) : -1;
+        if (pick >= 0)
+          b->setFillColor(c->parts[part].swatches[pick]);
+      }
+    }
+  }
+  if (picker && this->isPanelOpen(37) && this->colourPart < static_cast<int>(c->parts.size())) {
+    const PlacedObjects::ColourPart &part = c->parts[this->colourPart];
+    std::vector<int> order(part.swatches.size());
+    for (size_t i = 0; i < order.size(); i++)
+      order[i] = static_cast<int>(i);
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+      const SDL_Color &x = part.swatches[a], &y = part.swatches[b];
+      return std::tie(x.r, x.g, x.b) < std::tie(y.r, y.g, y.b);
+    });
+    this->colourChoices = order;
+    for (int k = 0; k < 24; k++)
+      if (UiButton *b = dynamic_cast<UiButton *>(picker->getElementById(2401 + k))) {
+        bool has = k < static_cast<int>(order.size());
+        b->setHidden(!has);
+        if (has)
+          b->setFillColor(part.swatches[order[k]]);
+      }
+  }
+}
+
+void UiGameScreen::refreshBuilding() {
+  if (this->shownBuilding < 0 || !this->objects)
+    return;
+  PlacedObjects::Object *o = this->objects->byId(this->shownBuilding);
+  bool open21 = this->isPanelOpen(21), open20 = this->isPanelOpen(20);
+  if (!o || (!open21 && !open20)) {
+    this->shownBuilding = -1;
+    this->setPanelOpen(21, false);
+    this->setPanelOpen(20, false);
+    this->setPanelOpen(302, false);
+    this->setPanelOpen(37, false);
+    return;
+  }
+  UiLayout *z = nullptr;
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == (open21 ? 21 : 20))
+      z = e.layout;
+  if (!z)
+    return;
+  auto text = [&](int eid, const std::string &v) {
+    if (UiText *e = dynamic_cast<UiText *>(z->getElementById(eid)))
+      if (!e->isBeingEdited())
+        e->setText(v);
+  };
+  auto money = [](double v) {
+    char b[32];
+    std::snprintf(b, sizeof b, v < 0 ? "-$%.0f" : "$%.0f", std::fabs(v));
+    return std::string(b);
+  };
+  this->refreshColours(z, o, open21);
+  int months = std::max(1, this->monthNumber - o->openedMonth + 1);
+  if (open21) {
+    text(4502, o->label);
+    char p[32];
+    std::snprintf(p, sizeof p, "$%.2f", o->price);
+    text(4555, p);
+    text(4531, money(o->income));
+    text(4533, money(o->upkeep));
+    text(4535, money(o->income - o->upkeep));
+    text(4559, money(o->income / months));
+    text(4561, money(o->upkeep / months));
+    text(4591, money((o->income - o->upkeep) / months));
+    text(4573, std::to_string(months));
+    // Items Sold: each thing it sold, its icon
+    int slot = 0;
+    for (const auto &[item, n] : o->sold) {
+      if (slot >= 5)
+        break;
+      if (UiImage *img = dynamic_cast<UiImage *>(z->getElementById(4567 + slot))) {
+        std::string icon;
+        if (IniReader *ic = this->resource_manager->getIniReader("items/" + item + ".cfg")) {
+          icon = ic->get("characteristics", "icon");
+          delete ic;
+        }
+        if (!icon.empty() && img->getImagePath() != icon)
+          img->setImage(icon);
+        img->setHidden(icon.empty() || n <= 0);
+      }
+      slot++;
+    }
+    for (; slot < 5; slot++)
+      if (UiElement *img = z->getElementById(4567 + slot))
+        img->setHidden(true);
+  } else {
+    text(4602, o->label);
+    text(4668, std::to_string(months));
+    // Programs (an animal house: zoo.exe 0x61794a): up to five, cheapest
+    // first, each its picture; the picked one's name, upkeep and the
+    // happiness it gives adults and children ("+5")
+    {
+      std::vector<const ResearchProgram *> shows = o->nameId ? Research::get().collectionFor(o->nameId)
+                                                             : std::vector<const ResearchProgram *>{};
+      if (UiElement *tab = z->getElementById(4678))
+        tab->setHidden(shows.empty());
+      if (!shows.empty()) {
+        o->program = std::clamp(o->program, 0, static_cast<int>(shows.size()) - 1);
+        for (int k = 0; k < 5; k++)
+          if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(4631 + k))) {
+            bool has = k < static_cast<int>(shows.size());
+            b->setHidden(!has);
+            if (has) {
+              Animation *pic = shows[k]->entityIcon.empty() ? nullptr
+                                                            : this->resource_manager->getAnimation(shows[k]->entityIcon);
+              b->setIcon(pic);
+              b->setToggledOn(k == o->program);
+              int id = o->id;
+              b->onClick = [this, id, k] {
+                if (PlacedObjects::Object *h = this->objects ? this->objects->byId(id) : nullptr)
+                  h->program = k;
+              };
+            }
+          }
+        const ResearchProgram *p = shows[o->program];
+        text(4640, p->name);
+        text(4642, formatCents(static_cast<long>(p->effectVal[0]) * 100));
+        text(4696, formatCents(static_cast<long>(p->effectVal[0]) * 100));
+        text(4644, "+" + std::to_string(p->effectVal[1]));
+        text(4646, "+" + std::to_string(p->effectVal[2]));
+      } else if (UiButton *status = dynamic_cast<UiButton *>(z->getElementById(4675))) {
+        if (UiButton *tab = dynamic_cast<UiButton *>(z->getElementById(4678)))
+          if (tab->isToggledOn()) {
+            status->choose();
+            z->syncTabs();
+          }
+      }
+    }
+    // Visitors: last month, this month, all told
+    text(4664, std::to_string(o->visitorsLast));
+    text(4666, std::to_string(o->visitorsNow));
+    text(4662, std::to_string(o->visitorsTotal));
+    // Upkeep Cost: its cUpkeep a month (ZUPDATE's infoncm1.lyt 4695/4696)
+    {
+      static std::map<std::string, double> upkeepOf;
+      std::string file = PlacedObjects::fileOf(*o);
+      auto u = upkeepOf.find(file);
+      if (u == upkeepOf.end()) {
+        double up = 0;
+        if (IniReader *ai = this->resource_manager->getIniReader(file)) {
+          std::string v = ai->get("characteristics/floats", "cupkeep");
+          up = v.empty() ? 0.0 : std::atof(v.c_str());
+          delete ai;
+        }
+        u = upkeepOf.emplace(file, up).first;
+      }
+      text(4696, formatCents(std::lround(u->second * 100)));
+    }
+  }
+}
+
+void UiGameScreen::showGuest(int id) {
+  if (!this->guests || !this->guests->guest(id))
+    return;
+  UiLayout *z = nullptr;
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 9)
+      z = e.layout;
+  if (!z)
+    return;
+  this->openInfo(9);
+  this->shownGuest = id;
+  this->guests->selected = id;
+  this->guestThoughts = static_cast<size_t>(-1);
+  if (UiElement *name = z->getElementById(3402))
+    name->setHidden(false);
+  // (Track starts off: on, its yellow lit art filled the portrait's circle)
+  if (UiButton *track = dynamic_cast<UiButton *>(z->getElementById(3415)))
+    track->setToggledOn(false);
+  if (UiButton *tab = dynamic_cast<UiButton *>(z->getElementById(3462)))
+    tab->choose();
+  z->syncTabs();
+  this->refreshGuest();
+}
+
+void UiGameScreen::refreshGuest() {
+  if (!this->guests)
+    return;
+  UiLayout *z = nullptr;
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 9)
+      z = e.layout;
+  const Guests::Guest *g = this->guests->guest(this->shownGuest);
+  if (this->isPanelOpen(9) && !g)
+    this->setPanelOpen(9, false);
+  if (!this->isPanelOpen(9) && this->shownGuest >= 0) {
+    if (this->guests->selected == this->shownGuest)
+      this->guests->selected = -1;
+    this->shownGuest = -1;
+  }
+  if (!z || !g || !this->isPanelOpen(9))
+    return;
+  auto text = [&](int eid, const std::string &v) {
+    if (UiText *e = dynamic_cast<UiText *>(z->getElementById(eid)))
+      if (!e->isBeingEdited())
+        e->setText(v);
+  };
+  auto bar = [&](int eid, float v) {
+    if (UiStatusImage *e = dynamic_cast<UiStatusImage *>(z->getElementById(eid)))
+      e->setValue(static_cast<int>(std::lround(v)));
+  };
+  text(3402, g->name);
+  bar(3404, (g->happiness + 100) / 2);
+  bar(3406, 100 - g->thirst);
+  bar(3408, 100 - g->hunger);
+  bar(3410, 100 - g->bathroom);
+  bar(3412, 100 - g->tired);
+  text(3475, this->resource_manager->getString(this->guests->timeInParkText(*g)));
+  text(3476, this->animalName && g->favourite >= 0 ? this->animalName(g->favourite) : "");
+  if (UiListBox *l = dynamic_cast<UiListBox *>(z->getElementById(3469)))
+    if (this->guestThoughts != g->thoughts.size() || l->getItemCount() != g->thoughts.size()) {
+      l->setWrapped(true);
+      l->clear();
+      for (const std::string &t : g->thoughts)
+        l->addItem(t, SDL_Color{255, 255, 255, 255});
+      this->guestThoughts = g->thoughts.size();
+    }
+}
+
+void UiGameScreen::showAnimal(int id) {
+  if (!this->animalPanel || !this->animals || !this->animals->member(id))
+    return;
+  this->openInfo(6);
+  this->shownAnimal = id;
+  // With the Exhibit/Show List open, the list picks its exhibit
+  if (this->isPanelOpen(30))
+    if (const Animals::Member *m = this->animals->member(id))
+      if (m->exhibit >= 0 && m->exhibit != this->shownExhibit)
+        if (UiListBox *list = this->exhibitPanel
+                                  ? dynamic_cast<UiListBox *>(this->exhibitPanel->getElementById(4305))
+                                  : nullptr)
+          for (size_t i = 0; i < this->listedExhibits.size(); i++)
+            if (this->listedExhibits[i] == m->exhibit) {
+              list->setSelectedIndex((int)i);
+              auto centre = this->centreOn;
+              this->centreOn = nullptr;
+              this->refreshExhibits();
+              this->centreOn = centre;
+            }
+  this->animals->selected = id;
+  // It opens on Status
+  if (UiButton *tab = dynamic_cast<UiButton *>(this->animalPanel->getElementById(3162)))
+    tab->choose();
+  this->animalPanel->syncTabs();
+  this->refreshAnimal();
+}
+
+void UiGameScreen::refreshAnimal() {
+  if (!this->animals)
+    return;
+  UiLayout *z = this->animalPanel;
+  const Animals::Member *m = this->animals->member(this->shownAnimal);
+  if (this->isPanelOpen(6) && !m)
+    this->setPanelOpen(6, false);
+  if (!this->isPanelOpen(6) && this->shownAnimal >= 0) {
+    if (this->animals->selected == this->shownAnimal)
+      this->animals->selected = -1;
+    this->shownAnimal = -1;
+  }
+  if (!z || !m || !this->isPanelOpen(6))
+    return;
+  auto text = [&](int eid, const std::string &v) {
+    if (UiText *e = dynamic_cast<UiText *>(z->getElementById(eid)))
+      if (!e->isBeingEdited())
+        e->setText(v);
+  };
+  auto bar = [&](int eid, float v) {
+    if (UiStatusImage *e = dynamic_cast<UiStatusImage *>(z->getElementById(eid)))
+      e->setValue(static_cast<int>(std::lround(v)));
+  };
+  text(3102, m->name);
+  bar(3104, static_cast<float>(Animals::shownHappiness(*m)));
+  bar(3108, m->food);
+  bar(3106, static_cast<float>(this->animals->shownHealth(*m)));
+  bar(3110, this->animalSuitability ? static_cast<float>(this->animalSuitability(m->id)) : 0.0f);
+  if (UiImage *sex = dynamic_cast<UiImage *>(z->getElementById(3172))) {
+    std::string want = m->female ? "ui/animal/icfemale.tga" : "ui/animal/icmale.tga";
+    if (this->animalSexImage != want) {
+      sex->setImage(want);
+      this->animalSexImage = want;
+    }
+  }
+  // Thoughts: the latest five guests had about it
+  if (this->guests)
+    if (UiListBox *l = dynamic_cast<UiListBox *>(z->getElementById(3125))) {
+      std::vector<std::string> th = this->guests->thoughtsAbout(m->id, -1, 5);
+      if (l->getItemCount() != th.size() || (!th.empty() && l->getItemCount() && th.front() != this->animalTopThought)) {
+        l->setWrapped(true);
+        l->clear();
+        for (const std::string &t : th)
+          l->addItem(t, SDL_Color{255, 255, 255, 255});
+        this->animalTopThought = th.empty() ? "" : th.front();
+      }
+    }
+  double now = this->animals->clock();
+  text(3177, this->resource_manager->getString(Animals::agoText(now - m->lastAte, false)));
+  text(3179, this->resource_manager->getString(Animals::agoText(now - m->lastSlept, true)));
+}
+
+// Zookeeper Recommendations (measured in the original): the animal's name
+// over a list of what would make it happier, problems in red
+void UiGameScreen::showAdvice(int id) {
+  const Animals::Member *m = this->animals ? this->animals->member(id) : nullptr;
+  UiLayout *z = nullptr;
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 28)
+      z = e.layout;
+  if (!m || !z)
+    return;
+  this->setPanelOpen(28, true);
+  // The patched layout lists the zookeeper's, the scientist's and the
+  // marine specialist's pictures: a zoo animal's is the zookeeper's
+  if (UiImage *bk = dynamic_cast<UiImage *>(z->getElementById(26000)))
+    bk->setImage("ui/keprinfo/kinfobk/kinfobk");
+  if (UiText *name = dynamic_cast<UiText *>(z->getElementById(26001)))
+    name->setText(m->name);
+  if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(26002))) {
+    list->setWrapped(true);
+    list->clear();
+    if (this->animalAdvice)
+      for (const auto &[text, warning] : this->animalAdvice(id))
+        list->addItem(text, warning ? SDL_Color{255, 0, 0, 255} : SDL_Color{0, 0, 0, 255});
+  }
+}
+
+// The round portrait at the panel's top left: the animal itself
+void UiGameScreen::drawAnimalPortrait(SDL_Renderer *renderer) {
+
+  // (a guest's, the same way)
+  if (this->guests && this->isPanelOpen(9))
+    if (const Guests::Guest *g = this->guests->guest(this->shownGuest))
+      for (const Entry &e : this->entries)
+        if (e.panel && e.id == 9 && e.open)
+          if (Animation *a = this->guests->art(*g, "stand"))
+            a->drawAnchored(renderer, static_cast<float>(e.rect.x + 34), static_cast<float>(e.rect.y + 62),
+                            CompassDirection::SE, nullptr, 0);
+  if (!this->animals || !this->isPanelOpen(6))
+    return;
+  const Animals::Member *m = this->animals->member(this->shownAnimal);
+  if (!m)
+    return;
+  for (const Entry &e : this->entries)
+    if (e.panel && e.id == 6 && e.open)
+      if (Animation *a = m->boxed ? this->animals->crate() : this->animals->art(*m, "stand"))
         a->drawAnchored(renderer, static_cast<float>(e.rect.x + 34),
                         static_cast<float>(e.rect.y + 62), CompassDirection::SE, nullptr, 0);
 }
@@ -1967,10 +3277,14 @@ void UiGameScreen::refreshExhibits() {
     if (ex.named)
       shown.push_back(&ex);
   // A tank's mini icon: its water clean (green), dirty (yellow, under
-  // murkyWaterPurity 60) or very dirty (red, under 20)
-  auto iconOf = [](const Fences::Exhibit *ex) -> std::string {
-    if (!ex->tank)
-      return "";
+  // murkyWaterPurity 60) or very dirty (red, under 20); another exhibit's:
+  // its fence (zoo.exe 0x5b3149: fences/lsgfen green, lsyfen worn, lsrfen
+  // broken)
+  auto iconOf = [this](const Fences::Exhibit *ex) -> std::string {
+    if (!ex->tank) {
+      static const char *fence[3] = {"fences/lsgfen/lsgfen", "fences/lsyfen/lsyfen", "fences/lsrfen/lsrfen"};
+      return fence[std::clamp(this->fences->condition(ex->id), 0, 2)];
+    }
     return ex->purity < 20   ? "ui/tanks/exbdirt2/exbdirt2"
            : ex->purity < 60 ? "ui/tanks/exbdirt1/exbdirt1"
                              : "ui/tanks/exbtank/exbtank";
@@ -2041,13 +3355,82 @@ void UiGameScreen::refreshExhibits() {
   text(4349, this->resource_manager->getString(22101 + ex->constructedMonth) + " " +
                  std::to_string(ex->constructedDay) + ", Year " +
                  std::to_string(ex->constructedYear));
-  for (int eid : {4325, 4323, 4347, 4319, 4317, 4321})
-    text(eid, "$0.00");
-  text(4364, "No");
+  // Upkeep and donations: last month, this month, all told
+  auto cents = [](double v) { return formatCents(std::lround(v * 100)); };
+  text(4325, cents(ex->upkeepLast));
+  text(4323, cents(ex->upkeepNow));
+  text(4347, cents(ex->upkeepTotal));
+  text(4319, cents(ex->donationsLast));
+  text(4317, cents(ex->donationsNow));
+  text(4321, cents(ex->donationsTotal));
+  // Staff Assigned: a keeper given this exhibit
+  bool assigned = false;
+  if (this->staff)
+    for (const Staff::Member &m : this->staff->members())
+      for (int e : m.exhibits)
+        assigned = assigned || e == id;
+  text(4364, this->resource_manager->getString(assigned ? 4360 : 4361));
+  // Animals (zoo.exe 0x467fc8): each one in it by name, its mini icon and
+  // name, the one selected in the zoo lit; picking one selects it (its
+  // information) and centres the view on it
+  if (UiListBox *animalList = dynamic_cast<UiListBox *>(element(4326))) {
+    std::vector<int> in;
+    if (this->animals)
+      for (const Animals::Member &m : this->animals->members())
+        if (m.exhibit == id && !m.escaped && !m.boxed)
+          in.push_back(m.id);
+    std::stable_sort(in.begin(), in.end(), [this](int a, int b) {
+      return this->animals->member(a)->name < this->animals->member(b)->name;
+    });
+    int lit = -1;
+    for (size_t i = 0; i < in.size(); i++)
+      if (this->animals && in[i] == this->animals->selected)
+        lit = static_cast<int>(i);
+    if (in != this->listedExhibitAnimals) {
+      animalList->clear();
+      for (int aid : in) {
+        const Animals::Member *m = this->animals->member(aid);
+        animalList->addItem(m->name, "", this->animals->types()[m->type].listImage);
+      }
+      this->listedExhibitAnimals = in;
+      this->litExhibitAnimal = lit;
+      animalList->setSelectedIndex(lit);
+    }
+    int pick = animalList->getSelectedIndex();
+    if (pick != this->litExhibitAnimal && pick >= 0 && pick < (int)in.size()) {
+      int aid = in[pick];
+      this->litExhibitAnimal = pick;
+      this->showAnimal(aid);
+      if (this->animalRequest)
+        this->animalRequest(AnimalRequest::Select, aid);
+    } else if (lit != this->litExhibitAnimal) {
+      this->litExhibitAnimal = lit;
+      animalList->setSelectedIndex(lit);
+    }
+  }
+  // Thoughts: what guests have thought about it, newest first
+  if (UiListBox *thoughtList = dynamic_cast<UiListBox *>(element(4330))) {
+    std::vector<std::string> said;
+    if (this->guests)
+      said = this->guests->thoughtsAbout(-1, id, 20);
+    if (said != this->listedExhibitThoughts) {
+      // (wrapped, in the list's forecolor: mulhab3.lyt 156,205,183)
+      thoughtList->setWrapped(true);
+      thoughtList->clear();
+      for (const std::string &s : said)
+        thoughtList->addItem(s, SDL_Color{156, 205, 183, 255});
+      this->listedExhibitThoughts = said;
+    }
+  }
+  // Popularity: a half star each 10 (0star ... 5star: (11 - 1) x pop / 100)
   if (UiImage *stars = dynamic_cast<UiImage *>(element(4315))) {
     std::vector<std::string> set = stars->getImageSet();
-    if (!set.empty())
-      stars->setImage(set.front());
+    if (!set.empty()) {
+      int pop = ex->popularity(this->guests ? this->guests->clock : 0);
+      size_t frame = std::min(set.size() - 1, static_cast<size_t>((set.size() - 1) * pop / 100));
+      if (stars->getImagePath() != set[frame])
+        stars->setImage(set[frame]);
+    }
   }
   // Tank Adjustment: the wall and base arrows (greyed where they can go no
   // further) and a step's price; filled, the water's salinity and Drain;

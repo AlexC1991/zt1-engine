@@ -40,6 +40,9 @@ public:
   bool drawAnchored(SDL_Renderer *renderer, float x, float y,
                     CompassDirection direction, const SDL_Color *tint = nullptr,
                     int frame = -1);
+  // Where drawAnchored would put it: its box on the screen (false: no frame)
+  bool anchoredBounds(float x, float y, CompassDirection direction, float &left, float &top, float &right,
+                      float &bottom);
   // Its frames' time (ms; 0 when the file gives none)
   uint32_t frameTimeMs() const { return this->frame_time_in_ms; }
   // How many frames it plays (its first direction's)

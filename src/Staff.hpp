@@ -1,6 +1,7 @@
 #ifndef STAFF_HPP
 #define STAFF_HPP
 
+#include <functional>
 #include <map>
 #include <random>
 #include <string>
@@ -13,6 +14,8 @@
 #include "ZooItems.hpp"
 #include "WorldIndex.hpp"
 #include "Walkways.hpp"
+
+class Animals;
 
 class ResourceManager;
 class WorldMap;
@@ -30,7 +33,11 @@ class WorldRenderer;
 // - maintenance workers go and fix worn fences and service tank filters
 //   (their Job Assignment ticks: empty trash, sweep, fences, filters);
 //   keepers, scientists and marine specialists need animals.
+class Guests;
+class PlacedObjects;
+
 class Staff {
+  friend class SaveGame; // (saving and loading a game)
 public:
   enum class Kind { Keeper, Maint, Guide, Scientist, Trainer, Helicopter };
   struct Type {
@@ -44,13 +51,23 @@ public:
     std::string fullPal;
     std::vector<std::string> hair, skin;
     std::string listImage[2], infoImage[2];
+    std::map<std::string, std::pair<std::string, int>> sounds; // [Sounds]: file, attenuation
     // The DRT: hired as its base (scenery/building/helibase.ai, a 10 x 8
     // half-tile building), the helicopter in its slot on top
     std::string baseFile;
     Animation *base = nullptr;
     int footX = 1, footY = 1; // tiles
+    // Tour guides (tour.ai): cTourGuideBonus (guests' happiness at a talk,
+    // and the viewing area's donation bonus), cFollowChance, cMaxGroupSize,
+    // cCrowdCheck (ticks between looks for followers), cCrowdRadius (tiles),
+    // cInformGuestTime (seconds of each of its two talks)
+    int tourBonus = 30, followChance = 60, maxGroup = 15, crowdCheck = 5, crowdRadius = 1, informTime = 5;
+    // cSlowRate (walking: a 60th of a tile a second; keeper training raises
+    // it), cCleanTrashRadius (maintenance: over 0, sweeping takes the litter
+    // all round, not just beside), cFixFenceModifier
+    int slowRate = 33, cleanTrashRadius = 0, fixFenceModifier = 0;
   };
-  enum class Job { None, Fence, Filter, Litter, Visit };
+  enum class Job { None, Fence, Filter, Litter, Visit, Catch, Tour, Trash, Dung };
   struct Member {
     int id = 0, type = 0;
     bool female = false;
@@ -76,10 +93,17 @@ public:
     Fences::Edge jobEdge = {false, -1, -1};
     int jobFilter = -1;
     int jobItem = -1;         // litter or dung it's going to
+    int jobAnimal = -1;       // the escaped animal it's after
+    float repath = 0;
     // Keepers visiting an exhibit: through its gate (access lets it walk
     // in that exhibit), then feeding, raking, out again
     int access = -1, visit = -1, phase = 0;
     float outX = 0, outY = 0, inX = 0, inY = 0;
+    float dropX = 0, dropY = 0; // where it's putting the food down
+    // A tour guide's trip: the exhibit, the guests following, its talk
+    std::vector<int> followers;
+    float crowdClock = 0, speakLeft = 0;
+    bool speaking = false;
     // (debug) the A* tiles of its current route and where it's going
     std::vector<std::pair<int, int>> routeTiles;
     int goalX = -1, goalY = -1;
@@ -108,6 +132,31 @@ public:
   void update(float seconds, const WorldMap &map, Fences &fences);
   // What lies about (food, dung, litter) for keepers and maintenance
   void setItems(ZooItems *items) { this->items = items; }
+  // The animals (keepers dart and crate escaped ones)
+  void setAnimals(Animals *animals) { this->animals = animals; }
+  void setGuests(Guests *guests) { this->guests = guests; }
+  void setObjects(PlacedObjects *objects) { this->objects = objects; }
+  // Dung raked with a compost in the zoo: cZooDooRecyclingAmount ($50) a
+  // pile, Recycling (zoo.exe 0x4a2c98); none without one. Taken since last
+  // asked.
+  double takeRecycling() {
+    double r = this->recycling;
+    this->recycling = 0;
+    return r;
+  }
+  // A tour guide giving its talk
+  bool guideSpeaking(int id) const;
+  // The tour guide bonus at an exhibit's viewing area: a guide (any) on one
+  // of its viewing tiles gives its cTourGuideBonus (they don't add up)
+  int guideBonusAt(const std::vector<std::pair<int, int>> &tiles) const;
+  // (research: training changes a kind of staff's characteristics)
+  std::vector<Type> &mutableTypes() { return this->typeList; }
+  // Research: a chow's cPurchaseCost changed (zoo.exe effect 5, in cents)
+  std::function<double(const std::string &food, double price)> foodPrice;
+  // Where a point is from the middle of the view (screen pixels), for
+  // their work sounds
+  std::function<bool(float x, float y, float &dx, float &dy)> viewOffset;
+  void workSound(const Member &m, const std::string &anim) const;
   // Where everything is (what blocks a tile, who's about)
   void setIndex(WorldIndex *index) { this->index = index; }
   void setWalkways(const Walkways *walkways) { this->walkways = walkways; }
@@ -131,6 +180,13 @@ public:
   // The one drawn at a logical screen point (-1: none)
   int pick(float sx, float sy, const WorldRenderer &view, const WorldMap &map) const;
   int monthlyWages() const;
+  // The food keepers bought since last asked (Zoo Upkeep Cost: a pile of
+  // herbivore chow $229, as the original's books)
+  double takeUpkeep() {
+    double u = this->upkeep;
+    this->upkeep = 0;
+    return u;
+  }
   // The art an animation of a member draws with (its colours)
   Animation *art(const Member &m, const std::string &name) const;
   Animation *preview(int type) const;
@@ -146,6 +202,23 @@ public:
 private:
   ResourceManager *rm = nullptr;
   ZooItems *items = nullptr;
+  Animals *animals = nullptr;
+  Guests *guests = nullptr;
+  PlacedObjects *objects = nullptr;
+  double recycling = 0;
+  void dungRecycled(float x, float y);
+  bool tourWork(Member &m, const WorldMap &map, Fences &fences);
+  void gatherFollowers(Member &m);
+  bool catchWork(Member &m, const WorldMap &map, const Fences &fences);
+  // What an exhibit's animals eat: the chow its keeper puts down, and
+  // whether they're carnivores (feedc, else feedh)
+  std::string foodFor(int exhibit, const Fences &fences, bool &carnivore) const;
+  std::map<std::string, int> chowPrice;
+  std::map<int, double> lastVisit; // exhibit -> when a keeper last finished there
+  double clock = 0;
+  static constexpr double kRevisitSeconds = 90.0; // zoo.ini [AI] exhibitServiceInterval (ticks)
+  double upkeep = 0;
+  void catchStep(Member &m, float seconds, const WorldMap &map, const Fences &fences);
   WorldIndex *index = nullptr;
   const Walkways *walkways = nullptr;
   bool findLayeredPath(Member &m, int gx, int gy, const WorldMap &map, const Fences &fences,

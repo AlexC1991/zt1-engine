@@ -1,5 +1,7 @@
 #include "Research.hpp"
 
+#include <algorithm>
+
 #include <mutex>
 #include <random>
 
@@ -77,11 +79,14 @@ void Research::load(ResourceManager *rm) {
         program.file = programFile;
         program.name = text(p, "research", "name");
         program.icon = p->get("research", "icon");
+        program.entityIcon = p->get("research", "entityicon");
         program.helpId = p->getInt("research", "helpid", 0);
         program.cost = p->getInt("research", "cost", 0);
         program.order = p->getInt("research", "order", 0);
         program.target = p->getInt("research", "target", 0);
         program.effect = p->getInt("research", "effect", 0);
+        for (int k = 0; k < 3; k++)
+          program.effectVal[k] = p->getInt("research", "effectval" + std::to_string(k + 1), 0);
         category.programs.push_back(program);
         delete p;
       }
@@ -127,6 +132,35 @@ bool Research::canResearch(const ResearchProgram &program) const {
   default:
     return true;
   }
+}
+
+Research::Tick Research::advance(float seconds, double cash) {
+  Tick t;
+  this->tickClock += seconds;
+  while (this->tickClock >= 3.0f) {
+    this->tickClock -= 3.0f;
+    for (ResearchBranch &b : this->list) {
+      if (b.funding.empty())
+        continue;
+      const ResearchFunding &f = b.funding[std::clamp(b.fundingLevel, 0, static_cast<int>(b.funding.size()) - 1)];
+      ResearchProgram *p = this->current(b);
+      if (!p || f.work <= 0)
+        continue;
+      // (the tick's share of a month's cost: none paid, no progress)
+      if (cash < f.cost / 120.0)
+        continue;
+      p->progress += f.work / 120.0f;
+      if (p->progress < p->cost)
+        continue;
+      p->progress = static_cast<float>(p->cost);
+      p->done = true;
+      t.completed.push_back(p);
+      this->pick(b);
+      if (!this->current(b))
+        t.finishedBranches.push_back(b.name);
+    }
+  }
+  return t;
 }
 
 ResearchProgram *Research::nextIn(ResearchCategory &category) {

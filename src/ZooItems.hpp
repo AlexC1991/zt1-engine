@@ -18,6 +18,7 @@ class WorldRenderer;
 // from the TEST PANEL (fake stats, no animals or guests): an exhibit's fake
 // animal count eats its food down a little every hour, nothing more.
 class ZooItems {
+  friend class SaveGame; // (saving and loading a game)
 public:
   enum class Kind { Food, Dung, Litter };
   struct Item {
@@ -37,10 +38,15 @@ public:
   int add(Kind kind, int exhibit, float x, float y);
   // Food for an exhibit: enough for its animals for a day or so
   int addFood(int exhibit, float x, float y, int animals, const std::string &food);
+  // A keeper's pile of chow (scenery/other/<food>.ai: cFoodUnits 1000)
+  static constexpr float kChowUnits = 1000.0f;
   void remove(int id);
   void removeIn(int exhibit, Kind kind);
 
   float foodIn(int exhibit) const;
+  // An animal eats from a pile of food: what it got (the pile goes when
+  // it's eaten up)
+  float eat(int id, float units);
   std::vector<int> ofKind(Kind kind, int exhibit = -2) const; // -2: anywhere
 
   // Fake animals eat their exhibit's food (a few units each an hour)
