@@ -229,6 +229,30 @@ bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
   return true;
 }
 
+bool Animation::drawMapped(SDL_Renderer *renderer, CompassDirection direction, int frame, const SDL_FPoint dst[4],
+                           const SDL_FPoint uv[4], SDL_Color tint) {
+  if (!renderer)
+    return false;
+  std::string key = convertCompassDirectionToExistingAnimationString(direction, this->anchor_points);
+  if (key.empty())
+    return false;
+  bool hi = this->world_art && RenderSettings::worldZoomedIn && ArtScaler::worldFactor() > 1;
+  std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, hi);
+  if (!frames || frames->empty())
+    return false;
+  size_t index = frame >= 0 ? static_cast<size_t>(frame) % frames->size() : 0;
+  SDL_Texture *texture = (*frames)[index];
+  if (!texture)
+    return false;
+  RenderSettings::applyArtScaleMode(texture);
+  SDL_Vertex v[4];
+  for (int i = 0; i < 4; i++)
+    v[i] = {dst[i], tint, uv[i]};
+  const int idx[6] = {0, 1, 2, 0, 2, 3};
+  SDL_RenderGeometry(renderer, texture, v, 4, idx, 6);
+  return true;
+}
+
 bool Animation::anchoredBounds(float x, float y, CompassDirection direction, float &left, float &top,
                                float &right, float &bottom) {
   std::string key = convertCompassDirectionToExistingAnimationString(direction, this->anchor_points);
