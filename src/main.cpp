@@ -2645,6 +2645,20 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       world->rotateView(1);
       capture(("save_view_rot" + std::to_string(r)).c_str());
     }
+    world->rotateView(1);
+    // (and zoomed in and out, as the wheel does: a tenth at a time)
+    if (std::getenv("ZT_VIEW_ZOOMS")) {
+      float saved = world->getRenderer().getCamera().zoom;
+      for (float z : {0.5f, 0.7f, 0.9f, 1.1f, 1.3f, 1.6f, 2.0f, 2.5f}) {
+        g_ZoomLevel = z;
+        world->getRenderer().getCamera().zoom = z;
+        char nm[32];
+        std::snprintf(nm, sizeof nm, "save_zoom_%d", static_cast<int>(std::lround(z * 100)));
+        capture(nm);
+      }
+      g_ZoomLevel = saved;
+      world->getRenderer().getCamera().zoom = saved;
+    }
     return 0;
   }
   // A new zoo's rating, worked out as the original does: 37 (measured)
@@ -3094,7 +3108,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             }
           }
           // Zoomed in (1.5x, 2x, 1.37x): no lines on the water
-          for (float z : {1.5f, 2.0f, 1.37f}) {
+          for (float z : {1.5f, 2.0f, 1.37f, 0.75f, 0.6f}) {
             float saved = world->getRenderer().getCamera().zoom;
             world->getRenderer().getCamera().zoom = z;
             world->centreOn(lx + 2.0f, ly + 2.0f);

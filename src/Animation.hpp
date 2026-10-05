@@ -40,6 +40,13 @@ public:
   bool drawAnchored(SDL_Renderer *renderer, float x, float y,
                     CompassDirection direction, const SDL_Color *tint = nullptr,
                     int frame = -1);
+  // Its frame stretched over a four-cornered shape on the screen: dst
+  // corners, each with its spot in the art (0-1 across and down), tinted
+  // (a water surface tile laid exactly on its tile: drawn as art, the
+  // original's 62 px diamonds left a pixel of the floor showing between
+  // them)
+  bool drawMapped(SDL_Renderer *renderer, CompassDirection direction, int frame, const SDL_FPoint dst[4],
+                  const SDL_FPoint uv[4], SDL_Color tint);
   // Where drawAnchored would put it: its box on the screen (false: no frame)
   bool anchoredBounds(float x, float y, CompassDirection direction, float &left, float &top, float &right,
                       float &bottom);

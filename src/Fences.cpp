@@ -1846,6 +1846,8 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       SDL_Color tint;
       bool tinted;
       int frame = -1;
+      bool quad = false;    // (laid over its tile's diamond: q, top left right bottom)
+      SDL_FPoint q[4] = {};
     };
     std::vector<Sprite> back, water, frontLow;
     // Its edges (for the waterline and the outline at the ground)
@@ -1949,8 +1951,27 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
             water.push_back({cd + 0.25f, sx, sy, face, CompassDirection::N, see, true});
           }
         }
-        if (Animation *surface = variant("top", "tscum", x, y))
-          water.push_back({cd, cx, cy, surface, CompassDirection::N, see, true});
+        if (Animation *surface = variant("top", "tscum", x, y)) {
+          Sprite sp{cd, cx, cy, surface, CompassDirection::N, see, true};
+          sp.quad = true;
+          const float wx[4] = {0, 1, 1, 0}, wy[4] = {0, 0, 1, 1};
+          SDL_FPoint c[4];
+          for (int k = 0; k < 4; k++) {
+            float d;
+            view.worldToScreenF(x + wx[k], y + wy[k], level, c[k].x, c[k].y, d);
+          }
+          // (in screen order: top, right, bottom, left)
+          int top = 0;
+          for (int k = 1; k < 4; k++)
+            if (c[k].y < c[top].y)
+              top = k;
+          for (int k = 0; k < 4; k++)
+            sp.q[k] = c[(top + k) % 4];
+          // (clockwise on screen from the top: if not, swap right and left)
+          if (sp.q[1].x < sp.q[3].x)
+            std::swap(sp.q[1], sp.q[3]);
+          water.push_back(sp);
+        }
         // The ripple along each wall on the surface (tankripl: edgrip, 19
         // frames of 83 ms, each started 0-2 s in; clean water only)
         if (ex.purity >= 60)
@@ -2120,8 +2141,15 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
                      vp](SDL_Renderer *r) {
       for (const Sprite &s : back)
         s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr);
+      // (the art's diamond - its top, right, bottom and left points - a
+      // little inside its stepped edge, whose outer pixels are clear)
+      static const SDL_FPoint diamond[4] = {
+          {0.5f, 2.0f / 32}, {1.0f - 4.0f / 62, 0.5f}, {0.5f, 1.0f - 2.0f / 32}, {4.0f / 62, 0.5f}};
       for (const Sprite &s : water)
-        s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr, s.frame);
+        if (s.quad)
+          s.art->drawMapped(r, s.side, s.frame, s.q, diamond, s.tint);
+        else
+          s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr, s.frame);
       (void)wet;
       (void)level;
       for (const Sprite &s : frontLow)
