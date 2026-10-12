@@ -861,7 +861,7 @@ for (Entity* e : entities) {
 
 **Original Game**: Blue Fang Games (2001)
 **Reverse Engineering**: ZT1 Open Engine Team (2024-2026)
-**Architecture Rebuild**: Claude AI + Human Collaboration (January 2026)
+**Architecture Rebuild**: batty251 (January 2026)
 
 **Special Thanks**:
 - Zoo Tycoon modding community for file format documentation

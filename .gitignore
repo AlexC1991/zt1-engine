@@ -9,3 +9,21 @@ CMakeFiles/
 __pycache__/
 *.pyc
 .idea/
+
+# The Lab app (lab-app/): its packages
+lab-app/node_modules/
+zt1-engine-lab.exe
+zt1-engine-play.exe
+lab-app/clangd/
+.cache/
+
+# Releases (engine-build-resources/make_release.py): the x64 build and its zips
+build-x64/
+dist/
+
+# Private reverse-engineering data (recordings, caches, private notes): never shared
+re/private/
+
+# Not published yet: the tutorial-video tooling and the Lab design files
+re/lab/video/
+re/lab/design/
