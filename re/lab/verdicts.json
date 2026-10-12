@@ -1,0 +1,124 @@
+{
+  "about": "Checked verdicts for Explore's What's missing: whether our engine does each action recorded in the original. Set from the Lab (Explore, an action's Details: Our engine does this / Not in our engine); they override the automatic guess. status: copied (cites the original), untraced (does it, not traced to the original's code), missing.",
+  "actions": {
+    "Selling an animal (Animal Information: Sell animal, the harbor porpoise)": {
+      "status": "untraced",
+      "at": "src/World.cpp:2013",
+      "note": "World::sellAnimal; the Sell button asks first with the refund (src/ui/UiGameScreen.cpp:2676)",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Opening a show's script (clicking the show tank's platform: Show Script panel)": {
+      "status": "missing",
+      "at": "",
+      "note": "The engine has no shows: no show tank, show script, tricks or grandstand logic (grep: only the research note 'marine tricks: not done here', src/main.cpp:2092)",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Adding a trick to a show's script (Wave to Crowd, the right arrow)": {
+      "status": "missing",
+      "at": "",
+      "note": "The engine has no shows: no show tank, show script, tricks or grandstand logic (grep: only the research note 'marine tricks: not done here', src/main.cpp:2092)",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Adding a show-object trick to a show's script (Play with Ball, unlocked by the orca ball)": {
+      "status": "missing",
+      "at": "",
+      "note": "The engine has no shows: no show tank, show script, tricks or grandstand logic (grep: only the research note 'marine tricks: not done here', src/main.cpp:2092)",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Changing a show's frequency (Show Script: Frequent to Infrequent)": {
+      "status": "missing",
+      "at": "",
+      "note": "The engine has no shows: no show tank, show script, tricks or grandstand logic (grep: only the research note 'marine tricks: not done here', src/main.cpp:2092)",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca never came through the gate, no show performed)": {
+      "status": "missing",
+      "at": "",
+      "note": "The engine has no shows: no show tank, show script, tricks or grandstand logic (grep: only the research note 'marine tricks: not done here', src/main.cpp:2092)",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Placing a show grandstand facing a show tank (tutorial)": {
+      "status": "missing",
+      "at": "",
+      "note": "The engine has no shows: no show tank, show script, tricks or grandstand logic (grep: only the research note 'marine tricks: not done here', src/main.cpp:2092)",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Funding trick research (Research tab: orca tricks, the + button)": {
+      "status": "missing",
+      "at": "src/main.cpp:2092",
+      "note": "Research effects for marine tricks are 'not done here'",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Building a show tank on its own (show tank walls all round: named Show Tank)": {
+      "status": "missing",
+      "at": "",
+      "note": "Show tank walls build as an ordinary tank: no show tank, no gate (src/Fences.* have no show tank)",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Building a show tank next to an exhibit tank (show tank walls, four sides on the plot: the show tank forms)": {
+      "status": "missing",
+      "at": "",
+      "note": "Show tank walls build as an ordinary tank: no show tank, no gate",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Building an exhibit tank against a show tank (exhibit walls, the shared side last: the gate between them)": {
+      "status": "missing",
+      "at": "",
+      "note": "No gate between tanks in the engine",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Deleting an object (bulldozing the termite mound)": {
+      "status": "untraced",
+      "at": "src/main.cpp:678",
+      "note": "The bulldozer tool and its refund (main.cpp:452)",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Building a fence outside the zoo wall (refused: Zoo objects can only be placed inside the main zoo wall)": {
+      "status": "untraced",
+      "at": "src/main.cpp:727",
+      "note": "Refused with lang 10311 '...inside the main zoo wall' (Fences.cpp:239 works out the inside)",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Placing a zebra outside an exhibit (refused: Animals can only be placed in exhibits)": {
+      "status": "untraced",
+      "at": "src/World.cpp:3237",
+      "note": "",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Raising zoo marketing funding (Zoo Status +)": {
+      "status": "untraced",
+      "at": "src/ui/UiGameScreen.cpp:896",
+      "note": "mktg.cfg levels",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "Raising the admission price (Zoo Status up arrow)": {
+      "status": "untraced",
+      "at": "src/ui/UiGameScreen.cpp:924",
+      "note": "$0.25 a click, as the original",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    },
+    "An escaped dinosaur loose in the zoo (the allosaurus out of its paddock: guests flee, staff respond)": {
+      "status": "untraced",
+      "at": "src/Animals.cpp:366",
+      "note": "Escapes exist; dinosaur-specific behaviour (going for buildings: fTargetBuilding) not checked",
+      "by": "batty251 (read the engine's code)",
+      "on": "2026-10-12"
+    }
+  }
+}

@@ -1,0 +1,153 @@
+{
+  "about": "The Lab's class tables (Original Game > Class tables): known classes' tables of functions (vtables), by the address their constructors store at an object's start. Entity names are ours (zoo.exe keeps no class names), found live with the Lab's census; the managers' are zoo.exe's own (zoo.ini [mgr], its text).",
+  "classes": {
+    "0x62ff54": {
+      "name": "ZTAnimal",
+      "how": "census: zebra, every animal"
+    },
+    "0x630f88": {
+      "name": "ZTGuest",
+      "how": "census: boy, man, woman, girl"
+    },
+    "0x62d808": {
+      "name": "ZTFence",
+      "how": "census: zoowall, wpicket, chainlnk"
+    },
+    "0x62dbc0": {
+      "name": "ZTTankWall",
+      "how": "census: tankwal2"
+    },
+    "0x62d950": {
+      "name": "ZTScenery",
+      "how": "census: elm, flowers, bushes"
+    },
+    "0x62da88": {
+      "name": "ZTPath",
+      "how": "census: path pieces"
+    },
+    "0x62e0b0": {
+      "name": "ZTBuilding",
+      "how": "census: the entrance gates"
+    },
+    "0x62d6ec": {
+      "name": "ZTAmbientAnimal",
+      "how": "census: bluejay, crow"
+    },
+    "0x630b9c": {
+      "name": "ZTGameMgr",
+      "how": "the game manager's (global 0x638048) first dword"
+    },
+    "0x62f3e4": {
+      "name": "ZTKeeper",
+      "how": "census: keeper, scient, trainer (the animal-care staff share it)"
+    },
+    "0x62f714": {
+      "name": "ZTTourGuide",
+      "how": "census: tour (staff/plguide)"
+    },
+    "0x62ea54": {
+      "name": "ZTMaintenanceWorker",
+      "how": "census: maint (staff/infmaint)"
+    },
+    "0x630268": {
+      "name": "ZTAnimalType",
+      "how": "its slot 0x60 is 0x4b6c51, the species loader (a type's config loader)"
+    },
+    "0x62e330": {
+      "name": "ZTGuestType",
+      "how": "its slot 0x60 is 0x4c4cb9, the guest type loader (a type's config loader)"
+    },
+    "0x62e404": {
+      "name": "ZTUnitType",
+      "how": "its slot 0x60 is 0x4b5681 (cNameID, cPurchaseCost, cSwims) (a type's config loader)"
+    },
+    "0x62e4d8": {
+      "name": "UnitBaseType",
+      "how": "its slot 0x60 is 0x4b5faf (cSlowRate, cMinHeight) (a type's config loader); 45 slots, under ZTUnitType's 53: its base"
+    },
+    "0x62e704": {
+      "name": "ZTMaintType",
+      "how": "its slot 0x60 is 0x4c3d44 (cCleanTrashRadius) (a type's config loader)"
+    },
+    "0x62e7d8": {
+      "name": "ZTKeeperType",
+      "how": "its slot 0x60 is 0x4c34ae (cFoodUnitsSecond) (a type's config loader)"
+    },
+    "0x62e8ac": {
+      "name": "ZTTourGuideType",
+      "how": "its slot 0x60 is 0x4c406f (cTourGuideBonus) (a type's config loader)"
+    },
+    "0x6303f4": {
+      "name": "ZTSceneryType",
+      "how": "its slot 0x64 is 0x4ba5b0, the scenery loader"
+    },
+    "0x630694": {
+      "name": "ZTTankFilterType",
+      "how": "its slot 0x64 is 0x4c44aa (cFilterDelay, cFilterUpkeep)"
+    },
+    "0x62f0b4": {
+      "name": "ZTHelicopter",
+      "how": "census: helicopter (the DRT base's)"
+    },
+    "0x62dd08": {
+      "name": "ZTFood",
+      "how": "census: food (herbchow, put down by a keeper)"
+    },
+    "0x62ed84": {
+      "name": "ZTStaff",
+      "how": "made by ZTStaffType's create (0x6112d9); shares 183-192 of 204 slots with keepers, guides, maintenance"
+    },
+    "0x62fa44": {
+      "name": "ZTUnit",
+      "how": "made by ZTUnitType's create (0x6151b3); the base of animals, guests and staff"
+    },
+    "0x62de40": {
+      "name": "ZTTankFilter",
+      "how": "made by ZTTankFilterType's create slot (0x5c -> 0x45d893 -> constructor 0x45d55f), which reads the type's decay and filter delay (x1000 ms)"
+    },
+    "0x63073c": {
+      "name": "ZTRubbleType",
+      "how": "its slot 0x64 (0x4c42a2) reads cExplosionSound: only scenery/other/brubble1-4, brubls1, bstump1, bathrubl set it"
+    },
+    "0x62df78": {
+      "name": "ZTRubble",
+      "how": "made by ZTRubbleType's create slot (0x5c -> 0x48e370 -> constructor 0x48e343)"
+    },
+    "0x63034c": {
+      "name": "ZTFenceType",
+      "how": "its create (slot 0x5c, 0x5b3a55) makes ZTFence objects"
+    },
+    "0x6305ec": {
+      "name": "ZTTankWallType",
+      "how": "its create (slot 0x5c, 0x45cd6b) makes ZTTankWall objects"
+    },
+    "0x63049c": {
+      "name": "ZTPathType",
+      "how": "its create (slot 0x5c, 0x451b8a) makes ZTPath objects"
+    },
+    "0x630544": {
+      "name": "ZTFoodType",
+      "how": "its create (slot 0x5c, 0x4fd1de) makes ZTFood objects; its slot 0x64 reads cKeeperFoodType"
+    },
+    "0x6307e4": {
+      "name": "ZTBuildingType",
+      "how": "its create (slot 0x5c, 0x45134e) makes ZTBuilding objects"
+    },
+    "0x62e980": {
+      "name": "ZTHelicopterType",
+      "how": "its create (slot 0x5c, 0x4e5725) makes ZTHelicopter objects; its slot 0x64 reads cLoopSoundName; 0x4e5725 ran first when a DRT base was placed"
+    },
+    "0x62e630": {
+      "name": "ZTStaffType",
+      "how": "its create (slot 0x5c, 0x6112d9) makes ZTStaff (0x62ed84) objects; its slot 0x60 is the staff loader"
+    },
+    "0x62e1e8": {
+      "name": "ZTAmbientAnimalType",
+      "how": "its slot 0x64 (0x4c2ec9) reads cSpeed, cFrequency, cSoundLoop - the ambient birds' keys"
+    },
+    "0x62fd58": {
+      "name": "UnitBase",
+      "how": "made by UnitBaseType's create (0x5ffe36); the base under ZTUnit (likely)"
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "about": "The Lab's loader mapper (Original Game > Config loaders): the functions zoo.exe reads a config key with - each call's pushes, nearest first: 'key' is the key's text, 'dest' where the value goes - and the structs known loaders fill (the rest are asked when saved). A name for a loader of globals only (AnimalSettings) names the loader (loadAnimalSettings), not a struct.",
+  "readers": [
+    {
+      "address": "0x4b4803",
+      "kind": "int",
+      "key": 1,
+      "dest": 2,
+      "about": "an int key into a field or a global"
+    },
+    {
+      "address": "0x4b486c",
+      "kind": "string",
+      "key": 1,
+      "dest": 2,
+      "about": "a string key"
+    },
+    {
+      "address": "0x409c14",
+      "kind": "int",
+      "key": 1,
+      "dest": 2,
+      "about": "an int key (often into a local, then copied)"
+    },
+    {
+      "address": "0x4b37c3",
+      "kind": "float",
+      "key": 1,
+      "dest": 2,
+      "about": "a float key (cPctSick, cMinAdultAdmissionPrice: seen in 0x591c0f)"
+    }
+  ],
+  "structs": {
+    "0x4b4903": "ZTEntityType",
+    "0x4b5681": "ZTUnitType",
+    "0x4b5faf": "UnitBaseType",
+    "0x4b6c51": "ZTAnimalType",
+    "0x4c4cb9": "ZTGuestType",
+    "0x4c3783": "ZTStaffType",
+    "0x4c34ae": "ZTKeeperType",
+    "0x4c3d44": "ZTMaintType",
+    "0x4c406f": "ZTTourGuideType",
+    "0x4ba5b0": "ZTSceneryType",
+    "0x4bb8ed": "ZTFenceType",
+    "0x4c070a": "ZTBuildingType",
+    "0x4c2136": "ZTBuildingType",
+    "0x591c0f": "ZTGameMgr",
+    "0x464f00": "ZTShopItem",
+    "0x590e00": "ZTResearchItem",
+    "0x523c58": "ZTTerrainType",
+    "0x45f98b": "AnimalSettings",
+    "0x463a0e": "TankSettings",
+    "0x52196e": "GuestSettings",
+    "0x4bf2ba": "ChaseSettings",
+    "0x5167ca": "ShowSettings",
+    "0x465e1a": "DecaySettings",
+    "0x4b9690": "Tricks"
+  }
+}

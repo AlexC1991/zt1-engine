@@ -1,0 +1,63 @@
+{
+  "about": "Formula checks: zoo.exe's own function (run in re/lab/zoorun.py) against our engine's (the engine's 'formula' command, src/Lab.cpp) on the same inputs. The Lab runs them all after every build (Explore > Code 1:1). Each object field is [offset, type, what]: an input's name, '=<number>' for a fixed value, '-><object index>' for a pointer to another object. result: st0 (a float return), eax, or field:<object>:<offset>:<type> (what the function left there).",
+  "checks": [
+    {
+      "id": "animalSellValue",
+      "title": "An animal's sell value",
+      "zoo": "0x48d21d",
+      "ours": "Animals::sellValueOf",
+      "oursAt": "src/Animals.cpp",
+      "inputs": ["cost", "happiness", "health", "cMinHits", "cMaxHits", "sick"],
+      "objects": [
+        { "name": "animal", "struct": "ZTAnimal", "fields": [["0x128", "ptr", "->1"], ["0x2a8", "int", "happiness"], ["0x2b8", "int", "health"], ["0x3a7", "bool", "sick"]] },
+        { "name": "species", "struct": "ZTAnimalType", "fields": [["0x0", "ptr", "=0x630268"], ["0x12c", "float", "cost"], ["0x234", "int", "cMaxHits"], ["0x238", "int", "cMinHits"]] }
+      ],
+      "calls": "run",
+      "result": "st0",
+      "tolerance": 0.005,
+      "cases": [
+        [800, 32, 500, 0, 500, 0],
+        [800, 100, 500, 0, 500, 0],
+        [800, -100, 500, 0, 500, 0],
+        [800, 0, 0, 0, 500, 1],
+        [800, 50, 250, 0, 500, 1],
+        [1500, 75, 400, 100, 500, 0],
+        [1500, -40, 120, 100, 500, 0],
+        [12000, 90, 1000, 0, 1000, 0],
+        [12000, 90, 50, 200, 1000, 1],
+        [350, 1, 333, 7, 499, 0],
+        [0, 50, 500, 0, 500, 0],
+        [2750, -99, 1, 0, 3, 1]
+      ]
+    },
+    {
+      "id": "setAdmissionPrice",
+      "title": "The admission price, kept to economy.cfg's limits",
+      "zoo": "0x4bbf10",
+      "ours": "Original::clampAdmission",
+      "oursAt": "src/OriginalConstants.hpp",
+      "inputs": ["price", "cMinAdultAdmissionPrice", "cMaxAdultAdmissionPrice"],
+      "objects": [
+        { "name": "gameMgr", "struct": "ZTGameMgr", "size": "0x1200", "fields": [["0x1150", "float", "=-1"], ["0x1154", "float", "cMinAdultAdmissionPrice"], ["0x1158", "float", "cMaxAdultAdmissionPrice"]] }
+      ],
+      "args": [["float", "price"]],
+      "calls": "skip",
+      "result": "field:0:0x1150:float",
+      "tolerance": 0.0001,
+      "cases": [
+        [22, 0, 100],
+        [22.25, 0, 100],
+        [130, 0, 100],
+        [100, 0, 100],
+        [-0.25, 0, 100],
+        [0, 0, 100],
+        [30.1, 0, 100],
+        [5, 10, 100],
+        [10, 10, 100],
+        [50, 0, 0],
+        [7.5, 5, 40],
+        [41, 5, 40]
+      ]
+    }
+  ]
+}
