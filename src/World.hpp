@@ -273,7 +273,9 @@ public:
     // The mouse at the window's edge scrolls the map (off for the
     // screenshot tests, where the mouse is wherever it happens to be)
     bool edgeScroll = true;
-    static constexpr float kEdgeScrollPixels = 32.0f; // a step, 30 a second (zoo.ini mouseScrollX/Y)
+    // A step, 30 a second: zoo.ini [UI] mouseScrollX (32 unless the Game
+    // Options' scroll speed set it - zoo.exe 0x51a33c, 0x606800)
+    static inline float kEdgeScrollPixels = 32.0f;
 
     // Camera control
     void setCameraPosition(int x, int y);

@@ -9,6 +9,11 @@
 #include "../Fences.hpp"
 #include "../ZooSim.hpp"
 #include "../OriginalConstants.hpp"
+#include "../Features.hpp"
+#include "../Settings.hpp"
+#include "UiScrollBar.hpp"
+#include <cstring>
+#include <map>
 #include "../Utils.hpp"
 #include "UiButton.hpp"
 #include "UiGraph.hpp"
@@ -19,10 +24,77 @@
 #include "UiStatusImage.hpp"
 #include "UiText.hpp"
 
+// addition: the Game Options' Extras tab. The original's gameopts.lyt has an
+// About tab button with its action left out (";action=3 ;target=903"): it's
+// turned on here, pointed at a page of the engine's additions
+// (ui/zt1extras.lyt, made below), each switched on or off. Off, each does
+// what the original does (Features.hpp)
+static const int kExtrasPage = 904, kExtrasTab = 1509, kExtrasFirst = 9050;
+static std::string extrasLabel(const std::string &name) {
+  static const std::map<std::string, std::string> labels = {
+      {"allunlocked", "All items unlocked"}, {"fencemodes", "Fence modes"},
+      {"staffpaths", "Staff on paths"},      {"smoothroutes", "Smooth walking"},
+      {"maptooltips", "Map hints"},          {"elevatedpaths", "Raised walkways"},
+      {"pathmodes", "Path modes"},           {"hotkeys", "Extra hotkeys"},
+      {"mods", "Load mods"},                 {"modmenu", "Mod menu"},
+      {"updatechecks", "Update checks"}};
+  auto it = labels.find(name);
+  return it == labels.end() ? name : it->second;
+}
+static std::string gameOptionsWithExtras(ResourceManager *rm) {
+  std::string t = rm->getGameText("ui/gameopts.lyt");
+  auto swap = [&t](const std::string &from, const std::string &to) {
+    for (const char *nl : {"\r\n", "\n"}) {
+      std::string f = from, r = to;
+      for (std::string *s : {&f, &r})
+        for (size_t at = 0; (at = s->find('\n', at)) != std::string::npos; at += std::strlen(nl))
+          s->replace(at, 1, nl);
+      size_t at = t.find(f);
+      if (at != std::string::npos) {
+        t.replace(at, f.size(), r);
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!swap(";state=4096\n;action=3\n;target=903", "state=4096\naction=3\ntarget=" + std::to_string(kExtrasPage)) ||
+      !swap("button = 1530", "button = 1530\nbutton = " + std::to_string(kExtrasTab)))
+    return t; // (a gameopts.lyt not like the shipped one: left as it is)
+  swap("helpid = 1544", "helpid = 0");
+  t += "\r\n[ExtrasLayout]\r\ntype=UILayout\r\nlayout=ui/zt1extras.lyt\r\nstate=1\r\n";
+  return t;
+}
+static std::string extrasPage() {
+  std::string t = "[LayoutInfo]\r\nanchor=1032\r\nx=17\r\ny=6\r\ndx=171\r\ndy=440\r\nid=" +
+                  std::to_string(kExtrasPage) + "\r\nlayer=1\r\n\r\n";
+  const std::string gold = "forecolor=237\r\nforecolor=228\r\nforecolor=173\r\nbackcolor=100\r\nbackcolor=108\r\n"
+                           "backcolor=108\r\ntransparent=1\r\nlayer=1\r\n";
+  t += "[Title]\r\ntype=UIText\r\nid=9040\r\nx=29\r\ny=29\r\ndx=127\r\ndy=fitfont\r\nfont=3270\r\nfontsize=3271\r\n"
+       "border=2\r\nforecolor=206\r\nforecolor=206\r\nforecolor=206\r\nbackcolor=68\r\nbackcolor=36\r\n"
+       "backcolor=20\r\ntransparent=1\r\nlayer=1\r\njustify=center\r\n\r\n";
+  int i = 0;
+  for (const Features::Switch &f : Features::all()) {
+    // (below the panel's logo, as the original's pages: 22 apart)
+    int y = 150 + i * 22, id = kExtrasFirst + i;
+    t += "[Toggle" + std::to_string(i) + "]\r\ntype=UIButton\r\nid=" + std::to_string(id) +
+         "\r\nanimation=ui/sharedui/radio/radio\r\nx=36\r\ny=" + std::to_string(y) +
+         "\r\nlayer=1\r\ntransparent=1\r\nstate=2048\r\n\r\n";
+    t += "[Label" + std::to_string(i) + "]\r\ntype=UIText\r\nid=" + std::to_string(id + 20) +
+         "\r\nx=54\r\ny=" + std::to_string(y - 1) + "\r\ndx=104\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\n"
+         "border=0\r\nalias=" + std::to_string(id) + "\r\n" + gold + "\r\n";
+    i++;
+  }
+  t += "[Note]\r\ntype=UIText\r\nid=9049\r\nx=33\r\ny=" + std::to_string(156 + i * 22) +
+       "\r\ndx=121\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\nborder=0\r\njustify=center\r\n" + gold;
+  return t;
+}
+
 UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
                            const std::string &mainLayout,
                            const std::string &screenLayout) {
   this->resource_manager = resource_manager;
+  resource_manager->provide("ui/gameopts.lyt", gameOptionsWithExtras);
+  resource_manager->provide("ui/zt1extras.lyt", [](ResourceManager *) { return extrasPage(); });
 
   IniReader *mainReader = resource_manager->getIniReader(mainLayout);
   if (!mainReader) {
@@ -108,6 +180,7 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   this->setupLists();
   this->setupColours();
   this->setupAnimalPanel();
+  this->setupGameOptions();
 
   // The bulldozer (Clear Objects) is a toggle that starts off: only the
   // view toggles (trees, guests, buildings) start on
@@ -1280,6 +1353,129 @@ void UiGameScreen::showPanel(int id, const std::string &category) {
   }
 }
 
+// The Game Options panel's settings pages, as the original's (zoo.exe
+// 0x518375 reads each setting back into its control when the panel opens;
+// each control's handler writes it - [UI] keys in zoo.ini), and the Extras
+// tab (an addition, above)
+void UiGameScreen::setupGameOptions() {
+  auto slider = [this](int id, int value, std::function<void(int)> changed) {
+    if (UiScrollBar *s = dynamic_cast<UiScrollBar *>(this->getElementById(id))) {
+      s->setValue(value);
+      s->onChange = std::move(changed);
+    }
+  };
+  // Main volume (gameopt2_MainVolumeScrollbar_click 0x58b98d): 0 is
+  // silence (5000), else (100 - value) x 15 hundredths of a decibel down
+  slider(1511, std::clamp(100 - Settings::getInt("UI", "userAttenuation", 0) / 15, 0, 100), [](int v) {
+    Settings::setInt("UI", "userAttenuation", v == 0 ? 5000 : (100 - v) * 15);
+    Settings::apply();
+  });
+  // Menu music (gameopt2_MainMenuMusicScrollbar_click 0x47ff4d): its top,
+  // menuMusicMaxAttenuation, and 50 more for each step down
+  int musicTop = Settings::getInt("UI", "menuMusicMaxAttenuation", -1000);
+  slider(1513, std::clamp(100 - (Settings::getInt("UI", "menuMusicAttenuation", -1000) - musicTop) / 50, 0, 100),
+         [musicTop](int v) {
+           Settings::setInt("UI", "menuMusicAttenuation", musicTop + (100 - v) * 50);
+           Settings::apply();
+         });
+  // Scroll speed (gameopt3_MainScrollSpeedBar_click 0x606800, 0x609abf):
+  // mouseScrollX/Y = 8 + value x 1.2 (shown back as x / 1.2, 0x518375)
+  slider(1515, std::clamp(static_cast<int>(std::lround(Settings::getInt("UI", "mouseScrollX", 32) * 100.0 / 120.0)), 0, 100),
+         [](int v) {
+           int step = 8 + static_cast<int>(v * 1.2);
+           Settings::setInt("UI", "mouseScrollX", step);
+           Settings::setInt("UI", "mouseScrollY", step);
+           Settings::apply();
+         });
+  // Tooltips: the delay (0x51a559: value x 10 + 1) and how long one stays
+  // (0x51a59f: value x 100 + 500 ms, 5000 by default). ours: the delay is
+  // kept but not yet used - the original reads it from UIManager+0x20, and
+  // its scale against our measured 600 ms isn't traced yet
+  slider(1523, std::clamp((Settings::getInt("UI", "tooltipDelay", 1) - 1) / 10, 0, 100),
+         [](int v) { Settings::setInt("UI", "tooltipDelay", v * 10 + 1); });
+  this->tooltipDurationMs = static_cast<Uint32>(std::max(500, Settings::getInt("UI", "tooltipDuration", 5000)));
+  slider(1525, std::clamp((static_cast<int>(this->tooltipDurationMs) - 500) / 100, 0, 100), [this](int v) {
+    this->tooltipDurationMs = static_cast<Uint32>(v * 100 + 500);
+    Settings::setInt("UI", "tooltipDuration", static_cast<int>(this->tooltipDurationMs));
+  });
+  // Short or long tooltips ([UI] helpType: 0 short, else long). ours: kept;
+  // the long ones' width isn't read yet, so both show the same
+  int helpType = Settings::getInt("UI", "helpType", 0);
+  for (int id : {1520, 1521})
+    if (UiButton *b = dynamic_cast<UiButton *>(this->getElementById(id))) {
+      if ((id == 1521) == (helpType != 0))
+        b->choose();
+      b->onClick = [id] { Settings::setInt("UI", "helpType", id == 1521 ? 1 : 0); };
+    }
+  // Window or full screen (Window_Mode 1587 and Full_Screen_Mode 1588, one
+  // over the other: the one shown is the one to change to) and the window's
+  // size (800 x 600, 1024 x 768, 1280 x 1024): [user] fullscreen,
+  // screenwidth, screenheight
+  auto window = [] {
+    SDL_Window *w = SDL_GetKeyboardFocus();
+    return w ? w : SDL_GetMouseFocus();
+  };
+  auto showMode = [this, window] {
+    SDL_Window *w = window();
+    bool full = w && (SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN) != 0;
+    if (UiElement *e = this->getElementById(1587))
+      e->setHidden(!full);
+    if (UiElement *e = this->getElementById(1588))
+      e->setHidden(full);
+  };
+  for (int id : {1587, 1588})
+    if (UiButton *b = dynamic_cast<UiButton *>(this->getElementById(id)))
+      b->onClick = [id, window, showMode] {
+        if (SDL_Window *w = window()) {
+          bool full = id == 1588;
+          SDL_SetWindowFullscreen(w, full ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+          Settings::setInt("user", "fullscreen", full ? 1 : 0);
+        }
+        showMode();
+      };
+  showMode();
+  const int sizes[3][3] = {{1517, 800, 600}, {1518, 1024, 768}, {1519, 1280, 1024}};
+  int savedW = Settings::getInt("user", "screenwidth", 1280);
+  for (const auto &s : sizes)
+    if (UiButton *b = dynamic_cast<UiButton *>(this->getElementById(s[0]))) {
+      if (savedW == s[1])
+        b->choose();
+      int w = s[1], h = s[2];
+      b->onClick = [w, h, window] {
+        if (SDL_Window *win = window()) {
+          SDL_SetWindowFullscreen(win, 0);
+          SDL_SetWindowSize(win, w, h);
+          SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+        }
+        Settings::setInt("user", "screenwidth", w);
+        Settings::setInt("user", "screenheight", h);
+        Settings::setInt("user", "fullscreen", 0);
+      };
+    }
+
+  // Extras (addition): each of the engine's additions on or off, kept in
+  // zoo.ini's [Extras]
+  if (UiText *title = dynamic_cast<UiText *>(this->getElementById(9040)))
+    title->setText("Extras");
+  if (UiText *note = dynamic_cast<UiText *>(this->getElementById(9049)))
+    note->setText("Off: as the original game");
+  int i = 0;
+  for (Features::Switch &f : Features::all()) {
+    int id = kExtrasFirst + i++;
+    if (UiText *label = dynamic_cast<UiText *>(this->getElementById(id + 20)))
+      label->setText(extrasLabel(f.name));
+    if (UiButton *b = dynamic_cast<UiButton *>(this->getElementById(id))) {
+      b->setToggledOn(*f.value);
+      bool *value = f.value;
+      std::string name = f.name;
+      b->onClick = [b, value, name] {
+        *value = b->isToggledOn();
+        Settings::saveExtra(name, *value);
+      };
+    }
+  }
+}
+
 void UiGameScreen::showTab(int panelId, int buttonId) {
   for (Entry &e : this->entries) {
     if (!e.panel || e.id != panelId)
@@ -1475,7 +1671,10 @@ std::string UiGameScreen::tooltipText() const {
 // A box with a gold edge, the help in white outlined in black, wrapped,
 // centred under the cursor and kept on the screen
 void UiGameScreen::drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
-  if (SDL_GetTicks() < this->mouseStill + 600)
+  // (measured: 600 ms still; then shown for [UI] tooltipDuration -
+  // zoo.exe 0x51a59f)
+  Uint32 now = SDL_GetTicks();
+  if (now < this->mouseStill + 600 || now > this->mouseStill + 600 + this->tooltipDurationMs)
     return;
   std::string text = this->tooltipText();
   if (text.empty())

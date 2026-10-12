@@ -3,6 +3,8 @@
 
 #include "UiElement.hpp"
 #include <SDL2/SDL.h>
+#include <algorithm>
+#include <functional>
 #include <string>
 
 class Animation;
@@ -33,6 +35,15 @@ public:
 
   void attach(UiScrollable *owner) { this->owner = owner; }
 
+  // A scroll bar attached to no list is a value slider (the Game Options'
+  // horizontal bars, horzslid/horzthm): its thumb along its own dx, a value
+  // from 0 to 100 (zoo.exe's scroll bars hold theirs at +0x364), set by
+  // dragging the thumb or clicking the bar. onChange is told each new value
+  // (the original's <layout>_<bar>_click handlers)
+  int getValue() const { return this->value; }
+  void setValue(int v) { this->value = std::clamp(v, 0, 100); }
+  std::function<void(int)> onChange;
+
   UiAction handleInputs(std::vector<Input> &inputs) override;
   void draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) override;
 
@@ -56,6 +67,9 @@ private:
   int drag_offset = 0;
 
   bool visible() const;
+  bool slider() const { return this->owner == nullptr; }
+  int value = 0;
+  void sliderTo(int mx);
   void setFromThumbTop(int thumbTop);
 };
 

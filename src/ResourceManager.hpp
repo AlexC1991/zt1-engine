@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <functional>
 #include <unordered_map>
 
 #include "SDL_ttf.h"
@@ -55,6 +56,13 @@ public:
   SDL_Cursor *getCursor(uint32_t cursor_id, int hotX = 0, int hotY = 0);
   Mix_Music *getMusic(const std::string &file_name);
   IniReader *getIniReader(const std::string &file_name);
+  // ours: a file the engine supplies in place of the game's, or beside it
+  // (e.g. the Game Options' Extras tab: ui/gameopts.lyt with that tab on,
+  // and its page); made each time it's read, from the game's own text if it
+  // wants it (getGameText)
+  void provide(const std::string &file_name, std::function<std::string(ResourceManager *)> make);
+  // A file of the game's as text (empty when there's none)
+  std::string getGameText(const std::string &file_name);
   Animation *getAnimation(const std::string &file_name);
   Pallet *getPallet(const std::string &file_name);
   SDL_Texture *getLoadTexture(SDL_Renderer *renderer);
@@ -104,6 +112,7 @@ public:
   PalletManager* getPalletManager() { return &pallet_manager; }
 
 private:
+  std::unordered_map<std::string, std::function<std::string(ResourceManager *)>> provided;
   std::unordered_map<std::string, std::string> resource_map;
   std::unordered_map<std::string, int> archive_priority; // archive -> path index
   std::unordered_map<uint32_t, std::string> string_map;

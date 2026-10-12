@@ -758,7 +758,27 @@ Mix_Music *ResourceManager::getMusic(const std::string &name_raw) {
   return ZtdFile::getMusic(loc, actual_key);
 }
 
+void ResourceManager::provide(const std::string &name, std::function<std::string(ResourceManager *)> make) {
+  this->provided[normalizePath(name)] = std::move(make);
+}
+
+std::string ResourceManager::getGameText(const std::string &name) {
+  int size = 0;
+  void *data = this->getFileContent(name, &size);
+  std::string text = data && size > 0 ? std::string(static_cast<const char *>(data), size) : std::string();
+  free(data);
+  return text;
+}
+
 IniReader *ResourceManager::getIniReader(const std::string &name_raw) {
+  // ours: a file the engine supplies itself (provide())
+  if (!this->provided.empty()) {
+    auto p = this->provided.find(normalizePath(name_raw));
+    if (p != this->provided.end()) {
+      std::string text = p->second(this);
+      return new IniReader(text.data(), text.size());
+    }
+  }
   std::string name = fixDoubleName(name_raw);
 
   if (isDirectory(name))

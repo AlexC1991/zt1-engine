@@ -421,6 +421,9 @@ private:
   size_t guestThoughts = 0;
   std::string animalSexImage, animalTopThought;
   void setupAnimalPanel();
+  // The Game Options panel's settings pages, and the Extras tab
+  void setupGameOptions();
+  Uint32 tooltipDurationMs = 5000; // [UI] tooltipDuration
   void drawAnimalPortrait(SDL_Renderer *renderer);
   int shownFilter = -1;
   void setupFilterPanel();

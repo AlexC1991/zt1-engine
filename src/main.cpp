@@ -41,6 +41,7 @@
 #include "OriginalConstants.hpp"
 #include "Paths.hpp"
 #include "Updater.hpp"
+#include "Settings.hpp"
 #include "Sound.hpp"
 #include "SaveGame.hpp"
 #include "Goals.hpp"
@@ -2490,6 +2491,8 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       {3, "!3", "filtermarine"},   {3, "!0", "filterall"},
       {15, "#4008", "research"},   {15, "#4009", "research2"},
       {15, "#4010", "conservation"}, {5, "", "gameopts"},
+      {5, "#1507", "gameopts_sound"}, {5, "#1508", "gameopts_help"},
+      {5, "#1530", "gameopts_advanced"}, {5, "#1509", "gameopts_extras"},
       {0, "~esc", "escmenu"},
       {14, "#4104", "zoo_info"},   {14, "#4154", "zoo_finance"},
       {14, "#4153", "zoo_graphs"}, {14, "#4105", "zoo_awards"},
@@ -2755,6 +2758,28 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   g_hud->setZooInfo(g_hud->zooInfo());
   check("typed admission $130 kept to $100.00 / $50.00",
         textOf(4193) == "$100.00" && textOf(4194) == "$50.00");
+
+  // Game Options, Extras (an addition): a switch for each extra; clicked,
+  // it flips and is kept in zoo.ini's [Extras] - clicked again, as it was
+  {
+    g_hud->showPanel(5, "");
+    g_hud->showTab(5, 1509);
+    capture("gameopts_extras_test");
+    int at = 0;
+    for (const Features::Switch &f : Features::all()) {
+      if (std::string(f.name) == "hotkeys")
+        break;
+      at++;
+    }
+    bool was = Features::hotkeys;
+    click(9050 + at);
+    bool flipped = Features::hotkeys != was && Settings::get("Extras", "hotkeys") == (was ? "0" : "1");
+    click(9050 + at);
+    check("Extras: a switch flips its extra and is kept in zoo.ini",
+          flipped && Features::hotkeys == was && Settings::get("Extras", "hotkeys") == (was ? "1" : "0"));
+    g_hud->showTab(5, 1506); // (back on File Options, for the game menu's tests)
+    g_hud->showPanel(0, "");
+  }
 
   // Fences, as done in the original: a chain-link loop round 3 x 3 tiles,
   // named; an Atlantean tank wall loop round 2 x 2, filled; then one tank
@@ -7459,6 +7484,9 @@ int main(int argc, char *argv[]) {
   g_widescreen = config.getWidescreen();
   g_timedUnlocks = config.getTimedUnlocks();
   Features::allUnlocked = !g_timedUnlocks;
+  // The extras switched on or off in the Game Options (zoo.ini [Extras]),
+  // and its volumes and scrolling at work
+  Settings::loadExtras();
   ResourceManager resource_manager(&config);
   // Sound effects, and every button's click (uiclick.wav)
   Sound::get().init(&resource_manager);
@@ -7474,6 +7502,9 @@ int main(int argc, char *argv[]) {
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
   Window window("ZT1-Engine", config.getScreenWidth(), config.getScreenHeight(),
                 60.0f);
+  // The Game Options' volumes and scrolling at work (after the window: it
+  // opens the audio)
+  Settings::apply();
   // Inside the ZT1 Lab app: the game's window in its Play view (--embed
   // <window>), or the Lab's engine kept out of sight, drawing for the app
   // (--lab-host <port>)

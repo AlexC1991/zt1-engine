@@ -44,7 +44,20 @@ UiScrollBar::UiScrollBar(IniReader *ini_reader,
 UiScrollBar::~UiScrollBar() {}
 
 bool UiScrollBar::visible() const {
-  return owner != nullptr && owner->getScrollMaximum() > 0;
+  return slider() || owner->getScrollMaximum() > 0;
+}
+
+// (a slider: the value under the mouse, along the bar)
+void UiScrollBar::sliderTo(int mx) {
+  int travel = track_rect.w - thumb_rect.w;
+  if (travel <= 0)
+    return;
+  int v = std::clamp((mx - drag_offset - track_rect.x) * 100 / travel, 0, 100);
+  if (v != this->value) {
+    this->value = v;
+    if (this->onChange)
+      this->onChange(v);
+  }
 }
 
 void UiScrollBar::setFromThumbTop(int thumbTop) {
@@ -59,6 +72,26 @@ void UiScrollBar::setFromThumbTop(int thumbTop) {
 UiAction UiScrollBar::handleInputs(std::vector<Input> &inputs) {
   if (!visible())
     return UiAction::NONE;
+  if (slider()) {
+    for (const Input &input : inputs) {
+      if (input.type != InputType::POSITIONED)
+        continue;
+      int mx = input.position.x, my = input.position.y;
+      if (input.event == InputEvent::LEFT_CLICK && inside(track_rect, mx, my)) {
+        // On the thumb: dragged from where it was taken; on the bar: the
+        // thumb jumps there
+        dragging = true;
+        drag_offset = inside(thumb_rect, mx, my) ? mx - thumb_rect.x : thumb_rect.w / 2;
+        sliderTo(mx);
+      } else if (input.event == InputEvent::CURSOR_MOVE && dragging) {
+        if (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK)
+          sliderTo(mx);
+        else
+          dragging = false;
+      }
+    }
+    return UiAction::NONE;
+  }
 
   for (const Input &input : inputs) {
     if (input.type != InputType::POSITIONED)
@@ -105,6 +138,26 @@ void UiScrollBar::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   (void)layout_rect;
   if (!renderer || !visible())
     return;
+
+  if (slider()) {
+    // Its own rect (x, y, dx, dy in the layout); the thumb at the value
+    track_rect = this->getRect(this->ini_reader->getSection(this->name), layout_rect);
+    this->last_rect = track_rect;
+    int thumbW = 0, thumbH = 0;
+    partSize(thumb, &thumbW, &thumbH);
+    if (thumbW <= 0)
+      thumbW = 12;
+    if (thumbH <= 0)
+      thumbH = track_rect.h;
+    int travel = std::max(0, track_rect.w - thumbW);
+    thumb_rect = {track_rect.x + travel * this->value / 100, track_rect.y + (track_rect.h - thumbH) / 2, thumbW,
+                  thumbH};
+    if (track)
+      track->draw(renderer, &track_rect, CompassDirection::N);
+    if (thumb)
+      thumb->draw(renderer, &thumb_rect, CompassDirection::N);
+    return;
+  }
 
   int upW, upH, downW, downH, thumbW, thumbH;
   partSize(up_arrow, &upW, &upH);
