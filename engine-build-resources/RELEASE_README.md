@@ -85,7 +85,7 @@ This alpha covers the **base Zoo Tycoon game's freeform mode**: its **animals an
 - **Dinosaur Digs and Marine Mania:** expansion animals, tanks, shows and dinosaurs are still being built. Their content may show up in menus and buy panels, but **it isn't ready to play.**
 - **Scenarios:** they open, but their goals and events aren't implemented yet. Stick to **freeform**.
 - **Original `.zoo` saves:** can't be loaded yet. The engine uses its own save format, so saves from the original game won't open.
-- **Linux and macOS:** Windows only for now; other platforms are planned.
+- **Linux and macOS:** this engine is Windows only. For Linux, see [sharkwouter's zt1-engine](https://github.com/sharkwouter/zt1-engine), which this project grew from.
 
 ---
 
@@ -152,7 +152,7 @@ Report issues at **https://github.com/AlexC1991/zt1-engine/issues**.
 
 **Zoo Tycoon** is © Microsoft Corporation, developed by Blue Fang Games. This project is **not affiliated with or endorsed by Microsoft or Blue Fang Games**. It ships **none** of the original game's files. You need your own legitimately obtained copy.
 
-**ZT1-Engine** is free and open source under the **MIT License** (see `LICENSE.txt`), © 2025 Wouter (sharkwouter) Wijsman and contributors.
+**ZT1-Engine** is free and open source under the **MIT License** (see `LICENSE.txt`), © 2025 Wouter (sharkwouter) Wijsman, © 2026 batty251 and the ZT1-Engine contributors.
 Source code: https://github.com/AlexC1991/zt1-engine
 
 It uses these open-source libraries: SDL2, SDL2_image, SDL2_mixer, SDL2_ttf, FreeType, libzip, zlib, pe-resource-loader and Dear ImGui (MIT License, © Omar Cornut). Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved.

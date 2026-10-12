@@ -43,6 +43,8 @@ def newest_save(project):
 
 
 def main():
+    # (cbx writes arrows and the like: the Windows console's code page can't)
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", required=True, help="the release's name, e.g. alpha-2026-10-19")
     ap.add_argument("--notes", required=True, help="a Markdown file: what's in this release")
@@ -63,16 +65,18 @@ def main():
     shutil.copyfile(os.path.join(ROOT, "LICENSE.txt"), os.path.join(folder, "LICENSE"))
     log = os.path.join(folder, "CHANGELOG.md")
     old = open(log, encoding="utf-8").read() if os.path.exists(log) else "# Changelog\n"
-    head, _, rest = old.partition("\n")
-    with open(log, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(f"{head}\n\n## {a.name}\n\n{notes}\n{rest}")
+    if f"\n## {a.name}\n" not in old:  # (the same release run again: once is enough)
+        head, _, rest = old.partition("\n")
+        with open(log, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(f"{head}\n\n## {a.name}\n\n{notes}\n{rest}")
 
     summary = notes.splitlines()[0][:200] if notes else a.name
     if first:
-        cbx("submit", folder, "--name", a.project, "--new", "-m", f"{a.name}: {summary}")
-        cbx("visibility", "public", a.project, "--yes")
+        cbx("submit", folder, "--name", a.project, "--new", "--no-licence", "-m", f"{a.name}: {summary}")
     else:
-        cbx("submit", folder, "-m", f"{a.name}: {summary}")
+        # (nothing changed - the same release run again - isn't a failure)
+        cbx("submit", folder, "--no-licence", "-m", f"{a.name}: {summary}", check=False)
+    cbx("visibility", "public", a.project, "--yes")
     n = newest_save(a.project)
     cbx("promote", n, a.project, "--name", a.name, "--notes-file", os.path.abspath(a.notes))
     for f in (a.zip, a.zip + ".sha256"):
