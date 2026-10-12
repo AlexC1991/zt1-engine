@@ -1,0 +1,29 @@
+name: Crash or bug
+description: The engine crashes, won't start, or something is plainly broken
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      placeholder: "1. Start a freeform zoo  2. ..."
+  - type: input
+    id: build
+    attributes:
+      label: Which build
+      placeholder: alpha-2026-10-19, or newest (built from abc1234)
+  - type: input
+    id: game
+    attributes:
+      label: Your Zoo Tycoon
+      placeholder: base game / Complete Collection, and where it's installed
+  - type: textarea
+    id: files
+    attributes:
+      label: Logs, a saved zoo, screenshots

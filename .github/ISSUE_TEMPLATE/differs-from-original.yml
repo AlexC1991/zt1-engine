@@ -1,0 +1,37 @@
+name: Differs from the original
+description: Something in the engine doesn't behave like Zoo Tycoon 1 does
+labels: [differs from original]
+body:
+  - type: markdown
+    attributes:
+      value: The original game is the spec, so these are the most useful reports there are. Thank you!
+  - type: textarea
+    id: did
+    attributes:
+      label: What you did
+      placeholder: "Placed a zebra in a savannah exhibit, then sold it from Animal Information"
+    validations:
+      required: true
+  - type: textarea
+    id: original
+    attributes:
+      label: What the original game does
+      description: Screenshots or numbers help a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: engine
+    attributes:
+      label: What the engine does
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Which build
+      placeholder: alpha-2026-10-19, or newest (built from abc1234)
+  - type: textarea
+    id: files
+    attributes:
+      label: A saved zoo, logs or anything else
+      description: Drag files in here. A saved zoo (Documents\zt1-engine\Saved Games) lets anyone see it happen.

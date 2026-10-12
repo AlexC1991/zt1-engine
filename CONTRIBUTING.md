@@ -72,6 +72,25 @@ Someone will review it. Expect questions about where a rule came from: that's ho
 
 You're welcome to use AI tools, or not. If you do, the ZT1 Lab's MCP server lets your agent search the original, edit, build and test the engine through the Lab, where you can watch everything it does. Setup is in the README. Either way, **you're responsible for what you submit**. Understand it, test it, and cite where its rules came from like any other change. Never submit AI-generated art, audio or text for the game itself.
 
+## Releases (for maintainers)
+
+Builds are made in the cloud (`.github/workflows/`):
+
+- **Every push and pull request** is built, to check that it compiles and packages.
+- **Every push to `main`** becomes the *newest build*:
+  - on GitHub, the `newest` pre-release, replaced each time;
+  - on CodeRook, `main`'s code mirrored to the `zt1-engine` project.
+- **A weekly alpha** is an annotated tag whose message is the release notes:
+
+  ```bash
+  git tag -a alpha-2026-10-19 -F notes.md
+  git push origin alpha-2026-10-19
+  ```
+
+  It becomes a GitHub release and a named version of `zt1-engine-releases` on CodeRook, both with the same zip.
+
+The cloud can't run the self-test or the formula checks, because they need Zoo Tycoon's own files. Run them in the ZT1 Lab before tagging an alpha.
+
 ## The game's files are not ours
 
 Never commit anything from Zoo Tycoon itself: no art, sounds, maps, `.ztd` archives, `zoo.exe` or its decompiled code. The engine reads them from each player's own copy. Small facts about the original (an address, a field's meaning, a number) are fine and expected.
