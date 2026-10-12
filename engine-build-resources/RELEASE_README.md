@@ -20,8 +20,8 @@
 
 **The base Zoo Tycoon game is all you need.** You do **not** need the Complete Collection.
 
-- **Base Zoo Tycoon only:** works. This alpha is built around the base game, and everything that's ready uses only base-game content.
-- **Complete Collection (with Dinosaur Digs and Marine Mania):** also works, but expansion content **isn't ready in this alpha** (see below), so you don't gain much from it yet.
+- **Base Zoo Tycoon only:** works. Everything in the base game is there to try.
+- **Complete Collection (with Dinosaur Digs and Marine Mania):** also works, and adds **Marine Mania's animals and tanks** (new in this alpha; the shows come later). Dinosaur Digs isn't ready yet (see below).
 
 ---
 
@@ -56,6 +56,14 @@ When a new alpha is out, ZT1-Engine offers it at the main menu: **Update now** d
 
 ---
 
+## New in this alpha
+
+- **An installer and updates:** one setup file, and the game offers each new alpha at the main menu.
+- **Game Options:** the original's Sound, Video, Tooltips and Scrolling settings work and are kept. A new **Extras** tab switches each of the engine's additions on or off (off plays exactly as the original).
+- **Building placement fixed:** buildings snap to whole tiles as in the original.
+- **Money as the original counts it:** an animal's sale price and the admission price follow the original's rules.
+- **Marine Mania animals (Complete Collection):** build tanks, adopt marine animals, put a filter beside each tank to keep its water clean, and hire Marine Specialists to feed them. Maintenance workers repair worn filters. **Animal shows aren't in yet.**
+
 ## What you can try in this alpha
 
 This alpha covers the **base Zoo Tycoon game's freeform mode**: its **animals and items**. **If you find a bug in any of it, please report it** (see [Reporting bugs](#reporting-bugs)).
@@ -66,6 +74,7 @@ This alpha covers the **base Zoo Tycoon game's freeform mode**: its **animals an
 - **Escapes and predators:** animals jump, climb or break out; loose meat-eaters chase guests, and keepers dart and crate them
 - **Guests:** needs, tours, donations, thoughts, litter, and running from escaped animals
 - **Staff:** zookeepers, maintenance workers and tour guides; hiring, firing and duties
+- **Marine Mania (Complete Collection):** tanks, marine animals, water purity and filters, Marine Specialists
 - **Running the zoo:** zoo rating, admissions, finances, graphs, research and conservation
 - **Saving and loading:** Save Game, Load Game and Continue Saved Game
 - **Sound:** music, ambience, crowds, guests and animals
@@ -76,13 +85,10 @@ This alpha covers the **base Zoo Tycoon game's freeform mode**: its **animals an
 
 ## Known bugs and what's not ready
 
-### 🐞 Buildings: placement is broken (known bug)
-
-**Buildings** (shops, restaurants, restrooms and other guest buildings) are in the game, but **placing them is broken in this alpha.** They may go in the wrong spot or not place properly, and the behaviour **isn't the same from one PC to another.** It's a known bug being worked on, so **you don't need to report it.** Please **avoid relying on buildings** for now. A fix is planned for an upcoming weekly build.
-
 ### Not in this alpha yet
 
-- **Dinosaur Digs and Marine Mania:** expansion animals, tanks, shows and dinosaurs are still being built. Their content may show up in menus and buy panels, but **it isn't ready to play.**
+- **Marine Mania's shows:** show tanks, tricks and show admissions are still being built. Marine animals and tanks are ready; the shows will follow in a later alpha.
+- **Dinosaur Digs:** dinosaurs and their items are still being built. They may show up in menus and buy panels, but **they aren't ready to play.**
 - **Scenarios:** they open, but their goals and events aren't implemented yet. Stick to **freeform**.
 - **Original `.zoo` saves:** can't be loaded yet. The engine uses its own save format, so saves from the original game won't open.
 - **Linux and macOS:** this engine is Windows only. For Linux, see [sharkwouter's zt1-engine](https://github.com/sharkwouter/zt1-engine), which this project grew from.
@@ -122,8 +128,6 @@ This alpha exists to find problems, so **if you find a bug, please report it.** 
 Add a **screenshot** or your **saved zoo** (from `Documents\zt1-engine\Saved Games`) if you can. Saying which **version** you were playing helps too (the installer's name, or the update message).
 
 Report issues at **https://github.com/AlexC1991/zt1-engine/issues**.
-
-*Building placement is already known (see [Known bugs](#known-bugs-and-whats-not-ready)), so there's no need to report it.*
 
 ---
 

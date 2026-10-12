@@ -1282,7 +1282,7 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
            "food <ex> | nofood <ex>          put food down / take it away\n"
            "litter [n]                       scatter litter round the view\n"
            "wear <ex|all> [life] | break <ex|all>   wear fences down / break them\n"
-           "filters [health]                 set every tank filter's health (0-10)\n"
+           "filters [health]                 list tank filters / set every one's health (0-10)\n"
            "dirty <ex> [purity]              a tank's water purity (default 30)\n"
            "staff | assign <staff#> <ex>     list staff / put one on an exhibit\n"
            "money <n> | day [n] | month [n] | speed <x>\n"
@@ -1385,6 +1385,13 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
       n++;
     }
     return std::to_string(n) + " fence pieces " + (c == "break" ? "broken" : "worn");
+  }
+  if (c == "filters" && w.size() < 2) {
+    std::string out;
+    for (const Fences::Filter &f : fences.filters())
+      out += f.name + "  at " + std::to_string(f.x) + "," + std::to_string(f.y) + "  tank " + std::to_string(f.tank) +
+             "  health " + std::to_string(static_cast<int>(f.health)) + "\n";
+    return out.empty() ? "No filters." : out;
   }
   if (c == "filters") {
     int n = 0;

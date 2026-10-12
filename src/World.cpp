@@ -2808,10 +2808,12 @@ void World::mouseMove(int x, int y) {
       this->hoverPrice = -1;
       return;
     }
-    // Centred on the grid point nearest the cursor
+    // Snapped as any object (zoo.exe 0x4df6f9): an odd number of tiles
+    // centred on the tile under the cursor, an even one on the grid point
+    // nearest it
     const Fences::FilterType &k = this->fences.filterType();
-    int fx = static_cast<int>(std::lround(wx)) - k.footprintX / 2;
-    int fy = static_cast<int>(std::lround(wy)) - k.footprintY / 2;
+    int fx = static_cast<int>(std::floor(wx - (k.footprintX - 1) * 0.5f));
+    int fy = static_cast<int>(std::floor(wy - (k.footprintY - 1) * 0.5f));
     this->fences.previewFilterX = fx;
     this->fences.previewFilterY = fy;
     this->fences.previewFilterFit = this->fences.filterFit(fx, fy, this->worldMap);
