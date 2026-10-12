@@ -2200,18 +2200,31 @@ int World::worldFacing(int iconFacing) const {
   return 4;
 }
 
-// Its footprint (half tiles; none counts as one) lined up on the half-tile
-// grid round the point
+// Where an object being placed goes, as the original puts it (zoo.exe
+// zooViewMouse 0x4ded90: 0x4df6f9-0x4df7df, then FUN_0040f26c): in the tile
+// under the cursor, each way by its footprint there (half tiles, as
+// cFootprintX/Y; none counts as one):
+// - one half tile: the middle of the quarter of the tile the cursor is in
+//   (x 16 or 48 of the tile's 64);
+// - more: whole tiles covered - the tile's middle when half the footprint is
+//   odd (2, 6 half tiles: 1 or 3 tiles), its corner when it's even (4: two
+//   tiles, the cursor's tile and the one before)
+// (it was the half-tile grid round the cursor, so a building two tiles long
+// could straddle tiles by where the cursor happened to be)
 void World::snapObject(const std::string &file, int facing, float &x, float &y) {
   auto [fx, fy] = this->footprintOf(file);
   fx = std::max(1, fx);
   fy = std::max(1, fy);
   if ((facing & 6) == 2 || (facing & 6) == 6)
     std::swap(fx, fy);
-  float left = std::round((x - fx / 4.0f) * 2.0f) / 2.0f;
-  float top = std::round((y - fy / 4.0f) * 2.0f) / 2.0f;
-  x = left + fx / 4.0f;
-  y = top + fy / 4.0f;
+  auto snap = [](float at, int n) {
+    float tile = std::floor(at);
+    if (n == 1)
+      return tile + (at - tile < 0.5f ? 0.25f : 0.75f);
+    return tile + ((n / 2) % 2 == 1 ? 0.5f : 0.0f);
+  };
+  x = snap(x, fx);
+  y = snap(y, fy);
 }
 
 const World::TankFlags &World::tankFlagsOf(const std::string &file) {
