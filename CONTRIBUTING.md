@@ -78,14 +78,16 @@ Builds are made in the cloud (`.github/workflows/`):
 
 - **Every push and pull request** is built, to check that it compiles and packages.
 - **Every push to `main`** is built too, and `main`'s code is mirrored to the `zt1-engine` project on CodeRook.
-- **A weekly alpha** is an annotated tag whose message is the release notes:
+- **A weekly alpha** is an annotated tag named for its version, `v<year>.<month>.<day>` with no leading zeros. Its message is the release notes:
 
   ```bash
-  git tag -a alpha-2026-10-19 -F notes.md
-  git push origin alpha-2026-10-19
+  git tag -a v2026.10.19 -F notes.md
+  git push origin v2026.10.19
   ```
 
-  It becomes a GitHub release and a named version of `zt1-engine-releases` on CodeRook, both with the same zip.
+  The engine is built as an official release, the only kind that can update itself. Its installer, the installer's checksum and `latest.yml` (the in-game updater's feed) become a GitHub release and a named version of `zt1-engine-releases` on CodeRook.
+
+`python engine-build-resources/make_release.py` builds the same installer on your own PC, into `dist/`. It needs Inno Setup 6. It isn't official unless you pass `--official`, so it never updates itself.
 
 The cloud can't run the self-test or the formula checks, because they need Zoo Tycoon's own files. Run them in the ZT1 Lab before tagging an alpha.
 

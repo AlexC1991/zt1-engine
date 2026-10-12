@@ -1,10 +1,15 @@
 """Publish a release on CodeRook: a named version of the zt1-engine-releases
-project, carrying the release's zip and its .sha256 (the same files as the
-GitHub release). Run by .github/workflows/release.yml for each weekly alpha,
-or by hand, signed in with `cbx sign-in`:
+project, carrying the release's downloads - its installer, the installer's
+.sha256 and latest.yml (the same files as the GitHub release). Run by
+.github/workflows/release.yml for each weekly alpha, or by hand, signed in
+with `cbx sign-in`:
 
-    python engine-build-resources/coderook_release.py --name alpha-2026-10-19 \
-        --notes notes.md --zip dist/zt1-engine-alpha-2026-10-19-win64.zip
+    python engine-build-resources/coderook_release.py --name v2026.10.19 --notes notes.md \
+        --files dist/ZT1-Engine-Setup-2026.10.19.exe dist/ZT1-Engine-Setup-2026.10.19.exe.sha256 dist/latest.yml
+
+The name is the version, v<year>.<month>.<day>: CodeRook's update feed
+(.../zt1-engine-releases/updates/latest.yml, which the in-game updater
+reads) takes the version from it.
 
 The releases project holds only the player's README, the licence and a
 changelog; each release is a version of it with the downloads attached
@@ -46,9 +51,9 @@ def main():
     # (cbx writes arrows and the like: the Windows console's code page can't)
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--name", required=True, help="the release's name, e.g. alpha-2026-10-19")
+    ap.add_argument("--name", required=True, help="the release's name: its version, e.g. v2026.10.19")
     ap.add_argument("--notes", required=True, help="a Markdown file: what's in this release")
-    ap.add_argument("--zip", required=True)
+    ap.add_argument("--files", nargs="+", required=True, help="the downloads to attach")
     ap.add_argument("--project", default=PROJECT)
     a = ap.parse_args()
     notes = open(a.notes, encoding="utf-8").read().strip()
@@ -79,9 +84,10 @@ def main():
     cbx("visibility", "public", a.project, "--yes")
     n = newest_save(a.project)
     cbx("promote", n, a.project, "--name", a.name, "--notes-file", os.path.abspath(a.notes))
-    for f in (a.zip, a.zip + ".sha256"):
-        if os.path.exists(f):
-            cbx("attach", os.path.abspath(f), n, a.project)
+    for f in a.files:
+        if not os.path.exists(f):
+            sys.exit(f"[X] No {f}")
+        cbx("attach", os.path.abspath(f), n, a.project)
     shutil.rmtree(work, ignore_errors=True)
     print(f"[OK] {a.project} v{n} is {a.name}, with its downloads")
 

@@ -1,46 +1,52 @@
-"""Make a release of the engine, the way the Alpha was made.
+"""Make a release of the engine: its installer, and the feed the in-game
+updater reads.
 
-Run from the ZT1 Lab (Engine code > Make release) or by hand:
-    python engine-build-resources/make_release.py [--version 0.4.0-alpha] [--no-build]
+Run by the release workflow (.github/workflows/release.yml), from the ZT1
+Lab (Engine code > Make release), or by hand:
+    python engine-build-resources/make_release.py [--version 2026.10.19] [--official] [--no-build]
 
 1. Builds the engine with MSVC, x64, Release, in build-x64/ (a folder of its
-   own: the Lab's build/ is Win32 and is left alone).
-2. Writes dist/zt1-engine-<version, else YYYYMMDD>-win64.zip and its .sha256:
-     zt1-engine-<date>-win64/build/Release/zt1-engine.exe  (where start.bat looks)
-     engine-build-resources/  the setup scripts start.bat runs (only those)
-     tools/decode_button_animation.py  (step5 runs it on the player's ui.ztd)
-     fonts/                   our UI font (Aileron, open licence)
-     pc-sync/                 empty: for the player's own overrides
-     saves/                   scenario progress
-     start.bat, LICENSE.txt, README.md + README.txt (the release notes)
+   own: the Lab's build/ is Win32 and is left alone), with the C++ runtime
+   built in (players need no Visual C++ Redistributable) and the version
+   baked in. --official marks it as a release that may update itself
+   (src/Updater.hpp): only the release workflow passes it.
+2. Builds the installer with Inno Setup 6 (installer/zt1-engine.iss):
+   dist/ZT1-Engine-Setup-<version>.exe, and its .sha256.
+3. Writes dist/latest.yml, the updater's feed (electron-updater's format:
+   the version, the installer's name, its SHA-512 and size). The release
+   carries it, on GitHub and on CodeRook (which also makes its own from the
+   release's name and files).
 
-Nothing is uploaded: publishing the zip is up to you.
+The version is a date, year.month.day without leading zeros (2026.10.19):
+a version number the feeds can compare. Without --version, today's.
 
-No Zoo Tycoon content goes in. The player's own install supplies it when
-start.bat first runs. Refused outright: .ztd/.zoo files and the game's DLLs.
-It needs no copy of the game, so it runs on a build server too (the GitHub
-Actions release workflow, .github/workflows/release.yml).
+No Zoo Tycoon content goes in: the engine reads the player's own install.
+It needs no copy of the game, so it runs on a build server too.
 """
 import argparse
+import base64
 import datetime
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
-import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x64")
 EXE = os.path.join(BUILD, "Release", "zt1-engine.exe")
-# The original game's DLLs (never shipped)
-GAME_DLL_PREFIXES = ("lang", "res", "dwin", "ebueula", "eula", "imeuires", "ijl15", "setupenu")
-# What start.bat runs, from engine-build-resources/
-PLAYER_SCRIPTS = ("start.py", "zt1_paths.py", "step3_build.py", "step4_import.py", "step5_setup.py")
+DIST = os.path.join(ROOT, "dist")
+ISS = os.path.join(ROOT, "installer", "zt1-engine.iss")
 CMAKE_CANDIDATES = [
     r"C:\Program Files\CMake\bin\cmake.exe",
     r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
     r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+]
+ISCC_CANDIDATES = [
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6", "ISCC.exe"),
+    r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+    r"C:\Program Files\Inno Setup 6\ISCC.exe",
 ]
 
 
@@ -48,10 +54,10 @@ def say(*a):
     print(*a, flush=True)
 
 
-def cmake():
-    found = shutil.which("cmake") or next((p for p in CMAKE_CANDIDATES if os.path.exists(p)), None)
+def find(name, candidates):
+    found = shutil.which(name) or next((p for p in candidates if p and os.path.exists(p)), None)
     if not found:
-        sys.exit("[X] No CMake found (Visual Studio's, or CMake on the PATH)")
+        sys.exit(f"[X] No {name} found")
     return found
 
 
@@ -61,15 +67,14 @@ def run(args):
     for line in p.stdout:
         say(line.rstrip())
     if p.wait() != 0:
-        sys.exit(f"[X] Failed ({p.returncode}): {args[1] if len(args) > 1 else args[0]}")
+        sys.exit(f"[X] Failed ({p.returncode}): {os.path.basename(args[0])}")
 
 
-def build():
-    c = cmake()
-    if not os.path.exists(os.path.join(BUILD, "CMakeCache.txt")):
-        say("[1/3] Configuring build-x64/ (MSVC, x64)")
-        run([c, "-S", ROOT, "-B", BUILD, "-A", "x64"])
-    say("[2/3] Building zt1-engine, Release")
+def build(version, official):
+    c = find("cmake", CMAKE_CANDIDATES)
+    say(f"[1/3] Building zt1-engine {version}{' (official)' if official else ''}, x64 Release")
+    run([c, "-S", ROOT, "-B", BUILD, "-A", "x64", "-DZT1_STATIC_RUNTIME=ON", f"-DZT1_VERSION={version}",
+         f"-DZT1_OFFICIAL_BUILD={'ON' if official else 'OFF'}"])
     # (CMakeLists.txt links SDL2_image-static / SDL2_mixer-static by file
     # name, not as targets, so nothing builds them before the engine links:
     # built first here)
@@ -79,75 +84,45 @@ def build():
         sys.exit("[X] The build said it worked, but there's no " + os.path.relpath(EXE, ROOT))
 
 
-def package(version):
-    say("[3/3] Packaging")
-    date = datetime.date.today().strftime("%Y%m%d")
-    name = f"zt1-engine-{version or date}-win64"
-    out = os.path.join(ROOT, "dist", name + ".zip")
-    entries = []
+def installer(version):
+    say("[2/3] The installer (Inno Setup)")
+    os.makedirs(DIST, exist_ok=True)
+    iscc = find("ISCC", ISCC_CANDIDATES)
+    run([iscc, "/Q", f"/DVersion={version}", f"/DSource={ROOT}", f"/DExe={EXE}", ISS])
+    setup = os.path.join(DIST, f"ZT1-Engine-Setup-{version}.exe")
+    if not os.path.exists(setup):
+        sys.exit("[X] Inno Setup said it worked, but there's no " + os.path.relpath(setup, ROOT))
+    return setup
 
-    entries.append((f"{name}/build/Release/zt1-engine.exe", EXE))
 
-    def add_tree(rel_dir):
-        top = os.path.join(ROOT, rel_dir)
-        for d, dirs, files in os.walk(top):
-            dirs[:] = [x for x in dirs if x != "__pycache__"]
-            for f in files:
-                if not f.endswith((".pyc", ".bak")):
-                    p = os.path.join(d, f)
-                    entries.append((f"{name}/{os.path.relpath(p, ROOT).replace(chr(92), '/')}", p))
-
-    # The setup start.bat runs (not the dev tools beside them), the font,
-    # the one tool step5 runs (it makes the button art from the player's own
-    # ui.ztd)
-    for f in PLAYER_SCRIPTS:
-        entries.append((f"{name}/engine-build-resources/{f}", os.path.join(ROOT, "engine-build-resources", f)))
-    entries.append((f"{name}/tools/decode_button_animation.py", os.path.join(ROOT, "tools", "decode_button_animation.py")))
-    add_tree("fonts")
-    for f in ("start.bat", "LICENSE.txt"):
-        if os.path.isfile(os.path.join(ROOT, f)):
-            entries.append((f"{name}/{f}", os.path.join(ROOT, f)))
-    notes = os.path.join(ROOT, "engine-build-resources", "RELEASE_README.md")
-    if os.path.isfile(notes):
-        entries.append((f"{name}/README.md", notes))
-        entries.append((f"{name}/README.txt", notes))
-
-    # The guard: nothing of the game's slips in
-    bad = [a for a, _ in entries
-           if a.lower().endswith((".ztd", ".zoo"))
-           or (a.lower().endswith(".dll") and os.path.basename(a).lower().startswith(GAME_DLL_PREFIXES))]
-    if bad:
-        sys.exit("[X] Refusing to package the game's files: " + ", ".join(bad[:5]))
-
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    tmp = out + ".tmp"
-    missing = [src for _a, src in entries if not os.path.isfile(src)]
-    if missing:
-        sys.exit("[X] Missing: " + ", ".join(os.path.relpath(m, ROOT) for m in missing))
-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-        for arc, src in entries:
-            z.write(src, arc)
-        # (folders the game writes to: scenario progress goes in saves/;
-        # pc-sync/ for the player's own overrides)
-        z.writestr(f"{name}/saves/", "")
-        z.writestr(f"{name}/pc-sync/README.txt",
-                   "Your own files to put over the game's go here (start.bat copies them in).\r\n"
-                   "None of Zoo Tycoon's own files are shipped: start.bat imports them from your install.\r\n")
-    os.replace(tmp, out)
-    sha = hashlib.sha256(open(out, "rb").read()).hexdigest()
-    with open(out + ".sha256", "w") as fh:
-        fh.write(f"{sha}  {os.path.basename(out)}\n")
-    say(f"[OK] {os.path.relpath(out, ROOT)}: {len(entries)} files, {os.path.getsize(out) / 1024 / 1024:.1f} MB")
-    say(f"     sha256 {sha}")
+def feed(setup, version):
+    say("[3/3] The updater's feed (latest.yml)")
+    data = open(setup, "rb").read()
+    sha256 = hashlib.sha256(data).hexdigest()
+    sha512 = base64.b64encode(hashlib.sha512(data).digest()).decode()
+    name = os.path.basename(setup)
+    with open(setup + ".sha256", "w", newline="\n") as fh:
+        fh.write(f"{sha256}  {name}\n")
+    when = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    with open(os.path.join(DIST, "latest.yml"), "w", newline="\n") as fh:
+        fh.write(f"version: '{version}'\nfiles:\n  - url: '{name}'\n    sha512: '{sha512}'\n    size: {len(data)}\n"
+                 f"path: '{name}'\nsha512: '{sha512}'\nreleaseDate: '{when}'\n")
+    say(f"[OK] {os.path.relpath(setup, ROOT)}: {len(data) / 1024 / 1024:.1f} MB")
+    say(f"     sha256 {sha256}")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default="", help="the release's version for its name (else today's date)")
-    ap.add_argument("--no-build", action="store_true", help="package the exe already in build-x64/")
+    ap.add_argument("--version", default="", help="year.month.day, e.g. 2026.10.19 (else today's)")
+    ap.add_argument("--official", action="store_true", help="a release that may update itself (the release workflow)")
+    ap.add_argument("--no-build", action="store_true", help="make the installer from the exe already in build-x64/")
     a = ap.parse_args()
+    today = datetime.date.today()
+    version = a.version or f"{today.year}.{today.month}.{today.day}"
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        sys.exit(f"[X] The version is three numbers, like 2026.10.19 (not {version})")
     if not a.no_build:
-        build()
+        build(version, a.official)
     elif not os.path.exists(EXE):
         sys.exit("[X] No " + os.path.relpath(EXE, ROOT) + ": build first")
-    package(a.version)
+    feed(installer(version), version)

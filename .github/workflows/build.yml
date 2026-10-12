@@ -1,13 +1,13 @@
-# Every push and pull request: does the engine build (Windows, MSVC, x64)?
-# The zip it makes is kept for a week as the run's artifact, for anyone
-# testing a pull request. (The self-test and the formula checks need Zoo
-# Tycoon's own files, which can't be on a build server: run them in the ZT1
-# Lab before a release.)
+# Every push to a branch, and every pull request: do the engine and its
+# installer build (Windows, MSVC, x64)? The installer is kept for a week as
+# the run's artifact, for anyone testing a pull request. (The self-test and
+# the formula checks need Zoo Tycoon's own files, which can't be on a build
+# server: run them in the ZT1 Lab before a release.)
 name: Build
 
 on:
   push:
-    branches-ignore: [main]   # (main and the alpha tags build in release.yml)
+    branches-ignore: [main]   # (main and the release tags build in release.yml)
     tags-ignore: ['*']
   pull_request:
 
@@ -19,10 +19,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build and package
-        run: python engine-build-resources/make_release.py --version build-${{ github.run_number }}
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ISCC -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+      - name: Build the engine and its installer
+        run: python engine-build-resources/make_release.py
       - uses: actions/upload-artifact@v4
         with:
           name: zt1-engine-build-${{ github.run_number }}
-          path: dist/*.zip
+          path: dist/ZT1-Engine-Setup-*.exe
           retention-days: 7

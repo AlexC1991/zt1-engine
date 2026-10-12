@@ -2007,7 +2007,7 @@ ipcMain.handle('anim:tool', (_e, req) => {
 
 ipcMain.handle('engine:release', (_e, opts = {}) => {
   if (engineRelease || engineBuild) return { error: 'Already building.' };
-  const args = ['-X', 'utf8', '-u', path.join(REPO, 'engine-build-resources', 'make_release.py'), '--game', path.dirname(zooExePath())];
+  const args = ['-X', 'utf8', '-u', path.join(REPO, 'engine-build-resources', 'make_release.py')];
   if (opts.noBuild) args.push('--no-build');
   const t0 = Date.now();
   const r = { zip: '', sha: '', error: '', leftOut: [] };

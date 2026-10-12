@@ -11,7 +11,8 @@
 
 **A new alpha build will be released every week.** Each one brings fixes and more of the game. Check back for the latest.
 
-> **You need your own copy of Zoo Tycoon.** This download has the engine only, with **no** Zoo Tycoon art, sound, maps or game files. The first time you run it, it imports them from your own install.
+
+> **You need your own copy of Zoo Tycoon.** ZT1-Engine comes with **no** Zoo Tycoon art, sound, maps or game files: it plays the copy you have installed, reading it where it is (it never changes your game's folder).
 
 ---
 
@@ -19,10 +20,8 @@
 
 **The base Zoo Tycoon game is all you need.** You do **not** need the Complete Collection.
 
-- **Base Zoo Tycoon only:** works. This alpha is built around the base game, and everything that's ready uses only base-game content. (Tested with just the base game: setup and play work.)
-- **Complete Collection (with Dinosaur Digs and Marine Mania):** also works, and setup imports the expansion files too. But expansion content **isn't ready in this alpha** (see below), so you don't gain much from it yet.
-
-If you only have the base game, setup shows a warning that Dinosaur Digs and Marine Mania content is missing. **That's expected and safe to ignore.**
+- **Base Zoo Tycoon only:** works. This alpha is built around the base game, and everything that's ready uses only base-game content.
+- **Complete Collection (with Dinosaur Digs and Marine Mania):** also works, but expansion content **isn't ready in this alpha** (see below), so you don't gain much from it yet.
 
 ---
 
@@ -31,28 +30,29 @@ If you only have the base game, setup shows a warning that Dinosaur Digs and Mar
 | | |
 |---|---|
 | **Windows** | 10 or 11, 64-bit |
-| **Zoo Tycoon 1** | The **base game** is enough (installed or extracted). The Complete Collection works too, but isn't needed |
-| **Python 3** | Used by `start.bat` each time it runs: the first time it imports your game files, after that it checks the setup before the game starts. [python.org/downloads](https://www.python.org/downloads/). **Tick "Add python.exe to PATH"** when you install it |
-| **Visual C++ Redistributable 2015–2022 (x64)** | Most PCs already have it. If you get an error about `MSVCP140.dll` or `VCRUNTIME140.dll`, install it from [aka.ms/vs/17/release/vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
-| **Disk space** | About **0.5 GB** after setup with the base game, about **1.1 GB** with the Complete Collection (the imported game files) |
+| **Zoo Tycoon 1** | Installed (the base game is enough), or copied into a folder of its own |
+| **Disk space** | About **20 MB**: the engine reads the game from where it's installed, so nothing is copied |
 
 ---
 
 ## Installing and playing
 
-1. **Unzip** the folder anywhere you like, such as your Desktop or `Documents`. Avoid `Program Files`, because Windows blocks writing there.
-2. Double-click **`start.bat`**.
-3. **First run only:** it checks the usual install folders (`Program Files (x86)\Microsoft Games\Zoo Tycoon` and similar). If your game isn't in one of them, a window asks you to pick the folder that contains **`animals.ztd`** and **`zoo.exe`**. The folder is remembered.
-4. It imports the game files and sets everything up (about a minute), then **the game starts**.
+1. Run **`ZT1-Engine-Setup-<version>.exe`**. It installs for you alone, with no admin prompt.
+2. Start **ZT1-Engine** from the Start menu (or the desktop, if you asked for a shortcut).
+3. **First run only:** it looks for Zoo Tycoon where its installer put it. If it can't find it (say, the game was copied to another drive), it asks you to pick the folder that has **`animals.ztd`** and **`zoo.exe`** in it, and remembers it.
 
-**After the first run,** double-click `start.bat` again to play. You can also run the game directly with
-`build\Release\zt1-engine.exe`. If you make a shortcut to it, keep **"Start in"** set to that `build\Release` folder.
+That's it: no setup scripts, nothing else to install.
+
+### Updates
+
+When a new alpha is out, ZT1-Engine offers it at the main menu: **Update now** downloads it, closes the game, installs it and starts it again. Your saved zoos, mods and settings are kept. You can also choose **Later**, or **Skip this version**.
 
 ### Where your files go
 
 - **Saved zoos:** `Documents\zt1-engine\Saved Games`
 - **Snapshots:** `Documents\zt1-engine\screenshots`
-- **Scenario progress:** the `saves` folder in the unzipped folder
+- **Settings, mods and scenario progress:** `%LocalAppData%\zt1-engine`
+- **The engine itself:** `%LocalAppData%\Programs\ZT1-Engine` (uninstall it from Windows' Settings › Apps; your saves and settings stay)
 
 ---
 
@@ -89,46 +89,25 @@ This alpha covers the **base Zoo Tycoon game's freeform mode**: its **animals an
 
 ---
 
+
 ## Troubleshooting
 
-**"Python was not found"**
-Install Python 3 from python.org, tick **"Add python.exe to PATH"**, then run `start.bat` again.
+**It can't find Zoo Tycoon, or it uses the wrong copy**
+It remembers the folder in `%LocalAppData%\zt1-engine\game-folder.txt`. Delete that file and start ZT1-Engine again: it looks again, and asks if it has to.
 
-**`MSVCP140.dll` or `VCRUNTIME140.dll` is missing**
-Install the [Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe).
-
-**Setup warns that Dinosaur Digs / Marine Mania content is missing**
-That's normal if you only have the base game. Ignore it; this alpha doesn't need the expansions.
-
-**It used the wrong Zoo Tycoon folder, or I want to import from a different one**
-The files are only imported once, so start again from scratch. Open a Command Prompt in the unzipped folder and run:
-```
-start.bat --clean
-set ZT1_SOURCE_DIR=D:\Games\Zoo Tycoon
-start.bat
-```
-Replace the path with the folder that has `animals.ztd` and `zoo.exe` in it.
+**Windows says "Windows protected your PC"**
+The installer isn't signed yet, so Windows doesn't know it. Click **More info**, then **Run anyway**.
 
 **Sound is slow, scratchy or muffled**
-The engine uses DirectSound by default, because Windows' newer WASAPI audio sounded wrong on some PCs. To try a different audio driver, open a Command Prompt in the `build\Release` folder and run:
+The engine uses DirectSound by default, because Windows' newer WASAPI audio sounded wrong on some PCs. To try a different audio driver, open a Command Prompt and run:
 ```
 set SDL_AUDIODRIVER=wasapi
-zt1-engine.exe
+"%LocalAppData%\Programs\ZT1-Engine\zt1-engine.exe"
 ```
 This only affects that one launch. It doesn't change anything else on your PC.
 
-**Something went wrong during setup**
-Run `start.bat --clean`, then `start.bat` again for a fresh setup. `--clean` removes the imported game files (they're imported again on the next run) but keeps the engine. Your saved zoos in `Documents` are not touched.
-
-### `start.bat` options
-
-| Command | What it does |
-|---|---|
-| `start.bat` | Set up (first time) and play |
-| `start.bat --setup` | Only import the game files, then stop |
-| `start.bat --clean` | Remove the imported game files and settings for a fresh setup (keeps the engine) |
-
-To import from a particular folder, `set ZT1_SOURCE_DIR=<folder>` before running `start.bat`.
+**Settings went wrong**
+Delete `%LocalAppData%\zt1-engine\zoo.ini`: the next start makes a fresh one. Your saved zoos in `Documents` are not touched.
 
 ---
 
@@ -140,7 +119,7 @@ This alpha exists to find problems, so **if you find a bug, please report it.** 
 2. What the original Zoo Tycoon does
 3. What the engine did instead
 
-Add a **screenshot** or your **saved zoo** (from `Documents\zt1-engine\Saved Games`) if you can. Saying which **alpha build** (the date in the folder and zip name) you were playing helps too.
+Add a **screenshot** or your **saved zoo** (from `Documents\zt1-engine\Saved Games`) if you can. Saying which **version** you were playing helps too (the installer's name, or the update message).
 
 Report issues at **https://github.com/AlexC1991/zt1-engine/issues**.
 

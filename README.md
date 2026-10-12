@@ -33,13 +33,12 @@ This is made out of love for the game. It isn't affiliated with Microsoft or Blu
 | **[GitHub Releases](https://github.com/AlexC1991/zt1-engine/releases)** | Every weekly alpha, with release notes |
 | **CodeRook** | The same builds |
 
-Both places get the same build each week. Unzip it anywhere you can write to (not `Program Files`), run **`start.bat`**, and on first run point it at your Zoo Tycoon folder if it isn't found by itself. The download has its own README with the full steps.
+Both places get the same build each week: an installer, **`ZT1-Engine-Setup-<version>.exe`**. Run it (no admin prompt), start ZT1-Engine, and it finds your Zoo Tycoon by itself, or asks you once where it is. It reads the game where it's installed: nothing is copied, and your game's folder is never changed. The installed README has the details.
 
 ### What you need
 
 - Windows 10 or 11, 64-bit
 - Zoo Tycoon 1. The **base game** is enough; the Complete Collection works too.
-- Python 3, for `start.bat`'s first-run import (being moved into the engine, so this requirement will go away)
 
 **Linux / macOS:** this project is Windows only. For Linux, see [sharkwouter's zt1-engine](https://github.com/sharkwouter/zt1-engine), which this project grew from.
 

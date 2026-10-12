@@ -1,13 +1,15 @@
 # Builds of main, and releases, to GitHub and CodeRook alike.
 #
-# - Every push to main: built, to check it compiles and packages, and main's
-#   code mirrored to the zt1-engine project on CodeRook. Nothing is
-#   published for download.
-# - A weekly alpha: push an annotated tag named alpha-YYYY-MM-DD, its message
-#   being the release notes:
-#       git tag -a alpha-2026-10-19 -F notes.md && git push origin alpha-2026-10-19
-#   It becomes a GitHub release, and a named version of the
-#   zt1-engine-releases project on CodeRook carrying the same download.
+# - Every push to main: the engine and its installer are built, to check
+#   they still do, and main's code is mirrored to the zt1-engine project on
+#   CodeRook. Nothing is published for download.
+# - A weekly alpha: push an annotated tag named v<year>.<month>.<day> (no
+#   leading zeros), its message being the release notes:
+#       git tag -a v2026.10.19 -F notes.md && git push origin v2026.10.19
+#   The engine is built as an official release (it can update itself), and
+#   its installer, the installer's .sha256 and latest.yml (the in-game
+#   updater's feed) become a GitHub release and a named version of the
+#   zt1-engine-releases project on CodeRook.
 #
 # CodeRook needs a personal access token (CodeRook > account settings) saved
 # as this repository's secret CODEROOK_TOKEN. Without it, the CodeRook steps
@@ -17,7 +19,7 @@ name: Release
 on:
   push:
     branches: [main]
-    tags: ['alpha-*']
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
   workflow_dispatch:
 
 concurrency:
@@ -33,7 +35,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       CODEROOK_TOKEN: ${{ secrets.CODEROOK_TOKEN }}
-      IS_TAG: ${{ startsWith(github.ref, 'refs/tags/alpha-') }}
+      IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,28 +43,37 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ISCC -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
 
-      - name: Name and notes
+      - name: Version and notes
         shell: bash
         run: |
           if [ "$IS_TAG" = "true" ]; then
-            NAME="${GITHUB_REF_NAME}"
-            git tag -l --format='%(contents)' "$NAME" > notes.md
-            [ -s notes.md ] || echo "Alpha build ${NAME#alpha-}" > notes.md
+            VERSION="${GITHUB_REF_NAME#v}"
+            git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > notes.md
+            [ -s notes.md ] || echo "Alpha build $VERSION" > notes.md
+            echo "OFFICIAL=--official" >> "$GITHUB_ENV"
           else
-            NAME="main-${GITHUB_SHA::7}"
+            VERSION="$(date -u +%Y.%-m.%-d)"
+            echo "OFFICIAL=" >> "$GITHUB_ENV"
           fi
-          echo "NAME=$NAME" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      - name: Build and package
-        run: python engine-build-resources/make_release.py --version ${{ env.NAME }}
+      - name: Build the engine and its installer
+        run: python engine-build-resources/make_release.py --version ${{ env.VERSION }} ${{ env.OFFICIAL }}
 
       - name: GitHub release
         if: env.IS_TAG == 'true'
         shell: bash
         run: |
-          ZIP=$(ls dist/*.zip)
-          gh release create "$NAME" "$ZIP" "$ZIP.sha256" --title "Alpha build ${NAME#alpha-}" --notes-file notes.md --verify-tag
+          SETUP="dist/ZT1-Engine-Setup-$VERSION.exe"
+          gh release create "$GITHUB_REF_NAME" "$SETUP" "$SETUP.sha256" dist/latest.yml \
+            --title "Alpha build $VERSION" --notes-file notes.md --verify-tag
 
       - name: CodeRook
         if: env.CODEROOK_TOKEN != ''
@@ -71,7 +82,9 @@ jobs:
           npm install -g @coderook/cli >/dev/null
           cbx sign-in --token "$CODEROOK_TOKEN"
           if [ "$IS_TAG" = "true" ]; then
-            python engine-build-resources/coderook_release.py --name "$NAME" --notes notes.md --zip "$(ls dist/*.zip)"
+            SETUP="dist/ZT1-Engine-Setup-$VERSION.exe"
+            python engine-build-resources/coderook_release.py --name "$GITHUB_REF_NAME" --notes notes.md \
+              --files "$SETUP" "$SETUP.sha256" dist/latest.yml
           else
             cbx link zt1-engine .
             # (--allow-private: cbx mistakes FreeType's src/cache, its font

@@ -479,14 +479,19 @@ game code on the live zoo, then move it where it belongs. Copying zoo.exe?
   `src/Embed.cpp`), and the game holds still while the Play tab isn't shown.
 - **Build engine** saves every file and builds the engine. The lab zoo
   restarts on the new build, and **Restart the game** in Play runs it.
-- **Make release** builds the engine x64 Release in `build-x64/` and makes
-  `dist/zt1-engine-<date>-win64.zip` and its `.sha256`
-  (`engine-build-resources/make_release.py`, which also runs by hand). The
-  zip holds the exe where `start.bat` looks for it, the setup scripts
-  `start.bat` runs, the font and the release notes. It holds none of the
-  original game's files: anything named in the game's own archives is left
-  out, and players import the rest from their own install. Nothing is
-  uploaded.
+- **Make release** builds the engine x64 Release in `build-x64/` (the C++
+  runtime built in, today's date as its version) and its installer,
+  `dist/ZT1-Engine-Setup-<version>.exe`, with its `.sha256` and
+  `dist/latest.yml`, the in-game updater's feed
+  (`engine-build-resources/make_release.py`, which also runs by hand; it
+  needs Inno Setup 6).
+  - The installer holds the engine, its fonts, the licences and the
+    player's README. It holds none of the original game's files: the engine
+    reads the player's own install where it is.
+  - A build made here isn't official, so it never updates itself. Only the
+    release workflow's builds are.
+  - Nothing is uploaded: a `v<year>.<month>.<day>` tag publishes a release
+    (CONTRIBUTING.md).
 
 - **Sync** (the tab under the editor) takes the engine to GitHub and CodeRook.
   GitHub (`AlexC1991/zt1-engine`) is the home: work goes on branches, and
