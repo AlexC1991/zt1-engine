@@ -35,8 +35,6 @@ This is made out of love for the game. It isn't affiliated with Microsoft or Blu
 
 Both places get the same build each week. Unzip it anywhere you can write to (not `Program Files`), run **`start.bat`**, and on first run point it at your Zoo Tycoon folder if it isn't found by itself. The download has its own README with the full steps.
 
-**Updates:** an automatic updater is on the way. Once it's in, every copy, whether downloaded from GitHub or CodeRook, will check for the new build and offer to install it, keeping your saves. You'll be able to choose weekly alphas or the newest build.
-
 ### What you need
 
 - Windows 10 or 11, 64-bit
@@ -134,11 +132,10 @@ You're also free to fork it and take it your own way. That's what open source is
 ## Roadmap
 
 1. **Base Zoo Tycoon freeform, one to one with the original.** Every system checked against `zoo.exe`, function by function.
-2. **The automatic updater**, a proper installer, and no Python needed.
-3. **An options menu** for the extras, and a friendlier mod menu.
-4. **Scenarios:** every scenario's goals and events.
-5. **Marine Mania**, then **Dinosaur Digs**.
-6. **The original's `.zoo` saves:** loading them.
+2. **An options menu** for the extras, and a friendlier mod menu.
+3. **Scenarios:** every scenario's goals and events.
+4. **Marine Mania**, then **Dinosaur Digs**.
+5. **The original's `.zoo` saves:** loading them.
 
 ---
 

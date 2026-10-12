@@ -77,9 +77,7 @@ You're welcome to use AI tools, or not. If you do, the ZT1 Lab's MCP server lets
 Builds are made in the cloud (`.github/workflows/`):
 
 - **Every push and pull request** is built, to check that it compiles and packages.
-- **Every push to `main`** becomes the *newest build*:
-  - on GitHub, the `newest` pre-release, replaced each time;
-  - on CodeRook, `main`'s code mirrored to the `zt1-engine` project.
+- **Every push to `main`** is built too, and `main`'s code is mirrored to the `zt1-engine` project on CodeRook.
 - **A weekly alpha** is an annotated tag whose message is the release notes:
 
   ```bash

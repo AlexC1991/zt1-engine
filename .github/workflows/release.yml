@@ -1,13 +1,13 @@
-# Releases, to GitHub and CodeRook alike.
+# Builds of main, and releases, to GitHub and CodeRook alike.
 #
-# - Every push to main: the "newest build". On GitHub it replaces the
-#   pre-release tagged `newest`; on CodeRook, main's code is mirrored to the
-#   zt1-engine project.
+# - Every push to main: built, to check it compiles and packages, and main's
+#   code mirrored to the zt1-engine project on CodeRook. Nothing is
+#   published for download.
 # - A weekly alpha: push an annotated tag named alpha-YYYY-MM-DD, its message
 #   being the release notes:
 #       git tag -a alpha-2026-10-19 -F notes.md && git push origin alpha-2026-10-19
 #   It becomes a GitHub release, and a named version of the
-#   zt1-engine-releases project on CodeRook carrying the same zip.
+#   zt1-engine-releases project on CodeRook carrying the same download.
 #
 # CodeRook needs a personal access token (CodeRook > account settings) saved
 # as this repository's secret CODEROOK_TOKEN. Without it, the CodeRook steps
@@ -47,32 +47,22 @@ jobs:
         run: |
           if [ "$IS_TAG" = "true" ]; then
             NAME="${GITHUB_REF_NAME}"
-            TITLE="Alpha build ${NAME#alpha-}"
             git tag -l --format='%(contents)' "$NAME" > notes.md
+            [ -s notes.md ] || echo "Alpha build ${NAME#alpha-}" > notes.md
           else
-            NAME="newest"
-            TITLE="Newest build ($(date -u +%Y-%m-%d), ${GITHUB_SHA::7})"
-            { echo "The newest build of main: not a weekly alpha, so expect more rough edges."
-              echo
-              echo "Built from ${GITHUB_SHA::7}: $(git log -1 --format=%s)"; } > notes.md
+            NAME="main-${GITHUB_SHA::7}"
           fi
-          [ -s notes.md ] || echo "$TITLE" > notes.md
           echo "NAME=$NAME" >> "$GITHUB_ENV"
-          echo "TITLE=$TITLE" >> "$GITHUB_ENV"
 
       - name: Build and package
         run: python engine-build-resources/make_release.py --version ${{ env.NAME }}
 
       - name: GitHub release
+        if: env.IS_TAG == 'true'
         shell: bash
         run: |
           ZIP=$(ls dist/*.zip)
-          if [ "$IS_TAG" = "true" ]; then
-            gh release create "$NAME" "$ZIP" "$ZIP.sha256" --title "$TITLE" --notes-file notes.md --verify-tag
-          else
-            gh release delete newest --yes --cleanup-tag 2>/dev/null || true
-            gh release create newest "$ZIP" "$ZIP.sha256" --title "$TITLE" --notes-file notes.md --prerelease --target "$GITHUB_SHA"
-          fi
+          gh release create "$NAME" "$ZIP" "$ZIP.sha256" --title "Alpha build ${NAME#alpha-}" --notes-file notes.md --verify-tag
 
       - name: CodeRook
         if: env.CODEROOK_TOKEN != ''

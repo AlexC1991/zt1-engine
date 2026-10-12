@@ -29,7 +29,7 @@ body:
     id: build
     attributes:
       label: Which build
-      placeholder: alpha-2026-10-19, or newest (built from abc1234)
+      placeholder: alpha-2026-10-19
   - type: textarea
     id: files
     attributes:
