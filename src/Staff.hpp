@@ -100,6 +100,19 @@ public:
     int access = -1, visit = -1, phase = 0;
     float outX = 0, outY = 0, inX = 0, inY = 0;
     float dropX = 0, dropY = 0; // where it's putting the food down
+    // Marine specialists in a tank (zoo.exe unit+0x258): 0 on land, 1
+    // climbing, 2 at the water's surface, 3 under it; the tank; its height
+    // over the ground under it (the tank's floor)
+    int water = 0, tank = -1;
+    float z = 0;
+    // A climb (bClimbUp fFly(climb), bClimbDown fFlyReverse(climb)): from
+    // one place to another over one play of the climb animation, backwards
+    // climbing down; inside the tank (diving under, up from under) it's
+    // drawn with the tank's water
+    bool climbing = false, climbDown = false, climbInside = false;
+    float climbFrom[3] = {0, 0, 0}, climbTo[3] = {0, 0, 0}, climbTime = 0;
+    int climbWater = 0;   // its water state when the climb's done
+    bool sweeping = false; // moving with the tank sweep (bCleanTankSub)
     // A tour guide's trip: the exhibit, the guests following, its talk
     std::vector<int> followers;
     float crowdClock = 0, speakLeft = 0;
@@ -186,6 +199,12 @@ public:
   void collect(const WorldRenderer &view, const WorldMap &map,
                std::vector<Fences::Drawable> &out,
                std::vector<Fences::Drawable> *raised = nullptr) const;
+  // Those in a tank's water, drawn with it: under its surface, and (surface
+  // true) the part of a swimmer at the surface above it
+  void drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, const WorldMap &map, int tank,
+                  bool surface);
+  // A tank's water depth (height units over its floor)
+  std::function<float(int tank)> tankDepth;
   // The one drawn at a logical screen point (-1: none)
   int pick(float sx, float sy, const WorldRenderer &view, const WorldMap &map) const;
   int monthlyWages() const;
@@ -254,6 +273,13 @@ private:
   void wander(Member &m, const WorldMap &map, const Fences &fences);
   bool findWork(Member &m, const WorldMap &map, Fences &fences);
   void play(Member &m, const std::string &anim, int times);
+  // A climb to (x, y, z: height over the ground there), down or up, inside
+  // the tank or over its wall; its water state after
+  void climb(Member &m, float x, float y, float z, bool down, bool inside, int water, const WorldMap &map);
+  // An animation's name as it's in the water (walk is subswim under it)
+  std::string inWater(const Member &m, const std::string &name) const;
+  mutable int onlyTank = -2;
+  mutable bool onlySurface = false;
   CompassDirection facing(const WorldRenderer &view, const Member &m) const;
   float animSeconds(const Member &m, const std::string &anim) const;
 };

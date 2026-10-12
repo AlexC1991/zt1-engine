@@ -4109,15 +4109,35 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           for (const Fences::Exhibit &e : fn.exhibits())
             if (e.name == "Test Tank")
               te = &e;
-          bool shot = false;
-          for (int i = 0; i < 4000 && te && (te->purity < 100.0f || world->getItems().foodIn(te->id) <= 0); i++) {
+          // As the original: over the wall at the gate, under the water for
+          // the food (subfeed) and the sweep, then up and out on the bank
+          bool shot = false, climbedIn = false, under = false, fedUnder = false;
+          auto inTank = [&] {
+            const Staff::Member *ms = st.member(trainer);
+            return ms && (ms->tank >= 0 || ms->water != 0);
+          };
+          for (int i = 0; i < 4000 && te && (te->purity < 100.0f || world->getItems().foodIn(te->id) <= 0 || inTank()); i++) {
             st.update(0.1f, map, fn);
             const Staff::Member *ms = st.member(trainer);
-            if (!shot && ms && ms->dutyId == 10327) {
+            if (!ms)
+              break;
+            climbedIn = climbedIn || (ms->climbing && ms->anim == "climb");
+            under = under || (ms->water == 3 && fn.exhibitAt(static_cast<int>(std::floor(ms->x)),
+                                                              static_cast<int>(std::floor(ms->y))) == te->id);
+            fedUnder = fedUnder || (ms->water == 3 && ms->anim == "subfeed");
+            if (!shot && ms->dutyId == 10327 && ms->water == 3) {
               shot = true;
               world->centreOnStaff(trainer);
               capture("marine_cleaning");
             }
+          }
+          check("marine specialist climbs into the tank and dives (water state 3)", climbedIn && under);
+          check("marine specialist feeds under the water (bFeedTank: subfeed)", fedUnder);
+          {
+            const Staff::Member *ms = st.member(trainer);
+            check("marine specialist climbs out onto the bank afterwards",
+                  ms && ms->tank < 0 && ms->water == 0 && fn.exhibitAt(static_cast<int>(std::floor(ms->x)),
+                                                                      static_cast<int>(std::floor(ms->y))) < 0);
           }
           check(("marine specialist cleaned the tank (purity " + std::to_string(te ? (int)te->purity : -1) + ")").c_str(),
                 te && te->purity >= 100.0f);

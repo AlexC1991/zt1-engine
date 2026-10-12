@@ -177,6 +177,7 @@ bool World::loadFreeform(const std::string &path) {
     const Fences::Exhibit *e = this->fences.exhibit(tank);
     return e ? this->fences.waterSubtiles(*e) * 0.5f : 0.0f;
   };
+  staff.tankDepth = animals.tankDepth;
   animals.tankSubtiles = [this](int tank) {
     const Fences::Exhibit *e = this->fences.exhibit(tank);
     return e ? this->fences.waterSubtiles(*e) : 0;
@@ -550,6 +551,8 @@ void World::draw(SDL_Renderer *renderer) {
       this->items.drawInTank(r, this->worldRenderer, this->worldMap, tank);
     // (animals in both: under the water, and a surface move's part above it)
     this->animals.drawInTank(r, this->worldRenderer, this->worldMap, tank, surface);
+    // (marine specialists in its water too)
+    this->staff.drawInTank(r, this->worldRenderer, this->worldMap, tank, surface);
   };
   fences.redrawGround = [this](SDL_Renderer *r, const std::set<std::pair<int, int>> &tiles) {
     this->worldRenderer.renderTerrainTiles(r, this->worldMap, SpriteDatabase::get(), tiles);

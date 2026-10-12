@@ -4212,6 +4212,13 @@
    "provisional": false,
    "summary": "The unit's position (class slot 0x94): x, y, z into the given place; with the flag, for units ('unit') its own way"
   },
+  "0x410919": {
+   "by": "batty251",
+   "confidence": "sure",
+   "name": "unitWaterState",
+   "provisional": false,
+   "summary": "A unit's water state (+0x258, class slot 0x2c8): 0 on land, 1 climbing, 2 at a tank's surface, 3 under the water - read live from a marine specialist's tank visit"
+  },
   "0x4109fe": {
    "by": "batty251 (read its code: the helpers every function uses)",
    "confidence": "likely",
@@ -9487,6 +9494,20 @@
    "provisional": false,
    "summary": "The handler for the .ai behaviour function fFly (a [BehaviorSet] line): behaviourRunFnMoves calls it with the line and the unit"
   },
+  "0x499cfa": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "tankEntryPoint",
+   "provisional": false,
+   "summary": "Where a climb into a tank ends: the target tile's middle (+0x20, +0x20), at the tank's water level (+0x184 x16)"
+  },
+  "0x499e80": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "tankClimbTop",
+   "provisional": false,
+   "summary": "The top of a climb over a tank's wall: the wall's edge toward the target tile, as high as the water (+0x188 x16 on a tank tile) or the target's ground, whichever's higher"
+  },
   "0x499fe6": {
    "by": "batty251 (the job class tables read from memory; each job's own status text)",
    "class": "Job20_ClimbUp",
@@ -10030,6 +10051,34 @@
    "name": "staffHabitatDuties",
    "provisional": false,
    "summary": "\"Doing Habitat Duties\": staff at work in an exhibit"
+  },
+  "0x49efa6": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "keeperFoodDuty",
+   "provisional": false,
+   "summary": "Task 0x6e's food duty: an animal of the habitat needing food (0x49f01a), its keeper food (+0x3c8) and the amount (keeperDropFood) - then job 1 (Job1_GoDropFood)"
+  },
+  "0x49f141": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "keeperSetHabitatJob",
+   "provisional": false,
+   "summary": "Task 0x6e's next job (ESI): in a tank at the surface (state 2), any job but 0x13 becomes 0x1d (Job29_ClimbDownB, diving under) first"
+  },
+  "0x49f165": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "habitatDungCount",
+   "provisional": false,
+   "summary": "Task 0x6e's dung duty: the habitat's dung piles not yet taken by another keeper - then job 3"
+  },
+  "0x49f22b": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "habitatNeedsCleaning",
+   "provisional": false,
+   "summary": "Task 0x6e's cleaning duty: on land, the count at +0x29c (0x4a8940); a tank, water in it (+0x188) and its purity (+0x1a8) under murkyWaterPurity (60) - job 5, a tank's 0x18 (Job24_GoCleanTank)"
   },
   "0x49f26e": {
    "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
@@ -30309,9 +30358,59 @@
    "by": "batty251 (read the code: the fidelity money audit)",
    "on": "2026-10-12",
    "what": "Global 0x635060 = sellHappinessScale"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-12",
+   "what": "Named 0x410919 unitWaterState"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-12",
+   "what": "Named 0x49f141 keeperSetHabitatJob"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-12",
+   "what": "Named 0x49f22b habitatNeedsCleaning"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-12",
+   "what": "Named 0x49efa6 keeperFoodDuty"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-12",
+   "what": "Named 0x49f165 habitatDungCount"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-12",
+   "what": "Named 0x499cfa tankEntryPoint"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-12",
+   "what": "Named 0x499e80 tankClimbTop"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-12",
+   "what": "Seen 0x49ae22 running: A marine specialist's tank visit, live (lab-sweep-marine3.zoo): task 0x7e job 0x14 climb up, task 0x6e job 0x1d dive, 0x18/0x19 sweep, task 0x7f job 0x17, 0x1c, 0x15 out"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-12",
+   "what": "Note at 0x42400a: Live order seen: ClimbUp (state 1) -> surface z 16 (state 2) -> ClimbDownB -> under z 0 (state 3) -> GoCleanTank -> CleanTank -> GoToPlatformExitTank -> ClimbUpB -> ClimbDown; each climb ~0.7 s (one play of climb, 125 ms frames)"
   }
  ],
  "notes": {
+  "0x42400a": {
+   "by": "batty251",
+   "on": "2026-10-12",
+   "text": "Live order seen: ClimbUp (state 1) -> surface z 16 (state 2) -> ClimbDownB -> under z 0 (state 3) -> GoCleanTank -> CleanTank -> GoToPlatformExitTank -> ClimbUpB -> ClimbDown; each climb ~0.7 s (one play of climb, 125 ms frames)"
+  },
   "0x4375d3": {
    "by": "batty251",
    "on": "2026-10-12",
@@ -96008,6 +96107,13 @@
     "from": "0x1f2cac9c",
     "on": "2026-10-12",
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca never came through the gate, no show performed)"
+   }
+  ],
+  "0x49ae22": [
+   {
+    "by": "batty251",
+    "on": "2026-10-12",
+    "when": "A marine specialist's tank visit, live (lab-sweep-marine3.zoo): task 0x7e job 0x14 climb up, task 0x6e job 0x1d dive, 0x18/0x19 sweep, task 0x7f job 0x17, 0x1c, 0x15 out"
    }
   ],
   "0x49afc7": [

@@ -36,6 +36,8 @@ constexpr int kPlacingFood = 10300, kRaking = 10302, kGoingTo = 10303, kEntering
               kExiting = 10306, kCleaningTank = 10327;
 constexpr int kGoingToSweep = 10500, kSweeping = 10501;
 constexpr float kCleanTankPct = 30.0f; // cCleanTankPct
+constexpr float kCleanTankThreshold = 100.0f; // cCleanTankThreshold: sweeps until this clean
+constexpr float kMurkyPurity = 60.0f; // tanks.cfg murkyWaterPurity: cleaned below it
 
 std::string stripAni(std::string p) {
   p = Utils::string_to_lower(p);
@@ -188,7 +190,26 @@ int Staff::monthlyWages() const {
 // ----------------------------------------------------------------------------
 // Art: each member's animations in its own colours
 // ----------------------------------------------------------------------------
-Animation *Staff::art(const Member &m, const std::string &name) const {
+// In a tank (trainer.ai): under the water walking is its swim (bWalksub
+// subswim) and standing subidle; at the surface surfswim (bWalksurf) and
+// surfidle
+std::string Staff::inWater(const Member &m, const std::string &name) const {
+  if (m.water == 3) {
+    if (name == "walk" || name == "run")
+      return "subswim";
+    if (name == "idle" || name == "stand")
+      return "subidle";
+  } else if (m.water == 2) {
+    if (name == "walk" || name == "run")
+      return "surfswim";
+    if (name == "idle" || name == "stand")
+      return "surfidle";
+  }
+  return name;
+}
+
+Animation *Staff::art(const Member &m, const std::string &asked) const {
+  const std::string name = inWater(m, asked);
   const Type &t = this->typeList[m.type];
   int sex = m.female && t.sexes[1] ? 1 : 0;
   auto it = t.anims[sex].find(name);
@@ -273,9 +294,12 @@ bool Staff::walkable(int x, int y, const WorldMap &map, const Fences &fences, in
     return false;
   int ex = fences.exhibitAt(x, y);
   if (ex >= 0) {
-    // In an exhibit only on a visit to it
+    // In an exhibit only on a visit to it (a tank: all of it, swimming)
     if (ex != access)
       return false;
+    if (const Fences::Exhibit *e = fences.exhibit(ex))
+      if (e->tank)
+        return true;
     const MapTile *t = map.getTile(x, y);
     return t && t->terrainType != 9 && t->terrainType != 10;
   }
@@ -478,7 +502,8 @@ float Staff::heightOf(const Member &m, const WorldMap &map) const {
     if (this->walkways->at(tx, ty))
       return this->walkways->heightAt(tx, ty, m.x - tx, m.y - ty);
   }
-  return groundAt(map, m.x, m.y);
+  // (in a tank, or climbing: over the ground, the tank's floor)
+  return groundAt(map, m.x, m.y) + m.z;
 }
 
 // With walkways about: A* over two layers, the ground and the decks above
@@ -688,7 +713,9 @@ void Staff::wander(Member &m, const WorldMap &map, const Fences &fences) {
 void Staff::workSound(const Member &m, const std::string &anim) const {
   static const std::map<std::string, std::string> keyOf = {
       {"sweep", "sweep"}, {"fix", "fix"}, {"feedh", "feed_herb"}, {"feedc", "feed_carn"},
-      {"clean", "rake"}, {"bag", "sweep"}, {"heal", "heal_animal"}, {"empty", "empty_trash"}};
+      {"clean", "rake"}, {"bag", "sweep"}, {"heal", "heal_animal"}, {"empty", "empty_trash"},
+      // (marine specialists in a tank: bFeedTank, bClean, bSubheal)
+      {"subfeed", "feed_carn"}, {"subclean", "subpoo"}, {"subheal", "heal_animal"}};
   auto k = keyOf.find(anim);
   if (k == keyOf.end())
     return;
@@ -705,6 +732,28 @@ void Staff::play(Member &m, const std::string &anim, int times) {
   m.animTime = 0;
   m.playsLeft = times;
   m.path.clear();
+}
+
+void Staff::climb(Member &m, float x, float y, float z, bool down, bool inside, int water, const WorldMap &map) {
+  m.climbFrom[0] = m.x;
+  m.climbFrom[1] = m.y;
+  m.climbFrom[2] = groundAt(map, m.x, m.y) + m.z;
+  m.climbTo[0] = x;
+  m.climbTo[1] = y;
+  m.climbTo[2] = groundAt(map, x, y) + z;
+  m.climbTime = 0;
+  m.climbing = true;
+  m.climbDown = down;
+  m.climbInside = inside;
+  m.climbWater = water;
+  m.water = 1;
+  m.anim = "climb";
+  m.animTime = 0;
+  m.playsLeft = 0;
+  m.path.clear();
+  m.pathAt = 0;
+  if (std::hypot(x - m.x, y - m.y) > 0.01f)
+    face(m, x, y);
 }
 
 // fMaintRoutine: a worn fence or a run-down tank filter it's assigned to,
@@ -928,12 +977,15 @@ bool Staff::needsVisit(const Member &m, int exhibit, const Fences &fences) const
     ZT_STEP("0x49d202", "Does it need a visit? (one to heal, one starving, dung, or due with no food)",
             {"exhibit", exhibit}, {"to heal", heal ? 1 : 0}, {"starving", starving ? 1 : 0}, {"dung", poo ? 1 : 0},
             {"due", due ? 1 : 0}, {"food there", food}, {"visit", heal || starving || poo || (due && food <= 0) ? "yes" : "no"});
-    return heal || starving || poo || (due && food <= 0);
+    // (a tank: its water murky too - under tanks.cfg murkyWaterPurity 60,
+    // zoo.exe 0x49f22b)
+    bool murky = ex->tank && ex->water > 0 && ex->purity < kMurkyPurity;
+    return heal || starving || poo || (due && food <= 0) || murky;
   }
   float low = ex->animalCount() * ZooItems::kFoodPerAnimal * 0.5f;
   bool hungry = this->items->foodIn(exhibit) < low;
   if (ex->tank)
-    return hungry || (ex->water > 0 && ex->purity < 90.0f);
+    return hungry || (ex->water > 0 && ex->purity < kMurkyPurity);
   (void)m;
   return hungry || !this->items->ofKind(ZooItems::Kind::Dung, exhibit).empty();
 }
@@ -1014,6 +1066,15 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
   const Type &t = this->typeList[m.type];
   Fences::Exhibit *ex = fences.exhibit(m.visit);
   auto done = [&] {
+    // (a visit cut short in a tank: out on the bank by its gate)
+    if (m.tank >= 0 || m.water != 0) {
+      m.x = m.outX;
+      m.y = m.outY;
+      m.tank = -1;
+      m.water = 0;
+      m.z = 0;
+      m.climbing = m.sweeping = false;
+    }
     m.job = Job::None;
     m.visit = -1;
     m.access = -1;
@@ -1060,43 +1121,120 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     ex->upkeepNow += price;
     ex->upkeepTotal += price;
   };
-  // A tank, from the platform
-  if (ex->tank) {
+  // A tank (marine specialists): over the wall at its gate onto the water,
+  // under it for the work, up and out again - as the original was seen
+  // doing it: Task 0x7e Job20_ClimbUp (0x49ae22), Task 0x6e's duties
+  // (0x42400a: Job29_ClimbDownB first when at the surface, 0x49f141), the
+  // tank's sweep (Job24_GoCleanTank, Job25_CleanTank), then Task 0x7f
+  // Job23_GoToPlatformExitTank, Job28_ClimbUpB, Job21_ClimbDown
+  const bool tank = ex->tank;
+  const float depth = tank && this->tankDepth ? this->tankDepth(m.visit) : 0.0f;
+  const bool murky = tank && ex->water > 0 && ex->purity < kMurkyPurity;
+  // A tile of the tank at random (where a sweep goes)
+  auto anyTankTile = [&](float &tx, float &ty) {
+    if (ex->tiles.empty())
+      return false;
+    auto it = ex->tiles.begin();
+    std::advance(it, std::uniform_int_distribution<size_t>(0, ex->tiles.size() - 1)(this->rng));
+    auto [x, y] = *it;
+    tx = x + 0.5f;
+    ty = y + 0.5f;
+    return true;
+  };
+  if (tank)
     switch (m.phase) {
-    case 0: // at the gate
-      face(m, m.inX, m.inY);
-      if (hungry) {
-        m.phase = 1;
-        m.dutyId = kPlacingFood;
-        play(m, "throw", 1);
-        return;
-      }
-      [[fallthrough]];
-    case 1: // (food thrown in)
-      if (m.phase == 1) {
-        this->items->addFood(m.visit, m.inX, m.inY, ex->animalCount(), food);
-        buy();
-      }
-      if (ex->water > 0 && ex->purity < 100.0f) {
-        m.phase = 2;
-        m.dutyId = kCleaningTank;
-        play(m, "feed", 2);
-        return;
-      }
-      done();
+    case 0: // outside the gate: climbs up over the wall onto the water
+      // (bClimbUp: fFly(climb, 33))
+      m.access = m.visit;
+      m.tank = m.visit;
+      m.dutyId = kEntering;
+      if (this->animals)
+        this->animals->keeperArrives(m.visit);
+      ZT_STEP("0x49ae22", "Climbs up over the tank's wall onto the water (Job20_ClimbUp, bClimbUp)",
+              {"tank", ex->name}, {"water depth", depth});
+      m.phase = 20;
+      climb(m, m.inX, m.inY, depth, false, false, 2, map);
       return;
-    case 2: // a sweep of the water
-      ex->purity = std::min(100.0f, ex->purity + kCleanTankPct);
-      if (ex->purity < 100.0f) {
-        play(m, "feed", 2);
+    case 20: { // at the surface: under the water for the work, if there's any
+      bool heal = false;
+      if (this->animals)
+        for (const Animals::Member &a : this->animals->members())
+          heal = heal || (a.exhibit == m.visit && !a.boxed && this->animals->needsHealing(a));
+      bool dung = !this->items->ofKind(ZooItems::Kind::Dung, m.visit).empty();
+      ZT_STEP("0x42400a", "At the surface: work under the water? (heal, food, dung, murky water)",
+              {"to heal", heal ? 1 : 0}, {"needs food", hungry ? 1 : 0}, {"dung", dung ? 1 : 0},
+              {"purity", ex->purity}, {"murky", murky ? 1 : 0});
+      if (heal || hungry || dung || murky) {
+        // (bClimbDown: fFlyReverse(climb, 33), Job29_ClimbDownB)
+        m.phase = 1;
+        climb(m, m.x, m.y, 0.0f, true, true, 3, map);
         return;
       }
-      done();
+      m.phase = 26;
+      visitStep(m, map, fences);
       return;
     }
-    done();
-    return;
-  }
+    case 22: { // the water murky: off to sweep it (Job24_GoCleanTank)
+      float tx, ty;
+      m.dutyId = kCleaningTank;
+      m.dutyArg.clear();
+      if (anyTankTile(tx, ty) &&
+          findPath(m, static_cast<int>(std::floor(tx)), static_cast<int>(std::floor(ty)), map, fences, tx, ty)) {
+        m.phase = 23;
+        return;
+      }
+      m.phase = 24;
+      visitStep(m, map, fences);
+      return;
+    }
+    case 23: { // a sweep across it (Job25_CleanTank, bCleanTankSub: moving
+      // with subclean)
+      float tx, ty;
+      if (anyTankTile(tx, ty) &&
+          findPath(m, static_cast<int>(std::floor(tx)), static_cast<int>(std::floor(ty)), map, fences, tx, ty)) {
+        m.sweeping = true;
+        m.phase = 25;
+        return;
+      }
+      m.phase = 25;
+      visitStep(m, map, fences);
+      return;
+    }
+    case 25: // swept: cCleanTankPct cleaner, again until cCleanTankThreshold
+      m.sweeping = false;
+      ex->purity = std::min(100.0f, ex->purity + kCleanTankPct);
+      ZT_STEP("0x47f64a", "A sweep of the tank (cCleanTankPct cleaner)", {"purity", ex->purity},
+              {"cCleanTankThreshold", kCleanTankThreshold});
+      m.phase = ex->purity < kCleanTankThreshold ? 23 : 24;
+      visitStep(m, map, fences);
+      return;
+    case 24: // done: back under the platform (Job23_GoToPlatformExitTank)
+      m.dutyId = kExiting;
+      m.dutyArg.clear();
+      m.phase = 27;
+      if (findPath(m, static_cast<int>(std::floor(m.inX)), static_cast<int>(std::floor(m.inY)), map, fences,
+                   m.inX, m.inY))
+        return;
+      [[fallthrough]];
+    case 27: // up to the surface at the wall (Job28_ClimbUpB: bClimbUp)
+      m.phase = 26;
+      climb(m, (m.inX + m.outX) * 0.5f, (m.inY + m.outY) * 0.5f, depth, false, true, 2, map);
+      return;
+    case 26: // over the wall and down outside (Job21_ClimbDown: bClimbDown)
+      m.dutyId = kExiting;
+      m.phase = 29;
+      climb(m, m.outX, m.outY, 0.0f, true, false, 0, map);
+      return;
+    case 29: // out
+      m.tank = -1;
+      m.water = 0;
+      m.z = 0;
+      this->lastVisit[m.visit] = this->clock;
+      done();
+      return;
+    default:
+      break; // (food, healing, dung: as a keeper's, under the water)
+    }
   switch (m.phase) {
   case 0: // outside the gate: in through it
     m.access = m.visit;
@@ -1150,9 +1288,10 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     m.phase = 3;
     visitStep(m, map, fences);
     return;
-  case 9: // at the spot: the food down (bFeedHerb / bFeedCarn)
+  case 9: // at the spot: the food down (bFeedHerb / bFeedCarn; a tank's
+    // bFeedTank, subfeed three times - zoo.exe 0x5084b3)
     m.phase = 2;
-    play(m, carnivore ? "feedc" : "feedh", 3);
+    play(m, tank ? "subfeed" : carnivore ? "feedc" : "feedh", 3);
     return;
   case 2: // food down where it stands
     this->items->addFood(m.visit, m.dropX, m.dropY, ex->animalCount(), food);
@@ -1182,7 +1321,8 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
       face(m, a->x, a->y);
     m.phase = 7;
     m.dutyId = 10301; // "Healing animal"
-    play(m, "heal", 1);
+    // (a tank's: bHeal's fPlaySetTank(bSurfheal, bSubheal), under the water)
+    play(m, tank ? "subheal" : "heal", 1);
     return;
   case 3: { // one to heal first, then dung to rake: the nearest pile
     if (this->animals) {
@@ -1225,6 +1365,12 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
       visitStep(m, map, fences);
       return;
     }
+    // A tank: its water swept if it's murky, then out by the platform
+    if (tank) {
+      m.phase = murky ? 22 : 24;
+      visitStep(m, map, fences);
+      return;
+    }
     // Out again
     m.phase = 6;
     m.dutyId = kExiting;
@@ -1237,7 +1383,8 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     if (const ZooItems::Item *it = this->items->item(m.jobItem))
       face(m, it->x, it->y);
     m.phase = 5;
-    play(m, t.kind == Kind::Scientist ? "clean" : "clean", 4);
+    // (a marine specialist's bClean: subpoo twice)
+    play(m, tank ? "subclean" : "clean", tank ? 2 : 4);
     return;
   case 5: // raked
     ZT_STEP("", "Rakes up a dung pile", {"pile", m.jobItem});
@@ -1573,6 +1720,10 @@ void Staff::moveTo(int id, float x, float y) {
     m->pathLayers.clear();
     m->anim = "idle";
     m->idleLeft = kIdleSeconds;
+    m->tank = -1;
+    m->water = 0;
+    m->z = 0;
+    m->climbing = m->sweeping = false;
   }
 }
 
@@ -1595,6 +1746,26 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
       continue;
     if (t.kind == Kind::Helicopter) {
       m.anim = "idle";
+      continue;
+    }
+    // Climbing (in or out of a tank, down under its water or up): along a
+    // line over one play of the climb animation
+    if (m.climbing) {
+      m.climbTime += seconds;
+      float len = std::max(0.1f, animSeconds(m, "climb"));
+      float k = std::min(1.0f, m.climbTime / len);
+      m.x = m.climbFrom[0] + (m.climbTo[0] - m.climbFrom[0]) * k;
+      m.y = m.climbFrom[1] + (m.climbTo[1] - m.climbFrom[1]) * k;
+      m.z = m.climbFrom[2] + (m.climbTo[2] - m.climbFrom[2]) * k - groundAt(map, m.x, m.y);
+      if (k >= 1.0f) {
+        m.climbing = false;
+        m.water = m.climbWater;
+        m.z = m.water == 0 ? 0.0f : std::max(0.0f, m.z);
+        m.anim = "idle";
+        m.animTime = 0;
+        if (m.job == Job::Visit)
+          visitStep(m, map, fences);
+      }
       continue;
     }
     // Playing a work animation
@@ -1701,7 +1872,7 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
       // (running after an animal: cFastRate 66)
       bool running = m.job == Job::Catch;
       float step = (running ? 66.0f / 60.0f : t.speed) * seconds;
-      const char *moving = running ? "run" : "walk";
+      const char *moving = running ? "run" : m.sweeping ? "subclean" : "walk";
       if (m.anim != moving) {
         m.anim = moving;
         m.animTime = 0;
@@ -1871,6 +2042,10 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
   std::vector<Fences::Drawable> &out = all;
   for (const Member &m : this->list) {
     const Type &t = this->typeList[m.type];
+    // In a tank's water: drawn with the tank (drawInTank), not here
+    bool withTank = m.tank >= 0 && (m.water >= 2 || (m.climbing && m.climbInside));
+    if (this->onlyTank != -2 ? (!withTank || m.tank != this->onlyTank) : withTank)
+      continue;
     if (t.kind == Kind::Helicopter) {
       // Its base, and the helicopter in the base's slot (slotpos -64, 0,
       // slotposz 80: a tile along x, five units up)
@@ -1893,6 +2068,32 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
       continue;
     float ms = a->frameTimeMs() ? static_cast<float>(a->frameTimeMs()) : 100.0f;
     int frame = static_cast<int>(m.animTime * 1000.0f / ms);
+    // (a climb plays once; climbing down, backwards - fFlyReverse)
+    if (m.climbing) {
+      int count = std::max(1, a->frameCount());
+      frame = std::min(frame, count - 1);
+      if (m.climbDown)
+        frame = count - 1 - frame;
+    }
+    // At a tank's surface: the part under the water ("under" and its art's
+    // name: undersurfidle, undersurfswim, undersurfpoo) drawn under it, the
+    // rest on the surface pass; without one, all of it under
+    if (this->onlyTank != -2) {
+      Animation *under = nullptr;
+      if (m.water == 2 && !m.climbing) {
+        int sex = m.female && t.sexes[1] ? 1 : 0;
+        auto it = t.anims[sex].find(inWater(m, m.anim));
+        if (it != t.anims[sex].end()) {
+          std::string key = "under" + it->second.substr(it->second.find_last_of("/\\") + 1);
+          if (t.anims[sex].count(key))
+            under = this->art(m, key);
+        }
+      }
+      if (this->onlySurface && !under)
+        continue;
+      if (under && !this->onlySurface)
+        a = under;
+    }
     float sx, sy, depth, gsx, gsy;
     float z = heightOf(m, map);
     view.worldToScreenF(m.x, m.y, z, sx, sy, depth);
@@ -1920,7 +2121,7 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
     }
   }
   // The one being hired: its likeness at the cursor, green where it can go
-  if (this->previewType >= 0) {
+  if (this->previewType >= 0 && this->onlyTank == -2) {
     const Type &pt = this->typeList[this->previewType];
     Animation *ghost = pt.kind == Kind::Helicopter && pt.base ? pt.base : this->preview(this->previewType);
     if (Animation *a = ghost) {
@@ -1932,6 +2133,21 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
       out.push_back({depth, sx, sy, a, CompassDirection::SE, tint, true});
     }
   }
+}
+
+void Staff::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, const WorldMap &map, int tank,
+                       bool surface) {
+  std::vector<Fences::Drawable> out;
+  this->onlyTank = tank;
+  this->onlySurface = surface;
+  this->collect(view, map, out);
+  this->onlyTank = -2;
+  this->onlySurface = false;
+  std::stable_sort(out.begin(), out.end(),
+                   [](const Fences::Drawable &a, const Fences::Drawable &b) { return a.depth < b.depth; });
+  for (Fences::Drawable &d : out)
+    if (d.art)
+      d.art->drawAnchored(renderer, d.sx, d.sy, d.side, d.tinted ? &d.tint : nullptr, d.frame);
 }
 
 int Staff::pick(float px, float py, const WorldRenderer &view, const WorldMap &map) const {

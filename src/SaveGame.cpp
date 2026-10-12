@@ -351,8 +351,10 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
     o.raw(m.hair);
     o.raw(m.skin);
     o.str(m.name);
-    o.raw(m.x);
-    o.raw(m.y);
+    // (one in a tank, or climbing in or out, is kept on the bank by its gate)
+    const bool wet = m.tank >= 0 || m.water != 0 || m.climbing;
+    o.raw(wet ? m.outX : m.x);
+    o.raw(wet ? m.outY : m.y);
     o.raw(m.duties);
     o.raw(static_cast<uint32_t>(m.exhibits.size()));
     for (int e : m.exhibits)
