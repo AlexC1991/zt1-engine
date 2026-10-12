@@ -31,11 +31,18 @@
 |---|---|
 | **Windows** | 10 or 11, 64-bit |
 | **Zoo Tycoon 1** | Installed (the base game is enough), or copied into a folder of its own |
-| **Disk space** | About **20 MB**: the engine reads the game from where it's installed, so nothing is copied |
+| **Disk space** | The ZT1 Engine: about **20 MB** (it reads the game where it's installed). The Game Build: about **20 MB** plus a copy of your game's files (up to about 1 GB with both expansions) |
 
 ---
 
 ## Installing and playing
+
+Each alpha comes as two downloads. Pick one:
+
+- **The ZT1 Engine: `ZT1-Engine-Setup-<version>.exe`.** An installer. It reads your Zoo Tycoon where it's installed, and offers each new alpha at the main menu.
+- **The Game Build: `ZT1-Game-Build-<version>-win64.zip`.** A folder that runs on its own, like the first alpha. Unzip it anywhere and run **`start.bat`**: the first time, it copies your Zoo Tycoon's files into the folder (it needs [Python 3](https://www.python.org/downloads/)), then starts the game. After that the folder plays by itself. It doesn't update itself: download the next Game Build when it's out.
+
+### The ZT1 Engine (installer)
 
 1. Run **`ZT1-Engine-Setup-<version>.exe`**. It installs for you alone, with no admin prompt.
 2. Start **ZT1-Engine** from the Start menu (or the desktop, if you asked for a shortcut).
@@ -53,6 +60,14 @@ When a new alpha is out, ZT1-Engine offers it at the main menu: **Update now** d
 - **Snapshots:** `Documents\zt1-engine\screenshots`
 - **Settings, mods and scenario progress:** `%LocalAppData%\zt1-engine`
 - **The engine itself:** `%LocalAppData%\Programs\ZT1-Engine` (uninstall it from Windows' Settings › Apps; your saves and settings stay)
+
+### The Game Build (a folder that runs on its own)
+
+1. Unzip **`ZT1-Game-Build-<version>-win64.zip`** anywhere you like.
+2. Run **`start.bat`**. The first time, it finds your Zoo Tycoon (or asks you to pick the folder with **`animals.ztd`** and **`zoo.exe`**), copies its files into `build\Release` beside the engine, and starts the game. It needs [Python 3](https://www.python.org/downloads/) for that first setup.
+3. After that, `start.bat` (or `build\Release\zt1-engine.exe`) starts the game straight away. The folder needs nothing else.
+
+Its settings stay in the folder (`build\Release\zoo.ini`), and saved zoos go to `Documents\zt1-engine\Saved Games`, as with the installer. To start over, run `start.bat --clean`: it removes the copied game files and keeps the engine.
 
 ---
 

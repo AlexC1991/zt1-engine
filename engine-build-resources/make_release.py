@@ -1,5 +1,6 @@
-"""Make a release of the engine: its installer, and the feed the in-game
-updater reads.
+"""Make a release of the engine: its two downloads - the installer (The ZT1
+Engine, which updates itself) and the Game Build (a folder that runs on its
+own, as the first alpha did) - and the feed the in-game updater reads.
 
 Run by the release workflow (.github/workflows/release.yml), from the ZT1
 Lab (Engine code > Make release), or by hand:
@@ -12,7 +13,12 @@ Lab (Engine code > Make release), or by hand:
    (src/Updater.hpp): only the release workflow passes it.
 2. Builds the installer with Inno Setup 6 (installer/zt1-engine.iss):
    dist/ZT1-Engine-Setup-<version>.exe, and its .sha256.
-3. Writes dist/latest.yml, the updater's feed (electron-updater's format:
+3. Packs the Game Build, dist/ZT1-Game-Build-<version>-win64.zip and its
+   .sha256: the same exe in build/Release/, start.bat and the setup it runs
+   (which imports the player's own Zoo Tycoon files beside the exe, so the
+   folder plays on its own), the font, the licence and the release notes.
+   A copy run from its own folder doesn't look for updates (Paths::portable).
+4. Writes dist/latest.yml, the updater's feed (electron-updater's format:
    the version, the installer's name, its SHA-512 and size). The release
    carries it, on GitHub and on CodeRook (which also makes its own from the
    release's name and files).
@@ -32,12 +38,17 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x64")
 EXE = os.path.join(BUILD, "Release", "zt1-engine.exe")
 DIST = os.path.join(ROOT, "dist")
 ISS = os.path.join(ROOT, "installer", "zt1-engine.iss")
+# The original game's DLLs (never shipped)
+GAME_DLL_PREFIXES = ("lang", "res", "dwin", "ebueula", "eula", "imeuires", "ijl15", "setupenu")
+# What start.bat runs, from engine-build-resources/
+PLAYER_SCRIPTS = ("start.py", "zt1_paths.py", "step3_build.py", "step4_import.py", "step5_setup.py")
 CMAKE_CANDIDATES = [
     r"C:\Program Files\CMake\bin\cmake.exe",
     r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
@@ -72,7 +83,7 @@ def run(args):
 
 def build(version, official):
     c = find("cmake", CMAKE_CANDIDATES)
-    say(f"[1/3] Building zt1-engine {version}{' (official)' if official else ''}, x64 Release")
+    say(f"[1/4] Building zt1-engine {version}{' (official)' if official else ''}, x64 Release")
     run([c, "-S", ROOT, "-B", BUILD, "-A", "x64", "-DZT1_STATIC_RUNTIME=ON", f"-DZT1_VERSION={version}",
          f"-DZT1_OFFICIAL_BUILD={'ON' if official else 'OFF'}"])
     # (CMakeLists.txt links SDL2_image-static / SDL2_mixer-static by file
@@ -85,7 +96,7 @@ def build(version, official):
 
 
 def installer(version):
-    say("[2/3] The installer (Inno Setup)")
+    say("[2/4] The installer (Inno Setup)")
     os.makedirs(DIST, exist_ok=True)
     iscc = find("ISCC", ISCC_CANDIDATES)
     run([iscc, "/Q", f"/DVersion={version}", f"/DSource={ROOT}", f"/DExe={EXE}", ISS])
@@ -95,8 +106,55 @@ def installer(version):
     return setup
 
 
+def game_build(version):
+    say("[3/4] The Game Build (a folder that runs on its own)")
+    name = f"ZT1-Game-Build-{version}-win64"
+    out = os.path.join(DIST, name + ".zip")
+    entries = [(f"{name}/build/Release/zt1-engine.exe", EXE)]
+    # The setup start.bat runs (not the dev tools beside them), the one tool
+    # step5 runs (it makes the button art from the player's own ui.ztd), the
+    # font
+    for f in PLAYER_SCRIPTS:
+        entries.append((f"{name}/engine-build-resources/{f}", os.path.join(ROOT, "engine-build-resources", f)))
+    entries.append((f"{name}/tools/decode_button_animation.py", os.path.join(ROOT, "tools", "decode_button_animation.py")))
+    for f in sorted(os.listdir(os.path.join(ROOT, "fonts"))):
+        if f.lower().endswith(".otf"):
+            entries.append((f"{name}/fonts/{f}", os.path.join(ROOT, "fonts", f)))
+    for f in ("start.bat", "LICENSE.txt", "THIRD_PARTY_LICENSES.md"):
+        entries.append((f"{name}/{f}", os.path.join(ROOT, f)))
+    notes = os.path.join(ROOT, "engine-build-resources", "RELEASE_README.md")
+    entries.append((f"{name}/README.md", notes))
+    entries.append((f"{name}/README.txt", notes))
+    # The guard: nothing of the game's slips in
+    bad = [a for a, _ in entries
+           if a.lower().endswith((".ztd", ".zoo"))
+           or (a.lower().endswith(".dll") and os.path.basename(a).lower().startswith(GAME_DLL_PREFIXES))]
+    if bad:
+        sys.exit("[X] Refusing to package the game's files: " + ", ".join(bad[:5]))
+    missing = [src for _a, src in entries if not os.path.isfile(src)]
+    if missing:
+        sys.exit("[X] Missing: " + ", ".join(os.path.relpath(m, ROOT) for m in missing))
+    os.makedirs(DIST, exist_ok=True)
+    tmp = out + ".tmp"
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for arc, src in entries:
+            z.write(src, arc)
+        # (folders the game writes to: scenario progress goes in saves/;
+        # pc-sync/ for the player's own overrides)
+        z.writestr(f"{name}/saves/", "")
+        z.writestr(f"{name}/pc-sync/README.txt",
+                   "Your own files to put over the game's go here (start.bat copies them in).\r\n"
+                   "None of Zoo Tycoon's own files are shipped: start.bat imports them from your install.\r\n")
+    os.replace(tmp, out)
+    sha = hashlib.sha256(open(out, "rb").read()).hexdigest()
+    with open(out + ".sha256", "w", newline="\n") as fh:
+        fh.write(f"{sha}  {os.path.basename(out)}\n")
+    say(f"[OK] {os.path.relpath(out, ROOT)}: {len(entries)} files, {os.path.getsize(out) / 1024 / 1024:.1f} MB")
+    say(f"     sha256 {sha}")
+
+
 def feed(setup, version):
-    say("[3/3] The updater's feed (latest.yml)")
+    say("[4/4] The updater's feed (latest.yml)")
     data = open(setup, "rb").read()
     sha256 = hashlib.sha256(data).hexdigest()
     sha512 = base64.b64encode(hashlib.sha512(data).digest()).decode()
@@ -125,4 +183,6 @@ if __name__ == "__main__":
         build(version, a.official)
     elif not os.path.exists(EXE):
         sys.exit("[X] No " + os.path.relpath(EXE, ROOT) + ": build first")
-    feed(installer(version), version)
+    setup = installer(version)
+    game_build(version)
+    feed(setup, version)

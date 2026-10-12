@@ -1,6 +1,7 @@
 """Publish a release on CodeRook: a named version of the zt1-engine-releases
-project, carrying the release's downloads - its installer, the installer's
-.sha256 and latest.yml (the same files as the GitHub release). Run by
+project, carrying the release's downloads - its installer and the Game
+Build zip, their .sha256s and latest.yml (the same files as the GitHub
+release). Run by
 .github/workflows/release.yml for each weekly alpha, or by hand, signed in
 with `cbx sign-in`:
 
