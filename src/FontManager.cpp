@@ -1,6 +1,7 @@
 #include "FontManager.hpp"
 #include <SDL2/SDL.h>
 #include "Utils.hpp"
+#include "Paths.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -99,8 +100,8 @@ TTF_Font *FontManager::getFont(int fontId, int fontSizeId, float scale) {
   if (!font) {
     // Bundled fallback when the Windows font isn't available
     std::string fallback = isBold(face) ? "Aileron-Bold.otf" : "Aileron-Regular.otf";
-    font = TTF_OpenFontDPI(Utils::fixPath("fonts/" + fallback).c_str(), points,
-                           dpi, dpi);
+    // (the engine's own fonts folder, beside the exe)
+    font = TTF_OpenFontDPI((Paths::appDir() + "fonts/" + fallback).c_str(), points, dpi, dpi);
     SDL_Log("[FontManager] '%s' not found, using %s", face.c_str(),
             fallback.c_str());
   }

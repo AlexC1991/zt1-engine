@@ -9,6 +9,7 @@
 
 #include "Features.hpp"
 #include "MiniJson.hpp"
+#include "Paths.hpp"
 #include "Utils.hpp"
 
 namespace fs = std::filesystem;
@@ -16,7 +17,9 @@ namespace fs = std::filesystem;
 namespace {
 // mods.cfg, by the game: "folder=<path>" and an "enabled=<mod folder>" line
 // for each mod switched on
-std::string cfgPath() { return (fs::path(Utils::getExecutableDirectory()) / "mods.cfg").string(); }
+// (in the engine's data folder: beside the exe when portable,
+// %LocalAppData%\zt1-engine when installed - Paths.hpp)
+std::string cfgPath() { return (fs::path(Paths::dataDir()) / "mods.cfg").string(); }
 
 struct Cfg {
   std::string folder;
@@ -56,7 +59,7 @@ std::string folder() {
   Cfg c = readCfg();
   if (!c.folder.empty())
     return c.folder;
-  return (fs::path(Utils::getExecutableDirectory()) / "mods").string();
+  return (fs::path(Paths::dataDir()) / "mods").string();
 }
 
 void setFolder(const std::string &path) {

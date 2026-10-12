@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "Utils.hpp"
+#include "Paths.hpp"
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -21,7 +22,7 @@ std::string langText(const std::string &name) {
 #ifdef _WIN32
   std::vector<std::string> dlls;
   try {
-    for (const auto &e : std::filesystem::directory_iterator(Utils::getExecutableDirectory())) {
+    for (const auto &e : std::filesystem::directory_iterator(Paths::gameDir())) {
       std::string f = Utils::string_to_lower(e.path().filename().string());
       if (f.rfind("lang", 0) == 0 && f.size() > 4 && f.substr(f.size() - 4) == ".dll")
         dlls.push_back(e.path().string());

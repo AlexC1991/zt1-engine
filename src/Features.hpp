@@ -24,6 +24,7 @@ inline bool pathModes = true;     // path drags bend once, Tab cycles (off: foll
 inline bool hotkeys = true;       // Esc / right-click put the bulldozer away, Ctrl+Z undoes (off: the button only)
 inline bool mods = true;          // mods switched on in the mods folder are loaded (off: the original's files only)
 inline bool modMenu = true;       // the main menu's Get New Zoo Tycoon Items opens the Mod Menu (off: as the original)
+inline bool updateChecks = true;  // an installed official build looks for a newer release at start (off: never; Updater.hpp)
 
 inline std::vector<Switch> &all() {
   static std::vector<Switch> list = {
@@ -37,6 +38,7 @@ inline std::vector<Switch> &all() {
       {"hotkeys", "Esc or right-click puts the bulldozer away, Ctrl+Z undoes, Q / E turn an object being placed (off: their buttons only)", &hotkeys},
       {"mods", "mods switched on in the mods folder are loaded over the game's files (off: the original's files only)", &mods},
       {"modmenu", "the main menu's Get New Zoo Tycoon Items opens the Mod Menu: your mods, on or off, their folder (off: as the original, whose download service is gone)", &modMenu},
+      {"updatechecks", "an installed official build looks for a newer release when it starts, and asks before updating (off: never looks)", &updateChecks},
   };
   return list;
 }

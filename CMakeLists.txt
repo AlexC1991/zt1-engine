@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.12)
+# (the C++ runtime chosen by CMAKE_MSVC_RUNTIME_LIBRARY, below)
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
 project(zt1-engine)
 # ZT1 Engine Remake - CMake Configuration
 
@@ -6,12 +10,24 @@ project(zt1-engine)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 2. FORCE DYNAMIC RUNTIME /MD (Fixes Linker/MSVCRT errors)
+# 2. THE C++ RUNTIME: as a DLL (/MD, the default - fixes linker/MSVCRT
+# errors), or built in (/MT, ZT1_STATIC_RUNTIME: releases, so players need
+# no Visual C++ Redistributable)
+option(ZT1_STATIC_RUNTIME "Build the C++ runtime into the exe (/MT)" OFF)
 if(MSVC)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
-    add_compile_options(/MD)
+    if(ZT1_STATIC_RUNTIME)
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    else()
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+        add_compile_options(/MD)
+    endif()
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
+
+# The release's version and whether it's official (src/Updater.hpp): set by
+# the release workflow. A build of one's own is "dev", and never updates
+set(ZT1_VERSION "dev" CACHE STRING "The release's version, e.g. 2026.10.19")
+option(ZT1_OFFICIAL_BUILD "A release made by the release workflow: it may update itself" OFF)
 
 # 3. DISABLE LIBRARY BLOAT & INSTALLS (Fixes NASM and Export errors)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libs" FORCE)
@@ -128,8 +144,11 @@ if(WIN32)
         bcrypt
         crypt32
         ws2_32
+        winhttp
     )
 endif()
+target_compile_definitions(zt1-engine PRIVATE ZT1_VERSION="${ZT1_VERSION}"
+    ZT1_OFFICIAL_BUILD=$<BOOL:${ZT1_OFFICIAL_BUILD}>)
 
 # 12. THE ORIGINAL GAME IN THE LAB (src/original/): zoo.exe is 32-bit, so
 # these are built only in a 32-bit tree (build/): zt1-original.exe starts

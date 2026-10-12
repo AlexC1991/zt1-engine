@@ -39,6 +39,8 @@
 #include <queue>
 #include "ZooSim.hpp"
 #include "OriginalConstants.hpp"
+#include "Paths.hpp"
+#include "Updater.hpp"
 #include "Sound.hpp"
 #include "SaveGame.hpp"
 #include "Goals.hpp"
@@ -7442,7 +7444,17 @@ int main(int argc, char *argv[]) {
   // MemoryDumpLog::get().setAutoDumpInterval(60);
   SDL_Log("Memory tracking initialized");
 
-  Config config;
+  // Where the game is (asked for once, when the engine's installed on its
+  // own) and where our settings, mods and progress are kept (Paths.hpp)
+  if (!Paths::setup())
+    return 1;
+  Config config(Paths::configFile());
+  SDL_Log("ZT1-Engine %s%s", Updater::version(), Updater::official() ? "" : " (a build of one's own)");
+  for (int i = 1; i < argc; i++)
+    if (std::string(argv[i]) == "--check-update")
+      return Updater::checkNow(i + 1 < argc && std::string(argv[i + 1]) == "--install");
+  if (!labHost)
+    Updater::checkInBackground();
   g_uiScaleSetting = config.getUiScale();
   g_widescreen = config.getWidescreen();
   g_timedUnlocks = config.getTimedUnlocks();
@@ -7516,15 +7528,12 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  // Load saved scenario states from project root saves/ folder
-  // Path is relative to executable: build/Release/zt1-engine.exe ->
-  // ../../saves/
-  if (!g_scenarioManager->getDatabase()->loadState(
-          "../../saves/user_scenarios.json")) {
+  // Which scenarios are done (Paths: the checkout's saves/ when portable,
+  // %LocalAppData%\zt1-engine\saves when installed)
+  if (!g_scenarioManager->getDatabase()->loadState(Paths::scenarioProgressFile())) {
     // No save found, create default
     SDL_Log("No save found, creating default save file.");
-    g_scenarioManager->getDatabase()->saveState(
-        "../../saves/user_scenarios.json");
+    g_scenarioManager->getDatabase()->saveState(Paths::scenarioProgressFile());
   }
 
   // Sync scenarios with database and sort by difficulty
@@ -7616,6 +7625,38 @@ int main(int argc, char *argv[]) {
     Uint32 currentTime = SDL_GetTicks();
     deltaTime = (currentTime - lastFrameTime) / 1000.0f; // Convert to seconds
     lastFrameTime = currentTime;
+
+    // A newer release, found at start (Updater.hpp): asked once, at the
+    // main menu
+    if (g_currentState == LayoutState::MAIN_MENU) {
+      Updater::Release update;
+      if (Updater::takeOffer(update)) {
+        std::string text = "ZT1-Engine " + update.version + " is out (you have " + Updater::version() +
+                           ").\n\nUpdate now? It downloads the new version, closes the game, installs it and "
+                           "starts it again. Your saved zoos, mods and settings are kept.";
+        const SDL_MessageBoxButtonData buttons[] = {
+            {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Update now"},
+            {0, 2, "Skip this version"},
+            {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Later"},
+        };
+        const SDL_MessageBoxData box = {SDL_MESSAGEBOX_INFORMATION, window.window, "Update available",
+                                        text.c_str(), 3, buttons, nullptr};
+        int chosen = 0;
+        SDL_ShowMessageBox(&box, &chosen);
+        if (chosen == 2)
+          Updater::skip(update);
+        if (chosen == 1) {
+          std::string why;
+          if (Updater::install(update, why))
+            running = 0;
+          else
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "Update failed",
+                                     (why + "\n\nYou can download it from GitHub or CodeRook instead.").c_str(),
+                                     window.window);
+        }
+        lastFrameTime = SDL_GetTicks();
+      }
+    }
 
     window.clear();
     inputs = input_manager.getInputs();

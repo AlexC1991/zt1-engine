@@ -18,6 +18,7 @@
 #include "Expansion.hpp"
 #include "Mods.hpp"
 #include "Utils.hpp"
+#include "Paths.hpp"
 // NOTE: PngLoader removed - using original game assets only
 #include "ZtdFile.hpp"
 
@@ -317,7 +318,7 @@ void ResourceManager::load_string_map(std::atomic<float> *progress,
   std::vector<std::string> lang_dlls;
   try {
     for (std::filesystem::directory_entry lang_dll :
-         std::filesystem::directory_iterator(Utils::getExecutableDirectory())) {
+         std::filesystem::directory_iterator(Paths::gameDir())) {
       std::string current = lang_dll.path().filename().string();
       if (Utils::string_to_lower(current).starts_with("lang") &&
           Utils::getFileExtension(current) == "DLL") {
