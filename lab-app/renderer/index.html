@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob:; worker-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' blob: data:; media-src 'self' blob: data:">
+<title>ZT1 Lab · Engine Workbench</title>
+<link rel="icon" href="logo.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header id="top">
+    <div class="brand" title="ZT1 Lab: the Zoo Tycoon engine workbench"><img class="logo" src="logo.svg" alt=""><div class="wordmark"><span class="wm-name">ZT1<b>Lab</b></span><span class="wm-sub">Engine Workbench</span></div></div><span class="zoochip" id="zoo-name">Lab zoo</span>
+    <div class="tabs" id="tabs"></div>
+    <div class="spacer"></div>
+    <div class="btn ghost small" data-act="layoutMenu" id="layout-btn" title="Panels: which show, where they sit, saved layouts">Layout</div>
+    <div class="btn primary" data-act="run" id="run-btn">▶ Run</div>
+    <div class="pill" id="engine-pill"><div class="dot"></div><span>Engine</span></div>
+    <div class="pill" id="ghidra-pill"><div class="dot"></div><span>Ghidra</span></div>
+  </header>
+
+  <!-- Scene: the lab zoo live, the mods, what's watched -->
+  <section class="view" id="v-scene">
+    <aside class="card side" id="scene-left"></aside>
+    <div class="col">
+      <div class="row grow">
+        <div class="stage" id="stage">
+          <canvas id="canvas"></canvas>
+          <div id="stage-ui"></div>
+        </div>
+        <aside class="card side wide" id="scene-right"></aside>
+      </div>
+      <div class="card consolebar" id="consolebar"></div>
+      <div class="card console hidden" id="console"></div>
+    </div>
+  </section>
+
+  <!-- Explore: ask where anything is, and what our engine is missing -->
+  <section class="view" id="v-explore"></section>
+
+  <!-- Code: one function, decompiled, in plain words -->
+  <section class="view" id="v-code"></section>
+
+  <!-- Functions: everything zoo.exe does, named or not -->
+  <section class="view" id="v-functions"></section>
+
+  <!-- Mods: the scripts, edited and built -->
+  <section class="view" id="v-mods"></section>
+
+  <!-- Engine code: our engine's source, edited and built here -->
+  <section class="view" id="v-engine"></section>
+
+  <!-- Files: the game's own files (layouts, configs), as the engine reads them -->
+  <section class="view" id="v-files"></section>
+
+  <!-- Play: the whole game -->
+  <section class="view" id="v-play">
+    <div class="playbar" id="playbar"></div>
+    <div class="play-row">
+      <div class="playarea" id="playarea"><div class="playhint" id="playhint"></div></div>
+      <aside class="card play-steps hidden" id="play-steps"></aside>
+    </div>
+  </section>
+
+  <div id="modal" class="hidden"></div>
+  <div id="toast" class="hidden"></div>
+</div>
+<!-- (dockview first: Monaco's loader defines an AMD define, and dockview would hide in it) -->
+<script src="errors.js"></script>
+<script src="../node_modules/dockview-core/dist/dockview-core.js"></script>
+<script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
+<script src="code.js"></script>
+<script src="icons.js"></script>
+<script src="editor.js"></script>
+<script src="app.js"></script>
+<script src="scene.js"></script>
+<script src="try.js"></script>
+<script src="stepview.js"></script>
+<script src="gamefiles.js"></script>
+<script src="scripts.js"></script>
+<script src="recorder.js"></script>
+<script src="memory.js"></script>
+<script src="kbtools.js"></script>
+<script src="explore.js"></script>
+<script src="formulas.js"></script>
+<script src="layout.js"></script>
+<script src="dock.js"></script>
+<script src="control.js"></script>
+</body>
+</html>

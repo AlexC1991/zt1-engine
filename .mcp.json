@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "zt1-lab": {
+      "command": "node",
+      "args": ["lab-app/mcp/server.js"]
+    }
+  }
+}
