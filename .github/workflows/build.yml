@@ -7,7 +7,8 @@ name: Build
 
 on:
   push:
-    branches-ignore: [main]   # (main builds in release.yml)
+    branches-ignore: [main]   # (main and the alpha tags build in release.yml)
+    tags-ignore: ['*']
   pull_request:
 
 jobs:

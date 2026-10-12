@@ -61,7 +61,7 @@ This plays a freeform zoo by itself and checks over 230 behaviours against the o
 
 ## Pull requests
 
-1. Fork the repo and make a branch for your change.
+1. Fork the repo and make a branch for your change. (This repo is itself a fork of sharkwouter's, so when you open the pull request, check that its base is **AlexC1991/zt1-engine** `main`. GitHub picks the original repo by default.)
 2. Keep each pull request to one thing. Small is good.
 3. Cite where your rules came from (above) and run the tests.
 4. In the description, say what changed, how you checked it against the original, and what you couldn't check.
