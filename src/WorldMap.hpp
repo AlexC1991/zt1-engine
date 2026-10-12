@@ -76,8 +76,18 @@ public:
     // Incremented on every successful load, so renderers can tell when
     // cached per-map data is stale
     uint32_t getGeneration() const { return generation; }
-    // The ground was changed (terraform, a tank sinking): redraw it
-    void touch() { generation++; }
+    // The ground was changed (terraform, a tank sinking): redraw it, and the
+    // lowest and highest again (a tank's floor sinks below the rest, and the
+    // cursor's line of sight goes down only so far: clicks in it missed)
+    void touch() {
+        generation++;
+        for (const auto &row : tiles)
+            for (const MapTile &t : row)
+                for (int c : t.cornerHeight) {
+                    if (c < minHeight) minHeight = c;
+                    if (c > maxHeight) maxHeight = c;
+                }
+    }
 
     // The zoo's name: its entrance's (a building named in the map, e.g.
     // "Death Mountain Zoo" on fgate, "Airport Dinosaur Zoo" on dgate)

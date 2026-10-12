@@ -47,6 +47,9 @@ public:
     std::string fullPal;
     std::vector<std::string> slots[4]; // shirt, pants or skirt, hair, skin palettes
     int gawkWeights[3] = {45, 10, 45}; // gawk, camera, stand
+    // Touching a live electric fence instead of watching (zoo.exe
+    // 0x425af4): cTestFenceChance in 100, cZapHappinessHit when zapped
+    int testFenceChance = 0, zapHit = 0;
   };
   enum class State { Arriving, Walking, Gawking, Leaving, Fleeing, Using, Caught };
   struct Guest {
@@ -209,6 +212,15 @@ public:
   double clock = 0;
   // Guest Information's lines: "Just arrived", "A short time", "A while"
   int timeInParkText(const Guest &g) const;
+  // (the ZT1 Lab) A guest's route between two tiles, by its rules (the
+  // paths, not into exhibits, no fences or steps): nothing moves
+  bool testRoute(int sx, int sy, int gx, int gy, std::vector<std::pair<int, int>> &out) const;
+  // (the ZT1 Lab) One of a guest's animations, now; what it has; a need
+  // set (happiness, hunger, thirst, bathroom, tired) or it sent home
+  void labPlay(int id, const std::string &anim, float seconds);
+  std::vector<std::string> labAnims(int id) const;
+  void labSet(int id, const std::string &field, float value);
+  void labLeave(int id);
 
 private:
   ResourceManager *rm = nullptr;
@@ -252,6 +264,7 @@ private:
   int arrivals = 0;
   std::vector<int> messages;
   mutable std::map<std::string, Animation *> artCache;
+  float artSweepIn = 15.0f; // (game seconds to the next freeing of art no guest wears)
   Animation *selectArrow = nullptr;
   std::mt19937 rng{1977};
   // crowd sounds
@@ -271,6 +284,9 @@ private:
   void viewing(Guest &g);
   void wander(Guest &g);
   void play(Guest &g, const std::string &anim, float seconds);
+  // Come to an exhibit: maybe it touches the live electric fence there
+  // instead of watching (zoo.exe 0x425af4); true when it did
+  bool testFence(Guest &g);
   float groundAt(float x, float y) const;
   CompassDirection facing(const WorldRenderer &view, const Guest &g) const;
 };

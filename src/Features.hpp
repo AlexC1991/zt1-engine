@@ -22,6 +22,8 @@ inline bool mapTooltips = true;   // tool hints over the map (off: buttons only)
 inline bool elevatedPaths = true; // ZT2-style walkways and stairs (off: none, as ZT1)
 inline bool pathModes = true;     // path drags bend once, Tab cycles (off: follows the mouse)
 inline bool hotkeys = true;       // Esc / right-click put the bulldozer away, Ctrl+Z undoes (off: the button only)
+inline bool mods = true;          // mods switched on in the mods folder are loaded (off: the original's files only)
+inline bool modMenu = true;       // the main menu's Get New Zoo Tycoon Items opens the Mod Menu (off: as the original)
 
 inline std::vector<Switch> &all() {
   static std::vector<Switch> list = {
@@ -33,6 +35,8 @@ inline std::vector<Switch> &all() {
       {"elevatedpaths", "raised walkways and stairs, the wheel sets the height (off: none, as ZT1)", &elevatedPaths},
       {"pathmodes", "path and walkway drags bend once, Tab to cycle (off: the path follows the mouse)", &pathModes},
       {"hotkeys", "Esc or right-click puts the bulldozer away, Ctrl+Z undoes, Q / E turn an object being placed (off: their buttons only)", &hotkeys},
+      {"mods", "mods switched on in the mods folder are loaded over the game's files (off: the original's files only)", &mods},
+      {"modmenu", "the main menu's Get New Zoo Tycoon Items opens the Mod Menu: your mods, on or off, their folder (off: as the original, whose download service is gone)", &modMenu},
   };
   return list;
 }

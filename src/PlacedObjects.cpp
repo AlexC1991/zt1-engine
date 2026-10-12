@@ -201,6 +201,35 @@ bool PlacedObjects::add(const std::string &file, float x, float y, int facing) {
   return true;
 }
 
+void PlacedObjects::explode(Object &o) {
+  o.explodeArt = nullptr;
+  o.exploding = -1;
+  if (!this->rm)
+    return;
+  std::string path;
+  if (IniReader *ai = this->rm->getIniReader(fileOf(o))) {
+    path = ai->get("animations", "explode");
+    delete ai;
+  }
+  // (objects/brubble2/used/used.ani: the art's name without .ani)
+  if (path.size() > 4 && path.compare(path.size() - 4, 4, ".ani") == 0)
+    path.resize(path.size() - 4);
+  if (path.empty() || !this->rm->hasResource(path + ".ani"))
+    return;
+  o.explodeArt = this->artFor(path);
+  if (o.explodeArt)
+    o.exploding = 0;
+}
+
+void PlacedObjects::tick(float seconds) {
+  for (Object &o : this->list)
+    if (o.exploding >= 0 && o.explodeArt) {
+      o.exploding += seconds;
+      if (o.exploding * 1000.0f >= o.explodeArt->frameCount() * o.explodeArt->frameTimeMs())
+        o.exploding = -1;
+    }
+}
+
 void PlacedObjects::remove(int index) {
   if (index < 0 || index >= static_cast<int>(this->list.size()))
     return;
@@ -286,6 +315,43 @@ static int cornerHeight(const WorldMap &map, int tx, int ty, int corner) {
   return t ? t->cornerHeight[corner] : 0;
 }
 
+void PlacedObjects::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, const WorldMap &map, int tank,
+                               bool surface, float level, const std::function<bool(const std::string &)> &onSurface) {
+  struct One {
+    float depth, sx, sy;
+    const Object *o;
+    CompassDirection side;
+  };
+  std::vector<One> all;
+  for (const Object &o : this->list) {
+    if (o.fence || this->hiddenNow(o) || !this->tankAt || this->tankAt(o.x, o.y) != tank)
+      continue;
+    if (onSurface && onSurface(fileOf(o)) != surface)
+      continue;
+    float angle = o.facing * 3.14159265f / 4.0f;
+    CompassDirection side = view.screenSide(std::sin(angle), -std::cos(angle));
+    float z = o.z;
+    if (const MapTile *t = map.getTile(static_cast<int>(std::floor(o.x)), static_cast<int>(std::floor(o.y))))
+      z = static_cast<float>(t->cornerHeight[0]);
+    if (surface)
+      z = level;
+    float sx, sy, depth;
+    view.worldToScreenF(o.x, o.y, z, sx, sy, depth);
+    all.push_back({depth, sx, sy, &o, side});
+  }
+  std::stable_sort(all.begin(), all.end(), [](const One &a, const One &b) { return a.depth < b.depth; });
+  static const SDL_Color red{255, 60, 50, 255};
+  for (const One &d : all) {
+    // (the bulldozer over it: red, as everywhere)
+    const SDL_Color *tint = static_cast<int>(d.o - this->list.data()) == this->highlight ? &red : nullptr;
+    if (d.o->bg)
+      d.o->bg->drawAnchored(renderer, d.sx, d.sy, d.side, tint, -1);
+    Animation *art = d.o->inUse && d.o->used ? d.o->used : d.o->art;
+    if (art)
+      art->drawAnchored(renderer, d.sx, d.sy, d.side, tint, -1);
+  }
+}
+
 std::pair<int, int> PlacedObjects::footprintOf(const Object &o) {
   std::string file = fileOf(o);
   auto it = this->footprints.find(file);
@@ -324,6 +390,9 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
   drawn.reserve(this->list.size());
   for (const Object &o : this->list) {
     if (this->hiddenNow(o))
+      continue;
+    // (in a tank: drawn with the tank)
+    if (!o.fence && this->tankAt && this->tankAt(o.x, o.y) >= 0)
       continue;
     // The facing as a world direction, then as the screen side it shows
     float angle = o.facing * 3.14159265f / 4.0f;
@@ -443,6 +512,13 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
     }
     if (o.bg)
       drawn.push_back({depth - 0.01f, sx, sy, &o, o.bg, side, lit ? &red : nullptr});
+    // (rubble just made: its explode, frame by frame from the first)
+    if (o.exploding >= 0 && o.explodeArt && o.explodeArt->frameTimeMs() > 0) {
+      int f = static_cast<int>(o.exploding * 1000.0f / o.explodeArt->frameTimeMs());
+      drawn.push_back({depth, sx, sy, &o, o.explodeArt, side, lit ? &red : nullptr,
+                       std::min(f, std::max(0, o.explodeArt->frameCount() - 1))});
+      continue;
+    }
     drawn.push_back({depth, sx, sy, &o, art, side, lit ? &red : nullptr});
   }
   for (const Fences::Drawable &f : fences)

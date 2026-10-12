@@ -171,6 +171,15 @@ public:
   std::string dutyText(const Member &m) const;
   // (dev console) sends one to a tile now; false: no way there
   bool walkTo(int id, int x, int y, const WorldMap &map, const Fences &fences);
+  // (the ZT1 Lab) A staff member's route between two tiles, by their rules
+  // (zoo ground, out of an exhibit through its gate, paths cheaper):
+  // nothing moves
+  bool testRoute(int sx, int sy, int gx, int gy, const WorldMap &map, const Fences &fences,
+                 std::vector<std::pair<int, int>> &out) const;
+  // (the ZT1 Lab) One of a staff member's animations, so many times; what
+  // it has
+  void labPlay(int id, const std::string &anim, int times);
+  std::vector<std::string> labAnims(int id) const;
   // Drawables for the map's objects pass; the selected one shows the arrow
   // over its head, the hovered one lit up
   // (those up on a walkway deck go to 'raised', drawn with the decks)

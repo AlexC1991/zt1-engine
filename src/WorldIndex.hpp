@@ -44,6 +44,12 @@ public:
   int width() const { return this->w; }
   int height() const { return this->h; }
 
+  // An object type's footprint, in half tiles, as blocking uses it (its
+  // .ai's cFootprintX/Y, else its catalogue entry's; 0, 0: none found - it
+  // blocks nothing)
+  std::pair<int, int> footprintOf(const std::string &subClass, const std::string &type,
+                                  ResourceManager *rm);
+
 private:
   int w = 0, h = 0;
   std::vector<What> grid;
@@ -52,8 +58,6 @@ private:
   std::vector<int> heads, nexts;
   std::vector<std::pair<int, int>> footprintCache; // per object type, half tiles
   std::vector<std::string> footprintKeys;
-  std::pair<int, int> footprintOf(const std::string &subClass, const std::string &type,
-                                  ResourceManager *rm);
 };
 
 #endif // WORLD_INDEX_HPP

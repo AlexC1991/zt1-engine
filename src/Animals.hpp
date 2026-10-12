@@ -53,6 +53,7 @@ public:
   struct Type {
     std::string file, key;
     int nameId = 0, cost = 0, expansion = 0;
+    bool dinosaur = false; // [Member] dinosaur: scientists look after it, not keepers
     // Speeds (cSlowRate, cMediumRate, cFastRate): staff walk at their
     // cSlowRate / 60 tiles a second (a keeper's 33: the 0.55 measured)
     float slow = 0.5f, medium = 0.8f, fast = 1.1f;
@@ -62,6 +63,10 @@ public:
     int noFoodChange = -50;
     int energyIncrement = 10, maxEnergy = 100;
     bool swims = false;
+    // Marine (Marine Mania): cUnderwater (it can live in a tank), cDepth (the
+    // water it needs, subtiles: zoo.exe 0x5af392, against the tank's level)
+    bool underwater = false;
+    int needDepth = 0;
     // Water (zoo.exe 0x438f6c, every cWaterCheck ticks): a cEnterWaterChance
     // in 100 to swim with more than cWaterNeeded water tiles in its exhibit,
     // cEnterLandChance to come out with more than cLandNeeded land tiles;
@@ -91,7 +96,30 @@ public:
     // Getting out (cIsJumper, cIsClimber, cBashStrength, cCrushesFences)
     bool jumper = false, climber = false;
     int bash = 0, crush = 0;
+    // Testing a live electric fence (zoo.exe 0x438ebc): a cTestFenceChance
+    // in 100 every cZapCheck ticks to try one cTestFenceOffset tiles off; each zap
+    // cZapHappinessChange, and it learns: each zap uses up
+    // cTestFenceChanceDrop of its cTestFenceChance, under cMinTestFenceChance
+    // it stops for good (0x59c4ba)
+    int testFenceChance = 0, testFenceChanceDrop = 0, minTestFenceChance = 0, zapHappinessChange = 0,
+        testFenceOffset = 1;
+    // Eggs (Dinosaur Digs): cLaysEggs - adopted, and born, as an egg
+    // (zoo.exe 0x4e2cf8, 0x60da6b) that hatches after cTimeToHatch ticks
+    // with at least cMinHatchHits health (0: 60% of cMaxHits - cMinHits)
+    bool laysEggs = false, eatsEggs = false;
+    int timeToHatch = 0, minHatchHits = 0, minHits = 0;
     bool eatsPeople = false; // cPrey lists people (9503): guests run from it
+    // cPreattack (ZTAnimalType+0x3d6; the dinosaurs, Smilodon, Macrauchenia):
+    // two that both have it stand off before a chase (zoo.exe 0x42fad3)
+    bool preattack = false;
+    // Rampaging (zoo.exe 0x438514; ZTAnimalType+0x3f4..0x400): at or under
+    // cRampageThreshold happiness, a cRampageChance in 100 a tick to start,
+    // for cRampageTimeMin..cRampageTimeMax ticks
+    int rampageThreshold = 0, rampageChance = 0, rampageTimeMin = 0, rampageTimeMax = 0;
+    // Its footprint (cFootprintX across, cFootprintY along the way it faces,
+    // half tiles; zoo.exe's type loader 0x4b5681 keeps them at +0xb4,
+    // +0xb8): a big one is drawn in strips by it (Animals::collect)
+    int footX = 0, footY = 0;
     // cPrey: the cNameIDs of the animals it hunts, per sex (m, f, y: a
     // lion's list is the lioness's alone; one without its own has the
     // male's)
@@ -113,6 +141,9 @@ public:
     std::map<std::string, std::vector<Step>> sets[3];
     std::vector<Ambient> ambient;
     std::vector<Ambient> ambientWater; // [AmbientAnimsWater]: in the water
+    // In a tank: [AmbientAnimsUnderwater] / [AmbientAnimsSurface], by where
+    // it swims
+    std::vector<Ambient> ambientUnder, ambientSurface;
     std::string listImage;
   };
   struct Member {
@@ -161,6 +192,9 @@ public:
     bool waterMode = false;
     int waterCheck = -1, boredCheck = -1;
     float drinkX = -1, drinkY = -1; // the water it's going to drink at
+    // In a tank: how high it swims over the floor (height units), and the
+    // height it's swimming to (fWalk's surface, floor, dive, rise, level)
+    float swimZ = 0, swimTo = 0;
     // Hunting a guest (loose predators, cPrey 9503): who, since when, the
     // check's countdown; mauling (out of sight: the guest's animation shows
     // both) and resting after
@@ -173,6 +207,15 @@ public:
     // by whom); the one it's caught and the dust ball's time left
     int huntAnimal = -1, fleeFrom = -1, caughtBy = -1, victim = -1, huntCheck = 0;
     bool tag = false;
+    // This chase's stand-off is done (zoo.exe's chase state: once a chase)
+    bool preattacked = false;
+    // Rampaging (zoo.exe ZTAnimal+0x3b0, "Ramp" in the original's debug
+    // overlay) and its tick count (+0x35c): over past cRampageTimeMax
+    bool rampaging = false;
+    int rampageTicks = 0;
+    // The tile it's on (-1: not yet): stepping onto another is when a
+    // rampage rubbles what stands there (zoo.exe 0x437572)
+    int tileX = -1, tileY = -1;
     double huntStart = 0;
     float killIn = 0;
     bool inside = false;
@@ -195,7 +238,13 @@ public:
     // up (ms)
     std::vector<std::pair<bool, float>> faces;
     float tickMs = 0;
-    int habitatCheck = 0, captivityCheck = 0, socialCheck = 0, otherCheck = 0, hungerCheck = 0;
+    int habitatCheck = 0, captivityCheck = 0, socialCheck = 0, otherCheck = 0, hungerCheck = 0, zapCheck = 0;
+    // What's left of its cTestFenceChance (zoo.exe ZTAnimal+0x3ac; -1 not
+    // set yet, 0 it's learnt and leaves electric fences alone)
+    int fenceTests = -1;
+    // An egg (zoo.exe ZTAnimal+0x395) and its ticks to hatching (+0x398)
+    bool egg = false;
+    int hatchIn = 0;
   };
   // An exhibit as one kind of animal rates it (worked out every 7 seconds,
   // or as soon as something in it changes)
@@ -230,9 +279,10 @@ public:
   Fences::Fit canPlace(int type, float x, float y, const WorldMap &map, const Fences &fences) const;
   int adopt(int type, bool female, float x, float y, const WorldMap &map, const Fences &fences);
   void remove(int id);
-  // What selling it gives back: its price by how happy it is (measured:
-  // an $800 zebra at about 66 happiness, $528)
-  int refund(int id) const;
+  // What selling it gives back (zoo.exe ZTAnimal::sellValue 0x48d21d): by
+  // how happy and how healthy it is, halved again when sick
+  double sellValue(int id) const;
+  static double sellValueOf(int cost, int happiness, int health, int minHits, int maxHits, bool sick);
   // Picked up (Move Animal) and put down again
   void moveTo(int id, float x, float y);
   // While held: whether it can be put down where it is (green or red)
@@ -295,6 +345,8 @@ public:
   }
   // How many live in an exhibit (keepers feed and rake for them)
   int countIn(int exhibit) const;
+  // Of those, the dinosaurs ([Member] dinosaur: Dinosaur Digs' and Nessie)
+  int dinosaursIn(int exhibit) const;
   // The objects standing about (an exhibit's trees, rocks, shelters, toys)
   void setObjects(const PlacedObjects *objects) { this->objects = objects; }
   // Something in an exhibit changed (an object, an animal, the ground):
@@ -332,6 +384,25 @@ public:
   void collect(const WorldRenderer &view, const WorldMap &map,
                std::vector<Fences::Drawable> &out) const;
   int pick(float sx, float sy, const WorldRenderer &view, const WorldMap &map) const;
+  // Animals in tanks are drawn with their tank (drawInTank), not in collect
+  std::function<int(float x, float y)> tankAt;
+  mutable int onlyTank = -2; // (collect: -2 all but tanks', else that tank's alone)
+  // A tank's water depth over its floor (height units)
+  std::function<float(int tank)> tankDepth;
+  // A tank's animals, in its two passes: under the water's surface and on it.
+  // Marine Mania's art comes in layers: an animation whose art is F has
+  // "under" + F beside it, its half below the water; the animation's own art
+  // is its part above (a jump's body in the air, the splash). Under the
+  // water that half is drawn, on it the animation; one without is all under
+  void drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, const WorldMap &map, int tank,
+                  bool surface = false);
+  mutable bool onlySurface = false; // (collect in a tank: its surface pass)
+  // An animation's "under" layer (its half below the water), or none
+  Animation *underArt(const Member &m, Animation *a) const;
+  // Why canPlace refused (the original's message, a lang string; 0 none)
+  mutable int placeMessage = 0;
+  // A tank's water level in subtiles (for cDepth)
+  std::function<int(int tank)> tankSubtiles;
   Animation *art(const Member &m, const std::string &name) const;
   Animation *preview(int type, bool female) const;
   Animation *crate() const { return this->crateArt; }
@@ -352,8 +423,23 @@ public:
   std::function<int(float x, float y, float radius)> findPrey;
   std::function<bool(int guest, float &x, float &y)> preyAt;
   std::function<void(int guest, const Member &by)> caughtPrey;
+  // A rampaging animal onto a tile (zoo.exe 0x437572): what stands on it
+  // that can be (cRubbleable) turned to rubble; how many were
+  std::function<int(int tileX, int tileY, const Member &by)> rubbleAt;
   // A water tile (fresh or salt water; a waterfall is land)
   static bool isWater(const WorldMap &map, int x, int y);
+  // (the ZT1 Lab) A route for one of them from where it stands to a tile, by
+  // its own rules (its exhibit's ground, the fences, the slopes), as walkTo
+  // would find it: nothing moves
+  bool testRoute(int id, int gx, int gy, const WorldMap &map, const Fences &fences,
+                 std::vector<std::pair<int, int>> &out) const;
+  // (the ZT1 Lab) One of its animations played now, for so long, or one of
+  // its behaviour sets started (what it was doing dropped); what it has of
+  // each, by its subtype
+  void labPlay(int id, const std::string &anim, float seconds);
+  void labBehave(int id, const std::string &set);
+  std::vector<std::string> labAnims(int id) const;
+  std::vector<std::string> labSets(int id) const;
 private:
   const WorldMap *mapRef = nullptr; // (the map, for the art: swimmers' swim / water idle)
   bool onWater(const Member &m) const;
@@ -386,6 +472,13 @@ private:
   // How many share its exhibit: its own kind (young too), its kind's
   // adults, all adults
   void company(const Member &m, int &kind, int &kindAdults, int &adults) const;
+  // Its go at a live electric fence this tick, if it has one (zoo.exe
+  // 0x438ebc, 0x4a3383, 0x59c4ba)
+  void testFence(Member &m, const Fences &fences);
+  // Made an egg (zoo.exe 0x5a5283), and an egg's tick: hatching when it's
+  // time and it's healthy enough (0x437860)
+  void becomeEgg(Member &m);
+  void eggTick(Member &m);
   void tick(Member &m, const WorldMap &map, const Fences &fences);
   WorldIndex *index = nullptr;
   std::vector<Type> typeList;
@@ -393,6 +486,7 @@ private:
   std::map<int, int> counts; // per type: how many were ever adopted
   int nextId = 1;
   mutable std::map<std::string, Animation *> artCache;
+  mutable std::map<const Animation *, Animation *> underCache; // (an art's "under" layer, or none)
   Animation *selectArrow = nullptr;
   Animation *smileArt = nullptr, *frownArt = nullptr;
   std::map<int, std::map<int, float>> snaps; // exhibit -> kind -> rating
@@ -426,6 +520,13 @@ private:
   // hunting); a set's way of moving (its fMove / fRun: anim and speed); the
   // nearest adult within reach that would hunt it, or chases it; running off
   bool hunts(const Member &predator, const Member &prey) const;
+  // The stand-off before a chase (zoo.exe 0x42fad3, 0x61b2d6): both have
+  // cPreattack and the other isn't an egg; standOff stops them face to face,
+  // the hunter with its bPreattack and the other with its bDefense; standingOff
+  // while either is still playing
+  bool preattacks(const Member &hunter, const Member &other) const;
+  void standOff(Member &hunter, Member &other);
+  bool standingOff(const Member &m) const;
   void moveOf(const Member &m, const std::string &setName, std::string &anim, float &speed) const;
   const Member *threatTo(const Member &m, float radius) const;
   void runFrom(Member &m, const Member &threat, const WorldMap &map, const Fences &fences);

@@ -1,7 +1,35 @@
 #include "ZooSim.hpp"
+#include "IniReader.hpp"
+#include "OriginalConstants.hpp"
+#include "ResourceManager.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+
+// economy.cfg's [characteristics] into Original::economy() (zoo.exe
+// ZTGameMgr::loadConfig 0x591c0f): a key it leaves out keeps the original's
+// default (ZTGameMgr::setDefaults 0x4c2683)
+void Original::loadEconomy(ResourceManager *rm) {
+  Economy e;
+  if (IniReader *ini = rm ? rm->getIniReader("economy.cfg") : nullptr) {
+    auto num = [&](const char *key, float &into) {
+      std::string v = ini->get("characteristics", key);
+      if (!v.empty())
+        into = static_cast<float>(std::atof(v.c_str()));
+    };
+    num("cMinAdultAdmissionPrice", e.minAdmission);
+    num("cMaxAdultAdmissionPrice", e.maxAdmission);
+    num("cPricingFactor", e.pricingFactor);
+    num("cDonationFactor", e.donationFactor);
+    num("cBuildingUseCostDefault", e.buildingUseCostDefault);
+    num("cBuildingUseCostMax", e.buildingUseCostMax);
+    num("cZooDooRecyclingAmount", e.zooDooRecycling);
+    num("cAdmissionMultiple", e.admissionMultiple);
+    delete ini;
+  }
+  economy() = e;
+}
 
 double ZooSim::Month::total() const {
   double t = 0;

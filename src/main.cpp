@@ -14,6 +14,8 @@
 #include "ArtScaler.hpp"
 #include "GpuFsr.hpp"
 #include "ItemCatalog.hpp"
+#include "Embed.hpp"
+#include "Lab.hpp"
 #include "CompassDirection.hpp"
 #include "Config.hpp"
 #include "RenderSettings.hpp"
@@ -30,11 +32,13 @@
 #include "World.hpp"
 #include "DevConsole.hpp"
 #include "Features.hpp"
+#include "ModMenu.hpp"
 #include "Pathfinder.hpp"
 #include <random>
 #include <sstream>
 #include <queue>
 #include "ZooSim.hpp"
+#include "OriginalConstants.hpp"
 #include "Sound.hpp"
 #include "SaveGame.hpp"
 #include "Goals.hpp"
@@ -74,6 +78,7 @@ enum class LayoutState {
   FREEFORM_SELECT,
   CREDITS,
   OPTIONS,
+  MOD_MENU, // Get New Zoo Tycoon Items, with the "modmenu" switch on (ModMenu.hpp)
   GAME_LOOP
 };
 LayoutState g_currentState = LayoutState::MAIN_MENU;
@@ -481,6 +486,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
   info.rating = rating;
   info.month = "Jan";
   ItemCatalog::get().load(rm);
+  Original::loadEconomy(rm);
   std::unordered_map<std::string, int> costByType;
   for (const CatalogItem &item : ItemCatalog::get().all()) {
     size_t slash = item.file.find_last_of('/'), dot = item.file.find_last_of('.');
@@ -573,7 +579,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
     switch (r) {
     case UiGameScreen::AnimalRequest::PickUp: world->pickUpAnimal(id); break;
     case UiGameScreen::AnimalRequest::Sell: {
-      int refund = world->getAnimals().refund(id);
+      double refund = world->getAnimals().sellValue(id);
       world->sellAnimal(id);
       if (refund > 0)
         g_sim.earn(ZooSim::AnimalPurchase, refund);
@@ -1161,14 +1167,12 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
     g_world->setObjectTool(file, cost, facing);
   }
   // Animals picked in Adopt Animals (male or female) are put down in an
-  // exhibit; zoo animals for now (the dinosaurs and marine animals later)
+  // exhibit (a dinosaur as its egg: Animals::adopt)
   {
     bool female = false;
     std::string file = g_hud->bulldozerOn() ? "" : g_hud->animalToolFile(female);
     Animals &an = g_world->getAnimals();
     int type = file.empty() ? -1 : an.typeOfFile(file);
-    if (!an.isZooAnimal(type))
-      type = -1;
     g_world->setAnimalTool(type, female);
   }
   // The Paths tab's walkway line
@@ -2742,11 +2746,13 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   click(4190);
   for (int i = 0; i < 5; i++)
     key(InputEvent::KEY_DOWN, SDLK_BACKSPACE, "");
-  key(InputEvent::TEXT_INPUT, 0, "30.1");
+  // (as typed, no more than cMaxAdultAdmissionPrice: $100 - zoo.exe
+  // setAdmissionPrice 0x4bbf10)
+  key(InputEvent::TEXT_INPUT, 0, "130");
   key(InputEvent::KEY_DOWN, SDLK_RETURN, "");
   g_hud->setZooInfo(g_hud->zooInfo());
-  check("typed admission $30.00 / $15.00",
-        textOf(4193) == "$30.00" && textOf(4194) == "$15.00");
+  check("typed admission $130 kept to $100.00 / $50.00",
+        textOf(4193) == "$100.00" && textOf(4194) == "$50.00");
 
   // Fences, as done in the original: a chain-link loop round 3 x 3 tiles,
   // named; an Atlantean tank wall loop round 2 x 2, filled; then one tank
@@ -3088,6 +3094,108 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             world->getFences().adjustWall(x.id, before - x.wallSub);
           }
         // Flush (walls down to the ground), then raised two steps: both tanks
+        // ZT_TANK_LAB_OBJ: underwater rock and foliage, a surface plant and a
+        // land rock tried in the left tank (the original's rules), then shot
+        if (std::getenv("ZT_TANK_LAB_OBJ")) {
+          struct Try {
+            const char *file;
+            float x, y;
+          } tries[] = {{"scenery/other/aqrock2.ai", lx + 1.5f, ly + 1.5f},
+                       {"scenery/foliage/kelp.ai", lx + 2.5f, ly + 2.5f},
+                       {"scenery/foliage/sgrass.ai", lx + 0.5f, ly + 3.5f},
+                       {"scenery/foliage/wtrlily.ai", lx + 3.5f, ly + 2.5f},
+                       {"scenery/other/lrock1.ai", lx + 2.5f, ly + 1.5f}};
+          for (const Try &t : tries) {
+            Fences::Fit f = world->objectFit(t.file, t.x, t.y, 4);
+            bool put = f == Fences::Fit::Ok && world->objectsMutable().add(t.file, t.x, t.y, 4);
+            SDL_Log("[TankLab] %s: fit %d message %d placed %d", t.file, static_cast<int>(f), world->fitMessage,
+                    static_cast<int>(put));
+          }
+          world->reindex();
+          // Animals: two hammerheads in it; a zebra refused
+          for (int i = 0; i < 20; i++)
+            world->getFences().update(1.0f); // (the water up again)
+          Animals &an = world->getAnimals();
+          int shark = an.typeOfFile("animals/hhshark.ai"), zebra = an.typeOfFile("animals/zebra.ai");
+          int s1 = an.adopt(shark, false, lx + 0.5f, ly + 0.5f, world->getMap(), fences);
+          SDL_Log("[TankLab] shark 1: %d (message %d)", s1, an.placeMessage);
+          for (const Fences::Exhibit &x : fences.exhibits())
+            if (x.tank)
+              SDL_Log("[TankLab] tank %d wallSub %d floor %d ground %d water %.2f level %.2f subtiles %d", x.id, x.wallSub,
+                      x.floorHeight, x.groundHeight, x.water, x.level, fences.waterSubtiles(x));
+          int s2 = an.adopt(shark, true, lx + 3.5f, ly + 0.5f, world->getMap(), fences);
+          SDL_Log("[TankLab] shark 2: %d (message %d)", s2, an.placeMessage);
+          int z1 = an.adopt(zebra, false, lx + 2.5f, ly + 3.5f, world->getMap(), fences);
+          SDL_Log("[TankLab] zebra: %d (message %d)", z1, an.placeMessage);
+          world->centreOn(lx + 2.0f, ly + 2.0f);
+          for (int r = 0; r < 4; r++) {
+            capture(("tankobj_rot" + std::to_string(r)).c_str());
+            world->rotateView(1);
+          }
+          // A marine specialist for it, a filter beside it; the sharks hungry,
+          // the water dirty: fed, eaten, cleaned
+          Staff &st = world->getStaff();
+          int trainer = -1;
+          for (int r = 1; r < 8 && trainer < 0; r++)
+            for (int dx = -r; dx <= r && trainer < 0; dx++)
+              trainer = st.hire(st.typeOfFile("staff/trainer.ai"), lx + 2.5f + dx, ly - r + 0.5f, world->getMap(), fences);
+          const Fences::Exhibit *tk = nullptr;
+          for (const Fences::Exhibit &x : fences.exhibits())
+            if (x.tank && x.tiles.count({lx, ly}))
+              tk = &x;
+          world->update(SDL_GetKeyboardState(nullptr), 0.05f); // (the tank's animals counted)
+          int why = tk ? st.assign(trainer, tk->id, fences) : -1;
+          SDL_Log("[TankLab] specialist %d assigned: %d", trainer, why);
+          bool filter = false;
+          for (int fy = ly - 3; fy <= ly + 5 && !filter; fy++)
+            for (int fx = lx - 3; fx <= lx + 5 && !filter; fx++) {
+              int t = -1;
+              if (fences.filterFit(fx, fy, world->getMap(), &t) == Fences::Fit::Ok && tk && t == tk->id)
+                filter = fences.placeFilter(fx, fy, world->getMap());
+            }
+          SDL_Log("[TankLab] filter placed: %d", static_cast<int>(filter));
+          for (Animals::Member &m : const_cast<std::vector<Animals::Member> &>(an.members()))
+            if (m.exhibit == (tk ? tk->id : -2))
+              m.hunger = 80;
+          if (tk)
+            const_cast<Fences::Exhibit *>(tk)->purity = 55;
+          float ateBefore = 0;
+          for (const Animals::Member &m : an.members())
+            ateBefore += m.hunger;
+          for (int f = 0; f < 12; f++) {
+            for (int i = 0; i < 50; i++)
+              world->update(SDL_GetKeyboardState(nullptr), 0.1f);
+            if (const Staff::Member *sm = st.member(trainer))
+              SDL_Log("[TankLab] specialist: %s; food %.0f; purity %.0f", st.dutyText(*sm).c_str(),
+                      tk ? world->getItems().foodIn(tk->id) : -1.0f, tk ? tk->purity : -1.0f);
+            for (const Animals::Member &m : an.members())
+              SDL_Log("[TankLab]   %s hunger %.0f anim %s", m.name.c_str(), m.hunger, m.anim.c_str());
+            if (const Animals::Member *m = an.member(s1))
+              SDL_Log("[TankLab] shark at %.1f,%.1f z %.2f -> %.2f anim %s exhibit %d set %s path %zu hunger %.0f", m->x, m->y,
+                      m->swimZ, m->swimTo, m->anim.c_str(), m->exhibit, m->stack.empty() ? "-" : m->stack.back().first.c_str(),
+                      m->path.size(), m->hunger);
+            capture(("tankswim" + std::to_string(f)).c_str());
+          }
+          // The filter run down; a maintenance worker services it
+          if (filter && !fences.filters().empty()) {
+            const_cast<Fences::Filter &>(fences.filters().back()).health = 2;
+            int maint = -1;
+            for (int r = 1; r < 8 && maint < 0; r++)
+              for (int dx = -r; dx <= r && maint < 0; dx++)
+                maint = st.hire(st.typeOfFile("staff/maint.ai"), lx + 2.5f + dx, ly + 5 + r + 0.5f, world->getMap(), fences);
+            bool serviced = false;
+            for (int i = 0; i < 1200 && !serviced; i++) {
+              world->update(SDL_GetKeyboardState(nullptr), 0.1f);
+              const Staff::Member *mm = st.member(maint);
+              if (i % 100 == 0 && mm)
+                SDL_Log("[TankLab] maint: %s; filter health %.1f", st.dutyText(*mm).c_str(), fences.filters().back().health);
+              serviced = fences.filters().back().health >= fences.filterType().startHealth - 0.01f;
+            }
+            SDL_Log("[TankLab] filter serviced: %d", static_cast<int>(serviced));
+            capture("tankfilter_serviced");
+          }
+          return 0;
+        }
         // ZT_TANK_LAB_ROT: each height from all four sides (default, flush,
         // two under, raised eight)
         if (std::getenv("ZT_TANK_LAB_ROT")) {
@@ -4882,9 +4990,16 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         g_hud->showAnimal(id1);
         // Hovering one names it
         tileWindow(static_cast<int>(an.member(id2)->x), static_cast<int>(an.member(id2)->y), px, py);
-        // Sold: its price by its happiness
-        int refund = an.refund(id2);
-        int expect = 800 * Animals::shownHappiness(*an.member(id2)) / 100;
+        // Sold: its price by its happiness and health (zoo.exe
+        // ZTAnimal::sellValue 0x48d21d, written out: $800 x 0.8 x
+        // ((happiness + 100) x 0.005 + (health - cMinHits) / cMaxHits) x 0.5)
+        double refund = an.sellValue(id2);
+        const Animals::Member &sold = *an.member(id2);
+        const Animals::Type &soldType = an.types()[sold.type];
+        double expect = soldType.cost * 0.8 *
+                        ((std::lround(sold.happiness) + 100) * 0.005 +
+                         static_cast<double>(std::lround(sold.health) - soldType.minHits) / soldType.maxHits) *
+                        0.5 * (sold.sick ? 0.5 : 1.0);
         cash = g_sim.cash();
         g_hud->showAnimal(id2);
         click(3111);
@@ -4898,7 +5013,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           g_hud->handleInputs(inputs);
         }
         check(("sold for $" + std::to_string(refund)).c_str(),
-              !an.member(id2) && refund == expect && std::lround(g_sim.cash() - cash) == refund);
+              !an.member(id2) && std::abs(refund - expect) < 0.01 && std::abs(g_sim.cash() - cash - refund) < 0.01);
         // Moved: picked up, put down elsewhere in the exhibit
         world->pickUpAnimal(id1);
         auto [mx, my] = inside[1];
@@ -5766,13 +5881,16 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           for (size_t k = 0; k < st.types().size(); k++)
             if (st.types()[k].kind == Staff::Kind::Guide)
               guideType = static_cast<int>(k);
+          // (by one of the guests on a path - one where no one else stands)
           float hx = -1, hy = -1;
-          for (const Guests::Guest &g : gs.guests())
-            if (g.x > -999 && world->getMap().isPath(static_cast<int>(g.x), static_cast<int>(g.y))) {
+          int guide = -1;
+          for (auto it = gs.guests().rbegin(); it != gs.guests().rend(); ++it)
+            if (const Guests::Guest &g = *it; guide < 0 && guideType >= 0 && g.x > -999 &&
+                world->getMap().isPath(static_cast<int>(g.x), static_cast<int>(g.y))) {
+              guide = st.hire(guideType, g.x, g.y, world->getMap(), world->getFences());
               hx = g.x;
               hy = g.y;
             }
-          int guide = guideType >= 0 && hx >= 0 ? st.hire(guideType, hx, hy, world->getMap(), world->getFences()) : -1;
           check("a tour guide hired on the path among guests", guide >= 0);
           bool spoke = false, cheered = false;
           size_t most = 0;
@@ -7075,7 +7193,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       s += " shared " + std::to_string(shared);
       for (const Animals::Member &m : world->getAnimals().members()) {
         char b[64];
-        std::snprintf(b, sizeof b, " a%d@%.1f,%.1f%s", m.type, m.x, m.y, m.female ? "f" : "m");
+        std::snprintf(b, sizeof b, " a%d@%.0f,%.0f%s", m.type, m.x, m.y, m.female ? "f" : "m");
         s += b;
       }
       return s;
@@ -7124,9 +7242,11 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       capture("menu_load_open");
       bool loadButton = click(1501) == UiAction::GAME_LOAD;
       bool read = gameLoad(rm, menuFile);
+      // (compared straight after loading: a few ticks later an animal may
+      // have walked across a tile line)
+      std::string now = snapshot();
       for (int i = 0; i < 3; i++)
         world->update(SDL_GetKeyboardState(nullptr), 0.05f);
-      std::string now = snapshot();
       SDL_Log("[Save] menu before %s", was.c_str());
       SDL_Log("[Save] menu after  %s", now.c_str());
       capture("menu_loaded");
@@ -7151,13 +7271,170 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   g_hud->toggleGameMenu();
   check("esc opens the game menu", g_hud->isPanelOpen(5));
 
+  // (last: a few hundred seconds go by, which would move everyone about
+  // for the tests after it)
+  // Marine Mania in the tank: what can go in (zoo.exe 0x4df688), a
+  // real shark, fed its chum and eating it
+  {
+    Fences &fn = world->getFences();
+    WorldMap &map = world->getMap();
+    const Fences::Exhibit *te = nullptr;
+    for (const Fences::Exhibit &e : fn.exhibits())
+      if (e.name == "Test Tank")
+        te = &e;
+    if (te) {
+      for (int i = 0; i < 30; i++)
+        fn.update(1.0f); // (the water in)
+      // A land rock: refused; kelp and an undersea rock: in
+      std::pair<int, int> spot{-1, -1};
+      for (auto [x, y] : te->tiles)
+        if (!fn.byTankLadder(*te, x, y) && spot.first < 0)
+          spot = {x, y};
+      Fences::Fit rock = world->objectFit("scenery/other/lrock1.ai", spot.first + 0.5f, spot.second + 0.5f, 4);
+      int rockWhy = world->fitMessage;
+      Fences::Fit kelp = world->objectFit("scenery/foliage/kelp.ai", spot.first + 0.5f, spot.second + 0.5f, 4);
+      check(("in a tank: no land rock (" + std::to_string(rockWhy) + "), kelp yes").c_str(),
+            rock != Fences::Fit::Ok && rockWhy == 10559 && kelp == Fences::Fit::Ok);
+      Animals &an = world->getAnimals();
+      int zebra = an.adopt(an.typeOfFile("animals/zebra.ai"), false, spot.first + 0.5f, spot.second + 0.5f, map, fn);
+      int zebraWhy = an.placeMessage;
+      int shark = an.adopt(an.typeOfFile("animals/hhshark.ai"), true, spot.first + 0.5f, spot.second + 0.5f, map, fn);
+      check(("a zebra not in a tank (" + std::to_string(zebraWhy) + "), a hammerhead in it").c_str(),
+            zebra < 0 && zebraWhy == 10553 && shark >= 0);
+      if (Animals::Member *sm = an.member(shark))
+        sm->hunger = 80;
+      world->getItems().removeIn(te->id, ZooItems::Kind::Food);
+      float ate = 0;
+      bool chum = false;
+      for (int i = 0; i < 3000 && an.member(shark); i++) {
+        world->update(SDL_GetKeyboardState(nullptr), 0.1f);
+        for (const ZooItems::Item &it : world->getItems().items())
+          chum = chum || (it.kind == ZooItems::Kind::Food && it.exhibit == te->id && it.food == "chum");
+        ate = 80 - an.member(shark)->hunger;
+        if (chum && ate >= 20)
+          break;
+      }
+      world->centreOn(spot.first + 0.5f, spot.second + 0.5f);
+      capture("shark_fed");
+      check(("the hammerhead fed chum by its specialist and eats it (" + std::to_string(static_cast<int>(ate)) + ")").c_str(),
+            chum && ate >= 20);
+      if (shark >= 0)
+        an.remove(shark);
+      world->getAnimals().takeMessages();
+    }
+    // A tank's filter run down: a maintenance worker goes and services it
+    // ("Going to service tank filter"), as good as new
+    if (te && fn.filters().empty())
+      for (int fy = -4; fy <= 4 && fn.filters().empty(); fy++)
+        for (int fx = -4; fx <= 4 && fn.filters().empty(); fx++) {
+          int tank = -1;
+          int x = te->tiles.begin()->first + fx, y = te->tiles.begin()->second + fy;
+          if (fn.filterFit(x, y, map, &tank) == Fences::Fit::Ok && tank == te->id)
+            fn.placeFilter(x, y, map);
+        }
+    world->reindex();
+    if (!fn.filters().empty()) {
+      Staff &st = world->getStaff();
+      Fences::Filter &f = const_cast<Fences::Filter &>(fn.filters().front());
+      f.health = 2;
+      int maint = -1;
+      for (const Staff::Member &m : st.members())
+        if (st.types()[m.type].kind == Staff::Kind::Maint)
+          maint = m.id;
+      if (maint < 0) {
+        int fx = f.x, fy = f.y;
+        for (int r = 2; r < 10 && maint < 0; r++)
+          for (int dx = -r; dx <= r && maint < 0; dx++)
+            maint = st.hire(st.typeOfFile("staff/maint.ai"), fx + dx + 0.5f, fy - r + 0.5f, map, fn);
+      }
+      bool going = false;
+      for (int i = 0; i < 3000 && f.health < fn.filterType().startHealth - 0.01f; i++) {
+        world->update(SDL_GetKeyboardState(nullptr), 0.1f);
+        for (const Staff::Member &m : st.members())
+          going = going || m.dutyId == 10515;
+      }
+      check(("a run-down filter serviced by a maintenance worker (health " + std::to_string(static_cast<int>(f.health)) + ")").c_str(),
+            going && f.health >= fn.filterType().startHealth - 0.01f);
+    }
+  }
+
   if (timings)
     fclose(timings);
   return 0;
 }
 
+// ----------------------------------------------------------------------------
+// The credits (zoo.exe 0x514b27 creditsLoadPages, 0x41a430 creditsTick,
+// 0x6162c0 creditsShowPage): the pages' layout ids from every
+// ui/credits/credit*.cfg with a version over 0 (credits.cfg, with none, is
+// left out), in file-name order, and the delay; one page shown at a time,
+// the next every delay; after the last the credits close
+// ----------------------------------------------------------------------------
+static std::vector<int> g_creditPages;
+static Uint32 g_creditDelayMs = 8000, g_creditNextAt = 0;
+static size_t g_creditPage = 0;
+
+static void creditsShowPage(UiLayout *layout, size_t page) {
+  for (size_t i = 0; i < g_creditPages.size(); i++)
+    if (UiElement *e = layout->getElementById(g_creditPages[i]))
+      e->setHidden(i != page);
+}
+
+static void creditsLoad(UiLayout *layout, ResourceManager *rm) {
+  g_creditPages.clear();
+  g_creditDelayMs = 8000;
+  for (const std::string &cfg : rm->listResources("ui/credits/credit", ".cfg")) {
+    IniReader *ini = rm->getIniReader(cfg);
+    if (!ini)
+      continue;
+    if (ini->getInt("credits", "version", 0) > 0) {
+      g_creditDelayMs = static_cast<Uint32>(ini->getInt("credits", "delay", 8)) * 1000;
+      for (const std::string &section : ini->getSections())
+        if (section != "credits")
+          if (int id = ini->getInt(section, "layout", 0))
+            g_creditPages.push_back(id);
+    }
+    delete ini;
+  }
+  g_creditPage = 0;
+  g_creditNextAt = SDL_GetTicks() + g_creditDelayMs;
+  creditsShowPage(layout, 0);
+  SDL_Log("[Credits] %zu pages, %u ms each", g_creditPages.size(), g_creditDelayMs);
+}
+
+// True once the last page has had its time: the credits are over
+static bool creditsTick(UiLayout *layout) {
+  if (g_creditPages.empty() || SDL_GetTicks() < g_creditNextAt)
+    return false;
+  g_creditNextAt = SDL_GetTicks() + g_creditDelayMs;
+  if (++g_creditPage >= g_creditPages.size())
+    return true;
+  creditsShowPage(layout, g_creditPage);
+  return false;
+}
+
 int main(int argc, char *argv[]) {
   SDL_SetMainReady();
+  // The ZT1 Lab app's engine (--lab-host) draws for the app and is never
+  // heard: a silent audio device, so only the game in its Play view plays
+  // and never shown: no waiting for the screen's refresh (reading each
+  // frame back waited on it)
+  bool labHost = false;
+  for (int i = 1; i < argc; i++)
+    if (std::string(argv[i]) == "--lab-host") {
+      labHost = true;
+      SDL_SetHint(SDL_HINT_AUDIODRIVER, "dummy");
+      SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
+    }
+#ifdef _WIN32
+  // This SDL build's WASAPI backend plays the game's audio slowly and
+  // scratchily on some machines (the same files play fine in any other
+  // player); DirectSound doesn't. DirectSound by default; SDL_AUDIODRIVER
+  // set in the environment still wins. (Not for the Lab's engine: the
+  // variable would outrank its silent device)
+  if (!labHost && SDL_getenv("SDL_AUDIODRIVER") == NULL)
+    SDL_setenv("SDL_AUDIODRIVER", "directsound", 0);
+#endif
 
   // Initialize memory tracking and crash dump system
   // ZT_MEMORY_DUMP_INIT();
@@ -7185,6 +7462,15 @@ int main(int argc, char *argv[]) {
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
   Window window("ZT1-Engine", config.getScreenWidth(), config.getScreenHeight(),
                 60.0f);
+  // Inside the ZT1 Lab app: the game's window in its Play view (--embed
+  // <window>), or the Lab's engine kept out of sight, drawing for the app
+  // (--lab-host <port>)
+  for (int i = 1; i + 1 < argc; i++)
+    if (std::string(argv[i]) == "--embed" && !Embed::into(window.window, argv[i + 1]))
+      SDL_Log("[Embed] couldn't go into window %s", argv[i + 1]);
+  for (int i = 1; i < argc; i++)
+    if (std::string(argv[i]) == "--lab-host")
+      labHostHide(window.window);
   bool gpuFsr = artMode == ArtScaler::Mode::Fsr &&
                 GpuFsr::init(window.renderer, config.getArtSharpness());
   ArtScaler::configure(gpuFsr ? ArtScaler::Mode::Off : artMode,
@@ -7250,6 +7536,17 @@ int main(int argc, char *argv[]) {
   UiLayout *layout = new UiLayout(lyt_reader, &resource_manager);
   g_currentState = LayoutState::MAIN_MENU;
 
+  // ZT1 Lab: the live view for what's found in zoo.exe (--lab [map]); for
+  // the Lab app, the same driven over a local connection (--lab-host [port])
+  for (int i = 1; i < argc; i++) {
+    if (std::string(argv[i]) == "--lab")
+      return runLab(window.window, window.renderer, &resource_manager, g_scenarioManager, g_world,
+                    i + 1 < argc ? argv[i + 1] : "deathmtn");
+    if (std::string(argv[i]) == "--lab-host")
+      return runLab(window.window, window.renderer, &resource_manager, g_scenarioManager, g_world, "deathmtn",
+                    i + 1 < argc ? std::atoi(argv[i + 1]) : 18490, g_console.run);
+  }
+
   for (int i = 1; i + 1 < argc; i++) {
     if (std::string(argv[i]) == "--panel-shots")
       return runPanelShots(window.renderer, &resource_manager,
@@ -7292,6 +7589,28 @@ int main(int argc, char *argv[]) {
         resource_manager.playMenuMusic();
       }
       lastState = g_currentState;
+    }
+    // In the Lab with its Play view not showing: the game holds still (no
+    // updates, its sound paused) and carries on where it was when shown
+    static bool heldHidden = false;
+    if (Embed::hidden()) {
+      if (!heldHidden) {
+        Mix_Pause(-1);
+        Mix_PauseMusic();
+        heldHidden = true;
+      }
+      if (Embed::quitAsked())
+        break;
+      SDL_PumpEvents();
+      SDL_Delay(50);
+      lastFrameTime = SDL_GetTicks();
+      continue;
+    }
+    if (heldHidden) {
+      Mix_Resume(-1);
+      Mix_ResumeMusic();
+      heldHidden = false;
+      lastFrameTime = SDL_GetTicks();
     }
     // Calculate delta time
     Uint32 currentTime = SDL_GetTicks();
@@ -7383,6 +7702,16 @@ int main(int argc, char *argv[]) {
       // Let's assume 9999 is safe for default case.
       action = (UiAction)9999;
     }
+    // The credits' pages, one at a time (zoo.exe 0x41a430 creditsTick, 0x6162c0
+    // creditsShowPage): the next every delay; after the last, back to the menu
+    if (g_currentState == LayoutState::CREDITS && layout && creditsTick(layout))
+      action = UiAction::CREDITS_EXIT;
+
+    // A menu screen's "close me" button (action=2 target=-1: the map select,
+    // scenario and Mod Menu screens' Back): back to the main menu, as the
+    // original (in a game, the HUD's panels handle their own)
+    if (g_currentState != LayoutState::GAME_LOOP && isPanelClose(action))
+      action = UiAction::SCENARIO_BACK_TO_MAIN_MENU;
 
     switch (action) {
     case UiAction::STARTUP_EXIT:
@@ -7395,6 +7724,10 @@ int main(int argc, char *argv[]) {
           getLayoutPath(&resource_manager, "credits.lyt"));
       layout = new UiLayout(lyt_reader, &resource_manager);
       g_currentState = LayoutState::CREDITS;
+      // The pages (zoo.exe 0x514b27 creditsLoadPages): every
+      // ui/credits/credit*.cfg, in file-name order, with a version over 0: its
+      // delay (seconds) and each section's layout id; only the first page shows
+      creditsLoad(layout, &resource_manager);
       break;
 
     case UiAction::STARTUP_PLAY_FREEFORM:
@@ -7406,6 +7739,28 @@ int main(int argc, char *argv[]) {
       populateFreeformList(layout, g_scenarioManager);
       updateFreeformDetails(layout, g_scenarioManager, &resource_manager);
       prepareHud(&resource_manager);
+      break;
+
+    // Get New Zoo Tycoon Items: the Mod Menu with its switch on (off, as
+    // ours always was: nothing - the original's download service is gone)
+    case UiAction::STARTUP_ZOO_ITEMS:
+      if (!Features::modMenu)
+        break;
+      delete layout;
+      layout = ModMenu::open(&resource_manager, getLayoutPath(&resource_manager, "mapselec.lyt"));
+      g_currentState = LayoutState::MOD_MENU;
+      break;
+    case UiAction::MOD_LIST_SELECTION:
+      if (g_currentState == LayoutState::MOD_MENU)
+        ModMenu::selectionChanged(layout, &resource_manager);
+      break;
+    case UiAction::MOD_FOLDER:
+      if (g_currentState == LayoutState::MOD_MENU)
+        ModMenu::chooseFolder(layout, &resource_manager);
+      break;
+    case UiAction::MOD_RESTART:
+      if (g_currentState == LayoutState::MOD_MENU && ModMenu::restart(layout))
+        running = 0;
       break;
 
     case UiAction::STARTUP_PLAY_SCENARIO:
@@ -7510,6 +7865,11 @@ int main(int argc, char *argv[]) {
       break;
 
     case UiAction::PLAY_FREEFORM_START:
+      // (in the Mod Menu that button is Switch on / off)
+      if (g_currentState == LayoutState::MOD_MENU) {
+        ModMenu::toggle(layout, &resource_manager);
+        break;
+      }
       if (g_freeformListBox && g_freeformListBox->getSelectedIndex() >= 0) {
         int idx = g_freeformListBox->getSelectedIndex();
         const FreeformMap *map = g_scenarioManager->getFreeformMap(idx);

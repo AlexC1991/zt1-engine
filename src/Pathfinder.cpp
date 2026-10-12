@@ -1,9 +1,12 @@
 #include "Pathfinder.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <queue>
+
+#include "LabTrace.hpp"
 
 namespace Pathfinder {
 
@@ -44,15 +47,54 @@ float octile(int x, int y, int gx, int gy) {
 }
 } // namespace
 
+std::function<bool()> wantSearch;
+std::function<void(const Search &)> searched;
+
+namespace {
+bool findTiles(int width, int height, int sx, int sy, int gx, int gy, const Pass &pass, const Step &step,
+               std::vector<std::pair<int, int>> &out, int maxNodes, const Cost &tileCost, Search *rec);
+}
+
+// (the search, kept when the Lab's watching whoever's asking)
 bool find(int width, int height, int sx, int sy, int gx, int gy, const Pass &pass,
           const Step &step, std::vector<std::pair<int, int>> &out, int maxNodes,
           const Cost &tileCost) {
+  if (!LabTrace::on || !searched || (wantSearch && !wantSearch()))
+    return findTiles(width, height, sx, sy, gx, gy, pass, step, out, maxNodes, tileCost, nullptr);
+  ZT_FN("", "Finds a route (A*)");
+  Search rec;
+  rec.width = width, rec.height = height, rec.sx = sx, rec.sy = sy, rec.gx = gx, rec.gy = gy;
+  rec.maxNodes = maxNodes;
+  auto t0 = std::chrono::steady_clock::now();
+  bool ok = findTiles(width, height, sx, sy, gx, gy, pass, step, out, maxNodes, tileCost, &rec);
+  rec.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  rec.found = ok;
+  rec.route = out;
+  if (rec.why.empty())
+    rec.why = ok ? "found" : rec.gaveUp ? "gave up: looked at its limit of tiles" : "no way there: everywhere it could reach was looked at";
+  // (kept first: stopped at the step below, the search is there to see)
+  searched(rec);
+  ZT_STEP("", "Route search done", {"from x", sx}, {"from y", sy}, {"to x", gx}, {"to y", gy}, {"result", rec.why},
+          {"tiles looked at", static_cast<int>(rec.closed.size())}, {"limit", maxNodes},
+          {"route tiles", static_cast<int>(out.size())}, {"couldn't enter", static_cast<int>(rec.blocked.size())},
+          {"steps refused", static_cast<int>(rec.walls.size())}, {"ms", rec.ms});
+  return ok;
+}
+
+namespace {
+bool findTiles(int width, int height, int sx, int sy, int gx, int gy, const Pass &pass, const Step &step,
+               std::vector<std::pair<int, int>> &out, int maxNodes, const Cost &tileCost, Search *rec) {
   out.clear();
   if (sx < 0 || sy < 0 || gx < 0 || gy < 0 || sx >= width || sy >= height || gx >= width ||
-      gy >= height)
+      gy >= height) {
+    if (rec)
+      rec->why = "the start or the goal is off the map";
     return false;
+  }
   if (sx == gx && sy == gy) {
     out.push_back({sx, sy});
+    if (rec)
+      rec->why = "already there";
     return true;
   }
   Scratch &s = scratch;
@@ -80,6 +122,8 @@ bool find(int width, int height, int sx, int sy, int gx, int gy, const Pass &pas
       continue;
     s.closed[n.index] = g;
     expanded++;
+    if (rec)
+      rec->closed.push_back(n.index);
     if (n.index == goal)
       break;
     int x = n.index % width, y = n.index / width;
@@ -91,8 +135,15 @@ bool find(int width, int height, int sx, int sy, int gx, int gy, const Pass &pas
         if (nx < 0 || ny < 0 || nx >= width || ny >= height)
           continue;
         int ni = ny * width + nx;
-        if (s.closed[ni] == g || !ok(nx, ny))
+        if (s.closed[ni] == g)
           continue;
+        if (!ok(nx, ny)) {
+          // (a tile beside it it can't go onto: the straight ones are what
+          // stop it; the diagonals' corners are covered by those)
+          if (rec && (dx == 0 || dy == 0))
+            rec->blocked.push_back(ni);
+          continue;
+        }
         float c;
         if (dx != 0 && dy != 0) {
           // Both ways round the corner must be open
@@ -101,8 +152,13 @@ bool find(int width, int height, int sx, int sy, int gx, int gy, const Pass &pas
             continue;
           c = kDiagonal;
         } else {
-          if (!step(x, y, nx, ny))
+          if (!step(x, y, nx, ny)) {
+            // (onto a tile it could stand on, but not across this edge: a
+            // fence, a cliff)
+            if (rec)
+              rec->walls.push_back({n.index, ni});
             continue;
+          }
           c = 1.0f;
         }
         if (tileCost)
@@ -116,6 +172,29 @@ bool find(int width, int height, int sx, int sy, int gx, int gy, const Pass &pas
         open.push({total + octile(nx, ny, gx, gy), ni});
       }
   }
+  if (rec) {
+    rec->gaveUp = expanded >= maxNodes && s.closed[goal] != g;
+    // (still open: not yet looked at)
+    while (!open.empty()) {
+      if (s.closed[open.top().index] != g)
+        rec->open.push_back(open.top().index);
+      open.pop();
+    }
+    auto tidy = [](std::vector<int> &v) {
+      std::sort(v.begin(), v.end());
+      v.erase(std::unique(v.begin(), v.end()), v.end());
+    };
+    tidy(rec->open);
+    tidy(rec->blocked);
+    // (a tile it went onto after all, by another way, wasn't blocked)
+    std::vector<int> seen(rec->closed);
+    tidy(seen);
+    rec->blocked.erase(std::remove_if(rec->blocked.begin(), rec->blocked.end(),
+                                      [&](int i) { return std::binary_search(seen.begin(), seen.end(), i); }),
+                       rec->blocked.end());
+    std::sort(rec->walls.begin(), rec->walls.end());
+    rec->walls.erase(std::unique(rec->walls.begin(), rec->walls.end()), rec->walls.end());
+  }
   if (s.closed[goal] != g)
     return false;
   for (int at = goal; at >= 0; at = s.from[at]) {
@@ -126,6 +205,7 @@ bool find(int width, int height, int sx, int sy, int gx, int gy, const Pass &pas
   std::reverse(out.begin(), out.end());
   return true;
 }
+} // namespace
 
 bool findGraph(int nodes, int start, int goal, const Next &next, const Guess &guess,
                std::vector<int> &out, int maxNodes) {

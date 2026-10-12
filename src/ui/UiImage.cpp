@@ -288,9 +288,22 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       dest_rect.x += LOCK_OFFSET_X;
       dest_rect.y += LOCK_OFFSET_Y;
     } else {
-      // Standard preview: stretch to fill
+      // Standard preview: to fill, keeping its shape (a map's picture has
+      // the box's, so it fills it; a mod's art - a tall fence - is fitted
+      // in the middle rather than stretched)
       dest_rect.w = TARGET_WIDTH;
       dest_rect.h = TARGET_HEIGHT;
+      if (this->image != nullptr) {
+        int tw = 0, th = 0;
+        ArtScaler::querySize(this->image, &tw, &th);
+        if (tw > 0 && th > 0) {
+          float s = std::min(TARGET_WIDTH / static_cast<float>(tw), TARGET_HEIGHT / static_cast<float>(th));
+          dest_rect.w = static_cast<int>(tw * s);
+          dest_rect.h = static_cast<int>(th * s);
+          dest_rect.x += (TARGET_WIDTH - dest_rect.w) / 2;
+          dest_rect.y += (TARGET_HEIGHT - dest_rect.h) / 2;
+        }
+      }
 
       // Apply the offsets
       dest_rect.x += OFFSET_X;

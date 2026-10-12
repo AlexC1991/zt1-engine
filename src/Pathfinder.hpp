@@ -2,6 +2,7 @@
 #define PATHFINDER_HPP
 
 #include <functional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -36,6 +37,28 @@ bool clearLine(float x0, float y0, float x1, float y1, const Pass &pass, const S
 
 // Drops waypoints that can be walked past in a straight line
 void smooth(std::vector<std::pair<float, float>> &points, const Pass &pass, const Step &step);
+
+// (the ZT1 Lab) A search as it went, kept to be seen: the tiles it looked
+// at in the order it did, what was still open when it stopped, the tiles
+// it couldn't go onto and the steps it couldn't take (a fence, a cliff
+// edge), and how it ended. Tiles are y * width + x
+struct Search {
+  int width = 0, height = 0, sx = 0, sy = 0, gx = 0, gy = 0;
+  bool found = false;
+  bool gaveUp = false;      // stopped at maxNodes, still looking
+  std::string why;          // how it ended, in words
+  int maxNodes = 0;
+  std::vector<int> closed;  // looked at, in order
+  std::vector<int> open;    // still to look at
+  std::vector<int> blocked; // couldn't go onto
+  std::vector<std::pair<int, int>> walls; // couldn't step from a to b
+  std::vector<std::pair<int, int>> route;
+  double ms = 0;
+};
+// Set by the Lab: whether to keep this search (whoever's asking is being
+// watched), and where to give it
+extern std::function<bool()> wantSearch;
+extern std::function<void(const Search &)> searched;
 } // namespace Pathfinder
 
 #endif // PATHFINDER_HPP

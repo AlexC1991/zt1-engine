@@ -15,6 +15,11 @@ ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 BUILD_DIR = os.path.join(ROOT_DIR, "build")
 REL_DIR = os.path.join(BUILD_DIR, "Release")
 
+# Shared game-folder discovery + the pc-sync override rules (see zt1_paths.py
+# for why only some pc-sync UI files may be installed loose).
+sys.path.insert(0, SCRIPT_DIR)
+import zt1_paths
+
 # Colors
 class C:
     RESET = '\033[0m'
@@ -105,50 +110,78 @@ def main():
     # Create Release folder if needed
     os.makedirs(REL_DIR, exist_ok=True)
     
-    # [PATCH] Check pc-sync first
-    check_pc_sync_assets()
-    
     # Check if assets already present
     if check_assets_present():
         print(f"  {C.GREEN}[OK]{C.RESET} Game assets already present")
         print(f"  {C.DIM}Skipping import (delete .ztd files to re-import){C.RESET}")
+        # The Marine Mania layouts still have to be there: on a rebuild from a
+        # clean build\ the assets survive but ui/ may not.
+        check_pc_sync_assets()
         return 0
     
-    # Ask for source folder
-    print(f"  {C.YELLOW}Game assets not found. Import required.{C.RESET}")
-    print()
-    print(f"  Please enter the path to your original Zoo Tycoon installation")
-    print(f"  {C.DIM}(where animals.ztd and zoo.exe are located){C.RESET}")
-    print()
-    
-    # Try to use tkinter for folder dialog
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-        
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        
-        source_dir = filedialog.askdirectory(
-            title="Select Original Zoo Tycoon Folder",
-            mustexist=True
-        )
-        
-        root.destroy()
-        
-        if not source_dir:
-            print(f"  {C.YELLOW}No folder selected. Skipping import.{C.RESET}")
-            return 0
-            
-    except ImportError:
-        # Fallback to manual entry
-        source_dir = input(f"  {C.CYAN}Path:{C.RESET} ").strip().strip('"')
-    
-    if not source_dir or not os.path.exists(source_dir):
+    # Where are the game files?
+    #   1. ZT1_SOURCE_DIR (set by start.bat when the user picks a folder)
+    #   2. a folder remembered from a previous run
+    #   3. the usual retail / digital install locations
+    #   4. ask, with a folder-picker dialog
+    source_dir = zt1_paths.find_game_dir()
+
+    if source_dir:
+        print(f"  {C.CYAN}Found Zoo Tycoon folder: {source_dir}{C.RESET}")
+    else:
+        print(f"  {C.YELLOW}Game assets not found. Import required.{C.RESET}")
+        print()
+        print(f"  Please choose your original Zoo Tycoon installation folder")
+        print(f"  {C.DIM}(the one containing animals.ztd and zoo.exe){C.RESET}")
+        print()
+
+        # Try to use tkinter for folder dialog
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes('-topmost', True)
+
+            source_dir = filedialog.askdirectory(
+                title="Select Original Zoo Tycoon Folder",
+                mustexist=True
+            )
+
+            root.destroy()
+
+            if not source_dir:
+                print(f"  {C.YELLOW}No folder selected. Skipping import.{C.RESET}")
+                return 0
+
+        except ImportError:
+            # Fallback to manual entry
+            source_dir = input(f"  {C.CYAN}Path:{C.RESET} ").strip().strip('"')
+
+    if not source_dir or not os.path.isdir(source_dir):
         print(f"  {C.RED}[X]{C.RESET} Invalid path{C.RESET}")
         return 1
-    
+
+    if zt1_paths.is_engine_dir(source_dir):
+        print(f"  {C.RED}[X]{C.RESET} That's this engine's own folder - pick the folder "
+              f"Zoo Tycoon is installed in. Nothing imported.")
+        return 1
+    if not zt1_paths.looks_like_game_dir(source_dir):
+        print(f"  {C.RED}[X]{C.RESET} That folder has no animals.ztd / ui.ztd / scenery.ztd "
+              f"(it needs two) - nothing imported.")
+        return 1
+
+    # Remember it so the next run (and start.bat) does not ask again
+    zt1_paths.save_game_dir(source_dir)
+
+    expansions = zt1_paths.missing_expansions(source_dir)
+    if expansions:
+        print(f"  {C.YELLOW}[!]{C.RESET} Dinosaur Digs / Marine Mania content may be "
+              f"missing ({', '.join(expansions)}).")
+        print(f"  {C.DIM}    Install both expansions over the base game and re-run to "
+              f"enable their maps and the buy-panel filter.{C.RESET}")
+
     print()
     print(f"  Source: {C.CYAN}{source_dir}{C.RESET}")
     print()
@@ -161,7 +194,13 @@ def main():
         print(f"  {C.GREEN}[OK]{C.RESET} Imported {files_copied} files{C.RESET}")
     else:
         print(f"  {C.YELLOW}No new files to import{C.RESET}")
-    
+
+    # pc-sync assets are installed AFTER the import on purpose:
+    # extract_marine_mania_ui() reads XPACK2\ui6.ztd out of the imported game
+    # files, so running it before the import would find no archive on a fresh
+    # clone and silently skip the 20 Marine Mania UI layouts.
+    check_pc_sync_assets()
+
     return 0
 
 def copy_folder(src, dst):
@@ -185,27 +224,48 @@ def copy_folder(src, dst):
     return False
 
 def check_pc_sync_assets():
-    """Copy assets from pc-sync if present."""
+    """Copy assets from pc-sync if present.
+
+    UI layouts are handled by zt1_paths.install_pc_sync_ui(), which installs
+    ONLY the few pc-sync files that genuinely override an archive. Copying the
+    whole pc-sync/ui folder here would put 76 base UI.ZTD layouts loose and
+    hide the patched ones (no expansion filter dropdown in the buy panels).
+    """
     pc_sync_dir = os.path.join(ROOT_DIR, "pc-sync")
     if not os.path.exists(pc_sync_dir):
         return 0
-    
+
     print(f"  {C.CYAN}Checking pc-sync for assets...{C.RESET}")
-    
-    folders = ["xpack1", "xpack2", "startup", "freeroam", "scenario", "ui"]
+
+    # Sub-folders of pc-sync/ui that are installed to the Release ROOT (not to
+    # Release/ui). These hold textures the UI needs, and they are expensive to
+    # lose: without them panels come up blank or incomplete.
+    # (not xpack1 / xpack2: copy_folder deletes the folder first, and on
+    # Windows that would be the player's imported Dinosaur Digs / Marine
+    # Mania)
+    folders = ["startup", "freeroam", "scenario"]
     copied = 0
-    
+
     for folder in folders:
         src = os.path.join(pc_sync_dir, folder)
         if not os.path.exists(src):
-            # Check if it's inside ui/ folder
+            # pc-sync keeps these under ui/
             src_ui = os.path.join(pc_sync_dir, "ui", folder)
             if os.path.exists(src_ui):
                 src = src_ui
-                
         dst = os.path.join(REL_DIR, folder)
         if copy_folder(src, dst):
             copied += 1
+
+    # The nested folders inside ui/ keep their location (Release/ui/...)
+    for folder in ("ui/scenario",):
+        src = os.path.join(pc_sync_dir, *folder.split("/"))
+        dst = os.path.join(REL_DIR, *folder.split("/"))
+        if copy_folder(src, dst):
+            copied += 1
+
+    # Only the real overrides, never the loose base layouts
+    zt1_paths.install_pc_sync_ui(REL_DIR, pc_sync_dir)
     
     # [PATCH] Extract Marine Mania UI from XPACK2
     extract_marine_mania_ui()
@@ -241,6 +301,9 @@ def extract_marine_mania_ui():
         extracted = 0
         
         for file_path in z.namelist():
+            # Skip directory entries (they come through as "ui/freeform/")
+            if file_path.endswith("/") or file_path.endswith("\\"):
+                continue
             # Check if file is in interesting folders
             lower_path = file_path.lower()
             if (lower_path.startswith("ui/startup/") or 

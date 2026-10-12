@@ -89,6 +89,12 @@ public:
   // path): 0 = the first directory (the highest priority, e.g. dlupdate);
   // bigger = later (the base game's own archives are last)
   int getResourcePriority(const std::string &name);
+  // The archive (or folder) a resource is read from: the one that wins
+  std::string archiveOf(const std::string &name) { return getResourceLocation(name); }
+  // Every resource and the archive it's read from, as loaded (loose files
+  // on disk aside): for listing them all at once - archiveOf asks the disk
+  // for loose copies first, a dozen times a name
+  const std::unordered_map<std::string, std::string> &allResources() const { return resource_map; }
 
   // The contents of many resources at once (each archive opened once)
   std::unordered_map<std::string, std::string>

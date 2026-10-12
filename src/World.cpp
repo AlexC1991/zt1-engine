@@ -1,4 +1,6 @@
 #include "World.hpp"
+#include "EngineScripts.hpp"
+#include "LabTrace.hpp"
 #include "ItemCatalog.hpp"
 #include "IniReader.hpp"
 #include "Utils.hpp"
@@ -128,6 +130,7 @@ bool World::loadFreeform(const std::string &path) {
     key = key.substr(0, key.find('.'));
     this->guests.caught(g, key, by.female, by.name);
   };
+  animals.rubbleAt = [this](int tx, int ty, const Animals::Member &) { return this->rubbleTile(tx, ty); };
   staff.setObjects(&placedObjects);
   guests.guideSpeaking = [this](int id) { return this->staff.guideSpeaking(id); };
   guests.guideBonusOf = [this](int id) {
@@ -162,6 +165,21 @@ bool World::loadFreeform(const std::string &path) {
       }
     }
     return false;
+  };
+  placedObjects.tankAt = [this](float x, float y) {
+    int ex = this->fences.exhibitAt(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
+    const Fences::Exhibit *e = ex >= 0 ? this->fences.exhibit(ex) : nullptr;
+    return e && e->tank ? ex : -1;
+  };
+  animals.tankAt = placedObjects.tankAt;
+  items.tankAt = placedObjects.tankAt;
+  animals.tankDepth = [this](int tank) {
+    const Fences::Exhibit *e = this->fences.exhibit(tank);
+    return e ? this->fences.waterSubtiles(*e) * 0.5f : 0.0f;
+  };
+  animals.tankSubtiles = [this](int tank) {
+    const Fences::Exhibit *e = this->fences.exhibit(tank);
+    return e ? this->fences.waterSubtiles(*e) : 0;
   };
   terrain.hasBigObject = [this](int x, int y) {
     WorldIndex::What w = this->index.at(x, y);
@@ -278,8 +296,10 @@ void World::update(const Uint8 *state, float deltaTime) {
     animals.rehome(worldMap, fences);
     // Each exhibit's animals, for its keepers
     for (const Fences::Exhibit &ex : fences.exhibits())
-      if (Fences::Exhibit *e = fences.exhibit(ex.id))
+      if (Fences::Exhibit *e = fences.exhibit(ex.id)) {
         e->animals = animals.countIn(ex.id);
+        e->dinosaurs = animals.dinosaursIn(ex.id);
+      }
     staff.update(deltaTime, worldMap, fences);
     // Gates open for staff coming through
     fences.updateGates(deltaTime, [this](const Fences::Edge &e) {
@@ -314,6 +334,10 @@ void World::update(const Uint8 *state, float deltaTime) {
     guests.updateSounds(deltaTime);
     this->updateBuildingSounds(deltaTime);
     items.update(deltaTime, fences);
+    placedObjects.tick(deltaTime);
+    // The Lab's scripts switched on (Write Code > New script): none, unless
+    // the Lab turns one on
+    EngineScripts::tick(*this, deltaTime);
   }
 }
 
@@ -516,6 +540,17 @@ void World::draw(SDL_Renderer *renderer) {
   this->drawToolOverlay(renderer);
   ambient.drawShadows(renderer, worldRenderer, worldMap);
   std::vector<Fences::Drawable> fenceArt;
+  fences.drawTankContents = [this](SDL_Renderer *r, int tank, bool surface, float level) {
+    this->placedObjects.drawInTank(r, this->worldRenderer, this->worldMap, tank, surface, level,
+                                   [this](const std::string &file) {
+                                     const TankFlags &f = this->tankFlagsOf(file);
+                                     return f.surface && !f.underwater;
+                                   });
+    if (!surface)
+      this->items.drawInTank(r, this->worldRenderer, this->worldMap, tank);
+    // (animals in both: under the water, and a surface move's part above it)
+    this->animals.drawInTank(r, this->worldRenderer, this->worldMap, tank, surface);
+  };
   fences.redrawGround = [this](SDL_Renderer *r, const std::set<std::pair<int, int>> &tiles) {
     this->worldRenderer.renderTerrainTiles(r, this->worldMap, SpriteDatabase::get(), tiles);
   };
@@ -560,6 +595,8 @@ void World::draw(SDL_Renderer *renderer) {
       SDL_Color tint = ghostFit == Fences::Fit::Ok ? SDL_Color{0, 255, 0, 255} : SDL_Color{255, 60, 60, 255};
       fenceArt.push_back({depth, sx, sy, a, worldRenderer.screenSide(std::sin(angle), -std::cos(angle)), tint, true});
     }
+  // (big animals' strips on the right side of the fences in their columns)
+  Fences::sideOfFences(fenceArt);
   placedObjects.draw(renderer, worldRenderer, worldMap, fenceArt, [this](float x, float y) {
     return Features::elevatedPaths &&
            this->walkways.at(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y))) != nullptr;
@@ -2052,6 +2089,103 @@ std::pair<int, int> World::footprintOf(const std::string &file) {
   return fp;
 }
 
+// A rampaging animal onto a tile (zoo.exe 0x437572): each thing standing on
+// it whose type is cRubbleable (its .ai; 1 unless it says 0 - zoo.exe's
+// type loader 0x4ba5b0 starts it at 1) turned to rubble, once each. Rubble
+// (0x47c2ac): the thing taken away, and in its place a tree's stump
+// (cUsesTreeRubble: bstump1); for one half a tile wide or less small rubble
+// (brubls1); else a piece of rubble (brubble1-4, any of the four) on each
+// tile it covered, each 99 in 100 - the first with the rubble's
+// cExplosionSound, and each playing its explode before it lies there
+int World::rubbleTile(int tx, int ty) {
+  auto keyOf = [this](const std::string &file, const char *key, int fallback) {
+    std::string k = file + "|" + key;
+    auto it = this->rubbleKeys.find(k);
+    if (it != this->rubbleKeys.end())
+      return it->second;
+    int v = fallback;
+    if (IniReader *ai = this->resourceManager->getIniReader(file)) {
+      v = ai->getInt("characteristics/integers", key, fallback);
+      delete ai;
+    }
+    this->rubbleKeys[k] = v;
+    return v;
+  };
+  // (what stands on the tile, by id: taking one away moves the others)
+  std::vector<int> ids;
+  for (const PlacedObjects::Object &o : this->placedObjects.objects()) {
+    if (o.fence || o.className == "fences")
+      continue;
+    std::string file = PlacedObjects::fileOf(o);
+    auto [fx, fy] = this->footprintOf(file);
+    fx = std::max(1, fx);
+    fy = std::max(1, fy);
+    if ((o.facing & 6) == 2 || (o.facing & 6) == 6)
+      std::swap(fx, fy);
+    float hx = fx / 4.0f, hy = fy / 4.0f;
+    bool covers = o.x + hx > tx + 0.01f && o.x - hx < tx + 1 - 0.01f && o.y + hy > ty + 0.01f && o.y - hy < ty + 1 - 0.01f;
+    if (covers && keyOf(file, "crubbleable", 1) != 0)
+      ids.push_back(o.id);
+  }
+  int n = 0;
+  for (int id : ids) {
+    int at = this->placedObjects.indexOf(id);
+    if (at < 0)
+      continue;
+    PlacedObjects::Object o = this->placedObjects.objects()[at];
+    std::string file = PlacedObjects::fileOf(o);
+    auto [fx, fy] = this->footprintOf(file);
+    fx = std::max(1, fx);
+    fy = std::max(1, fy);
+    if ((o.facing & 6) == 2 || (o.facing & 6) == 6)
+      std::swap(fx, fy);
+    this->placedObjects.remove(at);
+    n++;
+    // Its rubble, where it stood
+    std::vector<std::pair<float, float>> spots;
+    std::string kind;
+    if (keyOf(file, "cusestreerubble", 0) != 0) {
+      kind = "bstump1";
+      spots.push_back({o.x, o.y});
+    } else if (fx <= 1 || fy <= 1) {
+      kind = "brubls1";
+      spots.push_back({o.x, o.y});
+    } else {
+      // (a piece on each whole tile of it: its half tiles in twos)
+      float left = o.x - fx / 4.0f, top = o.y - fy / 4.0f;
+      for (int j = 0; j < std::max(1, fy / 2); j++)
+        for (int i = 0; i < std::max(1, fx / 2); i++)
+          spots.push_back({left + i + 0.5f, top + j + 0.5f});
+    }
+    bool first = true;
+    for (auto [x, y] : spots) {
+      if (std::rand() % 100 == 0)
+        continue;
+      std::string piece = kind.empty() ? "brubble" + std::to_string(1 + std::rand() % 4) : kind;
+      std::string pieceFile = "scenery/other/" + piece + ".ai";
+      if (!this->placedObjects.add(pieceFile, x, y, o.facing))
+        continue;
+      if (PlacedObjects::Object *r = this->placedObjects.last())
+        this->placedObjects.explode(*r);
+      if (first) {
+        first = false;
+        if (IniReader *ai = this->resourceManager->getIniReader(pieceFile)) {
+          std::string sound = ai->get("characteristics/integers", "cexplosionsound");
+          delete ai;
+          float dx = 0, dy = 0;
+          if (!sound.empty() && this->animals.viewOffset && this->animals.viewOffset(x, y, dx, dy))
+            Sound::get().playAt(sound, dx, dy);
+        }
+      }
+    }
+    ZT_STEP("0x47c2ac", "Turned to rubble", {"what", file}, {"rubble", kind.empty() ? "brubble1-4" : kind},
+            {"pieces", static_cast<int>(spots.size())});
+  }
+  if (n > 0)
+    this->reindex();
+  return n;
+}
+
 // The world facing (0 N, 2 E, 4 S, 6 W) that shows as the buy panel's icon
 // does in this turn of the view (0 SE, 1 SW, 2 NW, 3 NE)
 int World::worldFacing(int iconFacing) const {
@@ -2080,7 +2214,24 @@ void World::snapObject(const std::string &file, int facing, float &x, float &y) 
   y = top + fy / 4.0f;
 }
 
+const World::TankFlags &World::tankFlagsOf(const std::string &file) {
+  auto it = this->tankFlags.find(file);
+  if (it != this->tankFlags.end())
+    return it->second;
+  TankFlags f;
+  if (IniReader *ai = this->resourceManager->getIniReader(file)) {
+    const std::string ints = "characteristics/integers";
+    f.underwater = ai->getInt(ints, "cunderwater", 0) != 0;
+    f.surface = ai->getInt(ints, "csurface", 0) != 0;
+    f.depth = ai->getInt(ints, "cdepth", 0);
+    f.avoidEdges = ai->getInt(ints, "cavoidedges", 0);
+    delete ai;
+  }
+  return this->tankFlags[file] = f;
+}
+
 Fences::Fit World::objectFit(const std::string &file, float x, float y, int facing) {
+  this->fitMessage = 0;
   auto [fx, fy] = this->footprintOf(file);
   fx = std::max(1, fx);
   fy = std::max(1, fy);
@@ -2096,10 +2247,33 @@ Fences::Fit World::objectFit(const std::string &file, float x, float y, int faci
         return Fences::Fit::Outside;
       if (t->terrainType == 9 || t->terrainType == 10 || this->worldMap.isPath(tx, ty))
         return Fences::Fit::Outside;
+      // In a tank (zoo.exe 0x4df688): only what goes under the water or on
+      // its surface ("This object can not be placed in a tank."); a surface
+      // one deep enough ("...a deeper tank.": cDepth against the water's
+      // level in subtiles); not by its wall if it keeps off them (cAvoidEdges:
+      // "...next to a tank wall."), not on the ladder's tile ("...too close to
+      // the ladder or platform of the tank.")
       if (this->fences.exhibitAt(tx, ty) >= 0)
         if (const Fences::Exhibit *e = this->fences.exhibit(this->fences.exhibitAt(tx, ty)))
-          if (e->tank)
-            return Fences::Fit::Outside;
+          if (e->tank) {
+            const TankFlags &tf = this->tankFlagsOf(file);
+            if (!tf.underwater && !tf.surface) {
+              this->fitMessage = 10559;
+              return Fences::Fit::Outside;
+            }
+            if (tf.surface && tf.depth > this->fences.waterSubtiles(*e)) {
+              this->fitMessage = 10560;
+              return Fences::Fit::Outside;
+            }
+            if (this->fences.byTankLadder(*e, tx, ty)) {
+              this->fitMessage = 10562;
+              return Fences::Fit::InTheWay;
+            }
+            if (tf.avoidEdges > 0 && this->fences.byTankWall(*e, tx, ty, tf.avoidEdges - 1)) {
+              this->fitMessage = 10599;
+              return Fences::Fit::InTheWay;
+            }
+          }
       // No fence through it
       if (tx < x1 && this->fences.at(Fences::Edge{false, tx + 1, ty}))
         return Fences::Fit::InTheWay;
@@ -2727,10 +2901,19 @@ int World::fencePreviewPrice() const {
 }
 
 World::ToolResult World::mouseDown(int x, int y) {
+  ZT_FN("", "The mouse pressed on the map");
   ToolResult r;
   float wx = 0, wy = 0;
   bool onMap = this->pick(x, y, wx, wy);
   this->undoFresh = true;
+  ZT_STEP("", "Where on the ground", {"x", wx}, {"y", wy}, {"on the map", onMap ? 1.0 : 0.0},
+          {"tool", this->bulldozer             ? "bulldozer"
+                   : !this->objectTool.empty() ? this->objectTool
+                   : this->animalTool >= 0     ? "animal"
+                   : this->staffTool >= 0      ? "staff"
+                   : this->fenceTool >= 0      ? "fence"
+                   : !this->pathTool.empty()   ? "path"
+                                               : "none"});
   if (this->bulldozer) {
     {
       const Camera &cam = worldRenderer.getCamera();
@@ -2770,6 +2953,7 @@ World::ToolResult World::mouseDown(int x, int y) {
           this->recordUndo(u);
         }
         int ex = this->fences.exhibitAt(static_cast<int>(std::floor(gone.x)), static_cast<int>(std::floor(gone.y)));
+        ZT_STEP("", "Bulldozes scenery: 80% back", {"object", file}, {"refund", r.refund}, {"exhibit", ex});
         this->animals.snapshot(ex, this->worldMap, this->fences);
         this->placedObjects.remove(o);
         this->animals.markDirty();
@@ -2989,9 +3173,14 @@ World::ToolResult World::mouseDown(int x, int y) {
                                     static_cast<int>(std::floor(this->ghostY)));
     if (this->objectGhost && this->ghostFit == Fences::Fit::Ok)
       this->animals.snapshot(ex, this->worldMap, this->fences);
+    ZT_STEP("", "Can the object go there? (objectFit)", {"object", this->objectTool}, {"x", this->ghostX},
+            {"y", this->ghostY}, {"facing", this->ghostFacing},
+            {"fit", this->ghostFit == Fences::Fit::Ok ? "yes" : this->ghostFit == Fences::Fit::InTheWay ? "something's in the way" : "no"},
+            {"message", this->fitMessage}, {"exhibit", ex});
     if (this->objectGhost && this->ghostFit == Fences::Fit::Ok &&
         this->placedObjects.add(this->objectTool, this->ghostX, this->ghostY, this->ghostFacing)) {
       r.cost = this->objectCost;
+      ZT_STEP("", "Placed; the animals there react", {"cost", r.cost}, {"objects", static_cast<double>(this->placedObjects.objects().size())});
       if (PlacedObjects::Object *o = this->placedObjects.last()) {
         o->openedMonth = this->fences.month();
         UndoStep u{UndoStep::Kind::Object};
@@ -3005,6 +3194,7 @@ World::ToolResult World::mouseDown(int x, int y) {
       this->animals.react(ex, Animals::Change::Object, this->objectTool, -1, false, this->worldMap, this->fences);
     } else if (this->objectGhost) {
       Sound::get().play("sounds/noplace");
+      r.messageId = this->fitMessage;
     }
     if (this->objectGhost && this->ghostFit == Fences::Fit::Outside &&
                !this->fences.insideZoo(static_cast<int>(std::floor(this->ghostX)),
@@ -3022,6 +3212,8 @@ World::ToolResult World::mouseDown(int x, int y) {
     if (fits)
       this->animals.snapshot(ex, this->worldMap, this->fences);
     int id = this->animals.adopt(this->animalTool, this->animalFemale, wx, wy, this->worldMap, this->fences);
+    ZT_STEP("", id >= 0 ? "Adopted" : "Can't go there", {"animal", id}, {"exhibit", ex},
+            {"message", id >= 0 ? 0 : this->animals.placeMessage});
     if (id >= 0) {
       r.animalCost = this->animals.types()[this->animalTool].cost;
       {
@@ -3042,7 +3234,8 @@ World::ToolResult World::mouseDown(int x, int y) {
       Sound::get().play("sounds/noplace");
       if (this->animals.canPlace(this->animalTool, wx, wy, this->worldMap, this->fences) ==
           Fences::Fit::Outside)
-        r.messageId = 10108; // "Animals can only be placed in exhibits, ..."
+        // ("Animals can only be placed in exhibits, ..."; a tank's reasons its own)
+        r.messageId = this->animals.placeMessage ? this->animals.placeMessage : 10108;
     }
     this->mouseMove(x, y);
     return r;
@@ -3051,6 +3244,8 @@ World::ToolResult World::mouseDown(int x, int y) {
     if (!onMap)
       return r;
     int id = this->staff.hire(this->staffTool, wx, wy, this->worldMap, this->fences);
+    ZT_STEP("", id >= 0 ? "Hired" : "Can't go there", {"staff", id}, {"type", this->staff.types()[this->staffTool].key},
+            {"x", wx}, {"y", wy});
     Sound::get().play(id >= 0 ? "sounds/place" : "sounds/noplace");
     if (id >= 0) {
       r.wage = this->staff.types()[this->staffTool].salary;
@@ -3099,6 +3294,8 @@ World::ToolResult World::mouseDown(int x, int y) {
           r.building = this->placedObjects.objects()[o].id;
       }
       c.zoom = saved;
+      ZT_STEP("", "No tool: what's under the cursor", {"staff", r.staff}, {"animal", r.animal}, {"guest", r.guest},
+              {"building", r.building});
       if (r.staff >= 0 || r.animal >= 0 || r.guest >= 0 || r.building >= 0)
         return r;
     }
@@ -3170,6 +3367,7 @@ World::ToolResult World::mouseDown(int x, int y) {
 }
 
 World::ToolResult World::mouseUp(int x, int y) {
+  ZT_FN("", "The mouse released");
   ToolResult r;
   if (this->terrain.isHeld()) {
     this->terrain.release();
@@ -3232,6 +3430,8 @@ World::ToolResult World::mouseUp(int x, int y) {
         r.cost += this->pathCost;
         this->recordUndo(u);
       }
+    ZT_STEP("", "Lays the path dragged", {"path", this->pathTool}, {"tiles", static_cast<double>(this->pathPreview.size())},
+            {"cost", r.cost});
     this->pathPreview.clear();
     this->pathLast = {-1, -1};
     return r;
@@ -3260,10 +3460,16 @@ World::ToolResult World::mouseUp(int x, int y) {
       r.outsideZoo = true;
     }
   }
+  ZT_STEP("", "Lays the fence dragged", {"fence", this->fences.types()[this->fenceTool].key},
+          {"pieces", static_cast<double>(this->fences.preview.size())}, {"cost", r.cost},
+          {"outside the zoo", r.outsideZoo ? 1.0 : 0.0});
   this->fences.preview.clear();
   if (r.cost > 0)
     r.newExhibits =
         this->fences.updateExhibits(this->worldMap, date.day, date.month, date.year);
+  if (!r.newExhibits.empty())
+    ZT_STEP("", "Shut off from the map's edge: a new exhibit", {"exhibits made", static_cast<double>(r.newExhibits.size())},
+            {"first", r.newExhibits.front()});
   return r;
 }
 

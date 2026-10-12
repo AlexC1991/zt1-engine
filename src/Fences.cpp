@@ -504,7 +504,7 @@ bool Fences::passable(const Edge &e, bool climber, bool jumper, int bash, int cr
   float life = p->life < 0 ? static_cast<float>(t.life) : p->life;
   if (life <= 0)
     return true;
-  if (t.electrified && life > t.decayedLife)
+  if (this->liveElectric(e))
     return false;
   if (climber && t.climbable)
     return true;
@@ -514,6 +514,15 @@ bool Fences::passable(const Edge &e, bool climber, bool jumper, int bash, int cr
   if (bash > strength)
     return true;
   return crush > 0 && crush >= t.height;
+}
+
+bool Fences::liveElectric(const Edge &e) const {
+  const Piece *p = this->at(e);
+  if (!p || p->gate)
+    return false;
+  const FenceType &t = this->typeList[p->type];
+  float life = p->life < 0 ? static_cast<float>(t.life) : p->life;
+  return t.electrified && life > t.decayedLife;
 }
 
 void Fences::breakPiece(const Edge &e) {
@@ -1561,6 +1570,39 @@ void Fences::tankPieces(const Edge &e, const Piece &p, const Exhibit &ex, const 
       out.push_back({glass, h, true, false});
 }
 
+int Fences::waterSubtiles(const Exhibit &ex) const {
+  if (!ex.tank || ex.water <= 0)
+    return 0;
+  float level = ex.level > -1e8f ? ex.level : ex.floorHeight + ex.water * (ex.wallTop() - 0.5f - ex.floorHeight);
+  return std::max(0, static_cast<int>(std::lround((level - ex.floorHeight) * 2.0f)));
+}
+
+bool Fences::byTankLadder(const Exhibit &ex, int x, int y) const {
+  for (const auto &[e, p] : this->edges) {
+    if (!p.gate || (p.tank != ex.id && p.tank2 != ex.id))
+      continue;
+    int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
+    int ix = ex.tiles.count({ax, ay}) ? ax : e.x, iy = ex.tiles.count({ax, ay}) ? ay : e.y;
+    if (ix == x && iy == y)
+      return true;
+  }
+  return false;
+}
+
+bool Fences::byTankWall(const Exhibit &ex, int x, int y, int r) const {
+  for (int dy = -r; dy <= r; dy++)
+    for (int dx = -r; dx <= r; dx++) {
+      int tx = x + dx, ty = y + dy;
+      if (!ex.tiles.count({tx, ty}))
+        continue;
+      for (const Edge &e : {Edge{true, tx, ty}, Edge{true, tx, ty + 1}, Edge{false, tx, ty}, Edge{false, tx + 1, ty}})
+        if (const Piece *p = this->at(e))
+          if (p->tank == ex.id || p->tank2 == ex.id)
+            return true;
+    }
+  return false;
+}
+
 int Fences::drawnWith(const Edge &e, const Piece &p, const WorldMap &map, const WorldRenderer &view) const {
   if (p.tank2 < 0)
     return p.tank;
@@ -1816,14 +1858,31 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       std::swap(s0x, s1x);
       std::swap(d0, d1);
     }
+    // (its line on the ground, for the big animals' strips: sideOfFences)
+    d.lineAxis = ay == by ? 0 : 1;
+    d.lineAt = static_cast<float>(ay == by ? ay : ax);
+    d.lineFrom = static_cast<float>(ay == by ? std::min(ax, bx) : std::min(ay, by));
+    {
+      // (half a tile to either side of it: the one drawn first is behind)
+      float lx = ay == by ? mx : mx - 0.5f, ly = ay == by ? my - 0.5f : my;
+      float hx = ay == by ? mx : mx + 0.5f, hy = ay == by ? my + 0.5f : my;
+      float a, b, dl, dh;
+      view.worldToScreenF(lx, ly, (h0 + h1) * 0.5f, a, b, dl);
+      view.worldToScreenF(hx, hy, (h0 + h1) * 0.5f, a, b, dh);
+      d.lowBehind = dl < dh;
+    }
     Drawable left = d, right = d;
     left.clip = right.clip = true;
     left.depth = (3 * d0 + d1) / 4;
     left.clipX0 = -1e9f;
     left.clipX1 = sx;
+    left.sx0 = s0x;
+    left.sx1 = sx;
     right.depth = (d0 + 3 * d1) / 4;
     right.clipX0 = sx;
     right.clipX1 = 1e9f;
+    right.sx0 = sx;
+    right.sx1 = s1x;
     out.push_back(left);
     out.push_back(right);
   };
@@ -2137,10 +2196,14 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       part.clipX0 = st.x0;
       part.clipX1 = st.x1;
       part.clipY1 = st.y1;
+      const int tankId = ex.id;
       part.custom = [this, back = back1, water = water1, frontLow = front1, cover = cover1, rims, wet, level,
-                     vp](SDL_Renderer *r) {
+                     vp, tankId](SDL_Renderer *r) {
       for (const Sprite &s : back)
         s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr);
+      // (what's in the tank under the water, the water over it)
+      if (this->drawTankContents)
+        this->drawTankContents(r, tankId, false, level);
       // (the art's diamond - its top, right, bottom and left points - a
       // little inside its stepped edge, whose outer pixels are clear)
       static const SDL_FPoint diamond[4] = {
@@ -2150,6 +2213,8 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           s.art->drawMapped(r, s.side, s.frame, s.q, diamond, s.tint);
         else
           s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr, s.frame);
+      if (this->drawTankContents)
+        this->drawTankContents(r, tankId, true, level);
       (void)wet;
       (void)level;
       for (const Sprite &s : frontLow)
@@ -2298,6 +2363,35 @@ void Fences::drawWater(SDL_Renderer *renderer, const WorldRenderer &view,
       SDL_RenderGeometry(renderer, nullptr, v.data(), static_cast<int>(v.size()), idx.data(),
                          static_cast<int>(idx.size()));
       continue;
+    }
+  }
+}
+
+
+void Fences::sideOfFences(std::vector<Drawable> &list) {
+  std::vector<size_t> pieces;
+  for (size_t i = 0; i < list.size(); i++)
+    if (list[i].lineAxis >= 0)
+      pieces.push_back(i);
+  if (pieces.empty())
+    return;
+  for (Drawable &s : list) {
+    if (!s.animalStrip)
+      continue;
+    for (size_t k : pieces) {
+      const Drawable &f = list[k];
+      // (the pieces whose columns this strip shares, near the animal)
+      if (s.clipX1 <= f.sx0 || s.clipX0 >= f.sx1)
+        continue;
+      float across = f.lineAxis == 0 ? s.wy : s.wx, along = f.lineAxis == 0 ? s.wx : s.wy;
+      if (std::fabs(across - f.lineAt) > 3.0f || along < f.lineFrom - 3.0f || along > f.lineFrom + 4.0f)
+        continue;
+      // (behind it: on its side the view draws first - which side that is
+      // turns with the view)
+      if ((across < f.lineAt) == f.lowBehind)
+        s.depth = std::min(s.depth, f.depth - 0.002f);
+      else
+        s.depth = std::max(s.depth, f.depth + 0.002f);
     }
   }
 }

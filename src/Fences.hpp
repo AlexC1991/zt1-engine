@@ -145,6 +145,11 @@ public:
     // Its real animals (set each frame); with the fake ones, what the
     // staff look after
     int animals = 0;
+    int dinosaurs = 0; // of them, dinosaurs (scientists' work, not keepers')
+    // Whose work it is: dinosaurs there (or test ones) for a scientist, zoo
+    // animals (or test ones) for a keeper
+    bool forScientist() const { return !tank && (dinosaurs > 0 || (animals == 0 && testAnimals > 0 && testDino)); }
+    bool forKeeper() const { return !tank && (animals > dinosaurs || (animals == 0 && testAnimals > 0 && !testDino)); }
     int animalCount() const { return testAnimals + animals; }
     // Its books (zoo.exe hab+0xfc..0x110, rolled over monthly at
     // 0x48430c): guests' donations, and upkeep (keepers' food piles at
@@ -192,6 +197,13 @@ public:
   // The tank a wall is drawn with: its own, or of two sharing it the one
   // it's the back wall of (from the other it's the front: one face)
   int drawnWith(const Edge &e, const Piece &p, const WorldMap &map, const WorldRenderer &view) const;
+  // A tank's water level in subtiles (zoo.exe tank+0x188: what animals'
+  // and objects' cDepth is measured against)
+  int waterSubtiles(const Exhibit &ex) const;
+  // Its tile inside the gate (the ladder's and platform's); within r tiles
+  // of its wall (0: one of the tile's own sides is the wall)
+  bool byTankLadder(const Exhibit &ex, int x, int y) const;
+  bool byTankWall(const Exhibit &ex, int x, int y, int r) const;
   // A piece a fence can be laid over, replacing it
   bool replaceable(const Piece &p, int type) const;
   // What laying a piece of this kind there costs (over the same kind not
@@ -218,6 +230,9 @@ public:
   // one, a jumper over a jumpable one, a stronger one through it (its
   // strength worn down a cDecayDelta for each life it has lost)
   bool passable(const Edge &e, bool climber, bool jumper, int bash, int crush) const;
+  // A live electric fence on the edge (zoo.exe 0x4a44a0): an electrified
+  // kind (cIsElectrified), not a gate, its wear still above cDecayedLife
+  bool liveElectric(const Edge &e) const;
   bool broken(const Edge &e) const;
   // Gates swing open as someone comes to them (their art's frames, about
   // 20 a second) and shut after
@@ -363,7 +378,24 @@ public:
     float clipX0 = 0, clipX1 = 0;
     float clipY1 = 1e9f; // (and nothing under this row: a tank wall's piece
                          // under the ground in front of it)
+    // A fence piece's half: its line on the ground - along x (y = lineAt)
+    // or along y (x = lineAt), from lineFrom to lineFrom + 1 - and its
+    // screen columns sx0..sx1 (lineAxis -1: not a fence piece)
+    int lineAxis = -1;
+    float lineAt = 0, lineFrom = 0, sx0 = 0, sx1 = 0;
+    // (which of its sides is behind it as the view's turned: the side below
+    // lineAt, or the one above)
+    bool lowBehind = true;
+    // A strip of a big animal (Animals::collect): where it stands
+    bool animalStrip = false;
+    float wx = 0, wy = 0;
   };
+  // A big animal's strips put on the right side of the fence pieces in
+  // their own columns: one inside a fence drawn before the pieces in front
+  // of it, one outside after them (sorted by depth alone, a strip of a
+  // T. rex four tiles long came over the fence beside it). Only the pieces
+  // a strip's columns share, so nothing else is moved past it
+  static void sideOfFences(std::vector<Drawable> &list);
   void collect(const WorldRenderer &view, const WorldMap &map,
                std::vector<Drawable> &out) const;
   // Water surfaces of tanks without the water art (drawn with the terrain;
@@ -379,6 +411,9 @@ public:
   int highlightFilter = -1;
   // Game time (ms) for the water's ripples along the walls
   float rippleClock = 0;
+  // What's in a tank (its objects, its animals), drawn with its inside:
+  // those under the water before it (surface false), on it after
+  std::function<void(SDL_Renderer *, int tank, bool surface, float level)> drawTankContents;
   // The exhibit gate under the cursor: lit, as an animal is
   Edge hoverGate{false, -1, -1};
   // Draws some tiles' ground again (the world's terrain), over a tank's

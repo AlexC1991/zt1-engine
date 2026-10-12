@@ -75,6 +75,7 @@ public:
     void zoomStep(int direction);            // +1 in, -1 out
     void setPaused(bool p) { paused = p; }
     bool isPaused() const { return paused; }
+    double getClock() const { return clock; } // seconds of play
 
     // Fences and exhibits
     Fences& getFences() { return fences; }
@@ -177,6 +178,7 @@ public:
     // Where it can go: inside the zoo wall, its footprint on clear ground
     // (not water or path, nothing standing there, no fence through it)
     Fences::Fit objectFit(const std::string &file, float x, float y, int facing);
+    int fitMessage = 0; // (objectFit refused it: the original's message, a lang string; 0 none)
     // Its footprint in half tiles (cFootprintX, cFootprintY)
     std::pair<int, int> footprint(const std::string &file) { return footprintOf(file); }
     // Adopting animals (a type of getAnimals().types(), male or female;
@@ -190,6 +192,8 @@ public:
       zooRating = rating;
       zooAdmission = admission;
     }
+    int getZooRating() const { return zooRating; }
+    double getZooAdmission() const { return zooAdmission; }
     // Animal Information's Move: it follows the cursor until a click puts
     // it down in an exhibit
     void pickUpAnimal(int id);
@@ -200,6 +204,9 @@ public:
     WorldIndex &getIndex() { return index; }
     // What stands where changed (a filter put down, a base built)
     void reindex();
+    // A rampaging animal onto a tile (zoo.exe 0x437572): each thing standing
+    // on it that can be (cRubbleable) turned to rubble (0x47c2ac); how many
+    int rubbleTile(int tx, int ty);
     // (debug) routes, blocked tiles and goals drawn over the map
     bool debugPaths = false;
     // (debug) each bought building's footprint outlined
@@ -215,6 +222,10 @@ public:
     void centreOnStaff(int id);
     // The view centred on a point of the ground (at its height)
     void centreOn(float x, float y);
+    // The ground under window pixels x, y (tiles)
+    bool groundAt(int x, int y, float &wx, float &wy) { return this->pick(x, y, wx, wy); }
+    // A tile's path type ("path", "dirtpath"; empty: none)
+    std::string pathTypeAt(int x, int y) const;
     // The ground at the middle of the view (tiles)
     bool viewCentre(float &x, float &y) {
       return this->pick(this->viewRect.x + this->viewRect.w / 2,
@@ -288,7 +299,6 @@ private:
       }
       this->undoSteps.push_back(std::move(step));
     }
-    std::string pathTypeAt(int x, int y) const;
     ResourceManager* resourceManager;
 
     // Core subsystems (separated concerns)
@@ -333,7 +343,16 @@ private:
     int ghostFacing = 0;
     Fences::Fit ghostFit = Fences::Fit::Ok;
     std::map<std::string, std::pair<int, int>> footprints; // half tiles
+    std::map<std::string, int> rubbleKeys; // (file|key: cRubbleable, cUsesTreeRubble)
     std::pair<int, int> footprintOf(const std::string &file);
+    // An object's tank flags (zoo.exe's scenery loader: cUnderwater def+0x130,
+    // cSurface +0x131, cDepth +0x68, cAvoidEdges +0x74)
+    struct TankFlags {
+      bool underwater = false, surface = false;
+      int depth = 0, avoidEdges = 0;
+    };
+    std::map<std::string, TankFlags> tankFlags;
+    const TankFlags &tankFlagsOf(const std::string &file);
     int fencePreviewPrice() const; // the fence drag's pieces, priced
     int worldFacing(int iconFacing) const;
     void snapObject(const std::string &file, int facing, float &x, float &y);

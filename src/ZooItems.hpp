@@ -38,6 +38,13 @@ public:
   int add(Kind kind, int exhibit, float x, float y);
   // Food for an exhibit: enough for its animals for a day or so
   int addFood(int exhibit, float x, float y, int animals, const std::string &food);
+  // A keeper food's .ai (scenery/other/herbchow.ai; Marine Mania's are under
+  // scenery/food/)
+  static std::string foodFile(const std::string &food);
+  // The tank a spot is in (-1: none): food in a tank is drawn with it
+  std::function<int(float x, float y)> tankAt;
+  mutable int onlyTank = -2;
+  void drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, const WorldMap &map, int tank) const;
   // A keeper's pile of chow (scenery/other/<food>.ai: cFoodUnits 1000)
   static constexpr float kChowUnits = 1000.0f;
   void remove(int id);

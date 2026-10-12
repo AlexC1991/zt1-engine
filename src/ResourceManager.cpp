@@ -16,6 +16,7 @@
 
 #include "ArtScaler.hpp"
 #include "Expansion.hpp"
+#include "Mods.hpp"
 #include "Utils.hpp"
 // NOTE: PngLoader removed - using original game assets only
 #include "ZtdFile.hpp"
@@ -203,6 +204,13 @@ void ResourceManager::load_resource_map(std::atomic<float> *progress,
   SDL_Log("Loading resource map...");
 
   std::vector<std::string> resource_paths = config->getResourcePaths();
+  // Mods switched on go first: their files win over the game's (Mods.hpp)
+  {
+    std::vector<std::string> mods = Mods::enabledPaths();
+    resource_paths.insert(resource_paths.begin(), mods.begin(), mods.end());
+    for (const std::string &m : mods)
+      SDL_Log("Mod loaded: %s", m.c_str());
+  }
 
   // [PATCH] Auto-include expansion directories (check both cases)
   for (const auto &xpack : {"xpack1", "XPACK1", "xpack2", "XPACK2"}) {
@@ -711,6 +719,12 @@ SDL_Texture *ResourceManager::getZt1Texture(SDL_Renderer *renderer,
   void *raw_bytes = ZtdFile::getFileContent(raw_loc, raw, &raw_size);
   if (raw_bytes == nullptr || raw_size <= 0)
     return nullptr;
+  // (not a FATZ picture but an animation's frames - the Mod Menu's art of
+  // a mod: its first frame, with the palette it names)
+  if (raw_size < 4 || std::memcmp(raw_bytes, "FATZ", 4) != 0) {
+    free(raw_bytes);
+    return getZt1FrameTexture(renderer, raw);
+  }
 
   SDL_Surface *s =
       decodeZt1NToSurface((const uint8_t *)raw_bytes, raw_size, pal);

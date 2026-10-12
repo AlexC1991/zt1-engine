@@ -366,12 +366,23 @@ uint32_t * PeResourceLoader_GetLanguageIds(PeResourceLoader * loader, uint16_t *
 }
 
 uint32_t * PeResourceLoader_GetResourceIds(PeResourceLoader * loader, PRL_Type resource_type, uint32_t * count) {
-  PRL_ResourceDirectoryEntry * directories = PeResourceLoader_GetDirectories(loader, (uint16_t *) count, resource_type);
+  // The directory entry count is 16-bit. Written through the caller's
+  // uint32_t * (as this used to), the top 16 bits kept the caller's stack
+  // garbage, and with the 16-bit loop index below a garbage count could
+  // never be reached: start-up spun forever
+  uint16_t directory_count = 0;
+  PRL_ResourceDirectoryEntry * directories = PeResourceLoader_GetDirectories(loader, &directory_count, resource_type);
+  if (directories == NULL) {
+    *count = 0;
+    return NULL;
+  }
   if (resource_type == PRL_TYPE_STRING) {
-    *count = *count * 16;
+    *count = (uint32_t) directory_count * 16;
+  } else {
+    *count = directory_count;
   }
   uint32_t * resource_ids = (uint32_t *) calloc(*count, sizeof(uint32_t));
-  for(uint16_t i = 0; i < *count; i++) {
+  for(uint32_t i = 0; i < *count; i++) {
     if (resource_type == PRL_TYPE_STRING) {
       resource_ids[i] = (directories[i / 16].name_offset_or_id - 1) * 16 + (i % 16);
     } else {

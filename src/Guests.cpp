@@ -1,4 +1,6 @@
 #include "Guests.hpp"
+#include "LabTrace.hpp"
+#include "OriginalConstants.hpp"
 #include "Research.hpp"
 
 #include <algorithm>
@@ -20,7 +22,6 @@
 namespace {
 // zoo.exe and guests.ai (Updates\guests7.ztd)
 constexpr float kSpawnEveryMs = 2000.0f;    // economy.cfg [checks] newguest
-constexpr double kAdmissionMultiple = 3.5;  // cAdmissionMultiple
 constexpr float kTickMs = 1000.0f;          // [AI] mStatusPeriod
 constexpr int kViewCheck = 20, kLeaveCheck = 20, kNeedCheck = 30, kChaseCheck = 5;
 constexpr int kMaxGuests = 1000;            // [AI] maxGuests
@@ -85,6 +86,11 @@ void Guests::load(ResourceManager *rm) {
       for (std::string p : ai->getList(list, "pal"))
         t.slots[i].push_back(lower(p));
     }
+    auto num = [&](const char *k) {
+      return ai->getInt(ints, k, ai->getInt("characteristics/integers", k, ai->getInt("man/characteristics/integers", k, 0)));
+    };
+    t.testFenceChance = num("ctestfencechance");
+    t.zapHit = num("czaphappinesshit");
     if (t.kind == Kind::Woman) {
       t.gawkWeights[0] = 40, t.gawkWeights[1] = 20, t.gawkWeights[2] = 40;
     } else if (t.child) {
@@ -286,6 +292,50 @@ bool Guests::canStep(int x, int y, int nx, int ny) const {
   return a0 == b0 && a1 == b1;
 }
 
+bool Guests::testRoute(int sx, int sy, int gx, int gy, std::vector<std::pair<int, int>> &out) const {
+  if (!this->map || !this->fences)
+    return false;
+  auto pass = [&](int x, int y) { return walkable(x, y); };
+  auto step = [&](int x, int y, int nx, int ny) { return canStep(x, y, nx, ny); };
+  return Pathfinder::find(this->map->getWidth(), this->map->getHeight(), sx, sy, gx, gy, pass, step, out, 20000);
+}
+
+void Guests::labPlay(int id, const std::string &anim, float seconds) {
+  for (Guest &g : this->list)
+    if (g.id == id) {
+      g.path.clear();
+      g.pathAt = 0;
+      play(g, anim, seconds > 0 ? seconds : 2.0f);
+    }
+}
+
+std::vector<std::string> Guests::labAnims(int id) const {
+  std::vector<std::string> out;
+  if (const Guest *g = this->guest(id))
+    for (const auto &kv : this->typeList[g->type].anims)
+      out.push_back(kv.first);
+  return out;
+}
+
+void Guests::labSet(int id, const std::string &field, float v) {
+  for (Guest &g : this->list)
+    if (g.id == id) {
+      if (field == "happiness") g.happiness = v;
+      else if (field == "hunger") g.hunger = v;
+      else if (field == "thirst") g.thirst = v;
+      else if (field == "bathroom") g.bathroom = v;
+      else if (field == "tired") g.tired = v;
+    }
+}
+
+void Guests::labLeave(int id) {
+  for (Guest &g : this->list)
+    if (g.id == id) {
+      g.leaving = true;
+      decide(g);
+    }
+}
+
 bool Guests::walkTo(Guest &g, int tx, int ty, float speed) {
   int sx = static_cast<int>(std::floor(g.x)), sy = static_cast<int>(std::floor(g.y));
   auto pass = [&](int x, int y) { return walkable(x, y); };
@@ -343,6 +393,7 @@ void Guests::think(Guest &g, int stringId, const std::string &arg, int animal, i
   this->thoughtLog.insert(this->thoughtLog.begin(), {s, g.id, animal, exhibit});
   if (this->thoughtLog.size() > 500)
     this->thoughtLog.resize(500);
+  ZT_STEP("", "Thinks", {"thought", s}, {"string id", stringId});
   g.thoughts.erase(std::remove(g.thoughts.begin(), g.thoughts.end(), s), g.thoughts.end());
   g.thoughts.insert(g.thoughts.begin(), s);
   if (g.thoughts.size() > 10)
@@ -485,6 +536,8 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
           by = y;
         }
   }
+  ZT_STEP("", "Looks for a building for a need", {"need", need}, {"search radius", radius},
+          {"found", best >= 0 ? "yes" : full ? "all full" : "none in reach"}, {"distance", best >= 0 ? bestD : 0.0f});
   if (best < 0) {
     if (full)
       think(g, 10243); // "%s is too crowded."
@@ -580,7 +633,12 @@ double Guests::admit(double admission) {
   // A favourite animal: any kind (cPreferredAnimal isn't read)
   if (this->animals && !this->animals->types().empty())
     g.favourite = std::uniform_int_distribution<int>(0, static_cast<int>(this->animals->types().size()) - 1)(this->rng);
-  double fee = admission * kAdmissionMultiple * (t.child ? 0.5 : 1.0);
+  double fee = admission * Original::economy().admissionMultiple * (t.child ? 0.5 : 1.0);
+  {
+    ZT_WHO("guest", g.id);
+    ZT_STEP("0x424375", "Arrives at the gate", {"name", g.name}, {"type", t.key}, {"happiness", g.happiness},
+            {"hunger", g.hunger}, {"thirst", g.thirst}, {"admission paid", fee});
+  }
   this->list.push_back(g);
   this->income += fee;
   this->arrivals++;
@@ -784,8 +842,10 @@ void Guests::wander(Guest &g) {
 }
 
 void Guests::decide(Guest &g) {
+  ZT_FN("", "Decides where to go next");
   const Type &t = this->typeList[g.type];
   if (g.leaving) {
+    ZT_STEP("", "Leaving: off to the gate", {"happiness", g.happiness});
     g.state = State::Leaving;
     if (!walkTo(g, this->entranceX, this->entranceY, t.speed))
       g.x = -1000; // (nowhere to walk: gone)
@@ -807,6 +867,8 @@ void Guests::decide(Guest &g) {
     if (!fun.empty() &&
         std::uniform_int_distribution<int>(0, unseen + static_cast<int>(fun.size()) - 1)(this->rng) >= unseen) {
       const PlacedObjects::Object &o = objs[fun[std::uniform_int_distribution<size_t>(0, fun.size() - 1)(this->rng)]];
+      ZT_STEP("0x4282e1", "Picks an attraction it hasn't been to", {"attraction", o.typeName},
+              {"attractions left", static_cast<int>(fun.size())}, {"exhibits unseen", unseen});
       g.visited.insert(o.id);
       if (seekBuilding(g, "fun", 1000))
         return;
@@ -814,6 +876,8 @@ void Guests::decide(Guest &g) {
   }
   int vx = -1, vy = -1;
   int ex = pickExhibit(g, vx, vy);
+  ZT_STEP("", "Picks an exhibit it hasn't seen (attractiveness, favourite, distance)", {"exhibit", ex},
+          {"seen", static_cast<int>(g.seen.size())}, {"to x", vx}, {"to y", vy});
   if (ex >= 0 && walkTo(g, vx, vy, t.speed)) {
     g.target = ex;
     return;
@@ -826,6 +890,7 @@ void Guests::decide(Guest &g) {
     g.seen.clear();
     g.visited.clear();
     if (std::uniform_int_distribution<int>(0, 99)(this->rng) < 60) { // cLeaveChanceDone
+      ZT_STEP("", "Seen it all: leaves (cLeaveChanceDone 60%)");
       think(g, kSeenAll);
       g.leaving = true;
       decide(g);
@@ -835,6 +900,50 @@ void Guests::decide(Guest &g) {
   (void)anyExhibit;
   g.target = -1;
   wander(g);
+}
+
+// Testing an electric fence instead of watching (zoo.exe 0x425af4, 0x425e30):
+// come to an exhibit, a cTestFenceChance in 100 (guests.ai: 20) to touch a
+// live electric fence on a side of its tile - those with the fencezap
+// animation (the man) - and zapped: bTestFence (fencezap, the zap sound),
+// cZapHappinessHit (-35) and "Yow! I just got electrocuted by %s, this
+// place is dangerous." (10249)
+bool Guests::testFence(Guest &g) {
+  const Type &t = this->typeList[g.type];
+  if (t.testFenceChance <= 0 || !t.anims.count("fencezap"))
+    return false;
+  int roll = std::uniform_int_distribution<int>(0, 99)(this->rng);
+  if (roll >= t.testFenceChance)
+    return false;
+  int tx = static_cast<int>(std::floor(g.x)), ty = static_cast<int>(std::floor(g.y));
+  static const int dirs[4][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}}; // N E S W (zoo.exe 0, 2, 4, 6)
+  for (const auto &d : dirs) {
+    Fences::Edge e = d[0] ? Fences::Edge{false, d[0] > 0 ? tx + 1 : tx, ty}
+                          : Fences::Edge{true, tx, d[1] > 0 ? ty + 1 : ty};
+    if (!this->fences->liveElectric(e))
+      continue;
+    ZT_FN("0x425af4", "Tests an electric fence");
+    g.fx = static_cast<float>(d[0]);
+    g.fy = static_cast<float>(d[1]);
+    float secs = 2.0f;
+    if (Animation *a = this->art(g, "fencezap"))
+      if (a->frameTimeMs() > 0 && a->frameCount() > 0)
+        secs = a->frameCount() * a->frameTimeMs() / 1000.0f;
+    play(g, "fencezap", secs);
+    g.seen.insert(g.target);
+    g.target = -1;
+    float was = g.dHappy;
+    g.dHappy += static_cast<float>(t.zapHit);
+    if (this->sounds && this->soundFile.count("zap"))
+      Sound::get().play(this->soundFile["zap"], this->soundAtten["zap"] + 600);
+    const Fences::Piece *p = this->fences->at(e);
+    std::string fence = p ? this->fences->types()[p->type].name : "";
+    think(g, 10249, fence);
+    ZT_STEP("0x425af4", "Zapped testing the fence", {"roll", roll}, {"cTestFenceChance", t.testFenceChance},
+            {"cZapHappinessHit", t.zapHit}, {"happiness to come", was, g.dHappy}, {"fence", fence});
+    return true;
+  }
+  return false;
 }
 
 // Gawking at an exhibit: longer the happier and more attractive its animals
@@ -872,6 +981,8 @@ void Guests::gawk(Guest &g) {
       g.fy = (cy - g.y) / d;
     }
   }
+  ZT_STEP("", "Watches the exhibit (longer, the happier and more attractive its animals)", {"exhibit", g.target},
+          {"animals' happiness", h}, {"attractiveness", attract}, {"seconds", secs}, {"doing", anim});
   play(g, anim, secs);
   g.state = State::Gawking;
   g.seen.insert(g.target);
@@ -890,6 +1001,9 @@ void Guests::gawk(Guest &g) {
 void Guests::viewing(Guest &g) {
   if (g.state != State::Gawking || g.target < 0)
     return;
+  // (zoo.exe 0x43afde, every cViewingAreaCheck while gawking: the bands
+  // below are cHappyAnimalChange1/2 and cAngryAnimalChange1/2/3, as there)
+  ZT_FN("0x43afde", "What it thinks of what it's watching");
   float sum = 0;
   int n = 0;
   std::set<int> kinds;
@@ -925,9 +1039,11 @@ void Guests::viewing(Guest &g) {
     g.dHappy -= 35;
     about(kVeryAngry);
   }
+  ZT_STEP("", "Its animals' happiness", {"average", h}, {"animals", n}, {"dHappy", g.dHappy});
   if (static_cast<int>(kinds.size()) >= 4) { // cDifferentSpeciesThreshold
     g.dHappy += 5;
     think(g, kSpecies);
+    ZT_STEP("", "Four kinds or more: happier (cDifferentSpeciesThreshold)", {"kinds", static_cast<int>(kinds.size())});
   }
   // Crowding: guests by its viewing tiles
   int viewers = 0;
@@ -943,16 +1059,22 @@ void Guests::viewing(Guest &g) {
   if (tiles > 0 && viewers * 10 / tiles >= 75) { // cCrowdedViewingThreshold
     g.dHappy -= 3;
     think(g, kCrowded);
+    ZT_STEP("", "Crowded: unhappier (cCrowdedViewingThreshold)", {"viewers", viewers}, {"viewing tiles", tiles});
   }
 }
 
 void Guests::tick(Guest &g) {
+  ZT_FN("", "A guest's status tick (once a second)");
   // What the last tick's checks found
+  float wasHappy = g.happiness, wasHunger = g.hunger, wasThirst = g.thirst, wasBathroom = g.bathroom,
+        wasTired = g.tired;
   g.happiness = std::clamp(g.happiness + g.dHappy, -100.0f, 100.0f);
   g.hunger = std::clamp(g.hunger + g.dHunger, 0.0f, 100.0f);
   g.thirst = std::clamp(g.thirst + g.dThirst, 0.0f, 100.0f);
   g.bathroom = std::clamp(g.bathroom + g.dBathroom, 0.0f, 100.0f);
   g.tired = std::clamp(g.tired + g.dTired, 0.0f, 100.0f);
+  ZT_STEP("", "Takes what the last checks found", {"happiness", wasHappy, g.happiness}, {"hunger", wasHunger, g.hunger},
+          {"thirst", wasThirst, g.thirst}, {"bathroom", wasBathroom, g.bathroom}, {"tired", wasTired, g.tired});
   g.dHappy = g.dHunger = g.dThirst = g.dBathroom = g.dTired = 0;
   // An escaped animal near: run
   if (--g.chaseCheck < 0) {
@@ -969,6 +1091,7 @@ void Guests::tick(Guest &g) {
         }
       }
     if (near && g.state != State::Fleeing && g.state != State::Caught) {
+      ZT_STEP("", "An escaped animal near: runs (cEscapedAnimalChange -100)", {"animal", near->name}, {"distance", best});
       g.dHappy += -100; // cEscapedAnimalChange
       g.sawEscape = true;
       think(g, kRun, near->name);
@@ -1009,6 +1132,8 @@ void Guests::tick(Guest &g) {
         think(g, kLeaveHigh);
         g.leaving = true;
       }
+      ZT_STEP("", "Unhappy enough to leave? (12% at -20..-40, 24% to -80, 30% under)", {"happiness", h},
+              {"roll", roll}, {"leaves", g.leaving ? "yes" : "no"});
     }
   }
   // Needs: hungrier, thirstier ...; at cThreshold (50) off to the nearest
@@ -1023,6 +1148,8 @@ void Guests::tick(Guest &g) {
       delta += static_cast<float>(increment);
     if (value >= 100)
       g.dHappy += angry;
+    ZT_STEP("", "A need check", {"need", what}, {"value", value}, {"increment", g.need != what ? increment : 0},
+            {"at 100: happiness", value >= 100 ? angry : 0.0f}, {"goes to deal with it (50+)", value >= 50 ? "yes" : "no"});
     if (value >= 50 && g.building < 0 && !g.leaving && g.state != State::Fleeing) {
       think(g, wantThought);
       if (!seekBuilding(g, what, std::string(what) == "energy" ? 40 : 1000))
@@ -1046,12 +1173,17 @@ void Guests::tick(Guest &g) {
         think(g, 10091);
     }
   }
-  // Rubbish in hand: a bin nearby, else dropped as litter (cAngryTrashChange
-  // every check while holding it)
-  if (--g.trashCheck < 0) {
+  // The trash check (zoo.exe 0x43aedc), every cTrashCheck (30) while it isn't
+  // busy (+0x33e: off to or in a building): cAngryTrashChange (-5) unless
+  // it's on its way to a trash can (+0x24e, its goal, isn't "trash") - every
+  // guest, holding litter or not: unlike its needs, no measure first. Seen
+  // live (Play original): every guest loses 5 each ~2.5 days, oldest lowest
+  if (g.building < 0 && --g.trashCheck < 0) {
     g.trashCheck = kNeedCheck - 1;
+    ZT_STEP("0x43aedc", "Not off to a trash can: unhappier (cAngryTrashChange)", {"dHappy", g.dHappy, g.dHappy - 5});
+    g.dHappy -= 5;
+    // Rubbish in hand: a bin nearby, else dropped as litter
     if (g.trash) {
-      g.dHappy -= 5;
       think(g, 10237);
       if (g.building < 0 && !seekBuilding(g, "trash", 40)) {
         if (this->items)
@@ -1108,6 +1240,7 @@ void Guests::update(float seconds, int zooRating, double admission) {
       admit(admission);
   }
   for (Guest &g : this->list) {
+    ZT_WHO("guest", g.id);
     g.animTime += seconds;
     g.tickMs += seconds * 1000.0f;
     while (g.tickMs >= kTickMs) {
@@ -1142,7 +1275,8 @@ void Guests::update(float seconds, int zooRating, double admission) {
         } else if (g.building >= 0 && g.state == State::Walking) {
           useBuilding(g);
         } else if (g.state == State::Walking && g.target >= 0 && this->fences->exhibit(g.target)) {
-          gawk(g);
+          if (!testFence(g))
+            gawk(g);
         } else {
           if (g.state == State::Fleeing)
             g.state = State::Walking;
@@ -1183,12 +1317,15 @@ void Guests::update(float seconds, int zooRating, double admission) {
         // (game time in 100 ns units: a 12 s game day is 864e9)
         double ticks = g.playFor * (864e9 / 12.0);
         int guide = this->tourBonusAt ? this->tourBonusAt(g.target) : 0;
-        double d = kAdmissionMultiple * ticks * (this->animals->exhibitSuitability(g.target) + guide) * 0.01;
+        double d = Original::economy().admissionMultiple * ticks * (this->animals->exhibitSuitability(g.target) + guide) * 0.01;
         if (d > 0) {
           d = std::min(d, 10.0);
           this->donations += d;
           this->exhibitBooks[g.target].donated += d;
         }
+        ZT_STEP("0x42ea14", "Done watching: a donation (healthy, not crowded)", {"seconds watched", g.playFor},
+                {"suitability", this->animals->exhibitSuitability(g.target)}, {"tour bonus", guide},
+                {"donation ($10 at most)", d > 0 ? d : 0.0});
       }
       g.target = -1;
     }
@@ -1245,6 +1382,8 @@ void Guests::update(float seconds, int zooRating, double admission) {
           this->concessions += take;
           bo.income += take;
         }
+        ZT_STEP("0x42d1e2", "The price: too dear (2x) or a bargain (half)?", {"price", price}, {"default", b.price},
+                {"verdict", tooDear ? "too dear" : cheap ? "a bargain" : "fair"});
         if (tooDear) {
           think(g, 10073);
           g.dHappy -= 5;
@@ -1252,6 +1391,9 @@ void Guests::update(float seconds, int zooRating, double admission) {
           think(g, 10072);
           g.dHappy += 5;
         }
+        ZT_STEP("0x42d858", "Out of the building: what it did to them", {"building", bo.typeName}, {"need", g.need},
+                {"dHappy", g.dHappy}, {"dHunger", g.dHunger}, {"dThirst", g.dThirst}, {"dBathroom", g.dBathroom},
+                {"dTired", g.dTired}, {"bought", !b.item.empty() && !tooDear ? b.item : std::string("nothing")});
         if (!b.item.empty() && !tooDear) {
           bo.sold[b.item]++;
           if (g.need == "gift")
@@ -1278,6 +1420,30 @@ void Guests::update(float seconds, int zooRating, double admission) {
   this->list.erase(std::remove_if(this->list.begin(), this->list.end(),
                                   [](const Guest &g) { return g.x < -100; }),
                    this->list.end());
+  // Art in colours no guest wears now: freed. Each guest's art is all its
+  // frames in its own colours; kept for good, a zoo left running filled
+  // memory until the Lab's 32-bit engine couldn't make a picture (its view
+  // froze). The list icons stay (a panel may be showing one)
+  this->artSweepIn -= seconds;
+  if (this->artSweepIn <= 0.0f) {
+    this->artSweepIn = 15.0f;
+    std::set<std::string> worn;
+    for (const Guest &g : this->list) {
+      std::string k;
+      for (int i = 0; i < 4; i++)
+        k += "#" + std::to_string(g.colours[i]);
+      worn.insert(k);
+    }
+    for (auto it = this->artCache.begin(); it != this->artCache.end();) {
+      size_t at = it->first.find('#');
+      if (at != std::string::npos && it->first.rfind("guests/ls", 0) != 0 && !worn.count(it->first.substr(at))) {
+        delete it->second;
+        it = this->artCache.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
 }
 
 void Guests::addToIndex(WorldIndex &index) const {

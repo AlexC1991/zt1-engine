@@ -74,7 +74,15 @@ public:
     // A bought building's cNameID, and an animal house's program (an index
     // into its collection, cheapest first: zoo.exe inst+0x188)
     int nameId = 0, program = 0;
+    // Rubble just made: its explode played once (seconds in; -1 done)
+    Animation *explodeArt = nullptr;
+    float exploding = -1;
   };
+  // Its [Animations] explode played once, from its first frame (rubble
+  // made by a rampage); then it lies there as it is
+  void explode(Object &o);
+  // Time on (game seconds): explosions played out
+  void tick(float seconds);
 
   // The HUD's Hide Foliage / Hide Buildings toggles: not drawn, not
   // picked (the zoo's entrance stays, as the original)
@@ -98,6 +106,13 @@ public:
             const WorldMap &map,
             const std::vector<Fences::Drawable> &fences = {},
             const std::function<bool(float x, float y)> &under = nullptr);
+  // The tank a spot is in (-1: none): what's in a tank is drawn with it
+  // (drawInTank), under its water and behind its front walls, not here
+  std::function<int(float x, float y)> tankAt;
+  // A tank's objects, back to front: those under the water (surface false)
+  // or those on it (true, at the water's level)
+  void drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, const WorldMap &map, int tank, bool surface,
+                  float level, const std::function<bool(const std::string &)> &onSurface);
 
   const std::vector<Object> &objects() const { return this->list; }
   // The bulldozer: the scenery under window-logical pixels (in front

@@ -38,9 +38,15 @@ add_subdirectory(vendor/libzip)
 add_subdirectory(vendor/pe-resource-loader)
 
 # 6. GATHER SOURCE CODE
-file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.c")
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.c")
 list(FILTER SOURCES EXCLUDE REGEX "test_zoo_reader.cpp$")
 list(FILTER SOURCES EXCLUDE REGEX "Entity.cpp$")
+# (src/original/: the original game's hook, built on its own below)
+list(FILTER SOURCES EXCLUDE REGEX "src/original/")
+# Dear ImGui (vendor/imgui): the Lab's panels (--lab)
+list(APPEND SOURCES
+    vendor/imgui/imgui.cpp vendor/imgui/imgui_draw.cpp vendor/imgui/imgui_tables.cpp vendor/imgui/imgui_widgets.cpp
+    vendor/imgui/backends/imgui_impl_sdl2.cpp vendor/imgui/backends/imgui_impl_sdlrenderer2.cpp)
 
 # 7. FIX LINKER PATHS FOR MSVC
 if(MSVC)
@@ -70,6 +76,8 @@ add_executable(zt1-engine ${SOURCES}
 # 9. FIX INCLUDE PATHS
 target_include_directories(zt1-engine PRIVATE
     src
+    vendor/imgui
+    re/lab
     vendor/SDL/include
     vendor/SDL_image
     vendor/SDL_image/include
@@ -119,5 +127,16 @@ if(WIN32)
         shlwapi
         bcrypt
         crypt32
+        ws2_32
     )
+endif()
+
+# 12. THE ORIGINAL GAME IN THE LAB (src/original/): zoo.exe is 32-bit, so
+# these are built only in a 32-bit tree (build/): zt1-original.exe starts
+# zoo.exe with zt1-hook.dll loaded into it (windowed, in the Lab's Play view)
+if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    add_library(zt1-hook SHARED src/original/Hook.cpp)
+    target_link_libraries(zt1-hook PRIVATE user32 gdi32 ole32 advapi32 dxguid shlwapi)
+    add_executable(zt1-original src/original/Launch.cpp)
+    add_dependencies(zt1-original zt1-hook)
 endif()

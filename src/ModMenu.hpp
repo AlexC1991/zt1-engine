@@ -1,0 +1,34 @@
+#ifndef MODMENU_HPP
+#define MODMENU_HPP
+
+#include <string>
+
+class ResourceManager;
+class UiLayout;
+
+// The Mod Menu (with the "modmenu" switch on, the main menu's "Get New Zoo
+// Tycoon Items" opens it; off, that button does what ours always has -
+// nothing: the original's download service is long gone). A window of the
+// original's own art - the map-select screen's background, list, scroll
+// bars and button frames - listing the mods in the mods folder (Mods.hpp):
+// each one's name, author, what it changes and its art; switch one on or
+// off, point the menu at another folder, and restart the game to load
+// them (mods are read as the game starts).
+namespace ModMenu {
+// The window, built on the game's own map-select layout (its path given)
+UiLayout *open(ResourceManager *rm, const std::string &layoutPath);
+// The list and the picked mod's details shown again
+void refresh(UiLayout *layout, ResourceManager *rm);
+void selectionChanged(UiLayout *layout, ResourceManager *rm);
+// The picked mod switched on or off
+void toggle(UiLayout *layout, ResourceManager *rm);
+// Another mods folder (the Windows folder picker)
+void chooseFolder(UiLayout *layout, ResourceManager *rm);
+// Restart the game to load the mods switched on: false when it can't (in
+// the Lab's Play view: restart Play there) - the message says so
+bool restart(UiLayout *layout);
+// What's changed since the game started (a restart loads it)
+bool changed();
+} // namespace ModMenu
+
+#endif // MODMENU_HPP

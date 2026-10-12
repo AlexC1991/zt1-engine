@@ -8,6 +8,7 @@
 #include "../Research.hpp"
 #include "../Fences.hpp"
 #include "../ZooSim.hpp"
+#include "../OriginalConstants.hpp"
 #include "../Utils.hpp"
 #include "UiButton.hpp"
 #include "UiGraph.hpp"
@@ -921,14 +922,16 @@ void UiGameScreen::setupZooStatus() {
         this->marketingLevel++;
       this->chargeFunding();
     };
-  // Admission: $0.25 a click
+  // Admission: $0.25 a click (zoo.exe zooinfo1_UpSpinner 0x616e56,
+  // DownSpinner 0x616e85), kept to economy.cfg's limits (setAdmissionPrice
+  // 0x4bbf10: $0 to $100 in the shipped game)
   if (UiButton *up = button(4195))
     up->onClick = [this] {
-      this->zoo.admission = std::min(999.75, this->zoo.admission + 0.25);
+      this->zoo.admission = Original::clampAdmission(static_cast<float>(this->zoo.admission + Original::priceStep));
     };
   if (UiButton *down = button(4191))
     down->onClick = [this] {
-      this->zoo.admission = std::max(0.0, this->zoo.admission - 0.25);
+      this->zoo.admission = Original::clampAdmission(static_cast<float>(this->zoo.admission - Original::priceStep));
     };
   // The zoo's name (the layout hides it; a freeform zoo shows it), and the
   // admission price, both typed into
@@ -949,9 +952,10 @@ void UiGameScreen::setupZooStatus() {
     price->onCommit = [this](const std::string &typed) {
       if (typed.empty())
         return;
-      // To the nearest $0.25, as the arrows step
-      double v = std::atof(typed.c_str());
-      this->zoo.admission = std::clamp(std::round(v * 4) / 4, 0.0, 999.75);
+      // As typed, kept to the limits (zoo.exe
+      // zooinfo1_AdmissionsPriceCost_click 0x616eb4: read with 0x4b40ae,
+      // set with setAdmissionPrice 0x4bbf10 - not rounded)
+      this->zoo.admission = Original::clampAdmission(static_cast<float>(std::atof(typed.c_str())));
     };
   }
 }
@@ -2730,7 +2734,7 @@ void UiGameScreen::setupAnimalPanel() {
       size_t at = ask.find("%s");
       if (at != std::string::npos)
         ask.replace(at, 2, m->name);
-      ask += formatPrice(this->animals->refund(id));
+      ask += formatPrice(static_cast<int>(std::lround(this->animals->sellValue(id))));
       this->askConfirm(ask, [this, id] {
         if (this->animalRequest)
           this->animalRequest(AnimalRequest::Sell, id);
@@ -2786,7 +2790,9 @@ void UiGameScreen::showBuilding(int id) {
   z->syncTabs();
   if (commerce) {
     // Price up / down, $0.25 a step; sell
-    // (its cLowCost to cHighCost, $30 at most: zoo.exe 0x611b43, 0x5a5bbc)
+    // (zoo.exe ZTBuilding::raisePrice 0x611b43: no more than economy.cfg's
+    // cBuildingUseCostMax ($30) nor its cHighCost (type +0x184);
+    // lowerPrice 0x5a5bbc: no less than $0 nor its cLowCost (type +0x17c))
     float lo = 1, hi = 1;
     if (IniReader *ai = this->resource_manager->getIniReader(PlacedObjects::fileOf(*o))) {
       std::string l = ai->get("characteristics/floats", "clowcost"), h = ai->get("characteristics/floats", "chighcost");
@@ -2797,12 +2803,12 @@ void UiGameScreen::showBuilding(int id) {
     if (UiButton *up = dynamic_cast<UiButton *>(z->getElementById(4557)))
       up->onClick = [this, hi] {
         if (PlacedObjects::Object *b = this->objects->byId(this->shownBuilding))
-          b->price = std::min({b->price + 0.25f, 30.0f, hi});
+          b->price = std::min({b->price + Original::priceStep, Original::economy().buildingUseCostMax, hi});
       };
     if (UiButton *dn = dynamic_cast<UiButton *>(z->getElementById(4556)))
       dn->onClick = [this, lo] {
         if (PlacedObjects::Object *b = this->objects->byId(this->shownBuilding))
-          b->price = std::max({b->price - 0.25f, 0.0f, lo});
+          b->price = std::max({b->price - Original::priceStep, 0.0f, lo});
       };
   }
   if (UiButton *sell = dynamic_cast<UiButton *>(z->getElementById(commerce ? 4516 : 4616)))

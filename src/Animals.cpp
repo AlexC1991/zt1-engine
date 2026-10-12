@@ -5,6 +5,8 @@
 
 #include "IniReader.hpp"
 #include "ItemCatalog.hpp"
+#include "LabTrace.hpp"
+#include "OriginalConstants.hpp"
 #include "Pathfinder.hpp"
 #include "PlacedObjects.hpp"
 #include "Sound.hpp"
@@ -21,11 +23,15 @@ constexpr float kEnergyPerHalfDay = 1.0f;
 // From zoo.exe: animals' status ticks every second (zoo.ini [AI]
 // mStatusPeriod, 1000 ms); each check runs every so many ticks (ai.ztd
 // animals.ai: cHabitatCheck 20, cCaptivityCheck 20, cSocialCheck 30,
-// cOtherCheck 40, cHungerCheck 30); an exhibit is rated again every 7 s
+// cOtherCheck 40, cHungerCheck 30, cZapCheck 5); an exhibit is rated again
+// every 7 s
 constexpr float kTickMs = 1000.0f;
 constexpr int kHabitatCheck = 20, kCaptivityCheck = 20, kSocialCheck = 30, kOtherCheck = 40,
-              kHungerCheck = 30;
+              kHungerCheck = 30, kZapCheck = 5;
 constexpr float kRateEveryMs = 7000.0f;
+// (animals.ai cDefenseRadius 3, zoo.exe 0x641560: how near two that both
+// cPreattack get before their stand-off)
+constexpr float kDefenseRadius = 3.0f;
 
 std::string lower(std::string s) { return Utils::string_to_lower(s); }
 
@@ -89,8 +95,16 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.nameId = item->nameId;
     t.cost = item->cost;
     t.expansion = item->expansion;
+    // ([Member] dinosaur: a scientist's to look after, not a keeper's)
+    t.dinosaur = item->members.count("dinosaur") > 0;
+    // A value from the adult male's section, else its DefaultSubtype's (a
+    // lion's are under f/: its m/ has just the few where the male differs -
+    // found with the Lab's hunger script, re/lab/scripts/hunger.cpp)
     const std::string ints = "m/characteristics/integers";
-    auto num = [&](const char *key, int fallback) { return ai->getInt(ints, key, fallback); };
+    std::string defSub = lower(trim(ai->get("global", "defaultsubtype", "m")));
+    const std::string defInts = (defSub.empty() ? std::string("m") : defSub) + "/characteristics/integers";
+    auto sectionOf = [&](const char *key) { return ai->get(ints, key, "").empty() ? defInts : ints; };
+    auto num = [&](const char *key, int fallback) { return ai->getInt(sectionOf(key), key, fallback); };
     t.slow = num("cslowrate", 30) / 60.0f;
     t.medium = num("cmediumrate", 45) / 60.0f;
     t.fast = num("cfastrate", 66) / 60.0f;
@@ -115,7 +129,8 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.dirtyThreshold = num("cdirtythreshold", 70);
     // (cTimeDeath appears twice in some files: the last one counts)
     {
-      std::vector<std::string> td = ai->getList(ints, "ctimedeath"), dc = ai->getList(ints, "cdeathchance");
+      std::vector<std::string> td = ai->getList(sectionOf("ctimedeath"), "ctimedeath"),
+                               dc = ai->getList(sectionOf("cdeathchance"), "cdeathchance");
       t.timeDeath = td.empty() ? 5001 : std::atoi(td.back().c_str());
       t.deathChance = dc.empty() ? 100 : std::atoi(dc.back().c_str());
     }
@@ -128,12 +143,21 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.buildingUseChance = num("cbuildingusechance", 0);
     t.maxEnergy = std::max(1, num("cmaxenergy", 100));
     t.swims = num("cswims", 0) != 0;
+    t.underwater = num("cunderwater", 0) != 0;
+    t.needDepth = num("cdepth", 0);
     t.waterNeeded = num("cwaterneeded", 0);
     t.landNeeded = num("clandneeded", 0);
     t.enterWaterChance = num("centerwaterchance", 0);
     t.enterLandChance = num("centerlandchance", 0);
     t.drinkWaterChance = num("cdrinkwaterchance", 0);
     t.chaseAnimalChance = num("cchaseanimalchance", 0);
+    t.preattack = num("cpreattack", 0) != 0;
+    t.footX = num("cfootprintx", 0);
+    t.footY = num("cfootprinty", 0);
+    t.rampageThreshold = num("crampagethreshold", 0);
+    t.rampageChance = num("crampagechance", 0);
+    t.rampageTimeMin = num("crampagetimemin", 0);
+    t.rampageTimeMax = num("crampagetimemax", 0);
     t.genus = num("cgenus", 0);
     t.family = num("cfamily", 0);
     t.treePref = num("ctreepref", 0);
@@ -175,11 +199,21 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.climber = num("cisclimber", 0) == 1;
     t.bash = num("cbashstrength", 0);
     t.crush = num("ccrushesfences", 0);
+    t.testFenceChance = num("ctestfencechance", 0);
+    t.testFenceChanceDrop = num("ctestfencechancedrop", 0);
+    t.minTestFenceChance = num("cmintestfencechance", 0);
+    t.zapHappinessChange = num("czaphappinesschange", 0);
+    t.testFenceOffset = num("ctestfenceoffset", 1);
+    t.laysEggs = num("clayseggs", 0) != 0;
+    t.eatsEggs = num("ceatseggs", 0) != 0;
+    t.timeToHatch = num("ctimetohatch", 0);
+    t.minHatchHits = num("cminhatchhits", 0);
+    t.minHits = num("cminhits", 0);
     for (int s = 0; s < 3; s++) {
       static const char *subs[3] = {"m", "f", "y"};
       std::vector<std::string> list = ai->getList(std::string(subs[s]) + "/characteristics/integers", "cprey");
       if (list.empty() && s > 0)
-        list = ai->getList(ints, "cprey");
+        list = ai->getList(sectionOf("cprey"), "cprey");
       for (const std::string &p : list) {
         int id = std::atoi(p.c_str());
         t.eatsPeople = t.eatsPeople || id == 9503;
@@ -243,6 +277,12 @@ void Animals::loadTypes(ResourceManager *rm) {
     std::vector<std::string> a = ai->getList("ambientanims", "a"), b = ai->getList("ambientanims", "b");
     for (size_t i = 0; i < b.size() && 2 * i + 1 < a.size(); i++)
       t.ambient.push_back({std::atoi(a[2 * i].c_str()), std::atoi(a[2 * i + 1].c_str()), lower(trim(b[i]))});
+    for (auto [sec, list] : {std::make_pair("ambientanimsunderwater", &t.ambientUnder),
+                             std::make_pair("ambientanimssurface", &t.ambientSurface)}) {
+      std::vector<std::string> ua = ai->getList(sec, "a"), ub = ai->getList(sec, "b");
+      for (size_t i = 0; i < ub.size() && 2 * i + 1 < ua.size(); i++)
+        list->push_back({std::atoi(ua[2 * i].c_str()), std::atoi(ua[2 * i + 1].c_str()), lower(trim(ub[i]))});
+    }
     std::vector<std::string> wa = ai->getList("ambientanimswater", "a"), wb = ai->getList("ambientanimswater", "b");
     for (size_t i = 0; i < wb.size() && 2 * i + 1 < wa.size(); i++)
       t.ambientWater.push_back({std::atoi(wa[2 * i].c_str()), std::atoi(wa[2 * i + 1].c_str()), lower(trim(wb[i]))});
@@ -293,7 +333,8 @@ void Animals::rehome(const WorldMap &map, const Fences &fences) {
       continue;
     int ex = fences.exhibitAt(static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y)));
     const Fences::Exhibit *e = ex >= 0 ? fences.exhibit(ex) : nullptr;
-    if (e && e->tank)
+    // (a tank is no home to a land animal; a sea animal's it is)
+    if (e && e->tank && !this->typeList[m.type].underwater)
       ex = -1;
     // A crate put down in an exhibit lets its animal out (every
     // cBoxedCheck, 2 ticks: about two seconds)
@@ -396,6 +437,39 @@ bool Animals::hunts(const Member &predator, const Member &prey) const {
     return false;
   const Type &t = this->typeList[predator.type];
   return t.preyIds[sub(predator)].count(this->typeList[prey.type].nameId) > 0;
+}
+
+// Both stand off (zoo.exe 0x42fad3): the hunter's kind and the other's have
+// cPreattack, and the other isn't an egg
+bool Animals::preattacks(const Member &hunter, const Member &other) const {
+  return this->typeList[hunter.type].preattack && this->typeList[other.type].preattack && !other.egg;
+}
+
+// The stand-off (zoo.exe 0x4a4c0c -> its state 0x12 at 0x61b2d6): within
+// cDefenseRadius both stop where they are, face to face; the hunter plays
+// its bPreattack ("Started preattack"), the other its bDefense ("Started
+// defense") - then the chase goes on
+void Animals::standOff(Member &hunter, Member &other) {
+  ZT_STEP("0x61b2d6", "Stands off its prey before the chase: bPreattack against its bDefense", {"prey", other.name},
+          {"distance", std::hypot(other.x - hunter.x, other.y - hunter.y)}, {"cDefenseRadius", kDefenseRadius});
+  hunter.preattacked = true;
+  for (Member *a : {&hunter, &other}) {
+    a->stack.clear();
+    a->path.clear();
+    a->pathAt = 0;
+    a->stepping = false;
+  }
+  faceToward(hunter, other.x, other.y);
+  faceToward(other, hunter.x, hunter.y);
+  pushSet(hunter, "bpreattack");
+  pushSet(other, "bdefense");
+}
+
+bool Animals::standingOff(const Member &m) const {
+  for (const auto &s : m.stack)
+    if (s.first == "bpreattack" || s.first == "bdefense")
+      return true;
+  return false;
 }
 
 void Animals::moveOf(const Member &m, const std::string &setName, std::string &anim, float &speed) const {
@@ -539,6 +613,13 @@ int Animals::escapedCount() const {
   return n;
 }
 
+int Animals::dinosaursIn(int exhibit) const {
+  int n = 0;
+  for (const Member &m : this->list)
+    n += m.exhibit == exhibit && m.id != this->carried && this->typeList[m.type].dinosaur ? 1 : 0;
+  return n;
+}
+
 int Animals::countIn(int exhibit) const {
   int n = 0;
   for (const Member &m : this->list)
@@ -549,12 +630,48 @@ int Animals::countIn(int exhibit) const {
 // ----------------------------------------------------------------------------
 // Art
 // ----------------------------------------------------------------------------
+Animation *Animals::underArt(const Member &m, Animation *a) const {
+  auto c = this->underCache.find(a);
+  if (c != this->underCache.end())
+    return c->second;
+  // (its art's own name - the path's last part, surface_jump_spin's is
+  // jumpspin - and "under" + that among the type's animations)
+  Animation *u = nullptr;
+  const Type &t = this->typeList[m.type];
+  for (const auto &[path, art] : this->artCache)
+    if (art == a) {
+      // (only the animal's own art has layers: a crate's "idle" isn't its
+      // idle)
+      if (path.rfind("animals/", 0) != 0)
+        break;
+      std::string f = path.substr(path.find_last_of("/\\") + 1);
+      for (int s : {sub(m), 0}) {
+        auto it = t.anims[s].find("under" + f);
+        if (it != t.anims[s].end() && !it->second.empty()) {
+          u = this->rm && this->rm->hasResource(it->second + ".ani") ? this->rm->getAnimation(it->second) : nullptr;
+          break;
+        }
+      }
+      break;
+    }
+  this->underCache[a] = u;
+  return u;
+}
+
 Animation *Animals::art(const Member &m, const std::string &nameIn) const {
   const Type &t = this->typeList[m.type];
   int s = sub(m);
   // (a swimmer on a water tile: walking and running are its swim, standing
   // its water idle - zoo.exe 0x41338a, 0x413491)
   std::string name = nameIn;
+  // (in a tank at the surface: its surface swim and idle)
+  if (t.underwater && this->tankAt && this->tankAt(m.x, m.y) >= 0 && this->tankDepth &&
+      m.swimZ >= this->tankDepth(m.exhibit) - 0.35f) {
+    if (name == "walk" || name == "run" || name == "trot")
+      name = "surfswim";
+    else if (name == "stand" || name == "idle")
+      name = "surfidle";
+  }
   if (t.swims && onWater(m)) {
     if (name == "walk" || name == "run" || name == "trot")
       name = "swim";
@@ -667,8 +784,35 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
   int tx = static_cast<int>(std::floor(x)), ty = static_cast<int>(std::floor(y));
   int ex = fences.exhibitAt(tx, ty);
   const Fences::Exhibit *e = ex >= 0 ? fences.exhibit(ex) : nullptr;
+  const Type &t = this->typeList[type];
+  this->placeMessage = 0;
+  // In a tank (zoo.exe 0x4df688): one that lives underwater ("This animal
+  // doesn't swim in tanks..."), with water ("...a tank with water in it.")
+  // deep enough for it (cDepth: "...a deeper tank.")
+  if (e && e->tank) {
+    if (!t.underwater) {
+      this->placeMessage = 10553;
+      return Fences::Fit::Outside;
+    }
+    int level = this->tankSubtiles ? this->tankSubtiles(ex) : 0;
+    ZT_STEP("0x4df688", "In a tank: its water against what it needs", {"lives underwater (cUnderwater)", t.underwater ? 1 : 0},
+            {"tank water (subtiles)", level}, {"needs (cDepth)", t.needDepth},
+            {"verdict", level <= 0 ? "no water" : level < t.needDepth ? "not deep enough" : "deep enough"});
+    if (level <= 0) {
+      this->placeMessage = 10554;
+      return Fences::Fit::Outside;
+    }
+    if (level < t.needDepth) {
+      this->placeMessage = 10560;
+      return Fences::Fit::Outside;
+    }
+  } else if (e && t.underwater && !t.swims) {
+    // (a sea animal on land: a tank's its only home)
+    this->placeMessage = 10554;
+    return Fences::Fit::Outside;
+  }
   // A zoo animal: a land exhibit
-  if (!e || e->tank || !standable(tx, ty, this->typeList[type], ex, map, fences))
+  if (!e || !standable(tx, ty, t, ex, map, fences))
     return Fences::Fit::Outside;
   // Not on top of another (the original shows red over one)
   for (const Member &m : this->list)
@@ -679,7 +823,12 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
 
 int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
                    const Fences &fences) {
-  if (canPlace(type, x, y, map, fences) != Fences::Fit::Ok)
+  ZT_FN("", "Adopt an animal");
+  Fences::Fit fit = canPlace(type, x, y, map, fences);
+  ZT_STEP("", "Can it go there?", {"species", type >= 0 && type < static_cast<int>(this->typeList.size()) ? this->typeList[type].key : "?"},
+          {"x", x}, {"y", y}, {"fit", fit == Fences::Fit::Ok ? "yes" : fit == Fences::Fit::InTheWay ? "another's there" : "no"},
+          {"message", this->placeMessage});
+  if (fit != Fences::Fit::Ok)
     return -1;
   const Type &t = this->typeList[type];
   Member m;
@@ -689,6 +838,8 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   m.x = x;
   m.y = y;
   m.exhibit = fences.exhibitAt(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
+  if (this->tankDepth && this->tankAt && this->tankAt(x, y) >= 0)
+    m.swimZ = m.swimTo = this->tankDepth(m.exhibit) * 0.5f;
   m.name = (this->rm ? this->rm->getString(t.nameId) : t.key) + " " + std::to_string(++this->counts[type]);
   m.happiness = static_cast<float>(std::clamp(t.initialHappiness, -100, 100));
   m.energy = 0;
@@ -702,6 +853,7 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   m.socialCheck = start(kSocialCheck);
   m.otherCheck = start(kOtherCheck);
   m.hungerCheck = start(kHungerCheck);
+  m.zapCheck = start(kZapCheck);
   m.healthCheck = start(30);
   m.energyCheck = start(30);
   m.reproductionCheck = start(20);
@@ -714,6 +866,12 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   play(m, "stand", Member::Mode::Loop, 1.0f);
   // (put down in the water: in the water)
   m.waterMode = isWater(map, static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y)));
+  ZT_STEP("", "Its starting values", {"name", m.name}, {"exhibit", m.exhibit},
+          {"happiness (cInitialHappiness)", m.happiness}, {"health (cMaxHits)", m.health}, {"energy", m.energy},
+          {"life (cTimeDeath)", m.life});
+  // A dinosaur comes as an egg (zoo.exe 0x4e2cf8: cLaysEggs)
+  if (t.laysEggs)
+    becomeEgg(m);
   this->list.push_back(m);
   return m.id;
 }
@@ -732,11 +890,34 @@ void Animals::remove(int id) {
     this->carried = -1;
 }
 
-int Animals::refund(int id) const {
+// zoo.exe ZTAnimal::sellValue 0x48d21d (class slot 0x2a4, called by
+// sellObject 0x50a432): its cost (type slot 0xbc) x 0.8 x ((happiness
+// (+0x2a8) + 100) x 0.005 + (health (+0x2b8) - cMinHits (type +0x238)) /
+// cMaxHits (type +0x234)) x 0.5, halved again when sick (+0x3a7). Happiness
+// and health are whole numbers there; the money stays a float, as there.
+// (The formula alone: the Lab's formula check runs it against zoo.exe's)
+double Animals::sellValueOf(int cost, int happiness, int health, int minHits, int maxHits, bool sick) {
+  // (the FPU's order, in its wider precision; a float when sellObject keeps it.
+  // cMaxHits 0 would divide by nothing there: ours is 1 at least)
+  double v = cost * double(Original::sellFactor);
+  double happy = (happiness + double(Original::sellHappinessOffset)) * Original::sellHappinessScale;
+  double healthy = double(health - minHits) / std::max(1, maxHits);
+  v = v * (happy + healthy) * Original::sellHalf;
+  if (sick)
+    v *= Original::sellHalf;
+  return static_cast<float>(v);
+}
+
+double Animals::sellValue(int id) const {
   const Member *m = this->member(id);
   if (!m)
     return 0;
-  return this->typeList[m->type].cost * shownHappiness(*m) / 100;
+  const Type &t = this->typeList[m->type];
+  double v = sellValueOf(t.cost, static_cast<int>(std::lround(m->happiness)), static_cast<int>(std::lround(m->health)),
+                         t.minHits, t.maxHits, m->sick);
+  ZT_STEP("0x48d21d", "Its sell value", {"cost", t.cost}, {"happiness", m->happiness}, {"health", m->health},
+          {"cMinHits", t.minHits}, {"cMaxHits", t.maxHits}, {"sick", m->sick ? 1.0 : 0.0}, {"value", v});
+  return v;
 }
 
 void Animals::moveTo(int id, float x, float y) {
@@ -848,39 +1029,82 @@ void Animals::chooseBehaviour(Member &m) {
   // Loose: its escaped behaviour (zoo.exe: no eating or sleeping)
   if (m.escaped && this->set(m, "bescaped")) {
     pushSet(m, "bescaped");
+    ZT_STEP("", "Chooses: loose, its escaped behaviour", {"behaviour", "bescaped"});
     return;
   }
   if (m.hunger >= t.hungerThreshold && nearestFood(m) >= 0 && this->set(m, "bfindkeeperfood")) {
+    // (a find set that only goes to the food - a sea animal's - eats after
+    // with its bEat)
+    bool eats = false;
+    for (const Step &st : *this->set(m, "bfindkeeperfood"))
+      for (const std::string &a : st.args)
+        eats = eats || a == "beat";
+    if (!eats && this->set(m, "beat"))
+      pushSet(m, "beat");
     pushSet(m, "bfindkeeperfood");
+    ZT_STEP("", "Chooses: hungry with food down, goes to eat", {"behaviour", "bfindkeeperfood"}, {"hunger", m.hunger},
+            {"cHungerThreshold", t.hungerThreshold});
     return;
   }
   // Tired (cEnergyThreshold): to sleep; rested after (zoo.exe 0x4384ba)
   if (m.energy >= t.energyThreshold && !m.escaped && this->set(m, "bsleep")) {
+    float wasEnergy = m.energy;
     m.energy = 0;
     m.lastSlept = this->now;
+    m.rampaging = false; // (a sleep ends a rampage: zoo.exe 0x4375d3, as bSleep - or bHatch - starts)
+    m.rampageTicks = 0;
     pushSet(m, "bsleep");
+    ZT_STEP("0x4384ba", "Chooses: tired, to sleep", {"behaviour", "bsleep"}, {"energy", wasEnergy, 0.0},
+            {"cEnergyThreshold", t.energyThreshold});
     return;
+  }
+  // Rampaging: its bHabitatRampage, or bEscapedRampage when it's out
+  // (zoo.exe 0x438514 sets it; which set, by the names it ends there)
+  if (m.rampaging) {
+    const char *rs = m.escaped ? "bescapedrampage" : "bhabitatrampage";
+    if (this->set(m, rs)) {
+      pushSet(m, rs);
+      ZT_STEP("0x438514", "Chooses: rampaging", {"behaviour", rs}, {"happiness", m.happiness});
+      return;
+    }
   }
   // Sick: lies about (bSick)
   if (m.sick && this->set(m, "bsick")) {
     pushSet(m, "bsick");
+    ZT_STEP("", "Chooses: sick, lies about", {"behaviour", "bsick"});
     return;
   }
   int h = static_cast<int>(std::lround(m.happiness));
+  // (in a tank: its surface or underwater list, by where it swims)
+  if (t.underwater && this->tankAt && this->tankAt(m.x, m.y) >= 0) {
+    bool top = this->tankDepth && m.swimZ >= this->tankDepth(m.exhibit) - 0.35f;
+    for (const Ambient &a : top ? t.ambientSurface : t.ambientUnder)
+      if (h >= a.lo && h <= a.hi && this->set(m, a.set)) {
+        pushSet(m, a.set);
+        ZT_STEP("", "Chooses: by its happiness, in its tank", {"behaviour", a.set}, {"happiness", h}, {"from", a.lo},
+                {"to", a.hi});
+        return;
+      }
+  }
   // (a swimmer in the water: its [AmbientAnimsWater], by where it stands -
   // zoo.exe 0x43ca83)
   if (t.swims && onWater(m))
     for (const Ambient &a : t.ambientWater)
       if (h >= a.lo && h <= a.hi && this->set(m, a.set)) {
         pushSet(m, a.set);
+        ZT_STEP("0x43ca83", "Chooses: by its happiness, in the water", {"behaviour", a.set}, {"happiness", h},
+                {"from", a.lo}, {"to", a.hi});
         return;
       }
   for (const Ambient &a : t.ambient)
     if (h >= a.lo && h <= a.hi) {
       pushSet(m, a.set);
+      ZT_STEP("", "Chooses: by its happiness ([AmbientAnims])", {"behaviour", a.set}, {"happiness", h},
+              {"from", a.lo}, {"to", a.hi});
       return;
     }
   pushSet(m, "bidle1");
+  ZT_STEP("", "Chooses: nothing fits, idles", {"behaviour", "bidle1"}, {"happiness", h});
 }
 
 void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
@@ -889,6 +1113,11 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
   if (m.stack.empty() && m.dying) {
     m.dieAfter = 0;
     play(m, "stand", Member::Mode::Loop, 1.0f);
+    return;
+  }
+  // (an egg sits there, unless it's hatching)
+  if (m.egg && m.stack.empty()) {
+    play(m, "egg_idle", Member::Mode::Loop, 3600.0f);
     return;
   }
   if (m.stack.empty()) {
@@ -916,6 +1145,11 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
     } else if (s.fn == "fplayset") {
       pushSet(m, arg(0));
       continue;
+    } else if (s.fn == "fplaysettank") {
+      // (the first at the surface, else the second)
+      bool top = this->tankDepth && m.swimZ >= this->tankDepth(m.exhibit) - 0.35f;
+      pushSet(m, top ? arg(0) : arg(1));
+      continue;
     } else if (s.fn == "fplaysetprob") {
       // Weighted: set, chance, set, chance ...
       int total = 0;
@@ -935,12 +1169,36 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
         }
       }
       continue;
-    } else if (s.fn == "fwalk" || s.fn == "fmove" || s.fn == "frun") {
+    } else if (s.fn == "fplaysetterrain") {
+      // One of four sets by where it is: on land, in water, in a tank at the
+      // surface, in a tank below it (sleep, sick, die, after a catch: every
+      // species' .ai, Marine Mania's update)
+      bool inTank = this->tankAt && this->tankAt(m.x, m.y) >= 0;
+      bool top = inTank && this->tankDepth && m.swimZ >= this->tankDepth(m.exhibit) - 0.35f;
+      std::string pick = inTank ? (top ? arg(2) : arg(3)) : onWater(m) ? arg(1) : arg(0);
+      ZT_STEP("", "A set by where it is (fPlaySetTerrain)", {"where", inTank ? (top ? "tank surface" : "tank, under") : onWater(m) ? "water" : "land"},
+              {"set", pick});
+      if (!pick.empty())
+        pushSet(m, pick);
+      continue;
+    } else if (s.fn == "fwalk" || s.fn == "fmove" || s.fn == "frun" || s.fn == "ftrot" || s.fn == "fmovewithsound" ||
+               s.fn == "fmovereverse") {
       std::string target = arg(0);
-      m.moveAnim = s.fn == "frun" ? "run" : s.fn == "fmove" && !arg(2).empty() ? arg(2) : "walk";
+      // fMove(where, n, animation, speed); fMoveWithSound the same and a
+      // sound (a dolphin's jumps, a shark's frenzy); fMoveReverse (not yet
+      // played backwards); fTrot at its medium rate, trotting
+      bool asMove = s.fn == "fmove" || s.fn == "fmovewithsound" || s.fn == "fmovereverse";
+      bool hasTrot = t.anims[sub(m)].count("trot") || t.anims[0].count("trot");
+      m.moveAnim = s.fn == "frun" ? "run"
+                   : s.fn == "ftrot" ? (hasTrot ? "trot" : "run")
+                   : asMove && !arg(2).empty() ? arg(2)
+                                               : "walk";
       m.speed = s.fn == "frun" ? t.fast
-                : s.fn == "fmove" && !arg(3).empty() ? std::atoi(arg(3).c_str()) / 60.0f
-                                                     : t.slow;
+                : s.fn == "ftrot" ? t.medium
+                : asMove && !arg(3).empty() ? std::atoi(arg(3).c_str()) / 60.0f
+                                            : t.slow;
+      if (s.fn == "fmovewithsound" && !arg(4).empty())
+        playSound(m, arg(4));
       bool walking = false;
       if (target == "keeperfood" || target == "otherfood") {
         m.foodItem = nearestFood(m);
@@ -950,6 +1208,9 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
           m.stack.pop_back();
           continue;
         }
+        // (in a tank: down to it on the floor)
+        if (this->tankAt && this->tankAt(m.x, m.y) >= 0)
+          m.swimTo = 0.3f;
         // To beside it
         float dx = m.x - food->x, dy = m.y - food->y, d = std::hypot(dx, dy);
         float gx = food->x, gy = food->y;
@@ -960,6 +1221,35 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
         walking = walkTo(m, gx, gy, map, fences);
       } else if (target == "0" || target.empty()) {
         walking = walkSomewhere(m, map, fences);
+      } else if ((target == "level" || target == "floor") && arg(1) == "1" && m.foodItem >= 0 && this->items &&
+                 this->items->item(m.foodItem)) {
+        // (at the food: its eating move there, down by it)
+        const ZooItems::Item *food = this->items->item(m.foodItem);
+        m.swimTo = 0.3f;
+        walking = walkTo(m, food->x, food->y, map, fences);
+        if (!walking && art(m, m.moveAnim)) {
+          play(m, m.moveAnim, Member::Mode::Loop, std::max(1.5f, animSeconds(m, m.moveAnim)));
+          return;
+        }
+      } else if (target == "surface" || target == "floor" || target == "dive" || target == "rise" ||
+                 target == "level") {
+        // In a tank: somewhere else in it, at the surface, down at the floor,
+        // deeper, higher or as deep as it is
+        float depth = this->tankDepth ? this->tankDepth(m.exhibit) : 0.0f;
+        float top = std::max(0.3f, depth - 0.25f), low = std::min(0.3f, top);
+        std::uniform_real_distribution<float> u(0.0f, 1.0f);
+        if (target == "surface")
+          m.swimTo = top;
+        else if (target == "floor")
+          m.swimTo = low;
+        else if (target == "dive")
+          m.swimTo = std::max(low, m.swimZ - (0.3f + u(this->rng)) * depth * 0.5f);
+        else if (target == "rise")
+          m.swimTo = std::min(top - 0.4f, m.swimZ + (0.3f + u(this->rng)) * depth * 0.5f);
+        else
+          m.swimTo = std::clamp(m.swimZ, low, top - 0.4f);
+        m.swimTo = std::clamp(m.swimTo, low, top);
+        walking = walkSomewhere(m, map, fences);
       }
       if (!walking)
         continue;
@@ -968,6 +1258,12 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
         faceToward(m, food->x, food->y);
       else if (m.drinkX >= 0)
         faceToward(m, m.drinkX, m.drinkY);
+      continue;
+    } else if (s.fn == "fhatch") {
+      // Out of the egg: a baby (zoo.exe bHatch's last step)
+      m.egg = false;
+      this->markDirty(m.exhibit);
+      ZT_STEP("0x437860", "Hatched: a baby", {"name", m.name});
       continue;
     } else {
       // (not yet: fDie, fDustBall, fFollow, ...)
@@ -1004,6 +1300,56 @@ bool Animals::walkTo(Member &m, float gx, float gy, const WorldMap &map, const F
   m.animTime = 0;
   m.stepping = true;
   return true;
+}
+
+bool Animals::testRoute(int id, int gx, int gy, const WorldMap &map, const Fences &fences,
+                        std::vector<std::pair<int, int>> &out) const {
+  const Member *m = this->member(id);
+  if (!m)
+    return false;
+  const Type &t = this->typeList[m->type];
+  int sx = static_cast<int>(std::floor(m->x)), sy = static_cast<int>(std::floor(m->y));
+  auto pass = [&](int x, int y) { return (x == sx && y == sy) || standable(x, y, t, m->exhibit, map, fences); };
+  auto step = [&](int x, int y, int nx, int ny) { return canStep(x, y, nx, ny, map, fences); };
+  return Pathfinder::find(map.getWidth(), map.getHeight(), sx, sy, gx, gy, pass, step, out, 4000);
+}
+
+void Animals::labPlay(int id, const std::string &anim, float seconds) {
+  Member *m = this->member(id);
+  if (!m)
+    return;
+  m->stack.clear();
+  m->path.clear();
+  m->pathAt = 0;
+  play(*m, anim, Member::Mode::Loop, seconds > 0 ? seconds : std::max(1.0f, animSeconds(*m, anim)));
+  m->stepping = true;
+}
+
+void Animals::labBehave(int id, const std::string &set) {
+  Member *m = this->member(id);
+  if (!m || !this->set(*m, set))
+    return;
+  m->stack.clear();
+  m->path.clear();
+  m->pathAt = 0;
+  m->stepping = false;
+  pushSet(*m, set);
+}
+
+std::vector<std::string> Animals::labAnims(int id) const {
+  std::vector<std::string> out;
+  if (const Member *m = this->member(id))
+    for (const auto &kv : this->typeList[m->type].anims[sub(*m)])
+      out.push_back(kv.first);
+  return out;
+}
+
+std::vector<std::string> Animals::labSets(int id) const {
+  std::vector<std::string> out;
+  if (const Member *m = this->member(id))
+    for (const auto &kv : this->typeList[m->type].sets[sub(*m)])
+      out.push_back(kv.first);
+  return out;
 }
 
 // fWalk(0,0): to somewhere else in its exhibit
@@ -1197,6 +1543,7 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
     }
   }
   for (Member &m : this->list) {
+    ZT_WHO("animal", m.id);
     const Type &t = this->typeList[m.type];
     m.animTime += seconds;
     // Its faces float up and go after 1.25 s
@@ -1242,6 +1589,8 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
     if (m.victim >= 0) {
       m.killIn -= seconds;
       if (m.killIn <= 0) {
+        ZT_STEP("0x588d47", "The dust ball's over: its prey is gone", {"prey",
+                this->member(m.victim) ? this->member(m.victim)->name : std::string("?")});
         this->kills.push_back(m.victim);
         m.victim = -1;
         m.stack.clear();
@@ -1262,6 +1611,8 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
           m.huntAnimal = -1;
           m.tag = false;
         } else {
+          ZT_STEP("0x4a6043", "Catches its prey: under a dust ball", {"prey", p->name},
+                  {"chased for (s)", this->now - m.huntStart});
           p->caughtBy = m.id;
           p->x = m.x;
           p->y = m.y;
@@ -1351,6 +1702,11 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
         m.fx = dx / dist;
         m.fy = dy / dist;
       }
+      // (swimming up or down as it goes: there by the end of the leg)
+      if (m.swimZ != m.swimTo) {
+        float frac = dist > step ? step / dist : 1.0f;
+        m.swimZ += (m.swimTo - m.swimZ) * frac;
+      }
       if (dist <= step) {
         m.x = tx;
         m.y = ty;
@@ -1365,10 +1721,33 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
         m.x += dx / dist * step;
         m.y += dy / dist * step;
       }
+      // Onto another tile (zoo.exe 0x437572): rampaging - and not going
+      // over a fence, that's its own - it turns to rubble whatever stands
+      // there that can be (each thing once)
+      {
+        int ix = static_cast<int>(std::floor(m.x)), iy = static_cast<int>(std::floor(m.y));
+        if (ix != m.tileX || iy != m.tileY) {
+          bool first = m.tileX < 0;
+          m.tileX = ix;
+          m.tileY = iy;
+          if (!first && m.rampaging && m.crossing.x < 0 && this->rubbleAt) {
+            int n = this->rubbleAt(ix, iy, m);
+            if (n > 0)
+              ZT_STEP("0x437572", "Rampages onto a tile: what stands there is rubble", {"tile x", ix}, {"tile y", iy},
+                      {"objects", n});
+          }
+        }
+      }
       if (m.pathAt >= m.path.size()) {
         m.path.clear();
         m.pathAt = 0;
         m.stepping = false;
+        // (at its food with an eating move - a sea animal's fMove(level, 1,
+        // submerged_eat): eats it there)
+        if (m.foodItem >= 0 && m.moveAnim.find("eat") != std::string::npos && art(m, m.moveAnim)) {
+          play(m, m.moveAnim, Member::Mode::Loop, std::max(1.5f, animSeconds(m, m.moveAnim)));
+          continue;
+        }
         // At a shelter or toy: in it (hidden) for cTimeInside ticks, or its
         // play set there
         if (m.building >= 0 && !m.inside && this->objects) {
@@ -1397,16 +1776,21 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
     // Playing
     if (m.stepping && m.animTime < m.playFor)
       continue;
-    if (m.stepping && m.anim == "eat" && m.foodItem >= 0 && this->items) {
+    if (m.stepping && (m.anim == "eat" || m.anim.find("_eat") != std::string::npos) && m.foodItem >= 0 &&
+        this->items) {
       // A mouthful (cKeeperFoodUnitsEaten) of the food it's at
       float got = this->items->eat(m.foodItem, static_cast<float>(t.foodEaten));
       if (got > 0) {
         m.noFoodSeen = false;
+        float was = m.hunger;
         m.hunger = std::max(0.0f, m.hunger - got * t.foodUnitValue); // (cFoodUnitValue)
         m.food = std::clamp(100.0f - m.hunger, 0.0f, 100.0f);
         m.lastAte = this->now;
+        ZT_STEP("", "Eats a mouthful", {"hunger", was, m.hunger}, {"food eaten", got},
+                {"cKeeperFoodUnitsEaten", t.foodEaten}, {"cFoodUnitValue", t.foodUnitValue});
       } else {
         m.foodItem = -1;
+        ZT_STEP("", "Its food's all gone", {"food item", "none"});
       }
     }
     m.stepping = false;
@@ -1433,6 +1817,10 @@ CompassDirection Animals::facing(const WorldRenderer &view, const Member &m) con
 void Animals::collect(const WorldRenderer &view, const WorldMap &map,
                       std::vector<Fences::Drawable> &out) const {
   for (const Member &m : this->list) {
+    // (in a tank: drawn with the tank, unless that's being drawn now)
+    bool inTank = this->tankAt && this->tankAt(m.x, m.y) >= 0;
+    if (this->onlyTank != -2 ? (!inTank || this->tankAt(m.x, m.y) != this->onlyTank) : (inTank && m.id != this->carried))
+      continue;
     Animation *a = m.boxed && this->crateArt ? this->crateArt : this->art(m, m.anim);
     if (!a)
       continue;
@@ -1462,7 +1850,7 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
     case Member::Mode::Loop: f %= count; break;
     }
     float sx, sy, depth;
-    view.worldToScreenF(m.x, m.y, groundAt(map, m.x, m.y), sx, sy, depth);
+    view.worldToScreenF(m.x, m.y, groundAt(map, m.x, m.y) + (inTank ? m.swimZ : 0.0f), sx, sy, depth);
     // (the fight's dust ball isn't lit; the one caught is inside it)
     bool lit = m.id == this->hovered && m.victim < 0;
     if (m.caughtBy >= 0)
@@ -1471,14 +1859,86 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
     CompassDirection side = facing(view, m);
     if (!a->hasFrames(side))
       side = CompassDirection::N;
+    // In a tank: under the water, its "under" layer if it has one (and then
+    // the animation itself on the surface pass); without, all of it under
+    Animation *under = this->onlyTank != -2 && !m.boxed ? this->underArt(m, a) : nullptr;
+    if (this->onlySurface && !under)
+      continue;
+    if (under && !this->onlySurface) {
+      Fences::Drawable ud{depth, sx, sy, under, under->hasFrames(side) ? side : CompassDirection::N,
+                          SDL_Color{255, 255, 110, 255}, lit};
+      ud.frame = std::min(f, std::max(1, under->frameCount()) - 1);
+      out.push_back(ud);
+      continue;
+    }
     Fences::Drawable d{depth, sx, sy, a, side, SDL_Color{255, 255, 110, 255}, lit};
     d.frame = f;
-    out.push_back(d);
+    // A big one (its footprint - cFootprintX across, cFootprintY along the
+    // way it faces, in half tiles - over a tile): drawn in strips a quarter
+    // tile wide, each sorted at the front of its footprint in that strip,
+    // as a big building is. Sorted at one point, a T. rex four tiles long
+    // came over the fence beside it while it stood or played in place
+    const Type &ty = this->typeList[m.type];
+    float frontDepth = depth;
+    if (!m.boxed && (ty.footX > 2 || ty.footY > 2)) {
+      float ux = m.fx, uy = m.fy, len = std::hypot(ux, uy);
+      if (len < 0.001f)
+        ux = 0, uy = 1, len = 1;
+      ux /= len;
+      uy /= len;
+      float halfAlong = ty.footY / 4.0f, halfAcross = ty.footX / 4.0f;
+      const float gz = groundAt(map, m.x, m.y);
+      float px[4], py[4], cxs[4], cds[4];
+      for (int k = 0; k < 4; k++) {
+        float al = (k == 0 || k == 3) ? -halfAlong : halfAlong, ac = (k < 2) ? -halfAcross : halfAcross;
+        px[k] = m.x + ux * al - uy * ac;
+        py[k] = m.y + uy * al + ux * ac;
+        float csy;
+        view.worldToScreenF(px[k], py[k], gz, cxs[k], csy, cds[k]);
+      }
+      // (the footprint's front edge, seen from above: the most forward depth
+      // at a screen x - its outline's lower edges)
+      auto front = [&](float at) {
+        float best = -1e30f;
+        for (int k = 0; k < 4; k++) {
+          int j = (k + 1) % 4;
+          float x0 = cxs[k], x1 = cxs[j];
+          if ((at < std::min(x0, x1)) || (at > std::max(x0, x1)))
+            continue;
+          float t = std::fabs(x1 - x0) > 0.001f ? (at - x0) / (x1 - x0) : 0.0f;
+          best = std::max(best, cds[k] + t * (cds[j] - cds[k]));
+        }
+        return best > -1e29f ? best : depth;
+      };
+      float L = *std::min_element(cxs, cxs + 4), R = *std::max_element(cxs, cxs + 4);
+      float step = std::max(4.0f, view.getTileWidth() / 4.0f);
+      int strips = std::max(1, static_cast<int>(std::ceil((R - L) / step)));
+      // (the picture's own edges: its head and tail reach past its footprint)
+      float picL = L, picR = R, picT = 0, picB = 0;
+      if (!a->anchoredBounds(sx, sy, side, picL, picT, picR, picB))
+        picL = L, picR = R;
+      for (int k = 0; k < strips; k++) {
+        float xa = L + k * step, xb = std::min(R, xa + step);
+        Fences::Drawable s = d;
+        s.depth = front((xa + xb) * 0.5f) - 0.02f;
+        s.clip = true;
+        s.clipX0 = k == 0 ? std::min(picL, xa) - 1.0f : xa;
+        s.clipX1 = k == strips - 1 ? std::max(picR, xb) + 1.0f : xb;
+        // (and which side of the fences it's on: Fences::sideOfFences)
+        s.animalStrip = true;
+        s.wx = m.x;
+        s.wy = m.y;
+        frontDepth = std::max(frontDepth, s.depth);
+        out.push_back(s);
+      }
+    } else {
+      out.push_back(d);
+    }
     // Its smiles and frowns, over it (16 frames, 83 ms each)
     const float faceY = sy - this->typeList[m.type].facesYOffset;
     for (const auto &[smile, t] : m.faces)
       if (Animation *fa = smile ? this->smileArt : this->frownArt) {
-        Fences::Drawable fd{depth + 0.00005f, sx, faceY, fa, CompassDirection::N,
+        Fences::Drawable fd{frontDepth + 0.00005f, sx, faceY, fa, CompassDirection::N,
                             SDL_Color{255, 255, 255, 255}, false};
         fd.frame = std::min(static_cast<int>(t / 83.0f), std::max(1, fa->frameCount()) - 1);
         out.push_back(fd);
@@ -1486,7 +1946,7 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
     if (m.id == this->selected && this->selectArrow) {
       int w = 0, h = 0;
       a->queryTexture(CompassDirection::S, &w, &h);
-      out.push_back({depth + 0.0001f, sx, sy - std::max(36, h), this->selectArrow,
+      out.push_back({frontDepth + 0.0001f, sx, sy - std::max(36, h), this->selectArrow,
                      CompassDirection::N, SDL_Color{255, 255, 255, 255}, false});
     }
   }
@@ -1503,6 +1963,21 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
     }
 }
 
+void Animals::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, const WorldMap &map, int tank,
+                         bool surface) {
+  std::vector<Fences::Drawable> out;
+  this->onlyTank = tank;
+  this->onlySurface = surface;
+  this->collect(view, map, out);
+  this->onlyTank = -2;
+  this->onlySurface = false;
+  std::stable_sort(out.begin(), out.end(),
+                   [](const Fences::Drawable &a, const Fences::Drawable &b) { return a.depth < b.depth; });
+  for (Fences::Drawable &d : out)
+    if (d.art)
+      d.art->drawAnchored(renderer, d.sx, d.sy, d.side, d.tinted ? &d.tint : nullptr, d.frame);
+}
+
 int Animals::pick(float px, float py, const WorldRenderer &view, const WorldMap &map) const {
   int found = -1;
   float best = 1e9f;
@@ -1510,7 +1985,7 @@ int Animals::pick(float px, float py, const WorldRenderer &view, const WorldMap 
     if (m.id == this->carried)
       continue;
     float sx, sy, depth;
-    view.worldToScreenF(m.x, m.y, groundAt(map, m.x, m.y), sx, sy, depth);
+    view.worldToScreenF(m.x, m.y, groundAt(map, m.x, m.y) + (this->tankAt && this->tankAt(m.x, m.y) >= 0 ? m.swimZ : 0.0f), sx, sy, depth);
     int w = 24, h = 24;
     if (Animation *a = this->art(m, m.anim))
       a->queryTexture(facing(view, m), &w, &h);
@@ -1595,6 +2070,8 @@ void Animals::markDirty(int exhibit) {
 }
 
 void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
+  ZT_FN("", "Rate an exhibit for the animals in it");
+  ZT_WHO("exhibit", exhibit);
   Evaluation &ev = this->evaluations[exhibit];
   ev.dirty = false;
   ev.timerMs = static_cast<float>(std::uniform_int_distribution<int>(0, 199)(this->rng));
@@ -1819,6 +2296,9 @@ void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
     r.poo = static_cast<float>(pooTiles) / N;
     for (auto [id, v] : disliked)
       r.dislikes.push_back({id, v});
+    ZT_STEP("", "Its rating of the exhibit (suitability)", {"species", t.key}, {"score", r.score},
+            {"terrain (x0.3)", r.terrain}, {"objects (x0.2)", r.objects}, {"trees", r.trees}, {"rocks", r.rocks},
+            {"elevation", r.elevation}, {"shelters", r.shelters}, {"toys", r.toys}, {"compat", r.compat});
     ev.kinds[kind] = r;
   }
 }
@@ -1868,6 +2348,99 @@ void Animals::company(const Member &m, int &kind, int &kindAdults, int &adults) 
   }
 }
 
+// Made an egg (zoo.exe 0x5a5283): young, still, its egg art; cTimeToHatch
+// ticks to go, and health just under what hatching takes, plus those ticks
+// (cMinHatchHits, or 60% of cMaxHits - cMinHits), no more than cMaxHits
+void Animals::becomeEgg(Member &m) {
+  const Type &t = this->typeList[m.type];
+  m.egg = true;
+  m.baby = true;
+  m.grow = 0;
+  m.hatchIn = t.timeToHatch;
+  int need = t.minHatchHits ? t.minHatchHits : (t.maxHits - t.minHits) * 60 / 100;
+  m.health = static_cast<float>(std::min(need - 1 + m.hatchIn, t.maxHits));
+  m.stack.clear();
+  m.path.clear();
+  m.pathAt = 0;
+  m.stepping = false;
+  play(m, "egg_idle", Member::Mode::Loop, 3600.0f);
+  ZT_STEP("0x5a5283", "Laid as an egg", {"cTimeToHatch", t.timeToHatch}, {"health", m.health},
+          {"to hatch it needs", need});
+}
+
+// An egg's tick (zoo.exe 0x437860): healthy enough (cMinHatchHits, or 60%
+// of cMaxHits - cMinHits) and in an exhibit, a tick nearer hatching; when
+// it's time, its bHatch (the egg cracks, then fHatch: a baby)
+void Animals::eggTick(Member &m) {
+  const Type &t = this->typeList[m.type];
+  int need = t.minHatchHits ? t.minHatchHits : (t.maxHits - t.minHits) * 60 / 100;
+  if (m.health < need)
+    return;
+  if (--m.hatchIn >= 1 || m.exhibit < 0 || !m.stack.empty())
+    return;
+  ZT_FN("0x437860", "The egg hatches");
+  ZT_STEP("0x437860", "Time to hatch", {"health", m.health}, {"it needs", need});
+  // (its egg_idle ended: bHatch starts at once)
+  m.stepping = false;
+  if (this->set(m, "bhatch"))
+    pushSet(m, "bhatch");
+  else
+    m.egg = false;
+}
+
+// Testing a live electric fence (zoo.exe 0x438ebc, every cZapCheck): while it has
+// some of its cTestFenceChance left, a cTestFenceChance in 100 to look
+// cTestFenceOffset tiles north, east, south and west - still in its exhibit -
+// for a live electric fence on that tile's far side (0x4a3383, 0x42ec8b);
+// found, it stops what it's doing, faces it and plays bTestFence (the zap),
+// cZapHappinessChange, and uses up cTestFenceChanceDrop of its chance: under
+// cMinTestFenceChance there's none left, it's learnt (0x59c4ba)
+void Animals::testFence(Member &m, const Fences &fences) {
+  const Type &t = this->typeList[m.type];
+  if (m.fenceTests < 0)
+    m.fenceTests = t.testFenceChance;
+  if (--m.zapCheck >= 0)
+    return;
+  m.zapCheck = kZapCheck - 1;
+  if (m.fenceTests == 0 || t.testFenceChance <= 0 || m.exhibit < 0 || m.escaped || m.boxed || m.tranquilised ||
+      m.dying || m.sleeping || m.building >= 0 || m.huntAnimal >= 0 || m.fleeFrom >= 0 || m.caughtBy >= 0 ||
+      m.crossing.x >= 0 || !this->set(m, "btestfence"))
+    return;
+  ZT_FN("0x438ebc", "Tests an electric fence");
+  int roll = std::uniform_int_distribution<int>(0, 99)(this->rng);
+  if (roll >= t.testFenceChance)
+    return;
+  static const int dirs[4][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}}; // N E S W (zoo.exe 0, 2, 4, 6)
+  static const char *names[4] = {"N", "E", "S", "W"};
+  int tx = static_cast<int>(std::floor(m.x)), ty = static_cast<int>(std::floor(m.y));
+  int o = std::max(1, t.testFenceOffset);
+  for (int d = 0; d < 4; d++) {
+    int cx = tx + dirs[d][0] * o, cy = ty + dirs[d][1] * o;
+    if (fences.exhibitAt(cx, cy) != m.exhibit)
+      continue;
+    Fences::Edge e = dirs[d][0] ? Fences::Edge{false, dirs[d][0] > 0 ? cx + 1 : cx, cy}
+                                : Fences::Edge{true, cx, dirs[d][1] > 0 ? cy + 1 : cy};
+    if (!fences.liveElectric(e))
+      continue;
+    m.stack.clear();
+    m.path.clear();
+    m.pathAt = 0;
+    m.stepping = false;
+    faceToward(m, m.x + dirs[d][0], m.y + dirs[d][1]);
+    pushSet(m, "btestfence");
+    int had = m.fenceTests;
+    m.fenceTests -= t.testFenceChanceDrop;
+    if (m.fenceTests < t.minTestFenceChance)
+      m.fenceTests = 0;
+    float was = m.pending;
+    m.pending += t.zapHappinessChange;
+    ZT_STEP("0x438ebc", "Zapped testing the fence", {"facing", names[d]}, {"roll", roll},
+            {"cTestFenceChance", t.testFenceChance}, {"chance left", had, m.fenceTests},
+            {"cZapHappinessChange", t.zapHappinessChange}, {"pending", was, m.pending});
+    return;
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Happiness (zoo.exe 0x4378df, 0x437620): every tick what the last checks
 // found is added (kept to -100..100), then the checks that are due add to
@@ -1881,31 +2454,54 @@ void Animals::company(const Member &m, int &kind, int &kindAdults, int &adults) 
 //   many for the space, cNumberMaxChange; too little room for all the
 //   adults, cAllCrowdedChange;
 // - the others (every 40): one of them very angry, cOtherAnimalAngryChange;
+// - an electric fence (every 5): its test, cZapHappinessChange;
 // - hunger (every 30): cHungerIncrement hungrier; hungry with no food,
 //   cNoFoodChange.
 // ----------------------------------------------------------------------------
 void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
+  // (an egg only waits to hatch)
+  if (m.egg) {
+    eggTick(m);
+    return;
+  }
+  ZT_FN("0x4378df", "Its status tick (once a second)");
   const Type &t = this->typeList[m.type];
-  m.happiness = std::clamp(m.happiness + m.pending, -100.0f, 100.0f);
-  m.pending = 0;
+  {
+    float was = m.happiness, add = m.pending;
+    m.happiness = std::clamp(m.happiness + m.pending, -100.0f, 100.0f);
+    m.pending = 0;
+    ZT_STEP("0x4378df", "Happiness takes what the last checks found", {"happiness", was, m.happiness},
+            {"pending", add, 0});
+  }
   if (--m.habitatCheck < 0) {
     m.habitatCheck = kHabitatCheck - 1;
+    float was = m.pending;
     int s = this->suitability(m.id, map, fences);
+    const char *verdict;
     if (s >= t.habitatPreference)
-      m.pending += t.happyHabitatChange;
+      m.pending += t.happyHabitatChange, verdict = "suits it (cHappyHabitatChange)";
     else if (s * 100 >= t.habitatPreference * t.pctHabitat)
-      m.pending += t.angryHabitatChange;
+      m.pending += t.angryHabitatChange, verdict = "not quite (cAngryHabitatChange)";
     else
-      m.pending += t.veryAngryHabitatChange;
-    if (const Rating *r = this->rating(m, map, fences))
+      m.pending += t.veryAngryHabitatChange, verdict = "far from it (cVeryAngryHabitatChange)";
+    ZT_STEP("0x4378df", "Habitat check (every 20)", {"suitability", s}, {"cHabitatPreference", t.habitatPreference},
+            {"cPctHabitat", t.pctHabitat}, {"verdict", verdict}, {"pending", was, m.pending});
+    if (const Rating *r = this->rating(m, map, fences)) {
+      float before = m.pending;
       m.pending += std::trunc(std::clamp(std::trunc(r->compat), -500.0f, 150.0f) / 10.0f);
+      if (m.pending != before)
+        ZT_STEP("0x4378df", "What it thinks of the others there", {"compat", r->compat}, {"pending", before, m.pending});
+    }
   }
   if (--m.captivityCheck < 0) {
     m.captivityCheck = kCaptivityCheck - 1;
+    float was = m.pending;
     m.pending -= t.captivity;
+    ZT_STEP("0x4378df", "Captivity (every 20)", {"cCaptivity", t.captivity}, {"pending", was, m.pending});
   }
   if (--m.socialCheck < 0) {
     m.socialCheck = kSocialCheck - 1;
+    float was = m.pending;
     int kind, kindAdults, adults;
     company(m, kind, kindAdults, adults);
     int tiles = fences.exhibit(m.exhibit) ? static_cast<int>(fences.exhibit(m.exhibit)->tiles.size()) : 0;
@@ -1915,43 +2511,64 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       m.pending += t.numberMaxChange;
     if (adults > 0 && tiles / adults < t.animalDensity)
       m.pending += t.allCrowdedChange;
+    ZT_STEP("0x4378df", "Company (every 30)", {"its kind here", kind}, {"cNumberMin", t.numberMin},
+            {"cNumberMax", t.numberMax}, {"tiles", tiles}, {"cHabitatSize", t.habitatSize}, {"adults", adults},
+            {"cAnimalDensity", t.animalDensity}, {"pending", was, m.pending});
   }
   if (--m.otherCheck < 0) {
     m.otherCheck = kOtherCheck - 1;
     if (t.otherAnimalAngryChange < 0)
       for (const Member &o : this->list)
         if (o.id != m.id && o.exhibit == m.exhibit && o.happiness <= -81) {
+          float was = m.pending;
           m.pending += t.otherAnimalAngryChange;
+          ZT_STEP("0x4378df", "Another here is very angry", {"other", o.name}, {"pending", was, m.pending});
           break;
         }
   }
+  testFence(m, fences);
   // Hunger (zoo.exe 0x438a79): hungrier each check; hungry with no food,
   // the first time nothing, after that "%s can't find any food." and, at
   // 100, unhappier and less healthy. And the dung meter: full, a pile.
   if (--m.hungerCheck < 0) {
+    ZT_FN("0x438a79", "Hunger check (every 30)");
     m.hungerCheck = kHungerCheck - 1;
+    float was = m.hunger;
     m.hunger = std::min(100.0f, m.hunger + t.hungerIncrement);
+    ZT_STEP("0x438a79", "Hungrier", {"hunger", was, m.hunger}, {"cHungerIncrement", t.hungerIncrement});
     if (m.hunger >= t.hungerThreshold && !m.escaped && nearestFood(m) < 0) {
       if (!m.noFoodSeen) {
         m.noFoodSeen = true;
+        ZT_STEP("0x438a79", "Hungry, no food: first time, nothing happens", {"cHungerThreshold", t.hungerThreshold});
       } else if (m.hunger >= 100) {
+        float wasPending = m.pending, wasHealth = m.health;
         m.pending += t.noFoodChange;
         m.health = std::max(0.0f, m.health - t.hungryHealthChange);
+        ZT_STEP("0x438a79", "Starving: unhappier, less healthy", {"pending", wasPending, m.pending},
+                {"cNoFoodChange", t.noFoodChange}, {"health", wasHealth, m.health},
+                {"cHungryHealthChange", t.hungryHealthChange});
       }
     }
+    float wasDirty = m.dirty;
     m.dirty += t.dirtyIncrement;
+    ZT_STEP("0x438a79", "The dung meter", {"dirty", wasDirty, m.dirty}, {"cDirtyIncrement", t.dirtyIncrement},
+            {"cDirtyThreshold", t.dirtyThreshold});
     // (loose too: on the zoo's grounds, for the maintenance workers)
     if (m.dirty >= t.dirtyThreshold && this->items && (m.exhibit >= 0 || (m.escaped && !m.boxed))) {
       this->items->add(ZooItems::Kind::Dung, m.exhibit, m.x, m.y);
       m.dirty = 0;
       if (m.exhibit >= 0)
         this->markDirty(m.exhibit);
+      ZT_STEP("0x438a79", "Drops a dung pile", {"x", m.x}, {"y", m.y}, {"dirty", 0.0});
     }
   }
   // Health (0x4389aa): at 20% (cPctHits) or less, unhappy (cSickChange);
   // others sick, unhappier and maybe caught it; now and then ill anyway
   if (--m.healthCheck < 0) {
+    ZT_FN("0x4389aa", "Health check (every 30)");
     m.healthCheck = 29;
+    ZT_STEP("0x4389aa", "Its health", {"health", m.health}, {"cMaxHits", t.maxHits}, {"cPctHits", t.pctHits},
+            {"sick", m.sick ? 1.0 : 0.0});
     if (m.health <= 0) {
       m.sick = true;
       m.health = 0;
@@ -1959,8 +2576,11 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
     } else {
       m.starve = 0;
     }
-    if (m.health * 100 <= t.pctHits * t.maxHits)
+    if (m.health * 100 <= t.pctHits * t.maxHits) {
+      float was = m.pending;
       m.pending += t.sickChange;
+      ZT_STEP("0x4389aa", "Poorly: unhappy", {"pending", was, m.pending}, {"cSickChange", t.sickChange});
+    }
     bool othersSick = false;
     for (const Member &o : this->list)
       othersSick = othersSick || (o.id != m.id && o.exhibit == m.exhibit && o.exhibit >= 0 && o.sick);
@@ -1980,18 +2600,23 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
         m.sick = true;
         m.health = 0;
         say(15001); // "%s has caught an illness from another animal."
+        ZT_STEP("0x4389aa", "Caught an illness from another", {"sick", 0, 1}, {"health", 0.0});
       }
     } else if (!m.sick && pct(this->rng) < 10 && pct(this->rng) < 1) {
       m.sick = true;
       m.health = 0;
       say(15000); // "%s is ill."
+      ZT_STEP("0x4389aa", "Fell ill (1 in 1000)", {"sick", 0, 1}, {"health", 0.0});
     }
   }
   // Tiredness (0x4384ba)
   if (--m.energyCheck < 0) {
     m.energyCheck = 29;
+    float was = m.energy;
     if (m.energy < t.energyThreshold)
       m.energy += t.energyIncrement;
+    ZT_STEP("0x4384ba", "Tiredness (every 30)", {"energy", was, m.energy}, {"cEnergyIncrement", t.energyIncrement},
+            {"cEnergyThreshold", t.energyThreshold});
   }
   // Old age and babies (0x4385e5), every 20 ticks
   m.ready = std::min(m.ready + 1, std::max(1, t.reproductionInterval));
@@ -2010,6 +2635,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       m.dieAfter = this->set(m, "bdie") ? 1 : 0;
       if (m.dieAfter)
         pushSet(m, "bdie");
+      ZT_STEP("0x4385e5", "Old age: it's dying", {"life", m.life}, {"cDeathChance", t.deathChance});
     }
     // A happy grown male with a grown female of his kind: a baby
     if (!m.female && !m.baby && m.exhibit >= 0 && t.reproductionChance > 0 &&
@@ -2020,11 +2646,48 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
           for (int i = 0; i < t.offspring; i++)
             this->births.push_back({mate.id, m.type});
           m.ready = 0;
+          ZT_STEP("0x4385e5", "A baby on the way", {"mother", mate.name}, {"cOffspring", t.offspring},
+                  {"cReproductionChance", t.reproductionChance}, {"happiness", m.happiness},
+                  {"cHappyReproduceThreshold", t.happyReproduceThreshold});
           break;
         }
     }
   }
   waterTick(m, map, fences);
+  // Rampaging (zoo.exe 0x438514, each status tick): at or under its
+  // cRampageThreshold happiness, a cRampageChance in 100 to start, for
+  // cRampageTimeMin..cRampageTimeMax ticks ("Rampaging"); over when it's
+  // happier again or the time's up ("Stopping rampaging"), its rampage set
+  // ended. (Not an egg, not crated)
+  if (!m.egg && !m.boxed && !m.dying) {
+    if (m.rampaging) {
+      m.rampageTicks++;
+      if (m.happiness > t.rampageThreshold || m.rampageTicks > t.rampageTimeMax) {
+        ZT_STEP("0x438514", "Stops rampaging", {"happiness", m.happiness}, {"cRampageThreshold", t.rampageThreshold},
+                {"ticks", m.rampageTicks}, {"cRampageTimeMax", t.rampageTimeMax});
+        m.rampaging = false;
+        m.rampageTicks = 0;
+        for (const auto &s : m.stack)
+          if (s.first == "bhabitatrampage" || s.first == "bescapedrampage") {
+            m.stack.clear();
+            m.path.clear();
+            m.pathAt = 0;
+            m.stepping = false;
+            break;
+          }
+      }
+    } else if (t.rampageChance >= 1 && t.rampageTimeMin >= 1 && m.happiness <= t.rampageThreshold &&
+               std::uniform_int_distribution<int>(0, 99)(this->rng) < t.rampageChance &&
+               t.rampageTimeMax >= t.rampageTimeMin) {
+      // (its ticks start so many short of cRampageTimeMax: it lasts
+      // cRampageTimeMin..cRampageTimeMax ticks)
+      int span = t.rampageTimeMax - t.rampageTimeMin;
+      m.rampaging = true;
+      m.rampageTicks = span - std::uniform_int_distribution<int>(0, span)(this->rng);
+      ZT_STEP("0x438514", "Starts rampaging", {"happiness", m.happiness}, {"cRampageThreshold", t.rampageThreshold},
+              {"cRampageChance", t.rampageChance}, {"lasts (ticks)", t.rampageTimeMax - m.rampageTicks});
+    }
+  }
   // In its exhibit (zoo.exe 0x438514, every cEscapedCheck 2 ticks): prey run
   // from an adult that hunts them within 7 (or from one chasing them at
   // play); an adult hunter goes after the nearest animal it lists within 5
@@ -2032,8 +2695,11 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   if (!busy(m)) {
     if (--m.huntCheck <= 0) {
       m.huntCheck = 2;
-      const Member *threat = m.sleeping ? nullptr : threatTo(m, 7.0f);
+      // (standing its ground in a stand-off: no running till it's over)
+      const Member *threat = m.sleeping || standingOff(m) ? nullptr : threatTo(m, 7.0f);
       if (threat) {
+        ZT_STEP("0x438514", "A hunter's near: runs from it (within 7)", {"hunter", threat->name},
+                {"distance", std::hypot(threat->x - m.x, threat->y - m.y)});
         bool fresh = m.fleeFrom != threat->id || m.pathAt >= m.path.size();
         m.fleeFrom = threat->id;
         m.huntAnimal = -1;
@@ -2046,7 +2712,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
         const Member *best = nullptr;
         float bestD = 1e30f;
         for (const Member &o : this->list) {
-          if (o.exhibit != m.exhibit || o.boxed || o.dying || o.caughtBy >= 0 || o.id == this->carried ||
+          if (o.exhibit != m.exhibit || o.egg || o.boxed || o.dying || o.caughtBy >= 0 || o.id == this->carried ||
               o.claimedBy >= 0 || !hunts(m, o))
             continue;
           if (std::fabs(o.x - m.x) > 5.0f || std::fabs(o.y - m.y) > 5.0f)
@@ -2059,22 +2725,33 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
         }
         if (best) {
           if (m.huntAnimal != best->id)
+            ZT_STEP("0x438514", "Goes after prey it lists (cPrey, within 5: cPreyRadius)", {"prey", best->name},
+                    {"distance", std::sqrt(bestD)}, {"at play (tag)", m.tag ? 1 : 0});
+          if (m.huntAnimal != best->id) {
             m.huntStart = this->now;
+            m.preattacked = false; // (a new chase: a stand-off of its own)
+          }
           m.huntAnimal = best->id;
           m.tag = false;
         }
       }
     }
     // Running: on to another spot away when it gets there
-    if (m.fleeFrom >= 0 && m.pathAt >= m.path.size())
+    if (m.fleeFrom >= 0 && m.pathAt >= m.path.size() && !standingOff(m))
       if (const Member *threat = this->member(m.fleeFrom))
         runFrom(m, *threat, map, fences);
     if (m.huntAnimal >= 0) {
-      const Member *p = this->member(m.huntAnimal);
+      Member *p = this->member(m.huntAnimal);
       // (gone, crated, out of the exhibit; at play, cChaseTimeOut 10 s)
       if (!p || p->boxed || p->exhibit != m.exhibit || p->caughtBy >= 0 ||
           (m.tag && this->now - m.huntStart > 10.0))
         m.huntAnimal = -1;
+      else if (standingOff(m))
+        ; // (its bPreattack first: the chase after)
+      // (both cPreattack, within cDefenseRadius: zoo.exe 0x50eae2)
+      else if (!m.tag && !m.preattacked && preattacks(m, *p) &&
+               std::hypot(p->x - m.x, p->y - m.y) <= kDefenseRadius)
+        standOff(m, *p);
       else
         chase(m, map, fences);
     }
@@ -2115,8 +2792,10 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   if (--m.buildingCheck < 0) {
     m.buildingCheck = 19;
     if (m.building < 0 && !m.escaped && !m.sleeping && t.buildingUseChance > 0 &&
-        std::uniform_int_distribution<int>(0, 99)(this->rng) < t.buildingUseChance)
+        std::uniform_int_distribution<int>(0, 99)(this->rng) < t.buildingUseChance) {
+      ZT_STEP("0x438f20", "Goes to use a shelter or toy", {"cBuildingUseChance", t.buildingUseChance});
       useShelter(m, map, fences);
+    }
   }
   // Very unhappy: "%s is not happy." (every 10 ticks)
   if (--m.notHappyCheck < 0) {
@@ -2127,6 +2806,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       if (at != std::string::npos)
         s.replace(at, 2, m.name);
       this->notices.push_back({s, 2, m.id}); // (red in the original's list)
+      ZT_STEP("", "\"Not happy\" message", {"happiness", m.happiness}, {"message", s});
     }
   }
 }
@@ -2165,6 +2845,9 @@ void Animals::lifeEvents(const WorldMap &map, const Fences &fences) {
     b.path.clear();
     b.faces.clear();
     b.sick = false;
+    // (an egg-layer's young: an egg by its mother - zoo.exe 0x60da6b)
+    if (t.laysEggs)
+      becomeEgg(b);
     this->list.push_back(b);
     say(10032, mum->name, 1, mum->id); // (good news)
     this->markDirty(b.exhibit);

@@ -15,6 +15,10 @@ ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 BUILD_DIR = os.path.join(ROOT_DIR, "build")
 REL_DIR = os.path.join(BUILD_DIR, "Release")
 
+# Shared game-folder discovery + pc-sync override rules (see zt1_paths.py)
+sys.path.insert(0, SCRIPT_DIR)
+import zt1_paths
+
 # Colors
 class C:
     RESET = '\033[0m'
@@ -30,7 +34,14 @@ def enable_ansi():
         os.system('')
 
 def setup_pc_sync_files():
-    """Copy custom files from pc-sync folder to Release."""
+    """Copy custom files from pc-sync folder to Release.
+
+    The ui/ subfolder is special: most of its layouts are byte-identical to the
+    BASE UI.ZTD ones, and installing those loose stops the patched layouts in
+    zupdate / zupdate1 / xpack2 from being used (the expansion filter dropdown
+    then vanishes from every buy panel). zt1_paths knows which few files are
+    real overrides.
+    """
     pc_sync_dir = os.path.join(ROOT_DIR, "pc-sync")
     
     if not os.path.exists(pc_sync_dir):
@@ -41,18 +52,61 @@ def setup_pc_sync_files():
     # Recursively copy all files maintaining structure
     for root, dirs, files in os.walk(pc_sync_dir):
         rel_path = os.path.relpath(root, pc_sync_dir)
+
+        # ui/ is done separately, and only for the genuine overrides
+        if rel_path == "ui" or rel_path.startswith("ui" + os.sep):
+            continue
+
         dest_base = REL_DIR if rel_path == "." else os.path.join(REL_DIR, rel_path)
         
         os.makedirs(dest_base, exist_ok=True)
         
         for f in files:
+            # pc-sync/zoo.ini has [resource] path=. - copying it over the
+            # zoo.ini setup_zoo_ini() wrote drops zupdate/zupdate1/xpack1/
+            # xpack2 from the search path, so only the base UI.ZTD layouts
+            # load: no expansion filter dropdown, no terrain brush preview.
+            if rel_path == "." and f.lower() == "zoo.ini":
+                continue
+            # (pc-sync's own note about what goes in it)
+            if rel_path == "." and f.lower() == "readme.txt":
+                continue
             src = os.path.join(root, f)
             dst = os.path.join(dest_base, f)
             shutil.copy2(src, dst)
             file_count += 1
+
+    # pc-sync/ui/startup, ui/freeroam and ui/scenario hold textures that go to
+    # the Release ROOT (startup/, freeroam/, scenario/). They are not layouts,
+    # so they are copied in full - losing them leaves panels blank.
+    for folder in ("startup", "freeroam", "scenario"):
+        src = os.path.join(pc_sync_dir, "ui", folder)
+        if os.path.isdir(src):
+            file_count += copy_tree(src, os.path.join(REL_DIR, folder))
+    # ...and they also keep their own location under Release/ui/
+    for folder in ("startup", "freeroam", "scenario"):
+        src = os.path.join(pc_sync_dir, "ui", folder)
+        if os.path.isdir(src):
+            file_count += copy_tree(src, os.path.join(REL_DIR, "ui", folder))
+
+    # Only the pc-sync UI files that really override an archive
+    file_count += zt1_paths.install_pc_sync_ui(REL_DIR, pc_sync_dir)
     
     print(f"  {C.GREEN}[OK]{C.RESET} Custom files installed ({file_count} files from pc-sync)")
     return True
+
+
+def copy_tree(src, dst):
+    """Copy every file under src into dst, keeping the structure."""
+    count = 0
+    for root, _, files in os.walk(src):
+        rel_path = os.path.relpath(root, src)
+        out = dst if rel_path == "." else os.path.join(dst, rel_path)
+        os.makedirs(out, exist_ok=True)
+        for f in files:
+            shutil.copy2(os.path.join(root, f), os.path.join(out, f))
+            count += 1
+    return count
 
 def setup_fonts():
     """Copy fonts from root fonts folder to Release."""
@@ -85,6 +139,36 @@ def setup_fonts():
     
     print(f"  {C.GREEN}[OK]{C.RESET} Fonts installed")
     return True
+
+RESOURCE_PATH = ("./dlupdate;./updates;./xpack2/loc;./xpack2;./dupdate;"
+                 "./zupdate1;./xpack1/loc;./xpack1;./zupdate;./loc;.")
+
+
+def check_resource_path():
+    """zoo.ini's [resource] path must list the patch/expansion folders.
+
+    With just 'path=.' the engine indexes only the base archives, so the
+    patched layouts in zupdate/zupdate1 never load: the buy panels lose the
+    expansion filter dropdown and Modify Terrain loses its brush preview.
+    Rewrites zoo.ini if anything left it wrong.
+    """
+    ini_path = os.path.join(REL_DIR, "zoo.ini")
+    current = ""
+    section = ""
+    if os.path.exists(ini_path):
+        for line in open(ini_path, encoding="utf-8", errors="replace"):
+            s = line.strip()
+            if s.startswith("["):
+                section = s.lower()
+            elif section == "[resource]" and s.lower().startswith("path"):
+                current = s.split("=", 1)[1].strip()
+    if current == RESOURCE_PATH:
+        print(f"  {C.GREEN}[OK]{C.RESET} zoo.ini resource path includes the patches and expansions")
+        return True
+    print(f"  {C.YELLOW}[!]{C.RESET} zoo.ini resource path was '{current}' - rewriting it")
+    setup_zoo_ini()
+    return True
+
 
 def setup_zoo_ini():
     """Create the zoo.ini configuration file."""
@@ -126,6 +210,19 @@ msaa=0
 """
     
     ini_path = os.path.join(REL_DIR, "zoo.ini")
+    # The player's own settings ([user]: uiScale, widescreen, timedunlocks,
+    # artupscale, the resolution...) are kept: only the rest is rewritten
+    try:
+        with open(ini_path, encoding="utf-8", errors="replace") as f:
+            old = f.read()
+        lines = old.splitlines()
+        start = next((i for i, l in enumerate(lines) if l.strip().lower() == "[user]"), None)
+        if start is not None:
+            end = next((i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")), len(lines))
+            user = "\n".join(lines[start:end]).rstrip() + "\n"
+            ini_content = ini_content[:ini_content.index("[user]")] + user
+    except OSError:
+        pass
     with open(ini_path, "w", encoding="utf-8") as f:
         f.write(ini_content)
     
@@ -147,10 +244,50 @@ def setup_folders():
     print(f"  {C.GREEN}[OK]{C.RESET} Game folders created")
     return True
 
+def ensure_expansion_dlls():
+    """Make sure lang100.dll / lang200.dll (Dinosaur Digs, Marine Mania) are in
+    Release.
+
+    They normally arrive with the game files, but a base-game-only import or an
+    older import step can leave them out. Copy them from the source game folder
+    or from known install locations when possible; otherwise just say so.
+    """
+    have = [d for d in zt1_paths.EXPANSION_DLLS
+            if os.path.exists(os.path.join(REL_DIR, d))]
+    missing = [d for d in zt1_paths.EXPANSION_DLLS if d not in have]
+    if not missing:
+        return True
+
+    # Look in the remembered / discovered game folder
+    game_dir = zt1_paths.find_game_dir()
+    copied = 0
+    if game_dir:
+        for d in list(missing):
+            src = os.path.join(game_dir, d)
+            if os.path.isfile(src):
+                try:
+                    shutil.copy2(src, os.path.join(REL_DIR, d))
+                    copied += 1
+                    missing.remove(d)
+                except OSError:
+                    pass
+
+    if copied:
+        print(f"  {C.GREEN}[OK]{C.RESET} Expansion language DLLs copied ({copied})")
+
+    if missing:
+        print(f"  {C.YELLOW}[!]{C.RESET} Missing expansion language DLL(s): "
+              f"{', '.join(missing)}")
+        print(f"  {C.DIM}    Dinosaur Digs / Marine Mania map names and loading "
+              f"screens need them.{C.RESET}")
+        print(f"  {C.DIM}    Install both expansions over the base game, then re-run "
+              f"this step.{C.RESET}")
+    return not missing
+
+
 def setup_dlls():
     """Copy DLLs and create fallback copies."""
     dll_count = 0
-    
     # Copy any DLLs from build subfolders
     for root, _, files in os.walk(BUILD_DIR):
         if "Release" in root:
@@ -171,6 +308,11 @@ def setup_dlls():
         ("res0.dll", "res.dll"),
         ("lang0.dll", "lang.dll")
     ]
+
+    # The expansion language resources. Without these the Dinosaur Digs and
+    # Marine Mania map names come out blank and the game reports
+    # "Could not load content of loading screen".
+    ensure_expansion_dlls()
     
     for src_name, dst_name in fallbacks:
         src = os.path.join(REL_DIR, src_name)
@@ -255,9 +397,10 @@ def setup_ui_files():
         except Exception as e:
             print(f"  {C.YELLOW}[!]{C.RESET} Could not run button decoder: {e}")
     
-    # 3. Run menu position script
-    menu_script = os.path.join(tools_dir, "set_menu_x.py")
-    if os.path.exists(menu_script):
+    # 3. (The menu's position is the original game's: set_menu_x.py, which
+    # moved it, isn't run)
+    menu_script = None
+    if menu_script and os.path.exists(menu_script):
         try:
             result = subprocess.run(
                 [sys.executable, menu_script],
@@ -307,6 +450,8 @@ def main():
     setup_ui_files()
     
     setup_pc_sync_files()
+    if not check_resource_path():
+        all_ok = False
     
     # Final summary
     print()
@@ -318,14 +463,15 @@ def main():
         print(f"  You can now run: {C.CYAN}zt1-engine.exe{C.RESET}")
         print(f"  Location: {C.DIM}{REL_DIR}{C.RESET}")
         
-        # Offer to launch
-        print()
-        response = input(f"  {C.CYAN}Launch game now? [Y/n]:{C.RESET} ").strip().lower()
-        if response in ['', 'y', 'yes']:
-            exe_path = os.path.join(REL_DIR, "zt1-engine.exe")
-            print(f"\n  {C.GREEN}🚀 Launching Zoo Tycoon...{C.RESET}")
-            import subprocess
-            subprocess.Popen([exe_path], cwd=REL_DIR)
+        # Offer to launch (skipped when start.bat is driving: it launches)
+        if not os.environ.get("ZT1_NO_LAUNCH_PROMPT"):
+            print()
+            response = input(f"  {C.CYAN}Launch game now? [Y/n]:{C.RESET} ").strip().lower()
+            if response in ['', 'y', 'yes']:
+                exe_path = os.path.join(REL_DIR, "zt1-engine.exe")
+                print(f"\n  {C.GREEN}🚀 Launching Zoo Tycoon...{C.RESET}")
+                import subprocess
+                subprocess.Popen([exe_path], cwd=REL_DIR)
     else:
         print(f"  {C.YELLOW}Setup completed with warnings{C.RESET}")
         print(f"  {C.DIM}Review the messages above{C.RESET}")
@@ -335,8 +481,10 @@ def main():
 if __name__ == "__main__":
     try:
         code = main()
-        print()
-        input(f"  {C.CYAN}Press Enter to exit...{C.RESET}")
+        # start.bat drives this script directly and does not want to be paused
+        if not os.environ.get("ZT1_NO_LAUNCH_PROMPT"):
+            print()
+            input(f"  {C.CYAN}Press Enter to exit...{C.RESET}")
         sys.exit(code)
     except KeyboardInterrupt:
         print(f"\n  {C.YELLOW}Cancelled{C.RESET}")

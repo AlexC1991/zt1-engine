@@ -15,6 +15,12 @@ enum class UiAction {
     // [PATCH] List selection actions
     SCENARIO_LIST_SELECTION=100,    // Scenario was selected in list
     FREEFORM_LIST_SELECTION=101,    // Freeform map was selected in list
+    MOD_LIST_SELECTION=102,         // A mod picked in the Mod Menu's list
+
+    // The Mod Menu's own buttons (ModMenu.cpp); its Switch on/off is the
+    // map-select layout's Play button (11513)
+    MOD_FOLDER=7141,
+    MOD_RESTART=7143,
     
     // [PATCH] Starting cash spinner buttons (using button IDs)
     CASH_SPINNER_UP=11511,          // Increase starting cash

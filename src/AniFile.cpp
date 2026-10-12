@@ -133,10 +133,16 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
     // timing (shifted)
     uint32_t flagAndTiming = SDL_ReadLE32(rw);
     animation_data->has_background = (flagAndTiming & 0xFF) != 0;
+    if ((flagAndTiming >> 8) > 0 && (flagAndTiming >> 8) < 10000)
+      animation_data->frame_time_in_ms = flagAndTiming >> 8;
     str_len = SDL_ReadLE32(rw); // Read Length (shifted)
     str_len >>= 8;              // Fix shift
     SDL_ReadU8(rw);             // Skip padding byte (0x00)
   } else {
+    // (the first word is the art's own frame time, ms: the electric fence's
+    // sparks 83 - it was played at 100 for everything)
+    if (timing_or_height > 0 && timing_or_height < 10000)
+      animation_data->frame_time_in_ms = timing_or_height;
     str_len = SDL_ReadLE32(rw);
   }
 
@@ -200,7 +206,12 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
     frame.offset_x = SDL_ReadLE16(rw);
     frame.offset_y = SDL_ReadLE16(rw);
     frame.mystery_bytes = SDL_ReadLE16(rw);
-    frame.is_shadow = false;
+    // The height's top bit: a shadow frame (Marine Mania's "shadow" + art,
+    // on a tank's floor). Its lines' runs are (skip, length) with no colours:
+    // every pixel of a run is shadow. Read as a height, it was 32 thousand
+    // lines of nonsense, and the art never finished loading
+    frame.is_shadow = (frame.height & 0x8000) != 0;
+    frame.height &= 0x7FFF;
 
     // 2. PIXEL DATA
     frame.lines =
@@ -242,7 +253,8 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
           frame.lines[y].instructions[x].offset = SDL_ReadU8(rw);
           frame.lines[y].instructions[x].color_count = SDL_ReadU8(rw);
 
-          if (frame.lines[y].instructions[x].color_count > 0) {
+          // (a shadow run has no colours: its length is all)
+          if (frame.lines[y].instructions[x].color_count > 0 && !frame.is_shadow) {
 
             if (SDL_RWtell(rw) + frame.lines[y].instructions[x].color_count >
                 frame_data_end) {
