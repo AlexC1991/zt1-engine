@@ -37,10 +37,18 @@
 
 ## Installing and playing
 
-Each alpha comes as two downloads. Pick one:
+Each alpha comes with two downloads for playing, and one extra for anyone who wants to look inside the engine. Pick a way to play, and take the third only if you want it.
 
 - **The ZT1 Engine: `ZT1-Engine-Setup-<version>.exe`.** An installer. It reads your Zoo Tycoon where it's installed, and offers each new alpha at the main menu.
 - **The Game Build: `ZT1-Game-Build-<version>-win64.zip`.** A folder that runs on its own, like the first alpha. Unzip it anywhere and run **`start.bat`**: the first time, it copies your Zoo Tycoon's files into the folder (it needs [Python 3](https://www.python.org/downloads/)), then starts the game. After that the folder plays by itself. It doesn't update itself: download the next Game Build when it's out.
+
+### The ZT1 Lab (for looking inside the engine) — optional
+
+**`ZT1-Lab-Setup-<version>.exe`** is a separate app, and **you do not need it to play.** It is a workbench for people who want to know how Zoo Tycoon and this engine actually work: it reads your own `zoo.exe`, shows what each address in it does, traces which code runs in which situation, and edits and builds the engine's source. If that isn't you, skip it — it is a big download (about 570 MB).
+
+It installs for you alone, from the Start menu as **ZT1 Lab**. Everything it needs to look at your game — the decompiler, Java, Python — is inside it, so nothing else has to be installed first. It reads Zoo Tycoon where it already is; like the engine, it ships **none** of the game's files.
+
+You can point it at the engine's source if you have it (it will ask), or let it use what it carries.
 
 ### The ZT1 Engine (installer)
 
@@ -60,6 +68,7 @@ When a new alpha is out, ZT1-Engine offers it at the main menu: **Update now** d
 - **Snapshots:** `Documents\zt1-engine\screenshots`
 - **Settings, mods and scenario progress:** `%LocalAppData%\zt1-engine`
 - **The engine itself:** `%LocalAppData%\Programs\ZT1-Engine` (uninstall it from Windows' Settings › Apps; your saves and settings stay)
+- **The ZT1 Lab:** `%LocalAppData%\Programs\ZT1-Lab` (uninstall it the same way; it keeps nothing that matters outside its own folder)
 
 ### The Game Build (a folder that runs on its own)
 
@@ -72,6 +81,8 @@ Its settings stay in the folder (`build\Release\zoo.ini`), and saved zoos go to 
 ---
 
 ## New in this alpha
+
+- **The ZT1 Lab, an installer of its own:** a workbench for reading `zoo.exe` and the engine's source, released beside the game for the first time. It carries what it needs to decompile, so nothing has to be set up first.
 
 - **An installer and updates:** one setup file, and the game offers each new alpha at the main menu.
 - **Game Options:** the original's Sound, Video, Tooltips and Scrolling settings work and are kept. A new **Extras** tab switches each of the engine's additions on or off (off plays exactly as the original).
