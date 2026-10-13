@@ -42,6 +42,9 @@ function cbxCommand() {
 }
 
 module.exports = function makeSync(REPO, say) {
+  // (with no checkout there's nothing to sync: main.js only wires Sync up
+  // when the Lab has one, and the page says so)
+  if (!REPO) return { status: async () => ({ error: 'The Lab isn’t pointed at an engine checkout.' }) };
   const git = (...a) => run('git', a, REPO);
   const gh = (...a) => run('gh', a, REPO, 60000);
   const [CBX, CBX_PRE] = cbxCommand();

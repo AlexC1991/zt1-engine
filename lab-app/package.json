@@ -1,12 +1,15 @@
 {
   "name": "zt1-lab",
   "productName": "ZT1 Lab",
+  "author": "batty251 and the ZT1-Engine contributors",
+  "license": "SEE LICENSE.txt",
   "version": "0.1.0",
   "description": "ZT1 Lab: a live view on the zt1-engine for what's found in zoo.exe, with Ghidra as its backend, and the whole game in its Play view",
   "main": "main.js",
   "private": true,
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "pack": "electron-builder --config electron-builder.yml --win --dir"
   },
   "devDependencies": {
     "electron": "^44.4.5"

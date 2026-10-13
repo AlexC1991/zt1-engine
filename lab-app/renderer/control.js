@@ -11,6 +11,22 @@ function trimSel(sel, full) {
 }
 
 const CONTROL = {
+  // The shared knowledge base (re/cloud): what every install of the Lab has
+  // worked out about the original zoo.exe. Reporting where it is pointed needs
+  // no network; pull/contribute/pending go through re/cloud/sync.py.
+  async kbCloud(a) {
+    const status = await lab.kbCloud();
+    if (!status || !status.configured) {
+      return {
+        configured: false,
+        hint: 'No shared knowledge base is set up for this Lab. Point it at one: set ZT1_KB_API, or put {"api": "https://..."} in re/private/cloud.json. See re/cloud/README.md.',
+      };
+    }
+    const what = String((a && a.what) || '').trim().toLowerCase();
+    if (!what) return { ...status, actions: ['pull', 'contribute', 'pending'] };
+    const r = await lab.kbCloudSync(what, !!(a && a.dry));
+    return { ...status, what, ...r };
+  },
   // Where things are: the view, the selection, the engine, the editor
   state() {
     const st = S.engine.state;

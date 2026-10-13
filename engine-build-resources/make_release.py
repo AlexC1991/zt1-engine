@@ -23,6 +23,11 @@ Lab (Engine code > Make release), or by hand:
    carries it, on GitHub and on CodeRook (which also makes its own from the
    release's name and files).
 
+--lab also packs the ZT1 Lab, the app that studies the engine and the
+original game (pack_lab.py): dist/ZT1-Lab-Setup-<version>.exe, beside the
+engine's installer. It carries the engine built here, so it comes after
+step 2.
+
 The version is a date, year.month.day without leading zeros (2026.10.19):
 a version number the feeds can compare. Without --version, today's.
 
@@ -174,6 +179,7 @@ if __name__ == "__main__":
     ap.add_argument("--version", default="", help="year.month.day, e.g. 2026.10.19 (else today's)")
     ap.add_argument("--official", action="store_true", help="a release that may update itself (the release workflow)")
     ap.add_argument("--no-build", action="store_true", help="make the installer from the exe already in build-x64/")
+    ap.add_argument("--lab", action="store_true", help="also pack the ZT1 Lab and its installer (pack_lab.py)")
     a = ap.parse_args()
     today = datetime.date.today()
     version = a.version or f"{today.year}.{today.month}.{today.day}"
@@ -186,3 +192,14 @@ if __name__ == "__main__":
     setup = installer(version)
     game_build(version)
     feed(setup, version)
+    if a.lab:
+        # The Lab (the app that studies the engine): its own installer, with
+        # the engine built here and the knowledge base inside it
+        say("[5/5] The ZT1 Lab's installer")
+        # (an official build insists on the pieces a first-time machine must
+        #  not be without - Ghidra, the JDK for it, the Python. Without this
+        #  the released installer could quietly ship a Lab half of whose views
+        #  are dead on a machine that installed nothing else)
+        run([sys.executable, os.path.join(ROOT, "engine-build-resources", "pack_lab.py"), "--version", version]
+            + (["--official", "--require-backend"] if a.official else []))
+        say("[OK] " + os.path.relpath(os.path.join(DIST, f"ZT1-Lab-Setup-{version}.exe"), ROOT))

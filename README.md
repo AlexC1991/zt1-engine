@@ -33,10 +33,11 @@ This is made out of love for the game. It isn't affiliated with Microsoft or Blu
 | **[GitHub Releases](https://github.com/AlexC1991/zt1-engine/releases)** | Every weekly alpha, with release notes |
 | **CodeRook** | The same builds |
 
-Both places get the same two downloads each week:
+Both places get the same downloads each week:
 
 - **The ZT1 Engine, `ZT1-Engine-Setup-<version>.exe`:** an installer (no admin prompt). Start ZT1-Engine and it finds your Zoo Tycoon by itself, or asks you once where it is. It reads the game where it's installed, never changing your game's folder, and offers each new alpha at the main menu.
 - **The Game Build, `ZT1-Game-Build-<version>-win64.zip`:** a folder that runs on its own, like the first alpha. Unzip it and run `start.bat`: the first time, it copies your Zoo Tycoon's files in beside the engine (it needs Python 3), and from then on the folder plays by itself.
+- **The ZT1 Lab, `ZT1-Lab-Setup-<version>.exe`:** the app the engine is worked on with - it studies the original `zoo.exe` (the knowledge base, Ghidra, recordings, our own code side by side) and plays the whole game inside it. Also an installer, no admin prompt: it carries the engine, the Lab's own knowledge base, Python with the packages the Lab's tools need, and Ghidra with the Java it runs on - so nothing else has to be installed. It asks once for a checkout to edit and build, and works without one. See `lab-app/README.md`.
 
 The README that comes with each has the details.
 

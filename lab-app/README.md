@@ -1,7 +1,9 @@
 # ZT1 Lab (the app)
 
 The friendly face of the Lab, built with Electron to the design in
-`re/lab/design/`. Double-click **`ZT1 Lab.cmd`**, or run:
+`re/lab/design/`.
+
+**From a checkout:** double-click **`ZT1 Lab.cmd`**, or run:
 
 ```bash
 npm start
@@ -10,6 +12,92 @@ npm start
 It needs `build\Release\zt1-engine.exe` built first. The first time, it
 installs its packages (Electron) into `node_modules/`, which isn't
 committed.
+
+**Installed:** `dist/ZT1-Lab-Setup-<version>.exe` (a release's third
+download, or `make_release.py --lab`), which is this app - Electron and
+all - with the engine and what the Lab needs inside it, and no admin
+prompt. It installs into `%LocalAppData%\Programs\ZT1-Lab`:
+
+| | |
+|---|---|
+| `ZT1 Lab.exe` | the app (the page inside `resources/app.asar`) |
+| `tree\engine\` | `zt1-engine.exe`, built for release, and the hook for the original game |
+| `tree\re\` | the knowledge base and the Lab's Python tools |
+| `tree\clangd\` | the code intelligence |
+| `tree\ghidra\` | Ghidra itself, and `tree\java\` the JDK it runs on |
+| `tree\python\` | a Python of its own, with what the Lab's tools need |
+
+Nothing here asks the player to install Python or Java: `tree\python`
+is an interpreter with `capstone`, `pefile` and `unicorn` beside it, and
+`tree\ghidra` is Ghidra with the JDK it runs on. `tree\ghidra` is the
+program, not a project of the game: a Ghidra project is built out of
+`zoo.exe` itself - the game, which is nobody's to hand out - so the Lab
+makes one from the player's own copy.
+
+The installer asks for the engine's checkout (and remembers it in
+`%LocalAppData%\zt1-engine\lab-roots.json`). With one, the Lab reads and
+edits the real tree - Write Code, Build engine, Game Files, Sync, the
+code intelligence - exactly as running from a checkout does. Without
+one, it runs on what it carries: the lab zoo, Explore, Original Game's
+functions and code, the game's own files, Play. What needs a checkout
+says so when you click it.
+
+**One thing it does not carry, and will not: the game.** *Zoo Tycoon* is
+not free, and the Lab never ships it. It reads a copy you already own and
+have installed - the original `zoo.exe` for Original Game, Play original
+and the traces, and the game's own files for the Scene and Game Files. It
+finds it by itself, or you point it at yours:
+
+- `re/private/original.json` — `{ "exe": "<your zoo.exe>", "iso": "<a Marine Mania disc image, if your copy needs the disc>" }`
+- `ZT1_EXE` for the Scene's **Try zoo.exe**
+- Game Files and the Terrain painter find the install by themselves (the usual
+  `Microsoft Games\Zoo Tycoon`, or the Complete Collection)
+
+Everything the Lab *does* carry is ours or third-party under its own
+licence: the engine (`tree\engine`), the Lab's own tools and its knowledge
+base (`tree\re`), clangd, an embeddable Python with `capstone`, `pefile` and
+`unicorn`, and Ghidra with the JDK it runs on. No part of the game is in
+the installer, and `re/private` - your recordings, your game's location -
+never leaves your machine.
+
+Each of those carries its licence with it: the build writes
+`THIRD-PARTY-NOTICES.txt` from the licence text each project ships (and says
+so when one does not), and `SOURCE-OFFER.txt` is the written offer of
+corresponding source for the GPL-covered ones — the Temurin JDK and unicorn —
+because that source is not in the installer. Both sit beside `LICENSE.txt` in
+the install; `engine-build-resources/notices.py` writes them, and
+`fetch_licenses.py` keeps the one text no package provides (unicorn's GPLv2).
+
+Building an installer needs node/npm (electron-builder) and Inno Setup 6;
+`python engine-build-resources/pack_lab.py` does it by hand. That build
+also fetches and checks the backend the Lab carries — `vendor_python.py`
+(a Python with `capstone`, `pefile` and `unicorn`) and `vendor_ghidra.py`
+(Ghidra and the JDK, taken from the building machine's copies).
+
+The **checkout** needs none of that: it runs on the machine's own
+Python 3, so that still needs `unicorn`, `capstone` and `pefile`.
+
+## The shared knowledge base
+
+Everything the Lab works out about the original's `zoo.exe` - what
+`0x4378df` is, a struct's fields, which functions ran in a recording - is
+the same answer for every install, because it is all about one build of
+one game. So it can be shared: `re/cloud/` is a Cloudflare Worker and a
+database that moves findings between checkouts, and `re/knowledge.json`
+stays the copy that ships and that you review in git.
+
+```bash
+python re/cloud/sync.py pull        # bring in what others have found
+python re/cloud/sync.py contribute  # send what this checkout worked out
+```
+
+Point a checkout at it once (`re/private/cloud.json`, or `ZT1_KB_API`),
+and the Lab can do the same from its control port, so an AI agent can too
+(`lab_kb_cloud`). Anything contributed lands **provisional** until it is
+reviewed, and a contribution from a `zoo.exe` build other than the 2002
+Complete Collection is refused - its addresses would land on the wrong
+functions. Recordings never leave the machine; the addresses they found
+do. See **[`re/cloud/README.md`](../re/cloud/README.md)**.
 
 ## Explore (start here)
 
@@ -558,11 +646,19 @@ committed:
   the standard install folder.
 - **`ghidra.json`:** `{ "home": "<Ghidra's folder>", "projects": ["<your
   Ghidra project folder>"], "name": "zt1" }`. `home` can also come from the
-  `GHIDRA_INSTALL_DIR` environment variable. To make a project: import
-  `zoo.exe` into a new Ghidra project, then run **ZT1_Apply** to bring in
-  everything the knowledge base knows (see `re/README.md`). The views about
+  `GHIDRA_INSTALL_DIR` environment variable — and you can leave `home` out
+  entirely: an installed Lab runs the Ghidra it carries. To make a project:
+  import `zoo.exe` into a new Ghidra project, then run **ZT1_Apply** to bring
+  in everything the knowledge base knows (see `re/README.md`). The views about
   the original's code need Ghidra. The engine, game files, test zoo and
   Play views don't.
+
+  *The Lab does not make a project for you yet.* It ships Ghidra with the JDK
+  it runs on, but a Ghidra project is built out of `zoo.exe` — the game, which
+  is nobody's to hand out — so the first project has to come from your own
+  copy. Until the Lab grows a button for it (a headless import of your
+  `zoo.exe`), the decompiled views start working once you point `ghidra.json`
+  at a project with `zoo.exe` in it, as above.
 
 Two things that help when driving it:
 

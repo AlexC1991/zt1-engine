@@ -7,11 +7,11 @@
 #   leading zeros), its message being the release notes:
 #       git tag -a v2026.10.19 -F notes.md && git push origin v2026.10.19
 #   The engine is built as an official release (it can update itself), and
-#   its two downloads - the installer (The ZT1 Engine) and the Game Build
-#   (a zip that runs on its own, as the first alpha did) - with their
-#   .sha256s and latest.yml (the in-game updater's feed) become a GitHub
-#   release and a named version of the zt1-engine-releases project on
-#   CodeRook.
+#   its downloads - the installer (The ZT1 Engine), the Game Build (a zip
+#   that runs on its own, as the first alpha did) and the ZT1 Lab's own
+#   installer (the app that studies the engine) - with their .sha256s and
+#   latest.yml (the in-game updater's feed) become a GitHub release and a
+#   named version of the zt1-engine-releases project on CodeRook.
 #
 # CodeRook needs a personal access token (CodeRook > account settings) saved
 # as this repository's secret CODEROOK_TOKEN. Without it, the CodeRook steps
@@ -52,6 +52,57 @@ jobs:
             choco install innosetup -y --no-progress
           }
 
+      # The Lab's installer carries Ghidra and the JDK it runs on, so a
+      # first-time machine needs neither installed. A stock runner has neither,
+      # and the build refuses to ship without them (--require-backend), so they
+      # are put here. The versions are pinned the way the Lab's own docs name
+      # them: an unpinned one could change the released installer without a
+      # commit saying so.
+      - name: Ghidra and the JDK (the Lab's installer carries both)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = 'C:\tools'
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+
+          # JDK 25 (Ghidra 12 runs on it). Pinned to one Temurin build and its
+          # published SHA-256, the same way Ghidra is: `latest/25` moves, and a
+          # release must not silently change the JDK it carries or take a
+          # misrouted artifact. Bump the three lines together (Temurin's
+          # release page has the checksum). 25.0.4.1+1, LTS
+          $jdk = "$tools\jdk"
+          $jdkUrl = 'https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4.1%2B1/OpenJDK25U-jdk_x64_windows_hotspot_25.0.4.1_1.zip'
+          $jdkSha = '00c847d804f4a78e9f04f2683faf14fed898535b177b7fc704486cb0284e9283'
+          Write-Host "fetching the JDK from $jdkUrl"
+          Invoke-WebRequest -Uri $jdkUrl -OutFile "$tools\jdk.zip" -UseBasicParsing
+          $got = (Get-FileHash "$tools\jdk.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $jdkSha) { throw "the JDK's download does not match its published SHA-256 ($got)" }
+          Write-Host "the JDK's download matches its published SHA-256"
+          Expand-Archive -Path "$tools\jdk.zip" -DestinationPath $jdk -Force
+          $jhome = (Get-ChildItem $jdk -Directory | Select-Object -First 1).FullName
+          if (-not (Test-Path "$jhome\bin\java.exe")) { throw "no java.exe under $jhome" }
+          "JAVA_HOME=$jhome" >> $env:GITHUB_ENV
+          & "$jhome\bin\java.exe" -version
+
+          # Ghidra (Apache-2.0). Pinned to one release, and checked against
+          # its published SHA-256: an unpinned or unverified download could
+          # put something else in the released installer without a commit
+          # saying so. Bump both lines together when the Lab moves to a newer
+          # Ghidra (the hash is on the release's own page).
+          $gh = "$tools\ghidra"
+          $ghUrl = 'https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip'
+          $ghSha = 'ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db'
+          Write-Host "fetching Ghidra from $ghUrl"
+          Invoke-WebRequest -Uri $ghUrl -OutFile "$tools\ghidra.zip" -UseBasicParsing
+          $got = (Get-FileHash "$tools\ghidra.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $ghSha) { throw "Ghidra's download does not match its published SHA-256 ($got)" }
+          Write-Host "Ghidra's download matches its published SHA-256"
+          Expand-Archive -Path "$tools\ghidra.zip" -DestinationPath $gh -Force
+          $ghome = (Get-ChildItem $gh -Directory | Where-Object { Test-Path "$($_.FullName)\support\analyzeHeadless.bat" } | Select-Object -First 1).FullName
+          if (-not $ghome) { throw "no analyzeHeadless.bat under $gh (did the release name change?)" }
+          "GHIDRA_INSTALL_DIR=$ghome" >> $env:GITHUB_ENV
+          Write-Host "Ghidra: $ghome"
+
       - name: Version and notes
         shell: bash
         run: |
@@ -66,16 +117,16 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      - name: Build the engine, its installer and the Game Build
-        run: python engine-build-resources/make_release.py --version ${{ env.VERSION }} ${{ env.OFFICIAL }}
-
+      - name: Build the engine, its installer, the Game Build and the Lab
+        run: python engine-build-resources/make_release.py --version ${{ env.VERSION }} ${{ env.OFFICIAL }} --lab
       - name: GitHub release
         if: env.IS_TAG == 'true'
         shell: bash
         run: |
           SETUP="dist/ZT1-Engine-Setup-$VERSION.exe"
           GAME="dist/ZT1-Game-Build-$VERSION-win64.zip"
-          gh release create "$GITHUB_REF_NAME" "$SETUP" "$SETUP.sha256" "$GAME" "$GAME.sha256" dist/latest.yml \
+          LAB="dist/ZT1-Lab-Setup-$VERSION.exe"
+          gh release create "$GITHUB_REF_NAME" "$SETUP" "$SETUP.sha256" "$GAME" "$GAME.sha256" "$LAB" dist/latest.yml \
             --title "Alpha build $VERSION" --notes-file notes.md --verify-tag
 
       - name: CodeRook
@@ -87,8 +138,9 @@ jobs:
           if [ "$IS_TAG" = "true" ]; then
             SETUP="dist/ZT1-Engine-Setup-$VERSION.exe"
             GAME="dist/ZT1-Game-Build-$VERSION-win64.zip"
+            LAB="dist/ZT1-Lab-Setup-$VERSION.exe"
             python engine-build-resources/coderook_release.py --name "$GITHUB_REF_NAME" --notes notes.md \
-              --files "$SETUP" "$SETUP.sha256" "$GAME" "$GAME.sha256" dist/latest.yml
+              --files "$SETUP" "$SETUP.sha256" "$GAME" "$GAME.sha256" "$LAB" dist/latest.yml
           else
             cbx link zt1-engine .
             # (--allow-private: cbx mistakes FreeType's src/cache, its font

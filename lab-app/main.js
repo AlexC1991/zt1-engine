@@ -12,34 +12,106 @@ const net = require('net');
 const http = require('http');
 const cp = require('child_process');
 
-const REPO = path.resolve(__dirname, '..');
-const RELEASE = path.join(REPO, 'build', 'Release');
-const SCRIPTS = path.join(REPO, 're', 'lab', 'scripts');
-const PRIVATE = path.join(REPO, 're', 'private');
-const GHIDRA_CACHE = path.join(PRIVATE, 'ghidra');
+// Where everything is: the checkout (if there is one), and what the app
+// carries itself. This file is the only one for that (runtime.js says how).
+const roots = require('./runtime.js')({ appData: app.getPath('userData'), resources: process.resourcesPath });
+const REPO = roots.repo;      // the engine's checkout, or null: installed alone
+const DATA = roots.data;      // our files: the checkout's re/, else the install's
+const TREE = roots.tree;      // what the app carries: re/, engine/, clangd/, ghidra/
+// (the Lab's Python tools and the knowledge base, wherever they are: one
+// path either way - a checkout's re/, or the released copy in the install)
+const at = (...parts) => roots.at(...parts);
+// (a state folder in the app's own data: recordings, Ghidra's project, what
+// the Lab learns about the original game). Always there, checkout or not
+// Everything of ours that only exists in the source tree: built there, read
+// by the Lab. A Lab with no checkout has these empty (the views that need
+// them say so)
+function inRepo(...parts) {
+  return REPO ? path.join(REPO, ...parts) : null;
+}
+// (a file of our own to read: wherever it is, else what it was given, so a
+// failure reads as "no such file" rather than a crash)
+const readMaybe = (p, fallback) => {
+  try {
+    return fs.readFileSync(p, 'utf8');
+  } catch {
+    return fallback;
+  }
+};
+const keep = (p, make) => {
+  try {
+    make(p);
+  } catch {}
+  return p;
+};
+// (the Lab's Python tools and the knowledge base: the checkout's re/ first,
+// then the released copy. One path works whether or not there's a checkout)
+const RELEASE = REPO ? path.join(REPO, 'build', 'Release') : roots.engineDir;
+const SCRIPTS = at('lab', 'scripts');
+// (the shared files a checkout has and an installed Lab reads: what's found
+// nowhere is null, and the views that need it say so rather than break)
+const KNOWLEDGE = at('knowledge.json');
+const REFS = at('engine_refs.csv');
+const PY = at('lab', 'zoorun.py') && path.dirname(at('lab', 'zoorun.py'));
+// (what a view says when the Lab has no checkout: only the things that edit
+// or build the engine, or read its source, need one)
+const NO_CHECKOUT =
+  'The Lab isn’t pointed at an engine checkout: set its folder in %LocalAppData%\\zt1-engine\\lab-roots.json, or re-run the installer, to open one.';
+// (of our own: recordings, Ghidra's project, what the Lab learns about the
+// original game. A checkout, when there is one, keeps them in re/private/
+// as it always did; a Lab of its own keeps them in its own data folder, so
+// one is there either way)
+const PRIVATE = REPO ? keep(path.join(REPO, 're', 'private'), (p) => fs.mkdirSync(p, { recursive: true })) : roots.state;
+const GHIDRA_CACHE = PRIVATE && path.join(PRIVATE, 'ghidra');
+// (the 64-bit build, when there's a checkout with one)
+const BUILD64 = REPO ? path.join(REPO, 'build-x64') : null;
 const HOST_PORT = 18490;
 const GHIDRA_PORT = 18489;
 
+// Which Python runs the Lab's tools: the one the Lab carries (tree/python,
+// put there by the installer's build), else whatever 'python' the machine
+// has. Carrying it means an install works on a PC with no Python at all - and
+// with capstone, pefile and unicorn beside it, which the Scene view, Test Zoo
+// and the function traces need. Kept as a path here and used at each call site
+// (they pass 'python' today).
+function labPython() {
+  const carried = roots.python;
+  if (carried && fs.existsSync(carried)) return carried;
+  return 'python';
+}
+
 let win = null;
 
-// The engines run from a copy (zt1-engine-lab.exe, next to the real one so
-// it finds its files): a build can then replace zt1-engine.exe while they
-// run. The copy is refreshed whenever the build is newer
-// The 64-bit build (build-x64/, as a release is built) is the one run when
-// it's there: the 32-bit one has 2 GB, and a busy zoo's guests filled it
-// (the view froze). Its copy still goes in build/Release, where the game's
-// files are
-const BUILD64 = path.join(REPO, 'build-x64');
+// The engine the Lab runs. From a checkout: the 64-bit build (build-x64/,
+// as a release is built) when it's there - the 32-bit one has 2 GB, and a
+// busy zoo's guests filled it (the view froze) - else the 32-bit one in
+// build/Release, where the game's files are. Installed: the one the
+// installer put in engine/, and its own folder holds the copy beside it.
 function engineExe(role = 'lab') {
-  for (const p of [path.join(BUILD64, 'Release', 'zt1-engine.exe'), path.join(RELEASE, 'zt1-engine.exe'), path.join(RELEASE, 'zt1-engine-dev.exe')]) {
-    if (!fs.existsSync(p)) continue;
-    const run = path.join(RELEASE, `zt1-engine-${role}.exe`);
+  // (the engine runs where it is, with the game's files beside it: the
+  // checkout's build, or the install's engine/. The engines run from a copy -
+  // zt1-engine-lab.exe, next to the real one so it finds its files - so a
+  // build can replace zt1-engine.exe while they run; the copy is refreshed
+  // whenever the build is newer. Of a checkout's, the 64-bit build first -
+  // as a release is built - then the 32-bit one in build/Release, where the
+  // game's files are)
+  const sources = REPO
+    ? [BUILD64 && path.join(BUILD64, 'Release', 'zt1-engine.exe'), RELEASE && path.join(RELEASE, 'zt1-engine.exe'), RELEASE && path.join(RELEASE, 'zt1-engine-dev.exe')]
+    : roots.engineSources;
+  const build64 = sources[0] && fs.existsSync(sources[0]) ? path.dirname(sources[0]) : null;
+  const dir = build64 || roots.engineDir || RELEASE;
+  if (!dir) return null;
+  for (const p of sources) {
+    if (!p || !fs.existsSync(p)) continue;
     try {
+      const run = path.join(dir, `zt1-engine-${role}.exe`);
       const a = fs.existsSync(run) && fs.statSync(run), b = fs.statSync(p);
-      if (!a || a.mtimeMs < b.mtimeMs || a.size !== b.size) fs.copyFileSync(p, run);
+      if (a && a.mtimeMs >= b.mtimeMs && a.size === b.size) return run;
+      if (p === roots.engineExe && !a) return p; // (the install's: it is the engine)
+      fs.copyFileSync(p, run);
       return run;
     } catch {
-      return fs.existsSync(run) ? run : p; // (the copy is in use: the one there)
+      return fs.existsSync(path.join(dir, `zt1-engine-${role}.exe`)) ? path.join(dir, `zt1-engine-${role}.exe`) : p;
     }
   }
   return null;
@@ -63,12 +135,13 @@ function startHost() {
   // (one already there - left from before - is used as it is)
   tryConnect(() => {
     const exe = engineExe();
+    const where = roots.engineDir || RELEASE;
     if (!exe) {
       host.starting = false;
-      return hostStatus('missing', 'No zt1-engine.exe in build/Release: build the engine first.');
+      return hostStatus('missing', `No zt1-engine.exe: ${roots.looked('the engine')}`);
     }
     hostStatus('starting', 'Starting the engine...');
-    const proc = cp.spawn(exe, ['--lab-host', String(HOST_PORT)], { cwd: RELEASE, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = cp.spawn(exe, ['--lab-host', String(HOST_PORT)], { cwd: where, stdio: ['pipe', 'pipe', 'pipe'] });
     host.proc = proc;
     let out = '';
     proc.stdout.on('data', (d) => {
@@ -198,10 +271,10 @@ const play = { proc: null };
 ipcMain.handle('play:start', () => {
   if (play.proc) return play.kind === 'engine' ? { ok: true } : { error: 'The original is running in Play: stop it first.' };
   const exe = engineExe('play');
-  if (!exe) return { error: 'No zt1-engine.exe in build/Release: build the engine first.' };
+  if (!exe) return { error: roots.looked('the engine') };
   const handle = win.getNativeWindowHandle();
   const hwnd = handle.length >= 8 ? handle.readBigUInt64LE(0) : BigInt(handle.readUInt32LE(0));
-  const proc = cp.spawn(exe, ['--embed', hwnd.toString()], { cwd: RELEASE, stdio: ['pipe', 'pipe', 'pipe'] });
+  const proc = cp.spawn(exe, ['--embed', hwnd.toString()], { cwd: roots.engineDir || RELEASE, stdio: ['pipe', 'pipe', 'pipe'] });
   play.proc = proc;
   play.kind = 'engine';
   // (what the game says: re/private/play.log)
@@ -236,6 +309,14 @@ function originalConfig() {
     iso: c.iso || '',
   };
 }
+// (the zoo.exe to work on: the one Play uses, so every view and the shared
+// base agree on it - the ZT1_EXE override, then the configured original, then
+// the usual install. This used to ignore originalConfig() and only ever look
+// at the default path, so a player whose game is installed elsewhere could
+// Play but not run code or contribute)
+function zooExePath() {
+  return process.env.ZT1_EXE || originalConfig().exe;
+}
 function psRun(script) {
   const r = cp.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
   return { ok: r.status === 0, out: ((r.stdout || '') + (r.stderr || '')).trim() };
@@ -255,8 +336,8 @@ ipcMain.handle('play:original', () => {
   if (play.proc) return play.kind === 'original' ? { ok: true } : { error: 'Our engine is running in Play: stop it first.' };
   const c = originalConfig();
   if (!fs.existsSync(c.exe)) return { error: `The original isn't at ${c.exe} (re/private/original.json says where it is).` };
-  const launcher = path.join(RELEASE, 'zt1-original.exe');
-  if (!fs.existsSync(launcher)) return { error: 'No zt1-original.exe in build/Release: build the engine first (it builds the hook too).' };
+  const launcher = roots.originalExe;
+  if (!fs.existsSync(launcher)) return { error: roots.looked('zt1-original.exe (built with the engine: build first)') };
   // (its disc: mounted unless it already is)
   if (c.iso && fs.existsSync(c.iso)) {
     const q = c.iso.replace(/'/g, "''");
@@ -269,7 +350,7 @@ ipcMain.handle('play:original', () => {
   // (drawn at the Play view's size, at least the 800x600 it was made for)
   const r = playRect();
   if (r) args.push('--size', `${Math.max(800, r.width)}x${Math.max(600, r.height)}`);
-  const proc = cp.spawn(launcher, args, { cwd: RELEASE, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  const proc = cp.spawn(launcher, args, { cwd: path.dirname(launcher), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   play.proc = proc;
   play.kind = 'original';
   fs.mkdirSync(PRIVATE, { recursive: true });
@@ -365,10 +446,10 @@ ipcMain.handle('orig:pauseGame', async (_e, pause) => {
 // A function named from the steps: its name and what it does, how sure
 // (sure, likely, guess; a guess stays provisional), by you
 ipcMain.handle('orig:nameFn', (_e, address, name, summary, confidence, cls, by) => {
-  const args = [path.join(REPO, 're', 'kb.py'), 'func', address, name, summary || '', '--confidence', confidence || 'likely', '--by', by || me() || 'unknown'];
+  const args = [at('kb.py'), 'func', address, name, summary || '', '--confidence', confidence || 'likely', '--by', by || me() || 'unknown'];
   if (confidence === 'guess') args.push('--provisional');
   if (cls) args.push('--class', cls);
-  const r = cp.spawnSync('python', args, { cwd: REPO, encoding: 'utf8', windowsHide: true, timeout: 60000 });
+  const r = cp.spawnSync(labPython(), args, { cwd: REPO || roots.state, encoding: 'utf8', windowsHide: true, timeout: 60000 });
   return r.status === 0 ? { ok: true } : { error: ((r.stdout || '') + (r.stderr || '')).trim() };
 });
 ipcMain.handle('play:shot', async (_e, file) => {
@@ -515,7 +596,7 @@ async function debugNames() {
 function engineRefs() {
   const out = {};
   try {
-    for (const line of fs.readFileSync(path.join(REPO, 're', 'engine_refs.csv'), 'utf8').split(/\r?\n/).slice(1)) {
+    for (const line of readMaybe(REFS, '').split(/\r?\n/).slice(1)) {
       const m = line.match(/^(0x[0-9a-f]+),([^,]+),/i);
       if (m) (out[m[1].toLowerCase()] = out[m[1].toLowerCase()] || []).push(m[2]);
     }
@@ -628,7 +709,7 @@ ipcMain.handle('orig:recStart', async (_e, label) => {
 // twice a second)
 const kbMemo = { at: 0, kb: null };
 function kbCached() {
-  const f = path.join(REPO, 're', 'knowledge.json');
+  const f = KNOWLEDGE;
   let m = 0;
   try {
     m = fs.statSync(f).mtimeMs;
@@ -641,7 +722,7 @@ function kbCached() {
 // third column - re/scan_engine.py)
 const notesMemo = { at: 0, notes: null };
 function engineNotes() {
-  const f = path.join(REPO, 're', 'engine_refs.csv');
+  const f = REFS;
   let m = 0;
   try {
     m = fs.statSync(f).mtimeMs;
@@ -961,8 +1042,8 @@ ipcMain.handle('orig:stepsOf', async (_e, file) => {
 });
 // A guess accepted: a provisional name, confidence "guess", by you, with why
 ipcMain.handle('orig:acceptGuess', (_e, address, name, summary, by) => {
-  const r = cp.spawnSync('python', [path.join(REPO, 're', 'kb.py'), 'func', address, name, summary, '--provisional', '--confidence', 'guess', '--by', by || me() || 'unknown'], {
-    cwd: REPO,
+  const r = cp.spawnSync(labPython(), [at('kb.py'), 'func', address, name, summary, '--provisional', '--confidence', 'guess', '--by', by || me() || 'unknown'], {
+    cwd: REPO || roots.state,
     encoding: 'utf8',
     windowsHide: true,
     timeout: 60000,
@@ -1002,11 +1083,11 @@ ipcMain.handle('orig:recLoad', async (_e, file) => {
 // Into the knowledge base: every function in it seen running then (kb.py
 // seen-file), and the names picked (from their debug text)
 ipcMain.handle('orig:recSave', (_e, file, names, by) => {
-  const kb = path.join(REPO, 're', 'kb.py');
+  const kb = at('kb.py');
   const who = by || 'Lab recorder';
   const said = [];
   const run = (args) => {
-    const r = cp.spawnSync('python', [kb, ...args, '--by', who], { cwd: REPO, encoding: 'utf8', windowsHide: true, timeout: 60000 });
+    const r = cp.spawnSync(labPython(), [kb, ...args, '--by', who], { cwd: REPO || roots.state, encoding: 'utf8', windowsHide: true, timeout: 60000 });
     said.push(((r.stdout || '') + (r.stderr || '')).trim());
     return r.status === 0;
   };
@@ -1058,7 +1139,7 @@ function recWrote(line) {
   const after = get('after');
   const fn = fnContaining(after);
   const caller = fnContaining(get('from'));
-  const kb = jsonFile(path.join(REPO, 're', 'knowledge.json'), { functions: {} });
+  const kb = jsonFile(KNOWLEDGE, { functions: {} });
   const nameOf = (x) => (x ? (kb.functions[hex6(x.a)] || {}).name || x.name : '');
   watchLog.push({
     address: hex6(get('wrote')),
@@ -1141,21 +1222,38 @@ function ghidraConfig() {
   // <name>.gpr in it; own, your own project when the Lab works from a copy of
   // it; name; settings, Ghidra's settings folder for headless runs)
   const name = c.name || 'zt1';
-  const home = c.home || process.env.GHIDRA_INSTALL_DIR || '';
+  // (the Ghidra to run: what the player named, then GHIDRA_INSTALL_DIR, then
+  //  the one the Lab itself carries - tree/ghidra. A Lab on its own has
+  //  Ghidra without the player installing anything)
+  const home = c.home || process.env.GHIDRA_INSTALL_DIR || roots.ghidraHome || '';
   const project = c.project || (c.projects || []).find((p) => fs.existsSync(path.join(p, name + '.gpr')));
-  return { home, project, own: c.own || project, name, settings: c.settings || (project ? path.join(project, 'headless-settings') : '') };
+  // (Java, when the Lab carries one beside its Ghidra: Ghidra is a Java
+  //  program, so a machine with no JDK cannot start it at all)
+  const java = roots.javaHome || '';
+  return { home, project, own: c.own || project, name, settings: c.settings || (project ? path.join(project, 'headless-settings') : ''), java };
 }
 async function startOwnGhidra() {
   if (ghidraOwn.proc || (await ghidraGet('/status', 1500))) return;
   const c = ghidraConfig();
   const bat = path.join(c.home, 'support', 'analyzeHeadless.bat');
-  if (!c.project || !fs.existsSync(bat)) return; // (no Ghidra here: the Lab works from its saved copies)
+  const scripts = at('ghidra_scripts');
+  if (!c.project || !scripts || !fs.existsSync(bat)) return; // (no Ghidra here: the Lab works from its saved copies)
   fs.mkdirSync(PRIVATE, { recursive: true });
   const log = fs.openSync(path.join(PRIVATE, 'ghidra-bridge.log'), 'w');
   const proc = cp.spawn(
     'cmd.exe',
-    ['/c', bat, c.project, c.name, '-process', 'zoo.exe', '-noanalysis', '-readOnly', '-scriptPath', path.join(REPO, 're', 'ghidra_scripts'), '-postScript', 'ZT1_LabBridgeHeadless.py'],
-    { env: { ...process.env, JAVA_TOOL_OPTIONS: `-Dapplication.settingsdir=${c.settings}` }, stdio: ['ignore', log, log], windowsHide: true },
+    ['/c', bat, c.project, c.name, '-process', 'zoo.exe', '-noanalysis', '-readOnly', '-scriptPath', scripts, '-postScript', 'ZT1_LabBridgeHeadless.py'],
+    {
+      // (the JDK the Lab carries, when there is one: Ghidra's own launcher reads
+      //  JAVA_HOME, so this is what lets a first-time machine run Ghidra at all)
+      env: {
+        ...process.env,
+        ...(c.java ? { JAVA_HOME: c.java } : {}),
+        JAVA_TOOL_OPTIONS: `-Dapplication.settingsdir=${c.settings}`,
+      },
+      stdio: ['ignore', log, log],
+      windowsHide: true,
+    },
   );
   ghidraOwn.proc = proc;
   ghidraOwn.started = Date.now();
@@ -1180,7 +1278,7 @@ const ATLAS = path.join(PRIVATE, 'atlas.json');
 const UI_IDS = path.join(PRIVATE, 'ui_ids.json');
 ipcMain.handle('ui:ids', (_e, nums) => {
   if (!fs.existsSync(UI_IDS)) {
-    const r = cp.spawnSync('python', [path.join(REPO, 're', 'lab', 'uiids.py')], { cwd: REPO, encoding: 'utf8', windowsHide: true, timeout: 120000 });
+    const r = cp.spawnSync(labPython(), [at('lab', 'uiids.py')], { cwd: REPO || roots.state, encoding: 'utf8', windowsHide: true, timeout: 120000 });
     if (r.status !== 0) return { error: ((r.stdout || '') + (r.stderr || '')).trim() || 'couldn’t read the layouts' };
   }
   const ids = JSON.parse(fs.readFileSync(UI_IDS, 'utf8'));
@@ -1194,13 +1292,13 @@ ipcMain.handle('ui:ids', (_e, nums) => {
 const FIDELITY = path.join(PRIVATE, 'fidelity.json');
 ipcMain.handle('fidelity:load', () => {
   fs.mkdirSync(PRIVATE, { recursive: true });
-  const r = cp.spawnSync('python', [path.join(REPO, 're', 'lab', 'fidelity.py'), '--quiet', '--out', FIDELITY], { cwd: REPO, encoding: 'utf8', windowsHide: true, timeout: 60000 });
+  const r = cp.spawnSync(labPython(), [at('lab', 'fidelity.py'), '--quiet', '--out', FIDELITY], { cwd: REPO || roots.state, encoding: 'utf8', windowsHide: true, timeout: 60000 });
   if (r.status !== 0) return { error: ((r.stderr || '') + (r.stdout || '')).trim().slice(-800) || 'fidelity.py failed' };
   return jsonFile(FIDELITY, null);
 });
 // Formula checks (re/lab/formulas.json, shared): zoo.exe's function against
 // ours on the same inputs; the last results kept in re/private
-const FORMULAS = path.join(REPO, 're', 'lab', 'formulas.json');
+const FORMULAS = at('lab', 'formulas.json');
 const FORMULA_RESULTS = path.join(PRIVATE, 'formula-results.json');
 ipcMain.handle('formulas:load', () => ({ checks: (jsonFile(FORMULAS, { checks: [] }).checks || []), results: jsonFile(FORMULA_RESULTS, null) }));
 ipcMain.handle('formulas:save', (_e, results) => {
@@ -1208,17 +1306,17 @@ ipcMain.handle('formulas:save', (_e, results) => {
   fs.writeFileSync(FORMULA_RESULTS, JSON.stringify(results, null, 1) + '\n');
   return { ok: true };
 });
-const VERDICTS = path.join(REPO, 're', 'lab', 'verdicts.json');
+const VERDICTS = at('lab', 'verdicts.json');
 ipcMain.handle('atlas:build', async () => {
   fs.mkdirSync(PRIVATE, { recursive: true });
-  const args = [path.join(REPO, 're', 'lab', 'atlas.py'), '--out', ATLAS];
+  const args = [at('lab', 'atlas.py'), '--out', ATLAS];
   for (const [p, flag] of [['/functions', '--functions'], ['/fnstrings', '--fnstrings'], ['/debugnames', '--debugnames']]) {
     let r = await ghidraGet(p, 180000);
     const file = path.join(PRIVATE, 'atlas' + p.replace('/', '-') + '.json');
     if (r && r.json) fs.writeFileSync(file, JSON.stringify(r.json));
     if (fs.existsSync(file)) args.push(flag, file);
   }
-  const r = cp.spawnSync('python', args, { cwd: REPO, encoding: 'utf8', windowsHide: true, timeout: 300000 });
+  const r = cp.spawnSync(labPython(), args, { cwd: REPO || roots.state, encoding: 'utf8', windowsHide: true, timeout: 300000 });
   if (r.status !== 0) return { error: ((r.stderr || '') + (r.stdout || '')).trim().slice(-800) || 'atlas.py failed' };
   try {
     return { ok: true, counts: JSON.parse(r.stdout.trim().split('\n').pop()) };
@@ -1232,7 +1330,7 @@ ipcMain.handle('atlas:load', () => {
   // (older than what it's built from - the knowledge base, a recording, the
   // checked verdicts: it says so, to be built again)
   const built = fs.statSync(ATLAS).mtimeMs;
-  const newer = [path.join(REPO, 're', 'knowledge.json'), VERDICTS, ...(fs.existsSync(RECORDINGS) ? fs.readdirSync(RECORDINGS).filter((f) => f.endsWith('.json')).map((f) => path.join(RECORDINGS, f)) : [])].some((f) => {
+  const newer = [KNOWLEDGE, VERDICTS, ...(fs.existsSync(RECORDINGS) ? fs.readdirSync(RECORDINGS).filter((f) => f.endsWith('.json')).map((f) => path.join(RECORDINGS, f)) : [])].some((f) => {
     try {
       return fs.statSync(f).mtimeMs > built + 2000;
     } catch {
@@ -1242,8 +1340,12 @@ ipcMain.handle('atlas:load', () => {
   return { ...a, stale: newer };
 });
 // A checked verdict on one action (Explore): re/lab/verdicts.json, shared -
-// status null clears it
+// status null clears it. The verdicts are shared with the checkout when
+// there is one (re/lab/verdicts.json): a released copy writes the knowledge
+// base it was shipped with, which the installer keeps in the app's data
+// folder and an upgrade replaces - so those are read-only there.
 ipcMain.handle('atlas:verdict', (_e, label, status, at, note, by) => {
+  if (!REPO && VERDICTS && shipped(VERDICTS)) return { error: 'A verdict is kept in the checkout (re/lab/verdicts.json): point the Lab at one to record it.' };
   const v = jsonFile(VERDICTS, { actions: {} });
   v.actions = v.actions || {};
   if (!status) delete v.actions[label];
@@ -1291,11 +1393,14 @@ function me() {
 }
 
 ipcMain.handle('kb:load', () => {
-  const kb = JSON.parse(fs.readFileSync(path.join(REPO, 're', 'knowledge.json'), 'utf8'));
+  // (the knowledge base the Lab reads: the checkout's, or the released copy
+  // it was installed with. With neither, the views say what's missing)
+  if (!KNOWLEDGE) return { error: roots.looked('the knowledge base (re/knowledge.json)'), kb: { functions: {} }, refs: {}, me: '' };
+  const kb = JSON.parse(readMaybe(KNOWLEDGE, '{"functions":{}}'));
   // engine_refs.csv: address,engine,"comment"
   const refs = {};
   try {
-    const lines = fs.readFileSync(path.join(REPO, 're', 'engine_refs.csv'), 'utf8').split(/\r?\n/).slice(1);
+    const lines = readMaybe(REFS, '').split(/\r?\n/).slice(1);
     for (const l of lines) {
       const m = l.match(/^(0x[0-9a-f]+),([^,]+),(.*)$/i);
       if (!m) continue;
@@ -1309,11 +1414,16 @@ ipcMain.handle('kb:load', () => {
 ipcMain.handle('kb:run', (_e, args) => {
   // re/kb.py, as you (re/private/me.txt)
   return new Promise((resolve) => {
+    const kbpy = at('kb.py');
+    if (!kbpy) return resolve({ ok: false, out: roots.looked('kb.py') });
+    // (a run of ours saves the knowledge base where the tools live: the
+    // checkout's re/, or the app's own copy. Only a checkout's is writable
+    // for long - one of the app's own goes with the next upgrade)
     const by = me();
-    const full = [path.join(REPO, 're', 'kb.py'), ...args];
+    const full = [kbpy, ...args];
     // (a save that says who keeps it)
     if (by && !args.includes('--by')) full.push('--by', by);
-    cp.execFile('python', full, { cwd: REPO }, (err, stdout, stderr) =>
+    cp.execFile(labPython(), full, { cwd: REPO || roots.state }, (err, stdout, stderr) =>
       resolve({ ok: !err, out: (stdout || '') + (stderr || '') }),
     );
   });
@@ -1323,12 +1433,9 @@ ipcMain.handle('kb:run', (_e, args) => {
 // lays out (the selected animal as ZTAnimal, ...); it says back all it did.
 // Started the first time it's asked for, kept for the next
 const zr = { proc: null, buf: '', waiting: new Map(), id: 0, ready: null };
-function zooExePath() {
-  return process.env.ZT1_EXE || 'C:/Program Files (x86)/Microsoft Games/Zoo Tycoon/zoo.exe';
-}
 function zooRunner() {
   if (zr.proc) return zr.ready;
-  zr.proc = cp.spawn('python', ['-X', 'utf8', '-u', path.join(REPO, 're', 'lab', 'zoorun.py'), zooExePath()], { cwd: REPO });
+  zr.proc = cp.spawn(labPython(), ['-X', 'utf8', '-u', at('lab', 'zoorun.py'), zooExePath()], { cwd: REPO || roots.state });
   zr.buf = '';
   zr.ready = new Promise((resolve) => {
     zr.onReady = resolve;
@@ -1385,7 +1492,7 @@ app.on('will-quit', () => zr.proc && zr.proc.kill());
 const zb = { proc: null, buf: '', waiting: new Map(), id: 0, ready: null };
 function zooBin() {
   if (zb.proc) return zb.ready;
-  zb.proc = cp.spawn('python', ['-X', 'utf8', '-u', path.join(REPO, 're', 'lab', 'zoobin.py'), zooExePath(), path.join(app.getPath('userData'), 'zoobin')], { cwd: REPO });
+  zb.proc = cp.spawn(labPython(), ['-X', 'utf8', '-u', at('lab', 'zoobin.py'), zooExePath(), path.join(app.getPath('userData'), 'zoobin')], { cwd: REPO || roots.state });
   zb.buf = '';
   zb.ready = new Promise((resolve) => (zb.onReady = resolve));
   zb.proc.stdout.on('data', (d) => {
@@ -1441,10 +1548,56 @@ app.on('will-quit', () => zb.proc && zb.proc.kill());
 //   the struct it fills, or a global) - re/lab/zoobin.py "readers"
 // - Class tables: a class's table of functions, slot by slot
 // - The game's own text: names its debug text gives, the source file paths
-const LOADERS_JSON = path.join(REPO, 're', 'lab', 'loaders.json');
+const LOADERS_JSON = at('lab', 'loaders.json');
+// The shared knowledge base (re/cloud): what every install of the Lab has
+// worked out about zoo.exe, moved between checkouts by re/cloud/sync.py. What
+// shares and what doesn't - and why only one build of the game is involved -
+// is in re/cloud/README.md. Nothing happens by itself: the Lab only ever runs
+// it when it is asked to, and `pull` writes to re/knowledge.json.
+const CLOUD_CONF = path.join(PRIVATE, 'cloud.json');
+const CLOUD_API = () => (process.env.ZT1_KB_API || (jsonFile(CLOUD_CONF, {}) || {}).api || '').trim();
+// (10 minutes: sending a whole base goes up in pieces - 2,059 findings and
+// 18,167 situations is 13 requests - so a short timeout would cut it off
+// halfway through)
+// (the zoo.exe sync.py should hash and send. The script resolves its own when
+// it is given none - but an installed Lab's private state is not re/private,
+// so the app hands it exactly what Play and the other views use. --zoo is
+// optional in the script, so an older command line still works)
+function cloudZooArgs() {
+  const exe = zooExePath();
+  return exe && fs.existsSync(exe) ? ['--zoo', exe] : [];
+}
+function cloudRun(args, timeout = 600000) {
+  const api = CLOUD_API();
+  if (!api) {
+    return { ok: false, error: 'The Lab has no shared knowledge base to talk to. Point it at one: set ZT1_KB_API, or put it in re/private/cloud.json ({"api": "https://..."}). See re/cloud/README.md.' };
+  }
+  const wantsZoo = args[0] === 'contribute';
+  const r = cp.spawnSync(labPython(), [at('cloud', 'sync.py'), ...args, '--api', api, ...(wantsZoo ? cloudZooArgs() : [])], {
+    cwd: REPO || roots.state,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout,
+  });
+  const said = ((r.stdout || '') + (r.stderr || '')).trim();
+  return { ok: r.status === 0, said: said.slice(-4000), api };
+}
+// (what the shared base holds right now: the front page is written for a
+// person to read, so it is fetched rather than run through sync.py)
+ipcMain.handle('kb:cloud', () => {
+  const api = CLOUD_API();
+  if (!api) return { api: '', configured: false };
+  return { api, configured: true };
+});
+ipcMain.handle('kb:cloudSync', (_e, what, dry) => {
+  const known = ['pull', 'contribute', 'pending'];
+  if (!known.includes(what)) return { ok: false, error: 'not a shared-base action: ' + what };
+  return cloudRun([what, ...(dry ? ['--dry-run'] : [])]);
+});
+
 function kbRun(args, by) {
-  const r = cp.spawnSync('python', [path.join(REPO, 're', 'kb.py'), ...args, ...(by ? ['--by', by] : [])], {
-    cwd: REPO,
+  const r = cp.spawnSync(labPython(), [at('kb.py'), ...args, ...(by ? ['--by', by] : [])], {
+    cwd: REPO || roots.state,
     encoding: 'utf8',
     windowsHide: true,
     timeout: 120000,
@@ -1467,7 +1620,7 @@ async function loadersList() {
   const r = await zooBinAsk({ op: 'readers', readers: cfg.readers });
   if (r.error) return r;
   const owners = await ownersOf(r.reads.map((x) => x.at));
-  const kb = jsonFile(path.join(REPO, 're', 'knowledge.json'), { structs: {}, globals: {}, loaders: {} });
+  const kb = jsonFile(KNOWLEDGE, { structs: {}, globals: {}, loaders: {} });
   const groups = new Map();
   for (const x of r.reads) {
     const o = owners[x.at.replace(/^0x/, '')] || owners[x.at];
@@ -1571,12 +1724,12 @@ ipcMain.handle('kb:loaderSave', async (_e, loader, struct, by, confidence) => {
 // known ones named (re/lab/classes.json, then the knowledge base's own),
 // each slot with the other classes having the same function there (what
 // they share: the class they come from)
-const CLASSES_JSON = path.join(REPO, 're', 'lab', 'classes.json');
+const CLASSES_JSON = at('lab', 'classes.json');
 async function classTables() {
   const r = await zooBinAsk({ op: 'vtables' });
   if (r.error) return r;
   const cfg = jsonFile(CLASSES_JSON, { classes: {} }).classes;
-  const kb = jsonFile(path.join(REPO, 're', 'knowledge.json'), { classes: {}, functions: {} });
+  const kb = jsonFile(KNOWLEDGE, { classes: {}, functions: {} });
   const kbByTable = {};
   for (const [name, c] of Object.entries(kb.classes || {})) kbByTable[kbHex(c.vtable)] = name;
   const tables = r.tables.map((t) => ({ ...t, name: kbByTable[t.addr] || (cfg[t.addr] && cfg[t.addr].name) || '', how: (cfg[t.addr] && cfg[t.addr].how) || '', saved: !!kbByTable[t.addr] }));
@@ -1593,7 +1746,7 @@ ipcMain.handle('kb:class', async (_e, addr) => {
   const named = all.tables.filter((t) => t.name && t.addr !== kbHex(addr));
   const others = {};
   for (const t of named) others[t.name] = (await zooBinAsk({ op: 'vtable', addr: t.addr })).slots || [];
-  const kb = jsonFile(path.join(REPO, 're', 'knowledge.json'), { functions: {} });
+  const kb = jsonFile(KNOWLEDGE, { functions: {} });
   const slots = me.slots.map((fa, i) => {
     const off = '0x' + (i * 4).toString(16);
     const k = kbHex(fa);
@@ -1629,7 +1782,7 @@ async function textRows() {
   const dn = await ghidraGet('/debugnames', 180000);
   const fs2 = await ghidraGet('/fnstrings', 180000);
   if (!dn || !fs2) return { error: 'Ghidra isn’t up (the pill at the top).' };
-  const kb = jsonFile(path.join(REPO, 're', 'knowledge.json'), { functions: {} });
+  const kb = jsonFile(KNOWLEDGE, { functions: {} });
   const rows = new Map();
   for (const [a, names] of Object.entries(dn.json.functions || {})) {
     if (names.length !== 1) continue;
@@ -1675,12 +1828,16 @@ ipcMain.handle('me:set', (_e, name) => {
 });
 
 // ------------------------------------------------------ mods and source
+// (a path the page named, kept inside dir - and null when there's no dir to
+// keep it in: a Lab with no checkout has no source to read or write)
 function inside(dir, p) {
+  if (!dir) return null;
   const full = path.resolve(dir, p);
   return full.startsWith(dir + path.sep) ? full : null;
 }
 
 ipcMain.handle('mods:list', () => {
+  if (!SCRIPTS) return [];
   fs.mkdirSync(SCRIPTS, { recursive: true });
   return fs
     .readdirSync(SCRIPTS)
@@ -1699,7 +1856,7 @@ ipcMain.handle('mods:list', () => {
 });
 ipcMain.handle('mods:read', (_e, name) => {
   const p = inside(SCRIPTS, name);
-  if (!p) return null;
+  if (!p || !fs.existsSync(p)) return null;
   try {
     return fs.readFileSync(p, 'utf8');
   } catch {
@@ -1739,16 +1896,29 @@ ipcMain.handle('open:reveal', (_e, rel) => {
 ipcMain.handle('open:file', (_e, rel, line) => {
   const p = inside(REPO, rel);
   if (!p) return;
-  // (VS Code to the line if it's there, else whatever opens the file)
-  const code = cp.spawn('code', ['-g', `${p}:${line || 1}`], { shell: true, detached: true, stdio: 'ignore' });
+  // (VS Code to the line if it's there, else whatever opens the file. This
+  // must NOT go through a shell: `code` is found on PATH as code.cmd, and
+  // shell:true would hand the path and line to cmd.exe, where a path holding
+  // & | ^ > would be run as a command. shell:false runs the shim directly, and
+  // the line is a number or nothing)
+  const n = Math.floor(Number(line));
+  const at = Number.isFinite(n) && n > 0 ? n : 1;
+  const code = cp.spawn('code', ['-g', `${p}:${at}`], { shell: false, detached: true, stdio: 'ignore' });
   code.on('error', () => shell.openPath(p));
   code.on('exit', (c) => c && shell.openPath(p));
 });
 
 // ------------------------------------------------------- engine source
-const SRC = path.join(REPO, 'src');
+const SRC = inRepo('src');
 function srcFiles(dir = SRC, out = []) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+  if (!dir) return out;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out; // (no checkout: the views that list the source show nothing)
+  }
+  for (const e of entries) {
     const p = path.join(dir, e.name);
     if (e.isDirectory()) srcFiles(p, out);
     else if (/\.(cpp|hpp|h|c)$/i.test(e.name)) out.push(path.relative(REPO, p).replace(/\\/g, '/'));
@@ -1757,7 +1927,7 @@ function srcFiles(dir = SRC, out = []) {
 }
 // (which 'vendor': the libraries built with it - SDL, libzip, the PE loader -
 // whose fixes are the engine's too)
-const VENDOR = path.join(REPO, 'vendor');
+const VENDOR = inRepo('vendor');
 ipcMain.handle('src:list', (_e, which) => {
   if (which !== 'vendor') return srcFiles().sort();
   try {
@@ -1769,14 +1939,14 @@ ipcMain.handle('src:list', (_e, which) => {
 // Any file, read only (a header clangd's go to definition leads to)
 ipcMain.handle('file:readAny', (_e, abs) => {
   try {
-    if (!/\.(h|hpp|hh|hxx|inl|ipp|c|cc|cpp|cxx|tcc)$/i.test(abs) && !/[\\/]include[\\/]/i.test(abs)) return null;
-    return { text: fs.readFileSync(abs, 'utf8').replace(/\r\n/g, '\n') };
+    if (!/\.(h|hpp|hh|hxx|inl|ipp|c|cc|cpp|cxx|tcc)$/i.test(abs) && !/[\\/]include[\\/]/i.test(abs)) return null;    return { text: fs.readFileSync(abs, 'utf8').replace(/\r\n/g, '\n') };
   } catch {
     return null;
   }
 });
 ipcMain.handle('src:readAll', (_e, rel) => {
   const p = inside(REPO, rel);
+  if (!p) return null;
   try {
     const raw = fs.readFileSync(p, 'utf8');
     return { text: raw.replace(/\r\n/g, '\n'), crlf: raw.includes('\r\n') };
@@ -1787,6 +1957,7 @@ ipcMain.handle('src:readAll', (_e, rel) => {
 // A new engine file (src/, .cpp/.hpp/.h, not there yet): Engine code's New
 // file, and New engine code for a game file
 ipcMain.handle('src:create', (_e, rel, text) => {
+  if (!REPO) return { ok: false, error: NO_CHECKOUT };
   const p = inside(REPO, rel);
   if (!p || !p.startsWith(SRC + path.sep) || !/\.(cpp|hpp|h)$/i.test(p)) return { ok: false, error: 'A new file goes in src/, as .cpp, .hpp or .h' };
   if (fs.existsSync(p)) return { ok: false, error: rel + ' is there already' };
@@ -1795,6 +1966,7 @@ ipcMain.handle('src:create', (_e, rel, text) => {
   return { ok: true };
 });
 ipcMain.handle('src:write', (_e, rel, text, crlf) => {
+  if (!REPO) return false;
   const p = inside(REPO, rel);
   if (!p || !(p.startsWith(SRC + path.sep) || p.startsWith(VENDOR + path.sep))) return false; // (the engine's source and its libraries' only)
   fs.writeFileSync(p, crlf ? text.replace(/\n/g, '\r\n') : text);
@@ -1806,7 +1978,7 @@ ipcMain.handle('src:grep', (_e, q) => {
   const out = [];
   if (needle.length < 2) return out;
   for (const rel of srcFiles()) {
-    const lines = fs.readFileSync(path.join(REPO, rel), 'utf8').split(/\r?\n/);
+    const lines = readMaybe(path.join(REPO, rel), '').split(/\r?\n/);
     for (let i = 0; i < lines.length; i++)
       if (lines[i].toLowerCase().includes(needle)) {
         out.push({ file: rel, line: i + 1, text: lines[i].trim().slice(0, 200) });
@@ -1815,7 +1987,6 @@ ipcMain.handle('src:grep', (_e, q) => {
   }
   return out;
 });
-
 // Which of a game file's keys our engine reads ("cprey" in quotes, any
 // case): a species' .ai is never named - every one goes through the same
 // loader - but its keys are. Each key read, with where it's first read
@@ -1823,7 +1994,7 @@ ipcMain.handle('src:keys', (_e, keys) => {
   const want = new Map((keys || []).map((k) => [String(k).toLowerCase(), k]));
   const out = {};
   for (const rel of srcFiles()) {
-    const lines = fs.readFileSync(path.join(REPO, rel), 'utf8').split(/\r?\n/);
+    const lines = readMaybe(path.join(REPO, rel), '').split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i].toLowerCase();
       if (!l.includes('"')) continue;
@@ -1845,6 +2016,8 @@ const MSBUILD_CANDIDATES = [
 let engineBuild = null;
 ipcMain.handle('engine:build', () => {
   if (engineBuild) return { error: 'Already building.' };
+  // (building is the checkout's: there's nothing to build without one)
+  if (!REPO) return { error: NO_CHECKOUT };
   const msbuild = process.env.ZT1_MSBUILD || MSBUILD_CANDIDATES.find((p) => fs.existsSync(p));
   if (!msbuild) return { error: 'No MSBuild found (Visual Studio). Set ZT1_MSBUILD to its path.' };
   const t0 = Date.now();
@@ -1902,7 +2075,7 @@ ipcMain.handle('engine:build', () => {
     const ok = code === 0 && !problems.length;
     // (built: the zoo.exe addresses the code now cites, gathered again, so
     // Functions shows what's in our engine as soon as it is)
-    if (ok) cp.spawnSync('python', [path.join(REPO, 're', 'scan_engine.py')], { cwd: REPO, timeout: 60000 });
+    if (ok) cp.spawnSync(labPython(), [at('scan_engine.py')], { cwd: REPO || roots.state, timeout: 60000 });
     send('build:done', { ok, problems, secs: Math.round((Date.now() - t0) / 100) / 10 });
     if (ok) {
       // (the new engine: the lab zoo's, and the game's when it's next started)
@@ -1990,7 +2163,12 @@ ipcMain.handle('gamemods:enable', (_e, folder, on) => {
 // new one made from it as a mod
 ipcMain.handle('anim:tool', (_e, req) => {
   return new Promise((resolve) => {
-    const proc = cp.spawn('python', ['-I', '-X', 'utf8', path.join(REPO, 're', 'lab', 'animaker.py')], { cwd: REPO });
+    // (the engine's folder, which is also where the game's files are: the
+    // animation it's asked about comes from beside it either way)
+    const engineDir = roots.engineDir || RELEASE;
+    const tool = PY && path.join(PY, 'animaker.py');
+    if (!tool) return resolve({ ok: false, error: roots.looked('animaker.py') });
+    const proc = cp.spawn(labPython(), ['-I', '-X', 'utf8', tool], { cwd: engineDir });
     let out = '', err = '';
     proc.stdout.on('data', (d) => (out += d));
     proc.stderr.on('data', (d) => (err += d));
@@ -2001,17 +2179,18 @@ ipcMain.handle('anim:tool', (_e, req) => {
         resolve({ ok: false, error: (err || out || 'no answer').slice(0, 400) });
       }
     });
-    proc.stdin.end(JSON.stringify({ engineDir: RELEASE, modsFolder: modsFolder(), ...req }));
+    proc.stdin.end(JSON.stringify({ engineDir, modsFolder: modsFolder(), ...req }));
   });
 });
 
 ipcMain.handle('engine:release', (_e, opts = {}) => {
+  if (!REPO) return { error: NO_CHECKOUT };
   if (engineRelease || engineBuild) return { error: 'Already building.' };
   const args = ['-X', 'utf8', '-u', path.join(REPO, 'engine-build-resources', 'make_release.py')];
   if (opts.noBuild) args.push('--no-build');
   const t0 = Date.now();
   const r = { zip: '', sha: '', error: '', leftOut: [] };
-  const proc = cp.spawn('python', args, { cwd: REPO });
+  const proc = cp.spawn(labPython(), args, { cwd: REPO || roots.state });
   engineRelease = proc;
   let buf = '';
   let inLeft = false;
@@ -2053,16 +2232,19 @@ ipcMain.handle('engine:release', (_e, opts = {}) => {
 const sync = require('./sync.js')(REPO, (line) => send('sync:line', line));
 for (const [name, fn] of Object.entries({
   status: (a) => sync.status(a || {}),
-  pull: () => sync.pull(),
-  resolve: (a) => sync.resolve(a.file, a.how),
-  abort: () => sync.abortMerge(),
-  commit: (a) => sync.commit(a.message),
-  push: () => sync.push(),
-  propose: (a) => sync.propose(a.title, a.body),
-  branch: (a) => sync.newBranch(a.name),
-  mirror: () => sync.mirror(),
+  pull: () => sync.pull && sync.pull(),
+  resolve: (a) => sync.resolve && sync.resolve(a.file, a.how),
+  abort: () => sync.abortMerge && sync.abortMerge(),
+  commit: (a) => sync.commit && sync.commit(a.message),
+  push: () => sync.push && sync.push(),
+  propose: (a) => sync.propose && sync.propose(a.title, a.body),
+  branch: (a) => sync.newBranch && sync.newBranch(a.name),
+  mirror: () => sync.mirror && sync.mirror(),
 }))
-  ipcMain.handle('sync:' + name, (_e, a) => fn(a).catch((e) => ({ ok: false, error: String(e && e.message ? e.message : e) })));
+  ipcMain.handle('sync:' + name, (_e, a) => {
+    if (typeof fn(a || {}) === 'undefined') return { ok: false, error: NO_CHECKOUT };
+    return fn(a || {}).catch((e) => ({ ok: false, error: String(e && e.message ? e.message : e) }));
+  });
 
 // --------------------------------------------- clangd (code intelligence)
 // The C++ language server, on the engine's code (compile_flags.txt at the
@@ -2070,8 +2252,12 @@ for (const [name, fn] of Object.entries({
 // errors as you type. Its messages (LSP, framed by Content-Length) go to
 // and from the page as they are
 const lsp = { proc: null, buf: Buffer.alloc(0) };
+// (the clangd the app carries, or the one in a checkout's lab-app/clangd/
+// while developing. Named rather than found when the shipped one is flat -
+// tree/clangd/bin/clangd.exe)
 function clangdExe() {
-  const dir = path.join(__dirname, 'clangd');
+  if (roots.clangd) return roots.clangd;
+  const dir = roots.clangdInApp || path.join(__dirname, 'clangd');
   try {
     for (const d of fs.readdirSync(dir)) {
       const p = path.join(dir, d, 'bin', 'clangd.exe');
@@ -2088,7 +2274,7 @@ function clangdExe() {
 // index covers the whole engine (kept in .cache/clangd)
 function writeCompileDb() {
   try {
-    const flags = fs.readFileSync(path.join(REPO, 'compile_flags.txt'), 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const flags = fs.readFileSync(roots.compileFlags, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     const files = [];
     const walk = (d) => {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -2098,7 +2284,7 @@ function writeCompileDb() {
       }
     };
     walk(path.join(REPO, 'src'));
-    const dir = path.join(REPO, '.cache', 'lab-clangd');
+    const dir = path.join(PRIVATE, 'lab-clangd');
     fs.mkdirSync(dir, { recursive: true });
     const db = files.map((f) => ({ directory: REPO, file: f, arguments: ['clang++', ...flags, f] }));
     fs.writeFileSync(path.join(dir, 'compile_commands.json'), JSON.stringify(db, null, 1));
@@ -2109,8 +2295,10 @@ function writeCompileDb() {
 }
 ipcMain.handle('lsp:start', () => {
   if (lsp.proc) lsp.proc.kill();
+  // (the code intelligence is the checkout's: it needs the engine's source)
+  if (!REPO) return { error: NO_CHECKOUT };
   const exe = clangdExe();
-  if (!exe) return { error: 'clangd isn’t in lab-app/clangd' };
+  if (!exe) return { error: 'clangd isn’t here: ' + roots.looked('clangd') };
   const db = writeCompileDb();
   const args = ['--background-index', '--header-insertion=never', '--clang-tidy=false', '-j=4', '--pch-storage=memory'];
   if (db) args.push('--compile-commands-dir=' + db);
@@ -2285,7 +2473,7 @@ function createWindow() {
   for (const ev of ['move', 'resize', 'maximize', 'unmaximize', 'restore', 'minimize']) win.on(ev, placeGame);
   // (the page's errors: in this process's output, in .cache/lab-page.log, and
   // in the Lab's Log - a page that breaks says why somewhere you can read)
-  const pageLog = path.join(REPO, '.cache', 'lab-page.log');
+  const pageLog = path.join(PRIVATE, 'lab-page.log');
   try {
     fs.mkdirSync(path.dirname(pageLog), { recursive: true });
     fs.writeFileSync(pageLog, '');

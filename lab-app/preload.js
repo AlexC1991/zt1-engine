@@ -73,6 +73,9 @@ contextBridge.exposeInMainWorld('lab', {
   uiIds: (nums) => ipcRenderer.invoke('ui:ids', nums),
   atlasVerdict: (label, status, at, note, by) => ipcRenderer.invoke('atlas:verdict', label, status, at, note, by),
   setMe: (name) => ipcRenderer.invoke('me:set', name),
+  // the shared knowledge base: what every install has found (re/cloud)
+  kbCloud: () => ipcRenderer.invoke('kb:cloud'),
+  kbCloudSync: (what, dry) => ipcRenderer.invoke('kb:cloudSync', what, !!dry),
   // mods, the engine's source
   modsList: () => ipcRenderer.invoke('mods:list'),
   modsRead: (name) => ipcRenderer.invoke('mods:read', name),

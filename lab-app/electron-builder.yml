@@ -1,0 +1,46 @@
+# ZT1 Lab, packed. Not a target of its own: engine-build-resources/pack_lab.py
+# runs electron-builder (this file) to make the app, then Inno Setup
+# (installer/zt1-lab.iss) to make the installer the Lab is released as.
+#
+# electron-builder's work: an Electron runtime of its own (the app's own copy
+# in node_modules/ is what runs it developed), named ZT1 Lab.exe, with the
+# app inside resources/app.asar. Everything else the Lab needs - the engine,
+# its Python tools, the knowledge base, clangd - is not an Electron matter
+# and the installer carries it (pack_lab.py stages it: tree/).
+appId: dev.zt1-engine.lab
+productName: ZT1 Lab
+copyright: batty251 and the ZT1-Engine contributors
+asar: true
+# (there's no publishing from here: make_release.py names the release)
+publish: null
+
+directories:
+  output: .lab-pack
+  buildResources: .
+
+# What goes in the asar: the app itself, and the two libraries the page loads
+# by path (renderer/index.html, renderer/editor.js). The rest of
+# node_modules/ - Electron itself, and Monaco's esm/ and dev/ halves, 160 MB
+# the page never asks for - stays out
+files:
+  - '!**/*'
+  - package.json
+  - main.js
+  - preload.js
+  - runtime.js
+  - sync.js
+  - icon.png
+  - renderer/**
+  - '!renderer/**/*.map'
+  - node_modules/dockview-core/dist/dockview-core.js
+  - node_modules/monaco-editor/min/**
+  - '!node_modules/monaco-editor/min/**/*.map'
+
+win:
+  # (the app itself: the installer is what a release publishes)
+  target:
+    - dir
+  icon: icon.ico
+  # (no code signing - there's no certificate - but the icon and version
+  #  stamping are still applied)
+  signExecutable: false

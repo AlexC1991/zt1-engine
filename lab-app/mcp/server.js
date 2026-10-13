@@ -334,6 +334,20 @@ const TOOLS = {
     required: ['action'],
     run: (a) => call('sceneAct', a),
   },
+  lab_kb_cloud: {
+    description:
+      'The shared knowledge base: what every install of the Lab has worked out about the original zoo.exe (re/cloud). Reports where it is pointed, or with what: "pull" brings what others found into re/knowledge.json, "contribute" sends what this checkout has worked out (provisional until reviewed), "pending" lists what is waiting to be reviewed. dry: true says what would happen and changes nothing. Every fact is about one build of the game (2002 Complete Collection, SHA-256 checked), so a contribution from another build is refused.',
+    schema: {
+      what: { type: 'string', description: 'pull, contribute or pending (omit to just report where it is pointed)' },
+      dry: { type: 'boolean', description: 'say what would happen, change nothing' },
+    },
+    run: (a) => call('kbCloud', a),
+  },
+  lab_kb_cloud_status: {
+    description: 'The shared knowledge base: where this Lab is pointed (re/private/cloud.json or ZT1_KB_API), or that it has none set up yet. See re/cloud/README.md.',
+    schema: {},
+    run: () => call('kbCloud', {}),
+  },
   lab_scene_pin: {
     description: 'Scene: pin a value of the selected animal or guest (held at value, or its current one, every update), or on: false to let it go.',
     schema: { field: { type: 'string' }, value: { type: 'number' }, on: { type: 'boolean' } },
