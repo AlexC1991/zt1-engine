@@ -33,13 +33,32 @@ This is made out of love for the game. It isn't affiliated with Microsoft or Blu
 | **[GitHub Releases](https://github.com/AlexC1991/zt1-engine/releases)** | Every weekly alpha, with release notes |
 | **CodeRook** | The same builds |
 
-Both places get the same downloads each week:
+Both places get the same three files each week. **Two of them play the game; the third is for looking inside it.**
 
-- **The ZT1 Engine, `ZT1-Engine-Setup-<version>.exe`:** an installer (no admin prompt). Start ZT1-Engine and it finds your Zoo Tycoon by itself, or asks you once where it is. It reads the game where it's installed, never changing your game's folder, and offers each new alpha at the main menu.
-- **The Game Build, `ZT1-Game-Build-<version>-win64.zip`:** a folder that runs on its own, like the first alpha. Unzip it and run `start.bat`: the first time, it copies your Zoo Tycoon's files in beside the engine (it needs Python 3), and from then on the folder plays by itself.
-- **The ZT1 Lab, `ZT1-Lab-Setup-<version>.exe`:** the app the engine is worked on with - it studies the original `zoo.exe` (the knowledge base, Ghidra, recordings, our own code side by side) and plays the whole game inside it. Also an installer, no admin prompt: it carries the engine, the Lab's own knowledge base, Python with the packages the Lab's tools need, and Ghidra with the Java it runs on - so nothing else has to be installed. It asks once for a checkout to edit and build, and works without one. See `lab-app/README.md`.
+| Download | What it is |
+|---|---|
+| **`ZT1-Engine-Setup-<version>.exe`** — 4 MB | **The engine. Get this one.** An installer, no admin prompt. Start ZT1-Engine and it finds your Zoo Tycoon by itself (or asks you once where it is), reads the game where it's installed without ever changing your game's folder, and offers each new alpha at the main menu. |
+| **`ZT1-Game-Build-<version>-win64.zip`** — 3 MB | **The other way to play.** A folder that runs on its own, like the first alpha: unzip it anywhere and run `start.bat`. The first time it copies your Zoo Tycoon's files in beside the engine, and for that it needs [Python 3](https://www.python.org/downloads/) installed. After that the folder plays by itself, but it doesn't update itself — download the next one when it's out. |
+| **`ZT1-Lab-Setup-<version>.exe`** — 570 MB | **Not needed to play.** The workbench the engine is developed with: it reads your own `zoo.exe`, shows what each address in it does, records which code runs in which situation, and edits and builds this engine's C++ beside it. |
 
-The README that comes with each has the details.
+Every download has its **`.sha256`** beside it, so you can check what you got.
+
+### The ZT1 Lab, if you want it
+
+The Lab is for anyone who wants to know how Zoo Tycoon and this engine actually
+work. **Playing does not need it, and it is a 570 MB download** — skip it unless
+that sentence describes you.
+
+It installs the same way, for you alone with no admin prompt, and **everything
+it needs is inside it**: the decompiler (Ghidra) and the Java it runs on, an
+embeddable Python with the packages its tools use, and its knowledge base. There
+is nothing to install first. Like the engine, it ships **none** of the game's
+files — it reads your own copy where it is.
+
+You can point it at the engine's source to edit and build, or let it use what it
+carries. How it works: [`lab-app/README.md`](lab-app/README.md).
+
+Each download's own README has the rest.
 
 ### What you need
 
