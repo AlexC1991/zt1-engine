@@ -24,9 +24,9 @@
 
 <br>
 
-<img src="docs/screenshots/gazelle_jump.jpg" alt="ZT1-Engine running a zoo: paths, an exhibit, rocks and the original's HUD" width="720">
+<img src="docs/screenshots/main_menu.jpg" alt="The ZT1-Engine main menu" width="720">
 
-<sub>The engine running a freeform zoo, with the original game's own art and interface.</sub>
+<sub>The ZT1-Engine main menu, drawn from your own copy of Zoo Tycoon.</sub>
 
 </div>
 
