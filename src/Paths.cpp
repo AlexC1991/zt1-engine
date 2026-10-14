@@ -38,8 +38,13 @@ bool looksLikeGame(const fs::path &dir) {
 
 std::string withSlash(const fs::path &p) {
   std::string s = p.string();
+#ifdef _WIN32
+  const char separator = '\\';
+#else
+  const char separator = '/';
+#endif
   if (!s.empty() && s.back() != '\\' && s.back() != '/')
-    s += '\\';
+    s += separator;
   return s;
 }
 
@@ -238,9 +243,11 @@ std::string gameDir() { return g_game; }
 std::string dataDir() { return g_data; }
 std::string configFile() { return g_portable ? std::string("zoo.ini") : g_data + "zoo.ini"; }
 // (portable: the source checkout's saves/, two folders above build/Release,
-// where it has always been)
+// where it has always been. The separators here are forward slashes on every
+// platform: fs::path takes them on Windows too, and a backslash is an ordinary
+// character in a file name elsewhere. ours: Linux port.)
 std::string scenarioProgressFile() {
-  return g_portable ? std::string("../../saves/user_scenarios.json") : g_data + "saves\\user_scenarios.json";
+  return g_portable ? std::string("../../saves/user_scenarios.json") : g_data + "saves/user_scenarios.json";
 }
 
 } // namespace Paths

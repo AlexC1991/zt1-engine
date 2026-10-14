@@ -50,8 +50,31 @@ add_subdirectory(vendor/SDL_image)
 add_subdirectory(vendor/SDL_mixer)
 add_subdirectory(vendor/SDL_ttf)
 add_subdirectory(vendor/zlib)
-add_subdirectory(vendor/libzip)
 add_subdirectory(vendor/pe-resource-loader)
+
+# libzip. The copy under vendor/libzip is patched for MSVC -- lib/zip_fdopen.c
+# tests HAVE_UNISTD_H and then includes the Windows <io.h>, which is backwards,
+# and lib/zip_close.c calls _stricmp unconditionally -- so it does not build
+# anywhere else. Off Windows, take the same library from the system, where it
+# is already built for this platform. ours: Linux port.
+if(WIN32)
+    add_subdirectory(vendor/libzip)
+    set(ZT1_LIBZIP_TARGET zip)
+    set(ZT1_LIBZIP_INCLUDE_DIRS
+        vendor/libzip/lib
+        vendor/libzip/include
+        ${CMAKE_CURRENT_BINARY_DIR}/vendor/libzip)
+else()
+    find_path(LIBZIP_INCLUDE_DIR zip.h)
+    find_library(LIBZIP_LIBRARY NAMES zip)
+    if(NOT LIBZIP_INCLUDE_DIR OR NOT LIBZIP_LIBRARY)
+        message(FATAL_ERROR
+            "libzip not found. Install it (Debian/Ubuntu: libzip-dev, Arch: libzip, Fedora: libzip-devel).")
+    endif()
+    message(STATUS "Using the system libzip: ${LIBZIP_LIBRARY}")
+    set(ZT1_LIBZIP_TARGET ${LIBZIP_LIBRARY})
+    set(ZT1_LIBZIP_INCLUDE_DIRS ${LIBZIP_INCLUDE_DIR})
+endif()
 
 # 6. GATHER SOURCE CODE
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.c")
@@ -75,6 +98,16 @@ if(MSVC)
         "${CMAKE_BINARY_DIR}/vendor/libzip/lib/Release"
         "${CMAKE_BINARY_DIR}/vendor/pe-resource-loader/lib/Release"
     )
+    # (the SDL_* static libraries are named with a -static suffix in this build,
+    # and reach the linker by file name through the directories just above)
+    set(ZT1_SDL_IMAGE SDL2_image-static)
+    set(ZT1_SDL_MIXER SDL2_mixer-static)
+else()
+    # (elsewhere the same libraries are ordinary CMake targets -- SDL_image and
+    # SDL_mixer each define exactly one, without the -static suffix -- and a
+    # target carries its own path, so there is nothing to look up)
+    set(ZT1_SDL_IMAGE SDL2_image)
+    set(ZT1_SDL_MIXER SDL2_mixer)
 endif()
 
 # 8. CREATE EXECUTABLE
@@ -83,6 +116,17 @@ add_executable(zt1-engine ${SOURCES}
         src/UserProfile.hpp
         src/PngLoader.cpp
         src/PngLoader.hpp)
+
+# 8b. THE FILES THE ENGINE WANTS BESIDE IT
+# The engine reads its own files from the folder it is running in
+# (Paths::appDir()): the only one is fonts/. Without them the game starts,
+# loads everything, and draws no text anywhere -- buttons, panels, money, all
+# of it blank -- with nothing in the log to say why. ours: Linux port.
+add_custom_command(TARGET zt1-engine POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+            "$<TARGET_FILE_DIR:zt1-engine>/fonts"
+    COMMENT "Copying the engine's fonts beside the executable")
 
 # Test executable disabled - test_zoo_reader.cpp removed in architecture rebuild
 # add_executable(test-zoo src/test_zoo_reader.cpp src/ZooReader.cpp src/MemoryManager.cpp)
@@ -101,25 +145,23 @@ target_include_directories(zt1-engine PRIVATE
     vendor/SDL_mixer/include
     vendor/SDL_ttf
     vendor/SDL_ttf/include
-    vendor/libzip/lib
-    vendor/libzip/include
+    ${ZT1_LIBZIP_INCLUDE_DIRS}
     vendor/pe-resource-loader
     vendor/pe-resource-loader/src
     vendor/pe-resource-loader/include
     vendor/zlib
     ${CMAKE_CURRENT_BINARY_DIR}/vendor/zlib
-    ${CMAKE_CURRENT_BINARY_DIR}/vendor/libzip
 )
 
 # 10. LINK EVERYTHING TOGETHER (Single unified call with PRIVATE keyword)
 target_link_libraries(zt1-engine PRIVATE
     # SDL Libraries
     SDL2-static
-    SDL2_image-static
-    SDL2_mixer-static
+    ${ZT1_SDL_IMAGE}
+    ${ZT1_SDL_MIXER}
     SDL2_ttf
     # Archive/Compression
-    zip
+    ${ZT1_LIBZIP_TARGET}
     zlibstatic
     # PE Resource Loader
     pe_resource_loader_static

@@ -109,7 +109,12 @@ public:
 
     std::filesystem::path new_path = std::filesystem::path("/");
     if (!path.is_absolute()) {
-      new_path = std::filesystem::path(Utils::getExecutableDirectory());
+      // A relative path is relative to where the process is running, which by
+      // the time resources are read is the game's own folder: Paths::setup
+      // moves there. It used to be the executable's folder -- where the engine
+      // was built, and where there are no game files -- so every relative path
+      // resolved to nothing and was dropped without a word. ours: Linux port.
+      new_path = std::filesystem::current_path();
     }
     for (std::filesystem::path part : path) {
       if (part == "/" || part == ".") {

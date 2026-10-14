@@ -41,12 +41,11 @@
 #include "World.hpp"
 #include "lab_api.h"
 
-// (after the engine's headers: windows.h defines near, far, min, max)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#include <shellapi.h>
-#include <winsock2.h>
+// (the operating-system names this file calls: its sockets, the script module
+// it loads while running, and opening a file with the desktop. On Windows that
+// is windows.h/shellapi.h/winsock2.h, which is why this stays after the
+// engine's own headers; elsewhere, the POSIX counterparts of the same names.)
+#include "PlatformCompat.hpp"
 #include <SDL2/SDL_syswm.h>
 #undef near
 
@@ -235,7 +234,11 @@ using StartFn = void (*)(Lab *);
 using StepFn = bool (*)(Lab *, int);
 
 // (a script that crashes stops, not the Lab: plain functions so __try can
-// guard them)
+// guard them. Outside Windows there is no structured exception handling to
+// catch a faulting script, so the call is made directly and a crashing script
+// takes the process with it instead of being caught. ours: Linux port, a known
+// difference.)
+#ifdef _WIN32
 int guardedStart(StartFn f, Lab *lab) {
   __try {
     f(lab);
@@ -252,6 +255,16 @@ int guardedStep(StepFn f, Lab *lab, int step, bool *more) {
     return static_cast<int>(GetExceptionCode());
   }
 }
+#else
+int guardedStart(StartFn f, Lab *lab) {
+  f(lab);
+  return 0;
+}
+int guardedStep(StepFn f, Lab *lab, int step, bool *more) {
+  *more = f(lab, step);
+  return 0;
+}
+#endif
 
 std::string findVcvars() {
   if (const char *v = std::getenv("ZT1_VCVARS"))
@@ -355,8 +368,7 @@ private:
     SOCKET sk = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sk == INVALID_SOCKET)
       return false;
-    DWORD timeout = 90000;
-    setsockopt(sk, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout), sizeof timeout);
+    setReceiveTimeout(sk, 90000);
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_port = htons(18489);
@@ -369,7 +381,7 @@ private:
     FD_ZERO(&w);
     FD_SET(sk, &w);
     timeval tv{0, 300000};
-    if (select(0, nullptr, &w, nullptr, &tv) <= 0) {
+    if (selectWrite(sk, &w, &tv) <= 0) {
       closesocket(sk);
       return false;
     }
@@ -5186,12 +5198,17 @@ int LabApp::runHost(const std::string &mapStem, int port) {
 void labHostHide(SDL_Window *window) {
   // Off the screen, off the taskbar: the app shows what it draws
   SDL_SetWindowPosition(window, -20000, -20000);
+#ifdef _WIN32
   SDL_SysWMinfo info;
   SDL_VERSION(&info.version);
   if (SDL_GetWindowWMInfo(window, &info)) {
     HWND h = info.info.win.window;
     SetWindowLong(h, GWL_EXSTYLE, (GetWindowLong(h, GWL_EXSTYLE) | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
   }
+#else
+  // (no window manager here has Windows' tool-window flag to hide a window
+  // from the taskbar; off the screen is as far as this goes. ours: Linux port)
+#endif
 }
 
 int runLab(SDL_Window *window, SDL_Renderer *renderer, ResourceManager *rm, ScenarioManager *sm, World *world,

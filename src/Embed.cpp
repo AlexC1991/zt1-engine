@@ -7,16 +7,24 @@
 #include <string>
 #include <thread>
 
+// The Lab's Play view, and the window handle it passes in, exist only on
+// Windows: the Lab drives the retail 32-bit zoo.exe (src/original/). Anywhere
+// else Embed::into() reports failure and the engine runs as a normal window,
+// so everything below that needs a window handle is behind the platform check.
+// ours: Linux port (plumbing; the original game has nothing like this).
+#ifdef _WIN32
 #include <SDL2/SDL_syswm.h>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
 
 #include "SessionVolume.hpp"
 
 namespace {
 std::atomic<bool> g_active{false}, g_quit{false}, g_hidden{true};
+#ifdef _WIN32
 HWND g_child = nullptr, g_owner = nullptr;
 SDL_Window *g_window = nullptr;
 
@@ -79,10 +87,12 @@ void listen() {
   e.type = SDL_QUIT;
   SDL_PushEvent(&e);
 }
+#endif // _WIN32
 } // namespace
 
 namespace Embed {
 bool into(SDL_Window *window, const char *ownerHandle) {
+#ifdef _WIN32
   SDL_SysWMinfo info;
   SDL_VERSION(&info.version);
   if (!SDL_GetWindowWMInfo(window, &info))
@@ -107,6 +117,13 @@ bool into(SDL_Window *window, const char *ownerHandle) {
   g_active = true;
   std::thread(listen).detach();
   return true;
+#else
+  // There is no Lab to embed into here. Say so, and the engine keeps its own
+  // window and runs normally.
+  (void)window;
+  (void)ownerHandle;
+  return false;
+#endif
 }
 bool active() { return g_active; }
 bool quitAsked() { return g_quit; }

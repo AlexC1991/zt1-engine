@@ -37,6 +37,39 @@ BUILD_ENGINE.bat
 
 `BUILD_ENGINE.bat` offers a full build (the first time: it builds and imports your game files), a quick build that compiles changes and runs, and a verify build that only compiles. The engine ends up in `build/Release/`.
 
+### Building on Linux
+
+The engine builds and runs on Linux using the system's own libraries:
+
+```bash
+sudo apt install build-essential cmake ninja-build \
+     libx11-dev libxext-dev libxrender-dev libxrandr-dev libxcursor-dev \
+     libxi-dev libxfixes-dev libxss-dev libxinerama-dev \
+     libasound2-dev libpulse-dev libzip-dev
+git clone --recurse-submodules https://github.com/AlexC1991/zt1-engine.git
+cd zt1-engine
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ZT1_GAME_DIR="/path/to/Zoo Tycoon" ./build/zt1-engine
+```
+
+The game plays: resources, maps, both expansions, the UI, sound, and the zoo
+simulation. `--panel-shots` runs the same checks it runs on Windows.
+
+The Lab, the updater and embedding the window in the Lab's Play view are
+Windows-only (they drive `zoo.exe` or use Windows' window handling). Script
+modules load, but a script that crashes takes the engine with it: catching that
+needs structured exception handling, and there is no portable equivalent.
+
+Two things Linux needs help with, both handled where they arise:
+
+  * File names are case-sensitive here, and `zoo.ini` asks for `./zupdate1`
+    where the folder on disk is `ZUPDATE1`. `Utils::fixPath` corrects the case
+    of each part as it resolves it.
+  * `zoo.ini` lists its folders separated by `;`, relative paths included, and
+    relative means relative to the working directory, which is the game's own
+    folder by the time resources are read.
+
 ### Testing your change
 
 ```bash

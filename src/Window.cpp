@@ -34,7 +34,14 @@ Window::Window(const std::string &title, int width, int height, float fps_target
       char *def = nullptr;
       SDL_AudioSpec spec;
       if (SDL_GetDefaultAudioInfo(&def, &spec, 0) == 0) {
+        // (the device the system sends sound to by default. Windows has a name
+        // for this; elsewhere there is no such thing, so say what it is.
+        // ours: Linux port.)
+#ifdef _WIN32
         SDL_Log("[Sound]   Windows default: %s", def ? def : "?");
+#else
+        SDL_Log("[Sound]   System default: %s", def ? def : "?");
+#endif
         SDL_free(def);
       }
     }

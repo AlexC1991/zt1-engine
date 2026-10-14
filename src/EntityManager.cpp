@@ -1,6 +1,7 @@
 #include "EntityManager.hpp"
 #include "CompassDirection.hpp"
 #include <SDL2/SDL.h>
+#include <algorithm>
 #include <cmath>
 
 // ============================================================================
