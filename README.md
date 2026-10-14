@@ -1,11 +1,35 @@
-# ZT1-Engine
+<div align="center">
+
+<pre>
+███████╗████████╗ ██╗      ███████╗███╗   ██╗ ██████╗ ██╗███╗   ██╗███████╗
+╚══███╔╝╚══██╔══╝███║      ██╔════╝████╗  ██║██╔════╝ ██║████╗  ██║██╔════╝
+  ███╔╝    ██║   ╚██║█████╗█████╗  ██╔██╗ ██║██║  ███╗██║██╔██╗ ██║█████╗
+ ███╔╝     ██║    ██║╚════╝██╔══╝  ██║╚██╗██║██║   ██║██║██║╚██╗██║██╔══╝
+███████╗   ██║    ██║      ███████╗██║ ╚████║╚██████╔╝██║██║ ╚████║███████╗
+╚══════╝   ╚═╝    ╚═╝      ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝╚═╝  ╚═══╝╚══════╝
+
+</pre>
 
 **An open-source engine for Zoo Tycoon 1 on modern Windows: the original game, rebuilt to 2026 standards, for everyone to play, mod and improve.**
 
+<a href="https://github.com/AlexC1991/zt1-engine/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/AlexC1991/zt1-engine?include_prereleases&style=for-the-badge&color=2e7d32"></a> <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-orange?style=for-the-badge"> <img alt="Platform: Windows" src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078d4?style=for-the-badge"> <a href="LICENSE.txt"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge"></a>
+
+<a href="#getting-it">Get it</a> &nbsp;&middot;&nbsp; <a href="#what-works-now">What works</a> &nbsp;&middot;&nbsp; <a href="#modding">Modding</a> &nbsp;&middot;&nbsp; <a href="#contributing">Contribute</a> &nbsp;&middot;&nbsp; <a href="#roadmap">Roadmap</a> &nbsp;&middot;&nbsp; <a href="#q--a">Q &amp; A</a> &nbsp;&middot;&nbsp; <a href="#community-forks--related-projects">Forks</a>
+
+<br>
+
+<img src="docs/screenshots/gazelle_jump.jpg" alt="ZT1-Engine running a zoo: paths, an exhibit, rocks and the original's HUD" width="720">
+
+<sub>The engine running a freeform zoo, with the original game's own art and interface.</sub>
+
+</div>
+
 Think of it as OpenRCT2 for Zoo Tycoon. The original game is the spec. Every rule (animal happiness, guest needs, the zoo rating, prices, research, escapes, predators) is recovered from the original `zoo.exe` and checked against it, not guessed. The game plays as it always did, only on today's PCs, at any window size, with bugs fixed and with optional extras you can switch on.
 
-You need your own copy of Zoo Tycoon. The engine ships **none** of the game's art, sound or files: it imports them from your install the first time it runs.
+> [!NOTE]
+> You need your own copy of Zoo Tycoon. The engine ships **none** of the game's art, sound or files: it imports them from your install the first time it runs.
 
+> [!IMPORTANT]
 > **Status: alpha.** The base game's freeform mode is playable and being polished against the original. A new alpha comes out **every week**. Expect rough edges, back up saves you care about, and please report anything that behaves differently from the original.
 
 ---
