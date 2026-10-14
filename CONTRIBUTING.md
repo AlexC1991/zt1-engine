@@ -48,7 +48,8 @@ This plays a freeform zoo by itself and checks over 230 behaviours against the o
 ## Finding out how the original does something
 
 - **The game's own files** (`.ai`, `.cfg`, `.lyt` inside the `.ztd` archives) hold most numbers and settings. Read them first.
-- **`zoo.exe` itself:** open it in [Ghidra](https://ghidra-sre.org/) (free). The function names and fields worked out so far are in `re/knowledge.json`, and scripts in `re/ghidra_scripts/` apply them to your Ghidra project. Cite the addresses you used.
+- **`zoo.exe` itself:** open it in [Ghidra](https://ghidra-sre.org/) (free), or use the **ZT1 Lab** (which bundles Ghidra and Java). The function names and fields worked out so far are in `re/knowledge.json`, and scripts in `re/ghidra_scripts/` apply them to your Ghidra project. Cite the addresses you used.
+- **Sharing binary findings (with or without the ZT1 Lab):** you don't have to switch to the ZT1 Lab if you prefer your own Ghidra setup. You can sync findings through `python re/cloud/sync.py contribute` (see [`re/cloud/README.md`](re/cloud/README.md)) or open an issue/PR. Every address in the shared knowledge base is pinned to one specific retail Windows `zoo.exe` (`2,449,432` bytes, SHA-256 `61fcc6d1…`) so addresses never collide across builds. If you have symbol or class names from another binary (such as the Mac PowerPC build), class and struct names are keyed by name rather than address and can be cross-referenced onto the Windows build.
 - **Measuring:** play the original and the engine side by side and compare. Write down how you measured in the `measured:` comment.
 
 ### Formula checks
@@ -61,12 +62,17 @@ This plays a freeform zoo by itself and checks over 230 behaviours against the o
 
 ## Pull requests
 
-1. Fork the repo and make a branch for your change. (This repo is itself a fork of sharkwouter's, so when you open the pull request, check that its base is **AlexC1991/zt1-engine** `main`. GitHub picks the original repo by default.)
-2. Keep each pull request to one thing. Small is good.
-3. Cite where your rules came from (above) and run the tests.
-4. In the description, say what changed, how you checked it against the original, and what you couldn't check.
+1. **Scope, maintenance responsibility, and forks:** Pull requests for bug fixes, gameplay/UI accuracy cited to `zoo.exe` or measured against the original, formula checks, and docs are always welcome. However, I don't merge large subsystems or platform ports (such as Linux or macOS builds) that I would be left responsible for maintaining if the original contributor steps away. If you want to build a Linux, macOS, or custom version, **fork this repo** and own your build — and open an issue with your link so I can add it to the **Community Forks & Related Projects** table in [`README.md`](README.md#community-forks--related-projects) and send people your way (no matter what OS it runs on or how many forks exist).
+2. Fork the repo and make a branch for your change. (This repo is itself a fork of sharkwouter's, so when you open the pull request, check that its base is **AlexC1991/zt1-engine** `main`. GitHub picks the original repo by default.)
+3. Keep each pull request to one thing. Small is good.
+4. **Build and test on Windows first:** make sure `BUILD_ENGINE.bat` compiles with zero errors on Windows and run `--panel-shots`. GitHub Actions workflows on fork PRs wait for maintainer approval before running any jobs, so an untested Windows break won't be caught automatically when you open the PR.
+5. Cite where your rules came from (above), and in the description say what changed, how you checked it against the original, and what you couldn't check.
 
 Someone will review it. Expect questions about where a rule came from: that's how the engine stays faithful.
+
+### No Discord or chat server
+
+There is no Discord server or social group for this project. Everything happens in the open through GitHub issues, pull requests, and the ZT1 Lab's shared knowledge base so anyone can contribute without needing an invite and the project never depends on one person moderating a server.
 
 ### Using AI
 

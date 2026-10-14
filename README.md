@@ -65,7 +65,7 @@ Each download's own README has the rest.
 - Windows 10 or 11, 64-bit
 - Zoo Tycoon 1. The **base game** is enough; the Complete Collection works too.
 
-**Linux / macOS:** this project is Windows only. For Linux, see [sharkwouter's zt1-engine](https://github.com/sharkwouter/zt1-engine), which this project grew from.
+**Linux / macOS:** this repository focuses on the Windows build (see the [Q & A](#q--a) and [Forks & Related Projects](#community-forks--related-projects) below). For Linux or cross-platform work, see [sharkwouter's zt1-engine](https://github.com/sharkwouter/zt1-engine), its [`openztc` branch](https://github.com/sharkwouter/zt1-engine/tree/openztc), or any of the community forks listed below.
 
 ---
 
@@ -171,6 +171,90 @@ The original's rules are recovered by reading `zoo.exe`'s machine code (in Ghidr
 - **Every rule is traceable.** The code comments cite the address in `zoo.exe` each rule was copied from, or say it was measured from the original, or mark it as our own. Anyone can check the work.
 
 For a one-person project, that's what makes an engine like this possible. You're free to contribute with whatever tools you like, or to fork and do it your way.
+
+---
+
+## Q & A
+
+### Playing
+
+**Do I need to own Zoo Tycoon?**
+Yes. The engine ships none of the game's art, sound or files. It reads them from your own installed copy, the first time it runs.
+
+**Is the base game enough, or do I need the Complete Collection?**
+The base game is enough. The Complete Collection works too. Marine Mania and Dinosaur Digs content isn't playable yet.
+
+**Which download do I want?**
+Almost everyone wants `ZT1-Engine-Setup`. It's small, needs no admin rights, finds your game by itself and offers each new alpha at the main menu. `ZT1-Game-Build` is the same game as a folder you unzip and run with `start.bat`. It needs Python 3 the first time and doesn't update itself. `ZT1-Lab-Setup` is 570 MB and is only for people who want to look inside `zoo.exe`. You don't need it to play.
+
+**Will it change my Zoo Tycoon install?**
+No. The installer version reads your game where it is and never writes to that folder.
+
+**Can I load my old saves, or play scenarios?**
+Not yet. Saves from this engine use their own format. Scenarios and loading the original's `.zoo` saves are on the roadmap, after the base game's freeform mode matches the original.
+
+**Something behaves differently from the original. Where do I report it?**
+Open an issue. Say what you did, what the original does and what the engine does. A screenshot or a saved zoo helps a lot. These reports are the most useful thing anyone can send me.
+
+---
+
+### Linux, macOS, forks and pull requests
+
+**Is there a Linux or macOS version?**
+Not from me. I'm putting all my effort into the Windows build until it's fully built out, and I have no plans for a Linux or macOS one. Other people are working on those, and they're listed in [Community Forks & Related Projects](#community-forks--related-projects) below.
+
+**Do you accept pull requests?**
+Yes, for things like bug fixes, accuracy fixes where you can point to `zoo.exe` or a measurement, formula checks and docs. Please keep each one small and focused.
+
+**Then why won't you merge a Linux or macOS port, or another big piece of work?**
+It's not a question of quality. If I merge a big piece of work and the person who wrote it later moves on, I'm left maintaining code I didn't write and often can't test. That's too much for a one-person project. So for anything large, please fork the repo and keep it as your own project. You stay in charge of it and nothing depends on me.
+
+**What happens if I fork it?**
+That's welcome, and the MIT license allows it. If you tell me about your fork, I'll add it to the list below and send people your way. It doesn't matter what system it runs on or how many forks there end up being. If there are five Mac builds, I'll list all five.
+
+**Is there a Discord or chat server?**
+No. I don't want to host or moderate one, because then the project would depend on me being around to run it. Everything happens in the open here, in issues and pull requests.
+
+---
+
+### Reverse engineering and modding
+
+**How do I share what I find in `zoo.exe`? Do I have to use the ZT1 Lab?**
+No. You can stay in Ghidra and your own workflow. The shared knowledge base is a plain web service. You pull from it and send to it over HTTPS, with no account and no token. The ZT1 Lab can do it for you through its MCP tool, but nothing requires the Lab. If you'd rather not touch it, open an issue with what you found and I'll add it. The details are in [`re/cloud/README.md`](re/cloud/README.md).
+
+**Why does the knowledge base care which `zoo.exe` I have?**
+Every finding in it is an address, and an address is only true of one exact file. The base is for one build of `zoo.exe`: 2,449,432 bytes, SHA-256 starting `61fcc6d1`. It refuses contributions from any other file, because the addresses would land on the wrong functions and spoil it for everyone. Check your own file's size and hash first. If they match, your findings can go straight in.
+
+**I have findings from a different build, such as the Mac version. Are they useless?**
+No. Addresses from another build can't go in as they are, but class and struct names are stored by name, not by address. Those can be matched up to this build and are very welcome. Open an issue and tell me what you have.
+
+**Can I trust what's in the knowledge base?**
+Treat it as checked work, not as gospel. A new finding stays provisional until I've reviewed it. Observations of what ran in which situation are published straight away and marked unverified. Every rule in the engine cites the address or measurement it came from, so you can check it yourself.
+
+**Can I make mods?**
+Yes. A mod is a folder in `mods/` with a `mod.json` and `.ztd` archives that replace the originals while it's switched on, the same way the game's own patches work. There's more in the Modding section above.
+
+---
+
+### The project
+
+**Is AI used to make the game?**
+Nothing in the game is AI-generated: no art, audio or text. Everything you see and hear comes from your own copy of Zoo Tycoon. AI tools are part of how the engine is built, mainly for reading and decoding `zoo.exe` alongside Ghidra, and as a coding assistant. Every rule still cites where it came from, so the work can be checked. You're free to use whatever tools you like when you contribute.
+
+**Is this affiliated with Microsoft or Blue Fang?**
+No. It's a hobby project made out of love for the game.
+
+---
+
+## Community Forks & Related Projects
+
+Building your own fork, or something related to Zoo Tycoon, on any system? Open an issue with a link and a line about what it is, and I'll add it here.
+
+| Project | System | What it is |
+|---|---|---|
+| [sharkwouter/zt1-engine](https://github.com/sharkwouter/zt1-engine) | Linux | The original zt1-engine by Wouter Wijsman, which this project grew from |
+| [sharkwouter/zt1-engine, `openztc` branch](https://github.com/sharkwouter/zt1-engine/tree/openztc) | Cross-platform | A separate cross-platform line, developed independently |
+| [StevenGann/zt1-engine, `linux-port`](https://github.com/StevenGann/zt1-engine/tree/linux-port) | Linux | A Linux port of this engine |
 
 ---
 
