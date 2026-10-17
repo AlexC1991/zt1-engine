@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <cstring>
 #include <iterator>
 #include <filesystem>
 #include <fstream>
@@ -36,13 +37,14 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// The feeds, CodeRook first: each a folder holding latest.yml and the
-// installer it names
+// GitHub is the canonical published release, and the only feed for now.
+// CodeRook mirrors each release, but its update feed isn't reliable yet (its
+// publisher promotes a version before every file is attached), so the game
+// doesn't update from it; put it back here once it is.
 struct Feed {
   const char *name, *base;
 };
 const Feed kFeeds[] = {
-    {"CodeRook", "https://api.coderook.com/v1/public/projects/batty-251/zt1-engine-releases/updates/"},
     {"GitHub", "https://github.com/AlexC1991/zt1-engine/releases/latest/download/"},
 };
 
@@ -92,6 +94,12 @@ std::string ymlValue(const std::string &yml, const std::string &key) {
 }
 
 std::string skipFile() { return Paths::dataDir() + "update-skip.txt"; }
+
+// Raw P-256 public key (X || Y, big-endian). The matching private key is kept
+// outside the repository and is used only by the release signer.
+constexpr char kUpdatePublicKeyHex[] =
+    "09bdfbf256b798cd631fa24074f8e0d4f5514c68cebca1c352e29af5b9d6d46f"
+    "b837e9e3f3112b998bf6cdbcfebf7e0297c8a7abf6ed7e74c6b42d243363e353";
 
 #ifdef _WIN32
 std::wstring widen(const std::string &s) {
@@ -191,6 +199,70 @@ std::string sha512Base64(const fs::path &file) {
   BCryptCloseAlgorithmProvider(alg, 0);
   return out;
 }
+
+bool verifyUpdateSignature(const std::string &message, const std::string &encodedSignature) {
+  if (encodedSignature.size() != 88 || encodedSignature.compare(86, 2, "==") != 0 ||
+      !std::all_of(encodedSignature.begin(), encodedSignature.end() - 2, [](char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+               (c >= '0' && c <= '9') || c == '+' || c == '/';
+      }))
+    return false;
+
+  DWORD signatureSize = 0;
+  if (!CryptStringToBinaryA(encodedSignature.c_str(), static_cast<DWORD>(encodedSignature.size()),
+                            CRYPT_STRING_BASE64, nullptr, &signatureSize, nullptr, nullptr) ||
+      signatureSize != 64)
+    return false;
+  std::vector<BYTE> signature(signatureSize);
+  if (!CryptStringToBinaryA(encodedSignature.c_str(), static_cast<DWORD>(encodedSignature.size()),
+                            CRYPT_STRING_BASE64, signature.data(), &signatureSize, nullptr, nullptr))
+    return false;
+
+  BCRYPT_ALG_HANDLE algorithm = nullptr;
+  BCRYPT_KEY_HANDLE publicKey = nullptr;
+  if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_ECDSA_P256_ALGORITHM, nullptr, 0) != 0)
+    return false;
+
+  BCRYPT_ECCKEY_BLOB header{BCRYPT_ECDSA_PUBLIC_P256_MAGIC, 32};
+  std::vector<BYTE> keyBlob(sizeof(header) + 64);
+  std::memcpy(keyBlob.data(), &header, sizeof(header));
+  auto nibble = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+  };
+  bool keyOk = sizeof(kUpdatePublicKeyHex) == 129;
+  for (size_t i = 0; keyOk && i < 64; ++i) {
+    int hi = nibble(kUpdatePublicKeyHex[i * 2]), lo = nibble(kUpdatePublicKeyHex[i * 2 + 1]);
+    keyOk = hi >= 0 && lo >= 0;
+    if (keyOk) keyBlob[sizeof(header) + i] = static_cast<BYTE>((hi << 4) | lo);
+  }
+
+  bool valid = false;
+  if (keyOk && BCryptImportKeyPair(algorithm, nullptr, BCRYPT_ECCPUBLIC_BLOB, &publicKey,
+                                   keyBlob.data(), static_cast<ULONG>(keyBlob.size()), 0) == 0) {
+    BCRYPT_ALG_HANDLE hashAlgorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    if (BCryptOpenAlgorithmProvider(&hashAlgorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0) {
+      DWORD hashSize = 0, returned = 0;
+      if (BCryptGetProperty(hashAlgorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashSize),
+                            sizeof(hashSize), &returned, 0) == 0 && hashSize == 32 &&
+          BCryptCreateHash(hashAlgorithm, &hash, nullptr, 0, nullptr, 0, 0) == 0) {
+        std::vector<BYTE> digest(hashSize);
+        if (BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char *>(message.data())),
+                           static_cast<ULONG>(message.size()), 0) == 0 &&
+            BCryptFinishHash(hash, digest.data(), hashSize, 0) == 0)
+          valid = BCryptVerifySignature(publicKey, nullptr, digest.data(), hashSize, signature.data(),
+                                        signatureSize, 0) == 0;
+        BCryptDestroyHash(hash);
+      }
+      BCryptCloseAlgorithmProvider(hashAlgorithm, 0);
+    }
+    BCryptDestroyKey(publicKey);
+  }
+  BCryptCloseAlgorithmProvider(algorithm, 0);
+  return valid;
+}
 #endif
 
 // The first feed that answers, and what it offers (ZT1_UPDATE_FEED, a folder
@@ -209,11 +281,32 @@ bool lookUp(Updater::Release &out) {
     out.version = ymlValue(yml, "version");
     out.file = ymlValue(yml, "path");
     out.sha512 = ymlValue(yml, "sha512");
+    out.size = ymlValue(yml, "zt1Size");
+    out.signature = ymlValue(yml, "zt1Signature");
+    const std::string app = ymlValue(yml, "zt1App");
     out.url = std::string(f.base) + out.file;
     out.from = f.name;
-    if (!out.version.empty() && !out.file.empty() && !out.sha512.empty())
+    const std::string expected = "ZT1-Engine-Setup-" + out.version + ".exe";
+    const bool validVersion = out.version.size() >= 8 &&
+                              std::all_of(out.version.begin(), out.version.end(), [](char c) {
+                                return (c >= '0' && c <= '9') || c == '.';
+                              }) && out.version.front() != '.' && out.version.back() != '.' &&
+                              std::count(out.version.begin(), out.version.end(), '.') == 2 &&
+                              out.version.find("..") == std::string::npos;
+    const bool validHash = out.sha512.size() == 88 &&
+                           std::all_of(out.sha512.begin(), out.sha512.end() - 2, [](char c) {
+                             return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                                    (c >= '0' && c <= '9') || c == '+' || c == '/';
+                           }) && out.sha512.compare(86, 2, "==") == 0;
+    bool validSize = !out.size.empty() && out.size.size() <= 12 &&
+                     std::all_of(out.size.begin(), out.size.end(), [](char c) { return c >= '0' && c <= '9'; });
+    if (validSize && out.size.size() > 1 && out.size.front() == '0')
+      validSize = false;
+    const std::string signedFields = app + "\n" + out.version + "\n" + out.file + "\n" + out.size + "\n" + out.sha512;
+    if (validVersion && app == "zt1-engine" && out.file == expected && validHash && validSize &&
+        verifyUpdateSignature(signedFields, out.signature))
       return true;
-    SDL_Log("[Updater] %s: its latest.yml names no installer", f.name);
+    SDL_Log("[Updater] %s: latest.yml is invalid or its update signature is not trusted", f.name);
   }
 #else
   (void)out;
@@ -300,10 +393,12 @@ bool install(const Release &r, std::string &why) {
     why = "The download failed: " + why;
     return false;
   }
-  if (sha512Base64(setup) != r.sha512) {
+  std::error_code sizeError;
+  const auto actualSize = fs::file_size(setup, sizeError);
+  if (sizeError || std::to_string(actualSize) != r.size || sha512Base64(setup) != r.sha512) {
     std::error_code ec;
     fs::remove(setup, ec);
-    why = "The download didn't match its SHA-512, so it wasn't run.";
+    why = "The download didn't match its signed size and SHA-512, so it wasn't run.";
     return false;
   }
   // Silently, closing this engine; /RELAUNCH: start it again afterwards

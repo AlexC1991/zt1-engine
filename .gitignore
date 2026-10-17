@@ -37,3 +37,10 @@ re/lab/design/
 
 # The agent's own state (build state, memory, rag index): never shared
 .voxai/
+
+# Scratch output from checking CI runs by hand (never part of the engine)
+/_jobs.*
+/_log.*
+/_run.*
+/selectWrite-windows-build*.log
+lab-app/_dev_*.py

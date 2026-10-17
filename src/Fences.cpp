@@ -20,7 +20,8 @@
 
 namespace {
 // tanks.cfg
-constexpr int kTankSink = 4;       // initialSink (subtiles: 2 height units)
+constexpr int kTankSink = 4;       // initialSink (height units: 0x45b92f takes it off the tiles')
+constexpr float kWaterOffset = 1.0f; // waterOffset -1: full is a unit under the rim
 constexpr int kTankHeight = 5;     // initialHeight
 constexpr int kTankTerrain = 2;    // tankTerrain (sand)
 constexpr float kFillSeconds = 8.0f;
@@ -200,13 +201,17 @@ void Fences::clear() {
 void Fences::load(const ZooReader &reader, WorldMap &map) {
   this->clear();
   for (const ZooReader::ZooObject &obj : reader.getObjects()) {
-    if (obj.className != "fences")
+    // (fences, and tank walls: Marine Mania's maps and saved zoos keep them
+    // as their own class)
+    if (obj.className != "fences" && obj.className != "tankwall")
       continue;
     int type = this->typeIndex(obj.subClass);
     if (type < 0)
       continue;
     int facing = 4;
-    if (obj.payload.size() >= 20) {
+    if (obj.decoded) {
+      facing = static_cast<int>(obj.direction & 6);
+    } else if (obj.payload.size() >= 20) {
       uint32_t f = 0;
       std::memcpy(&f, obj.payload.data() + 16, 4);
       facing = static_cast<int>(f & 6);
@@ -913,7 +918,7 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
       for (int c = 0; c < 4; c++)
         ground = std::max(ground, static_cast<int>(t->cornerHeight[c]));
   ex.groundHeight = ground;
-  ex.floorHeight = ground - kTankSink / 2;
+  ex.floorHeight = std::max(-12, ground - kTankSink); // (0x458c6a: floors -12..12)
   for (auto [x, y] : ex.tiles)
     if (MapTile *t = map.getTileMutable(x, y)) {
       for (int c = 0; c < 4; c++)
@@ -935,7 +940,7 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
       it->second.tank = ex.id;
   }
   ex.water = 0;
-  ex.wallSub = kTankHeight; // a subtile above the ground
+  ex.wallSub = kTankHeight; // a unit above the ground
   ex.salt = true;                            // initialSalinity 100
   ex.filling = true;                         // initialFillState 1
   ex.water = 1;                              // full at once, as the original
@@ -1011,10 +1016,10 @@ bool Fences::canAdjustWall(int id, int step) const {
   const Exhibit *ex = this->exhibit(id);
   if (!ex || !ex->tank)
     return false;
-  // (as the original: down to two subtiles over the floor - under the
-  // ground round it - up to maximumTankHeight)
+  // (as the original: down to a unit over the floor - the 1-height tank's
+  // low pieces, under the ground round it - up to maximumTankHeight)
   int sub = ex->wallSub + step;
-  return sub <= kTankMaxHeight && sub >= 2;
+  return sub <= kTankMaxHeight && sub >= 1;
 }
 
 void Fences::adjustWall(int id, int step) {
@@ -1029,7 +1034,7 @@ bool Fences::canAdjustBase(int id, int step) const {
   if (!ex || !ex->tank || !this->mapEdit)
     return false;
   int floor = ex->floorHeight + step;
-  return floor < ex->groundHeight;
+  return floor < ex->groundHeight && floor >= -12; // (0x458c6a: -12..12)
 }
 
 void Fences::adjustBase(int id, int step) {
@@ -1075,7 +1080,7 @@ void Fences::update(float seconds) {
     // The water shown follows the walls and the base: up a unit a second
     // (as the original after the base is raised), down at once
     {
-      float target = ex.floorHeight + ex.water * (ex.wallTop() - 0.5f - ex.floorHeight);
+      float target = ex.floorHeight + ex.water * (ex.wallTop() - kWaterOffset - ex.floorHeight);
       if (ex.level < -1e8f || ex.level > target)
         ex.level = target;
       else
@@ -1387,6 +1392,7 @@ bool Fences::pieceAt(float px, float py, const WorldRenderer &view, const WorldM
                      Edge &found) const {
   float best = 20.0f * 20.0f; // within 20 logical pixels of its middle
   bool any = false;
+  this->pieceBelowTop = 1e9f;
   // A tank's wall: anywhere on its face, from the floor up to its top (a
   // raised one's middle was far from where it was looked for); of two in
   // the way, the nearer
@@ -1427,6 +1433,7 @@ bool Fences::pieceAt(float px, float py, const WorldRenderer &view, const WorldM
       nearest = depth;
       found = kv.first;
       any = true;
+      this->pieceBelowTop = py - (top + 4.0f);
     }
   }
   if (any)
@@ -1530,11 +1537,11 @@ void Fences::tankPieces(const Edge &e, const Piece &p, const Exhibit &ex, const 
   if (!front)
     std::swap(left, right);
   int column = left && right ? 1 : right ? 0 : left ? 2 : 3;
-  const int levels = ex.wallSub; // (subtiles: a piece every 8 px)
-  const int rows = std::max(1, levels - 1);
-  // (each a subtile under the one above it from the top: the top one's rail
-  // reaches the walls' height - measured against the original at default,
-  // flush, and one and two under the ground)
+  const int levels = ex.wallSub; // (a piece every height unit, 16 px)
+  const int rows = std::max(1, levels);
+  // (each a unit under the one above it from the top, the top one a unit
+  // under the walls' height: its rail reaches it; a 1-high wall is the low
+  // pieces alone - tankwall.ai's "1-height tank")
   // (the back walls' art, seen from inside, sits a subtile lower than the
   // front walls' seen from outside)
   const float drop = front ? 0.0f : 0.5f;
@@ -1548,20 +1555,20 @@ void Fences::tankPieces(const Edge &e, const Piece &p, const Exhibit &ex, const 
     // original: a back wall's on its inside face, a front wall's on its
     // outside face down to the ground)
     if (a)
-      out.push_back({a, ex.floorHeight + k * 0.5f - drop, false, k == rows - 1});
+      out.push_back({a, ex.floorHeight + k * 1.0f - drop, false, k == rows - 1});
     if (p.gate && t.ladder)
-      out.push_back({t.ladder, ex.floorHeight + k * 0.5f - drop, false, k == rows - 1, true});
+      out.push_back({t.ladder, ex.floorHeight + k * 1.0f - drop, false, k == rows - 1, true});
   }
   // The glass: "\" edges (facing down-left / up-right) and "/" ones
   bool falling = (s1y - s0y) * (s1x - s0x) > 0;
   Animation *glass = this->waterPart("glass" + scumSuffix(ex.purity),
                                      falling ? (front ? "fgrey" : "bgrey") : (front ? "rgrey" : "lgrey"));
   // (only as high as the water: the rail over it isn't tinted)
-  float level = ex.level > -1e8f ? ex.level : ex.floorHeight + ex.water * (ex.wallTop() - 0.5f - ex.floorHeight);
+  float level = ex.level > -1e8f ? ex.level : ex.floorHeight + ex.water * (ex.wallTop() - kWaterOffset - ex.floorHeight);
   // (a pane a height unit tall, the top one down to the water's height -
   // a glass wall's up to its rail, as the original: over the water it
   // showed the sand floor through it, untinted)
-  const float glassTop = t.seeThrough ? std::max(level, ex.wallTop() - 0.5f) : level;
+  const float glassTop = t.seeThrough ? std::max(level, ex.wallTop() - kWaterOffset) : level;
   // (from the top down: an overlap under the ground, not a dark band)
   // (a solid wall's outside isn't tinted: only its inside, seen through
   // the water)
@@ -1573,7 +1580,7 @@ void Fences::tankPieces(const Edge &e, const Piece &p, const Exhibit &ex, const 
 int Fences::waterSubtiles(const Exhibit &ex) const {
   if (!ex.tank || ex.water <= 0)
     return 0;
-  float level = ex.level > -1e8f ? ex.level : ex.floorHeight + ex.water * (ex.wallTop() - 0.5f - ex.floorHeight);
+  float level = ex.level > -1e8f ? ex.level : ex.floorHeight + ex.water * (ex.wallTop() - kWaterOffset - ex.floorHeight);
   return std::max(0, static_cast<int>(std::lround((level - ex.floorHeight) * 2.0f)));
 }
 
@@ -1970,7 +1977,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     // The water: up to a unit under the walls' top (tanks.cfg waterOffset
     // -1), as it's shown rising
     float level = ex.level > -1e8f ? ex.level
-                                   : ex.floorHeight + ex.water * (ex.wallTop() - 0.5f - ex.floorHeight);
+                                   : ex.floorHeight + ex.water * (ex.wallTop() - kWaterOffset - ex.floorHeight);
     if (ex.water > 0 && level > ex.floorHeight + 0.01f) {
       const bool scum = !scumSuffix(ex.purity).empty();
       auto variant = [&](const std::string &part, const std::string &scumPart, int x, int y) {
@@ -2331,7 +2338,7 @@ void Fences::drawWater(SDL_Renderer *renderer, const WorldRenderer &view,
     if (!ex.tank || ex.water <= 0)
       continue;
     // Up to a unit below the walls' top (tanks.cfg waterOffset -1)
-    float level = ex.floorHeight + ex.water * (ex.wallTop() - 0.5f - ex.floorHeight);
+    float level = ex.floorHeight + ex.water * (ex.wallTop() - kWaterOffset - ex.floorHeight);
     std::string set = ex.salt ? "salt" : "fresh";
     if (ex.purity < 1)
       set += "es";

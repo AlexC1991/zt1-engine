@@ -11,6 +11,8 @@
 #include "../OriginalConstants.hpp"
 #include "../Features.hpp"
 #include "../Settings.hpp"
+#include "../RenderSettings.hpp"
+#include "../Embed.hpp"
 #include "UiScrollBar.hpp"
 #include <cstring>
 #include <map>
@@ -1633,14 +1635,20 @@ std::string UiGameScreen::tooltipText() const {
   if (this->dialog.layout || this->mouseX < 0)
     return "";
   SDL_Point p = {this->mouseX, this->mouseY};
-  const UiButton *found = nullptr;
+  const UiElement *found = nullptr;
+  // (buttons, and the images and status bars with help of their own: the
+  // animal panel's icons, "Animal hunger. Assign zookeepers ..." and bars,
+  // "Hunger: %d")
   std::function<void(const UiElement *)> search = [&](const UiElement *e) {
     if (e->isHidden())
       return;
-    if (const UiButton *b = dynamic_cast<const UiButton *>(e)) {
-      SDL_Rect r = b->getLastRect();
-      if (r.w > 0 && SDL_PointInRect(&p, &r) && b->getHelpId() > 0)
-        found = b;
+    bool button = dynamic_cast<const UiButton *>(e) != nullptr;
+    if (button || dynamic_cast<const UiImage *>(e) || dynamic_cast<const UiStatusImage *>(e)) {
+      SDL_Rect r = e->getLastRect();
+      int help = e->helpId();
+      if (r.w > 0 && SDL_PointInRect(&p, &r) && help > 0 &&
+          (button || !this->resource_manager->getString(30000 + help).empty()))
+        found = e;
     }
     for (const UiElement *c : const_cast<UiElement *>(e)->getChildren())
       search(c);
@@ -1651,8 +1659,9 @@ std::string UiGameScreen::tooltipText() const {
   if (found) {
     // The view toggles say what a click does: "Click to hide foliage in
     // the game area." on, "Click to show ..." off
-    int help = found->getHelpId();
-    if (!found->isToggledOn()) {
+    int help = found->helpId();
+    const UiButton *b = dynamic_cast<const UiButton *>(found);
+    if (b && !b->isToggledOn()) {
       if (help == 1066)
         return this->resource_manager->getString(31065);
       if (help == 1067)
@@ -1661,6 +1670,12 @@ std::string UiGameScreen::tooltipText() const {
         return this->resource_manager->getString(31070);
     }
     std::string tip = this->resource_manager->getString(30000 + help);
+    // (a status bar's: its value - "Happiness: %d")
+    if (const UiStatusImage *s = dynamic_cast<const UiStatusImage *>(found)) {
+      size_t at = tip.find("%d");
+      if (at != std::string::npos)
+        tip.replace(at, 2, std::to_string(s->getValue()));
+    }
     return tip;
   }
   if (this->isOverHud(this->mouseX, this->mouseY))
@@ -1749,6 +1764,26 @@ void UiGameScreen::drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       SDL_RenderCopy(renderer, white, nullptr, &d);
     }
     y += lineH;
+  }
+  // (the Lab's Play: the screen as drawn, tooltip and all - a window grab
+  // of the GPU window came back without it)
+  if (RenderSettings::uiPass != RenderSettings::UiPass::Art && Embed::active() && this->tooltipShot) {
+    this->tooltipShot = false;
+    SDL_Rect vp;
+    SDL_RenderGetViewport(renderer, &vp);
+    float sx = 1, sy = 1;
+    SDL_RenderGetScale(renderer, &sx, &sy);
+    int ow = 0, oh = 0;
+    SDL_GetRendererOutputSize(renderer, &ow, &oh);
+    if (SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, ow, oh, 24, SDL_PIXELFORMAT_RGB24)) {
+      SDL_RenderSetViewport(renderer, nullptr);
+      SDL_RenderSetScale(renderer, 1, 1);
+      if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, s->pixels, s->pitch) == 0)
+        SDL_SaveBMP(s, "tooltip.bmp");
+      SDL_RenderSetScale(renderer, sx, sy);
+      SDL_RenderSetViewport(renderer, &vp);
+      SDL_FreeSurface(s);
+    }
   }
 }
 
@@ -2816,10 +2851,23 @@ void UiGameScreen::refreshLists() {
     });
     text(z, 3835, this->resource_manager->getString(kAnimalNames[this->animalFilter]));
     if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(3805))) {
-      int picked = fill(list, ids, this->listedAnimals, this->litAnimal, this->animals->selected, [this](int id) {
-        const Animals::Member *m = this->animals->member(id);
-        return std::make_pair(m->name, this->animals->types()[m->type].listImage);
-      });
+      int picked = fill(
+          list, ids, this->listedAnimals, this->litAnimal, this->animals->selected,
+          [this](int id) {
+            const Animals::Member *m = this->animals->member(id);
+            return std::make_pair(m->name, this->animals->types()[m->type].listImage);
+          },
+          // (its cListImageName as art: Marine Mania's - the porpoise's
+          // lsporpoi, 37 x 14 - came out a few pixels wide from the raw
+          // frame reader; centred in its row, as the .ani's bounds round
+          // the middle have it)
+          [this](int id) -> Animation * {
+            const Animals::Member *m = this->animals->member(id);
+            const std::string &path = this->animals->types()[m->type].listImage;
+            return path.empty() || !this->resource_manager->hasResource(path + ".ani")
+                       ? nullptr
+                       : this->resource_manager->getAnimation(path);
+          });
       if (picked >= 0) {
         this->bulldozerOff();
         this->showAnimal(picked);
@@ -3366,6 +3414,20 @@ void UiGameScreen::refreshAnimal() {
       e->setValue(static_cast<int>(std::lround(v)));
   };
   text(3102, m->name);
+  // Its carer's (cKeeper - zoo.exe 0x4831b2): the plaque's picture and help
+  // (Zookeeper, Scientist or Marine Specialist Recommendations), the
+  // hunger and suitability icons' help
+  {
+    const int carer = this->animals->carerIndex(*m);
+    if (carer != this->animalCarer) {
+      if (UiButton *plaque = dynamic_cast<UiButton *>(z->getElementById(3122)))
+        plaque->chooseAnimation(static_cast<size_t>(carer));
+      this->animalCarer = carer;
+    }
+    for (int eid : {3122, 3107, 3109})
+      if (UiElement *e = z->getElementById(eid))
+        e->chooseHelp(static_cast<size_t>(carer));
+  }
   bar(3104, static_cast<float>(Animals::shownHappiness(*m)));
   bar(3108, m->food);
   bar(3106, static_cast<float>(this->animals->shownHealth(*m)));
@@ -3405,10 +3467,16 @@ void UiGameScreen::showAdvice(int id) {
   if (!m || !z)
     return;
   this->setPanelOpen(28, true);
-  // The patched layout lists the zookeeper's, the scientist's and the
-  // marine specialist's pictures: a zoo animal's is the zookeeper's
+  // The layout lists the zookeeper's, the scientist's and the marine
+  // specialist's backgrounds and titles: the animal's carer's (cKeeper -
+  // zoo.exe 0x4831b2 picks 26000's picture and 26020's text by it)
+  const int carer = this->animals->carerIndex(*m);
+  static const char *const backs[3] = {"ui/keprinfo/kinfobk/kinfobk", "ui/sciinfo/scinfobk/scinfobk",
+                                       "ui/trnrinfo/tinfobk/tinfobk"};
   if (UiImage *bk = dynamic_cast<UiImage *>(z->getElementById(26000)))
-    bk->setImage("ui/keprinfo/kinfobk/kinfobk");
+    bk->setImage(backs[carer]);
+  if (UiText *title = dynamic_cast<UiText *>(z->getElementById(26020)))
+    title->setText(this->resource_manager->getString(26020 + carer));
   if (UiText *name = dynamic_cast<UiText *>(z->getElementById(26001)))
     name->setText(m->name);
   if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(26002))) {
@@ -3436,11 +3504,43 @@ void UiGameScreen::drawAnimalPortrait(SDL_Renderer *renderer) {
   const Animals::Member *m = this->animals->member(this->shownAnimal);
   if (!m)
     return;
+  // What it's doing now (zoo.exe 0x4ee2ba: the unit's animation, slot 0x90),
+  // its frame's box centred in the round window (0x4fab40 with -30005: the
+  // middle; a land animal standing comes out with its feet at +34, +62 as
+  // measured) - a porpoise's swim too, not a land animal's stand
   for (const Entry &e : this->entries)
-    if (e.panel && e.id == 6 && e.open)
-      if (Animation *a = m->boxed ? this->animals->crate() : this->animals->art(*m, "stand"))
-        a->drawAnchored(renderer, static_cast<float>(e.rect.x + 34),
-                        static_cast<float>(e.rect.y + 62), CompassDirection::SE, nullptr, 0);
+    if (e.panel && e.id == 6 && e.open) {
+      Animation *a = m->boxed ? this->animals->crate() : this->animals->art(*m, m->anim.empty() ? "stand" : m->anim);
+      if (!a && !m->boxed)
+        a = this->animals->art(*m, "stand");
+      if (!a)
+        continue;
+      const float cx = static_cast<float>(e.rect.x + 34), cy = static_cast<float>(e.rect.y + 37);
+      // (a tank animal at the surface: its art is the part above the water,
+      // its "under" layer the rest - both, the whole animal)
+      Animation *under = m->boxed ? nullptr : this->animals->underArt(*m, a);
+      float l, t, r, b;
+      if (!a->anchoredBounds(0, 0, CompassDirection::SE, l, t, r, b))
+        continue;
+      // (inside its round window, the Trackanim button's art, as the
+      // original draws it into the button)
+      SDL_Rect clip{};
+      if (UiElement *track = e.layout->getElementById(3114))
+        clip = track->getLastRect();
+      SDL_Rect oldClip;
+      SDL_RenderGetClipRect(renderer, &oldClip);
+      const bool clipped = clip.w > 0 && clip.h > 0;
+      if (clipped)
+        SDL_RenderSetClipRect(renderer, &clip);
+      float ul, ut, ur, ub;
+      if (under && under->anchoredBounds(0, 0, CompassDirection::SE, ul, ut, ur, ub)) {
+        l = std::min(l, ul), t = std::min(t, ut), r = std::max(r, ur), b = std::max(b, ub);
+        under->drawAnchored(renderer, cx - (l + r) * 0.5f, cy - (t + b) * 0.5f, CompassDirection::SE, nullptr, 0);
+      }
+      a->drawAnchored(renderer, cx - (l + r) * 0.5f, cy - (t + b) * 0.5f, CompassDirection::SE, nullptr, 0);
+      if (clipped)
+        SDL_RenderSetClipRect(renderer, oldClip.w > 0 ? &oldClip : nullptr);
+    }
 }
 
 void UiGameScreen::showExhibit(int id) {

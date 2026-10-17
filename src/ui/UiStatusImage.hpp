@@ -23,6 +23,7 @@ public:
 
   // 0-100
   void setValue(int value) { this->value = value < 0 ? 0 : (value > 100 ? 100 : value); }
+  int getValue() const { return this->value; }
 
 private:
   std::vector<std::string> image_paths;

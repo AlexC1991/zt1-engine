@@ -33,7 +33,7 @@ const S = {
   tab: store.get('tab', 'scene'),
   expert: false, // (one look: the Simple/Expert switch is gone)
   engine: { status: 'starting', detail: '', state: null, log: [] },
-  ghidra: { ok: false, program: '', functions: null, loading: false },
+  ghidra: { ok: false, program: '', functions: null, loading: false, building: false, said: '' },
   kb: null,
   refs: {},
   me: '',
@@ -273,12 +273,14 @@ function renderTop() {
   ep.dataset.act = st === 'connected' ? '' : 'restartEngine';
   const gp = $('ghidra-pill');
   gp.className = 'pill ' + (S.ghidra.ok ? 'ok' : '');
-  gp.querySelector('span').textContent = S.ghidra.ok ? 'Ghidra connected' : S.ghidra.starting ? 'Ghidra starting' : 'Ghidra not connected';
+  gp.querySelector('span').textContent = S.ghidra.ok ? 'Ghidra connected' : S.ghidra.building ? 'Ghidra: building' : S.ghidra.starting ? 'Ghidra starting' : 'Ghidra not connected';
   gp.title = S.ghidra.ok
     ? S.ghidra.program
-    : S.ghidra.starting
-      ? 'The Lab is starting Ghidra for itself (headless, zoo.exe read only): a minute or two. Code you have seen before still shows.'
-      : 'No Ghidra found to start (re/private/ghidra.json says where it is). Or in Ghidra, with zoo.exe open: Tools > zt1-engine > Start Lab bridge. Until then, code you have seen before still shows.';
+    : S.ghidra.building
+      ? (S.ghidra.said || 'The Lab is building a Ghidra project from your zoo.exe (once: a few minutes).')
+      : S.ghidra.starting
+        ? 'The Lab is starting Ghidra for itself (headless, zoo.exe read only): a minute or two. Code you have seen before still shows.'
+        : (S.ghidra.said || 'No Ghidra found to start (re/private/ghidra.json says where it is). Or in Ghidra, with zoo.exe open: Tools > zt1-engine > Start Lab bridge. Until then, code you have seen before still shows.');
 }
 
 // (the Scene view: scene.js)
@@ -2203,11 +2205,26 @@ const ACTIONS = {
   // A line to the game in Play (src/Embed.hpp): "click <x> <y>" at its
   // window's pixels, for testing menus without the mouse
   playCmd: (line) => lab.playCmd(String(line || '')),
+  checkLabUpdate: async () => {
+    const button = $('lab-update-btn');
+    button.classList.add('disabled');
+    button.textContent = 'Checking…';
+    try {
+      const result = await lab.checkLabUpdate();
+      if (result.status !== 'installing') alert(result.message);
+    } catch (e) {
+      alert(`Could not check for updates: ${e.message}`);
+    } finally {
+      button.classList.remove('disabled');
+      button.textContent = 'Check updates';
+    }
+  },
 };
 
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (!el || !el.dataset.act) return;
+  if (el.classList.contains('disabled')) return;
   const fn = ACTIONS[el.dataset.act];
   if (fn) fn(el.dataset.arg);
 });
@@ -2270,10 +2287,13 @@ async function loadApi() {
 
 async function pollGhidra() {
   let st = await lab.ghidraStatus();
-  const was = S.ghidra.ok, wasStarting = S.ghidra.starting;
-  // (the Lab's own headless Ghidra still opening the project: a minute or two)
+  const was = S.ghidra.ok, wasStarting = S.ghidra.starting, wasBuilding = S.ghidra.building;
+  // (the Lab's own headless Ghidra still opening the project: a minute or two;
+  //  and the longer job before that, when it has to make the project first)
+  S.ghidra.building = !!(st && st.building);
+  S.ghidra.said = (st && st.said) || '';
   S.ghidra.starting = !!(st && st.starting);
-  if (S.ghidra.starting) st = null;
+  if (S.ghidra.starting || S.ghidra.building) st = null;
   S.ghidra.ok = !!st;
   S.ghidra.program = st ? `${st.program} · ${st.functions.toLocaleString()} functions` : '';
   if (S.ghidra.ok && (!was || !S.ghidra.functions)) {
@@ -2281,7 +2301,7 @@ async function pollGhidra() {
     for (const k of Object.keys(S.cache)) if (S.cache[k] && S.cache[k].cached) delete S.cache[k];
     loadGhidraFunctions(true);
   }
-  if (was !== S.ghidra.ok || wasStarting !== S.ghidra.starting) {
+  if (was !== S.ghidra.ok || wasStarting !== S.ghidra.starting || wasBuilding !== S.ghidra.building) {
     renderTop();
     if (S.tab === 'code') renderCode();
     if (S.tab === 'code') renderFinder();

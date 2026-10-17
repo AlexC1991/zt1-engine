@@ -371,6 +371,15 @@ Object.assign(ACTIONS, {
   // first <slots> entries as addresses, to compare what each class replaces)
   // ("uniq <slots> <address>...": just every different entry, once - to make
   // them all functions at once with makeFns)
+  // A 4-byte number written into the running original ("0x1234 100"): a
+  // test sets a type's numbers to see what the game then does (Hook.cpp poke)
+  memPoke: async (arg) => {
+    const [at, v] = String(arg || '').trim().split(/[\s,]+/);
+    if (!at || v === undefined) return { error: 'memPoke "0xADDRESS value"' };
+    const r = await lab.origAsk(`poke ${at.replace(/^0x/, '')} ${parseInt(v, 10)}`, 'poke ');
+    if (r.error) return r;
+    return { ok: / ok$/.test(r.line), line: r.line };
+  },
   memTables: async (arg) => {
     let parts = String(arg).trim().split(/\s+/);
     const uniq = parts[0] === 'uniq';
@@ -487,6 +496,22 @@ Object.assign(ACTIONS, {
   origDialog: async (arg) => lab.origAsk(('dialog ' + (arg || '')).trim(), 'dialog'),
   // A key to the original: its virtual-key code (27 Esc, 13 Enter, 32 Space)
   origKey: async (vk) => lab.origAsk('key ' + parseInt(vk, 10), 'done key'),
+  // Pictures of the original one after another, as it plays - a clip to look
+  // through frame by frame ("<folder> <count> <ms between>": f000.png...)
+  origFrames: async (arg) => {
+    const [dir, n, ms] = String(arg || '').trim().split(/\s+/);
+    if (!dir) return { error: 'origFrames "<folder> [count] [ms]"' };
+    const count = Math.min(+n || 20, 600), gap = Math.max(+ms || 500, 0);
+    const files = [];
+    for (let i = 0; i < count; i++) {
+      const t = Date.now();
+      const r = await lab.playShot(`${dir.replace(/[\\/]$/, '')}/f${String(i).padStart(3, '0')}.png`);
+      if (r.error) return { error: r.error, files };
+      files.push(r.file);
+      await new Promise((res) => setTimeout(res, Math.max(0, gap - (Date.now() - t))));
+    }
+    return { count: files.length, first: files[0], last: files[files.length - 1] };
+  },
   memWatch: async (at) => {
     await lab.origWrites(true);
     MEM.writes = [];

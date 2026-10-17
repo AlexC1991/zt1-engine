@@ -111,7 +111,13 @@ npx wrangler secret put ZT1_REVIEW_TOKEN      # the token you review with
 npx wrangler deploy                           # prints the URL
 ```
 
-Then tell a checkout where it is, once:
+The released Lab and this checkout include the public endpoint in
+`re/cloud/config.json`, so users can pull and contribute without configuring a
+URL. `ZT1_KB_API` or `re/private/cloud.json` can override that default for a
+different deployment. The review token remains server-only; it is never
+included in the Lab.
+
+To override the endpoint in a checkout:
 
 ```bash
 echo {"api": "https://zt1-knowledge.<you>.workers.dev"} > re/private/cloud.json

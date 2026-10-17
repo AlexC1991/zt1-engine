@@ -21,8 +21,8 @@ sharing, so that is what `contribute` sends.
   python re/cloud/sync.py pending [--api URL]
   python re/cloud/sync.py review --take 0x4378df/function --refuse ZTAnimal+0x128/field
 
-The name of the API is kept in re/private/cloud.json ({"api": "https://..."}),
-or in ZT1_KB_API, so a checkout only has to be told once.
+The released Lab and this checkout carry a public default endpoint in
+re/cloud/config.json. ZT1_KB_API or re/private/cloud.json can override it.
 
 The one build all of this is about is checked, not assumed: `contribute`
 hashes the zoo.exe it is looking at and refuses to send anything if it is not
@@ -45,6 +45,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 KB = os.path.join(ROOT, "re", "knowledge.json")
 PRIVATE = os.path.join(ROOT, "re", "private")
 CONF = os.path.join(PRIVATE, "cloud.json")
+PUBLIC_CONF = os.path.join(HERE, "config.json")
 # (what this checkout has already sent up. It lives with the Lab's other state
 #  and never leaves the machine: it is a bookmark against resending, not a way
 #  of telling installs apart - the shared base records no identity)
@@ -168,11 +169,12 @@ def read_json(path, fallback):
 
 
 def api_from(a):
-    """Where the API is: as asked, else the environment, else this checkout."""
+    """Where the API is: explicit, environment, private override, then release default."""
     return (
         a.api
         or os.environ.get("ZT1_KB_API")
         or read_json(CONF, {}).get("api")
+        or read_json(PUBLIC_CONF, {}).get("api")
         or ""
     ).rstrip("/")
 
@@ -698,7 +700,7 @@ def main():
     # (the options belong to every subcommand, so they read the way the
     # docstring does: sync.py pull --api URL --dry-run)
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--api", default="", help="the Worker's URL (else ZT1_KB_API, else re/private/cloud.json)")
+    common.add_argument("--api", default="", help="the Worker's URL (else ZT1_KB_API, private config, or the bundled release default)")
     common.add_argument("--sha", default="", help="the build to pull (default: the 2002 Complete Collection)")
     common.add_argument("--token", default="", help="the review token (else ZT1_KB_TOKEN)")
     common.add_argument("--by", default="", help="your name (else re/private/me.txt)")
@@ -730,7 +732,7 @@ def main():
         ap.print_help()
         return
     if fn is not cmd_review and not api_from(a):
-        sys.exit("[X] no API to talk to: --api, ZT1_KB_API, or re/private/cloud.json")
+        sys.exit("[X] no API to talk to: --api, ZT1_KB_API, private config, or re/cloud/config.json")
     say(f"[{a.cmd}] {api_from(a) or '(local)'}")
     fn(a)
 

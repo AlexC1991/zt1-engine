@@ -103,8 +103,14 @@ Name: "{autodesktop}\ZT1 Lab"; Filename: "{app}\ZT1 Lab.exe"; WorkingDir: "{app}
 
 [Run]
 Filename: "{app}\ZT1 Lab.exe"; WorkingDir: "{app}"; Description: "Open the ZT1 Lab"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\ZT1 Lab.exe"; WorkingDir: "{app}"; Parameters: "--updated"; Flags: runhidden nowait; Check: IsLabUpdateRelaunch
 
 [Code]
+function IsLabUpdateRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCHLAB|0}') = '1';
+end;
+
 // A folder is an engine checkout when it has the source and the Lab's files
 function LooksLikeCheckout(dir: string): Boolean;
 begin
@@ -198,24 +204,44 @@ end;
 
 var
   CheckoutPage: TInputDirWizardPage;
+  StandaloneCheck: TNewCheckBox;
 
 procedure InitializeWizard;
 var
   saved: string;
+  useStandalone: Boolean;
 begin
   // (upgrading: what it was pointed at before is offered again)
   saved := SavedCheckout;
   CheckoutPage := CreateInputDirPage(wpSelectDir, 'The engine', 'Where is the ZT1-Engine checkout?',
     'Point the Lab at the engine''s source to edit and build it, to open the game''s own files, ' +
-    'and to play the original with the Lab''s hook. Leave it empty to use the Lab on its own: ' +
-    'Explore, the original game''s code and reading the game''s files all work without one.',
+    'and to play the original with the Lab''s hook. The bundled engine and Explore work without a checkout; ' +
+    'check the option below to install the Lab on its own.',
     False, '');
   // (a page starts with no fields: this is the one it has)
-  CheckoutPage.Add('The engine''s checkout (leave empty for the Lab on its own):');
+  CheckoutPage.Add('The engine''s source checkout (only if connecting to one):');
   if (saved <> '') and LooksLikeCheckout(saved) then
-    CheckoutPage.Values[0] := saved
+  begin
+    CheckoutPage.Values[0] := saved;
+    useStandalone := False;
+  end
   else
-    CheckoutPage.Values[0] := DefaultCheckout;
+  begin
+    saved := DefaultCheckout;
+    CheckoutPage.Values[0] := saved;
+    useStandalone := saved = '';
+    // TInputDirWizardPage validates that its directory field names an
+    // existing folder, even when the field is described as optional. Give it
+    // a harmless existing folder and an explicit standalone choice instead.
+    if CheckoutPage.Values[0] = '' then
+      CheckoutPage.Values[0] := ExpandConstant('{tmp}');
+  end;
+  StandaloneCheck := TNewCheckBox.Create(CheckoutPage.Surface);
+  StandaloneCheck.Parent := CheckoutPage.Surface;
+  StandaloneCheck.Caption := 'Use the Lab on its own; do not connect a source checkout';
+  StandaloneCheck.Checked := useStandalone;
+  StandaloneCheck.Top := CheckoutPage.Surface.Height - StandaloneCheck.Height - ScaleY(8);
+  StandaloneCheck.Left := 0;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -225,7 +251,7 @@ begin
   // given, and reads one that isn't a checkout as no checkout)
   if WizardSilent then
     exit;
-  if CurPageID = CheckoutPage.ID then
+  if (CurPageID = CheckoutPage.ID) and not StandaloneCheck.Checked then
   begin
     if (CheckoutPage.Values[0] <> '') and not DirExists(CheckoutPage.Values[0]) then
     begin
@@ -255,7 +281,7 @@ begin
   body := 'app=' + ExpandConstant('{app}') + #13#10;
   // (only a folder that is the engine's checkout: the Lab reads it, and a
   // wrong one would leave it worse off than no checkout at all)
-  if LooksLikeCheckout(CheckoutPage.Values[0]) then
+  if not StandaloneCheck.Checked and LooksLikeCheckout(CheckoutPage.Values[0]) then
     body := body + 'repo=' + CheckoutPage.Values[0] + #13#10
   else
     body := body + 'repo=' + #13#10;

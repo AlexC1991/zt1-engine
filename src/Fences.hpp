@@ -114,12 +114,14 @@ public:
     // Tanks: the ground they sank from, and the water (0-1 full)
     int groundHeight = 0, floorHeight = 0;
     float water = 0;
-    // Tanks: the walls' height over the floor in the original's subtiles
-    // (tanks.cfg's units: half a height unit, 8 px - measured, a wall step
-    // moves the rim 8 px), raised and lowered on Tank Adjustment; salt or
-    // fresh water, and whether it is filling (else draining)
+    // Tanks: the walls' height over the floor in height units (tanks.cfg's
+    // units are the tiles': tankEntryPoint 0x499cfa counts the walls x16
+    // world units as FUN_0040f26c the tile's height - 16 px a step, seen
+    // in the original's shots: a new tank's wall is 5 x 16 px), raised and
+    // lowered on Tank Adjustment; salt or fresh water, and whether it is
+    // filling (else draining)
     int wallSub = 0;
-    float wallTop() const { return this->floorHeight + this->wallSub * 0.5f; }
+    float wallTop() const { return static_cast<float>(this->floorHeight + this->wallSub); }
     // The water's height as shown: it follows the walls and base up a
     // unit a second (down at once); unset until first drawn
     float level = -1e9f;
@@ -200,6 +202,9 @@ public:
   // A tank's water level in subtiles (zoo.exe tank+0x188: what animals'
   // and objects' cDepth is measured against)
   int waterSubtiles(const Exhibit &ex) const;
+  // The water's level over the floor in whole height units (the original's
+  // tank +0x188: animals' cDepth, trick and scenery depths)
+  int waterLevel(const Exhibit &ex) const { return this->waterSubtiles(ex) / 2; }
   // Its tile inside the gate (the ladder's and platform's); within r tiles
   // of its wall (0: one of the tile's own sides is the wall)
   bool byTankLadder(const Exhibit &ex, int x, int y) const;
@@ -361,6 +366,10 @@ public:
   // when none is within reach
   bool pieceAt(float sx, float sy, const WorldRenderer &view, const WorldMap &map,
                Edge &found) const;
+  // After pieceAt found a tank wall: how far under its top (its rail) the
+  // point was, logical pixels (zoo.exe 0x4fb5ab: within 20 of the top the
+  // wall can be dragged - the up/down cursor and its hint)
+  mutable float pieceBelowTop = 0;
 
   // Drawing: each piece (and the preview) as a drawable for PlacedObjects
   struct Drawable {

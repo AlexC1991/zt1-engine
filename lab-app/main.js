@@ -5,12 +5,13 @@
 //    window put inside this one (the Play view)
 // and talks to Ghidra (the ZT1_LabBridge script, 127.0.0.1:18489), the
 // knowledge base (re/knowledge.json, re/kb.py) and the mods' files.
-const { app, BrowserWindow, ipcMain, shell, screen, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, screen, nativeImage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
 const http = require('http');
 const cp = require('child_process');
+const labUpdates = require('./update.js');
 
 // Where everything is: the checkout (if there is one), and what the app
 // carries itself. This file is the only one for that (runtime.js says how).
@@ -96,7 +97,14 @@ function engineExe(role = 'lab') {
   // as a release is built - then the 32-bit one in build/Release, where the
   // game's files are)
   const sources = REPO
-    ? [BUILD64 && path.join(BUILD64, 'Release', 'zt1-engine.exe'), RELEASE && path.join(RELEASE, 'zt1-engine.exe'), RELEASE && path.join(RELEASE, 'zt1-engine-dev.exe')]
+    ? [
+        BUILD64 && path.join(BUILD64, 'Release', 'zt1-engine.exe'),
+        RELEASE && path.join(RELEASE, 'zt1-engine.exe'),
+        RELEASE && path.join(RELEASE, 'zt1-engine-dev.exe'),
+        // A checkout can have the source without a built engine. The installer
+        // carries its own engine, so keep that as the final fallback.
+        roots.engineDir && path.join(roots.engineDir, 'zt1-engine.exe'),
+      ]
     : roots.engineSources;
   const build64 = sources[0] && fs.existsSync(sources[0]) ? path.dirname(sources[0]) : null;
   const dir = build64 || roots.engineDir || RELEASE;
@@ -107,7 +115,10 @@ function engineExe(role = 'lab') {
       const run = path.join(dir, `zt1-engine-${role}.exe`);
       const a = fs.existsSync(run) && fs.statSync(run), b = fs.statSync(p);
       if (a && a.mtimeMs >= b.mtimeMs && a.size === b.size) return run;
-      if (p === roots.engineExe && !a) return p; // (the install's: it is the engine)
+      // (the install's engine is run as it is - but only an installed Lab's:
+      // a checkout's own build must run from the copy, or the next Build
+      // can't replace the exe while the Lab's engine has it open - LNK1104)
+      if (!REPO && p === roots.engineExe && !a) return p;
       fs.copyFileSync(p, run);
       return run;
     } catch {
@@ -235,6 +246,40 @@ function onHostData(d) {
 
 ipcMain.on('engine:send', (_e, cmd) => {
   if (host.sock) host.sock.write(JSON.stringify(cmd) + '\n');
+});
+ipcMain.handle('lab:update', async () => {
+  if (!app.isPackaged) return { status: 'unavailable', message: 'Updates are available in the installed release.' };
+  let manifest;
+  try {
+    manifest = labUpdates.validate(await labUpdates.readManifest());
+  } catch (e) {
+    return { status: 'error', message: `Could not verify the update: ${e.message}` };
+  }
+  const current = app.getVersion();
+  if (labUpdates.compareVersions(manifest.version, current) <= 0)
+    return { status: 'current', message: `ZT1 Lab ${current} is up to date.` };
+  const choice = await dialog.showMessageBox(win, {
+    type: 'info', buttons: ['Download and install', 'Cancel'], defaultId: 0, cancelId: 1,
+    title: 'ZT1 Lab update available',
+    message: `ZT1 Lab ${manifest.version} is available (you have ${current}).`,
+    detail: 'The installer is signed and will be checked before it runs. The Lab will close during installation.'
+  });
+  if (choice.response !== 0) return { status: 'cancelled', message: 'Update cancelled.' };
+  const dir = fs.mkdtempSync(path.join(app.getPath('temp'), 'zt1-lab-update-'));
+  const installer = path.join(dir, manifest.file);
+  try {
+    await labUpdates.download(manifest, installer);
+    const proc = cp.spawn(installer, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/RELAUNCHLAB=1'], { detached: false, stdio: 'ignore', windowsHide: true });
+    await new Promise((resolve, reject) => {
+      proc.once('error', reject);
+      proc.once('spawn', resolve);
+    });
+    app.quit();
+    return { status: 'installing', message: 'The update installer has started.' };
+  } catch (e) {
+    try { fs.rmSync(dir, {recursive:true, force:true}); } catch {}
+    return { status: 'error', message: `Update failed: ${e.message}` };
+  }
 });
 ipcMain.handle('engine:start', () => {
   if (!host.sock) startHost();
@@ -1201,7 +1246,11 @@ ipcMain.handle('ghidra:get', async (_e, p, fresh) => {
 ipcMain.handle('ghidra:status', async () => {
   const r = await ghidraGet('/status', 1500);
   if (r && !r.cached) return r.json;
-  return ghidraOwn.proc ? { starting: true, since: ghidraOwn.started } : null;
+  // (building its own project is the long job before Ghidra can start at all:
+  //  the pill says so rather than looking like nothing is happening)
+  if (ghidraOwn.building) return { building: true, since: ghidraOwn.started, said: ghidraOwn.said };
+  if (ghidraOwn.proc) return { starting: true, since: ghidraOwn.started, said: ghidraOwn.said };
+  return ghidraOwn.said ? { said: ghidraOwn.said } : null;
 });
 
 // The bridge started by the Lab itself: when nothing answers on its port at
@@ -1211,7 +1260,39 @@ ipcMain.handle('ghidra:status', async () => {
 // project are: re/private/ghidra.json (below). The Lab can work from a copy
 // of your own project, so your own Ghidra keeps it unlocked: "projects"
 // lists the copy first, "own" is yours
-const ghidraOwn = { proc: null, started: 0 };
+const ghidraOwn = { proc: null, started: 0, building: false, said: '', project: '' };
+// What the Lab made for itself, when nothing else points it at a project:
+// a Ghidra project of the player's own zoo.exe, in the Lab's data folder.
+// (The Lab carries Ghidra and the JDK it runs on, but it does not carry a
+//  project - a project is built out of zoo.exe, which is the player's file
+//  and is never shipped. Without one there is nothing for the headless Ghidra
+//  to open, so a first-time machine was told to start the bridge by hand in a
+//  Ghidra it had never opened, while the Ghidra that could do it sat in its
+//  own install. On the first run with no project, the Lab imports zoo.exe and
+//  analyses it - a few minutes, once - and starts its own bridge on that)
+const OWN_PROJECT = PRIVATE && path.join(PRIVATE, 'ghidra-project');
+// Ghidra's own log, kept: the import's progress is the only way to tell a long
+// build from a stuck one, and it is what to read when it fails
+const GHIDRA_BRIDGE_LOG = PRIVATE && path.join(PRIVATE, 'ghidra-bridge.log');
+// (the zoo.exe this project is of, so a player whose game moves - or a second
+//  build of it - is noticed and built again rather than quietly read wrong)
+const OWN_PROJECT_MARK = PRIVATE && path.join(PRIVATE, 'ghidra-project.json');
+function sameZoo(paths) {
+  try {
+    if (!fs.existsSync(OWN_PROJECT_MARK)) return false;
+    const m = JSON.parse(fs.readFileSync(OWN_PROJECT_MARK, 'utf8'));
+    return !!m && !!m.zoo && (m.zoos || [m.zoo]).some((z) => paths.includes(z)) && !!m.built && !!m.project;
+  } catch {
+    return false;
+  }
+}
+function ourProjectDir() {
+  try {
+    return JSON.parse(fs.readFileSync(OWN_PROJECT_MARK, 'utf8')).project || '';
+  } catch {
+    return '';
+  }
+}
 function ghidraConfig() {
   let c = {};
   try {
@@ -1226,18 +1307,34 @@ function ghidraConfig() {
   //  the one the Lab itself carries - tree/ghidra. A Lab on its own has
   //  Ghidra without the player installing anything)
   const home = c.home || process.env.GHIDRA_INSTALL_DIR || roots.ghidraHome || '';
-  const project = c.project || (c.projects || []).find((p) => fs.existsSync(path.join(p, name + '.gpr')));
+  // (no project of yours, and none named: the Lab's own import of the player's
+  //  zoo.exe, when it has made one that is still of that same file)
+  const zoo = zooExePath();
+  // (both the project of ours and a build that is finished-but-not-started-yet)
+  const ourMark = OWN_PROJECT && sameZoo([zoo]) ? ourProjectDir() : '';
+  const ourProject = ourMark && fs.existsSync(path.join(ourMark, name + '.gpr')) ? ourMark : (ghidraOwn.project || '');
+  const project = c.project || (c.projects || []).find((p) => fs.existsSync(path.join(p, name + '.gpr'))) || ourProject;
   // (Java, when the Lab carries one beside its Ghidra: Ghidra is a Java
   //  program, so a machine with no JDK cannot start it at all)
   const java = roots.javaHome || '';
   return { home, project, own: c.own || project, name, settings: c.settings || (project ? path.join(project, 'headless-settings') : ''), java };
 }
 async function startOwnGhidra() {
-  if (ghidraOwn.proc || (await ghidraGet('/status', 1500))) return;
+  if (ghidraOwn.proc || ghidraOwn.building || (await ghidraGet('/status', 1500))) return;
   const c = ghidraConfig();
   const bat = path.join(c.home, 'support', 'analyzeHeadless.bat');
   const scripts = at('ghidra_scripts');
-  if (!c.project || !scripts || !fs.existsSync(bat)) return; // (no Ghidra here: the Lab works from its saved copies)
+  if (!scripts || !fs.existsSync(bat)) return; // (no Ghidra here: the Lab works from its saved copies)
+  // (no project to open, and Ghidra is here: make one out of the player's own
+  //  zoo.exe, then start on it. This is the first run on a machine that has
+  //  only the Lab - there is no project because there was nothing to make one
+  //  out of until now)
+  if (!c.project) {
+    if (!(await buildOwnProject(c, bat, scripts))) return;
+    // buildOwnProject records the result on ghidraOwn; this config object was
+    // created before the import, so pass the new project path to the bridge.
+    c.project = ghidraOwn.project;
+  }
   fs.mkdirSync(PRIVATE, { recursive: true });
   const log = fs.openSync(path.join(PRIVATE, 'ghidra-bridge.log'), 'w');
   const proc = cp.spawn(
@@ -1257,13 +1354,103 @@ async function startOwnGhidra() {
   );
   ghidraOwn.proc = proc;
   ghidraOwn.started = Date.now();
+  ghidraOwn.said = '';
+  ghidraOwn.project = c.project;
   proc.on('exit', () => {
     if (ghidraOwn.proc === proc) ghidraOwn.proc = null;
   });
 }
+// Build the Lab its own Ghidra project out of the player's zoo.exe: import the
+// exe and analyse it (analyzeHeadless, which is the headless Ghidra that came
+// with the Lab), then start on the result. Run once per machine - the project
+// is kept, so later starts open it. A few minutes for a 2.4 MB exe; the import
+// is synchronous because what it produces is needed before Ghidra can start,
+// and the truth is on disk either way - the project is not named as built
+// until its .gpr is actually there.
+//
+// (zoo.exe is imported from a copy, not from where the game is installed.
+//  Ghidra's analyzeHeadless.bat passes its arguments through cmd, which reads
+//  parentheses as syntax: 'C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\
+//  zoo.exe' - which is where the game installs by default - fails with
+//  '\zoo.exe was unexpected at this time' before Java even starts. Measured:
+//  a path with spaces is fine, a path with () is not. The copy is the player's
+//  own file, kept in the Lab's own folder and never shipped, and the bytes -
+//  so every address in it - are identical to the ones Ghidra would have read)
+const PAREN = /[()]/;
+async function buildOwnProject(c, bat, scripts) {
+  if (!OWN_PROJECT) return false;
+  const zoo = zooExePath();
+  if (!zoo || !fs.existsSync(zoo)) {
+    ghidraOwn.said = `No zoo.exe to build a Ghidra project from (looked at ${zoo || 'nothing'}). Set where the game is in the Lab's settings, or point Ghidra at your own project in re/private/ghidra.json.`;
+    return false;
+  }
+  // (both the project and the file imported into it have to be somewhere cmd
+  //  will not choke on: the Lab's data folder, or a plain temporary one when
+  //  even that has parentheses in it - a checkout under 'My Stuff (old)', say)
+  const dir = PAREN.test(OWN_PROJECT) ? path.join(os.tmpdir(), 'zt1-lab-ghidra-project') : OWN_PROJECT;
+  ghidraOwn.building = true;
+  ghidraOwn.started = Date.now();
+  ghidraOwn.said = 'Building a Ghidra project from zoo.exe (once: a few minutes)…';
+  let log;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(PRIVATE, { recursive: true });
+    log = fs.openSync(GHIDRA_BRIDGE_LOG, 'w');
+    // (the project is made fresh: a half-built one from an earlier try would
+    //  otherwise be opened as if it were complete)
+    for (const f of [c.name + '.gpr', c.name + '.rep', c.name + '.lock', c.name + '.lock~']) {
+      fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+    }
+    // (named zoo.exe, so the bridge's -process zoo.exe still finds it)
+    const copied = path.join(dir, 'zoo.exe');
+    fs.copyFileSync(zoo, copied);
+    // (analyzed, so the project has zoo.exe's functions in it: 'analyzeHeadless'
+    //  runs the analysers by default, and only skips them with -noanalysis.
+    //  No postScript: the Lab's own scripts are for naming, which ZT1_Apply and
+    //  the bridge do later, against the knowledge base)
+    const proc = cp.spawn('cmd.exe', ['/c', bat, dir, c.name, '-import', copied, '-overwrite'],
+      { env: { ...process.env, ...(c.java ? { JAVA_HOME: c.java } : {}) }, stdio: ['ignore', log, log], windowsHide: true });
+    ghidraOwn.buildProc = proc;
+    const result = await new Promise((resolve, reject) => {
+      proc.once('error', reject);
+      proc.once('close', (code, signal) => resolve({ code, signal }));
+    });
+    if (ghidraOwn.buildProc === proc) ghidraOwn.buildProc = null;
+    fs.closeSync(log);
+    log = null;
+    if (result.code !== 0) {
+      ghidraOwn.said = `Ghidra project import failed (exit ${result.code === null ? result.signal : result.code}). What it said is in ${GHIDRA_BRIDGE_LOG}.`;
+      ghidraOwn.building = false;
+      return false;
+    }
+  } catch (e) {
+    if (log !== undefined) {
+      try { fs.closeSync(log); } catch {}
+    }
+    ghidraOwn.buildProc = null;
+    ghidraOwn.said = 'Couldn’t build the Ghidra project: ' + e.message;
+    ghidraOwn.building = false;
+    return false;
+  }
+  ghidraOwn.building = false;
+  // (named as built only when Ghidra really made it: a failed import leaves a
+  //  folder behind, and it must be tried again rather than opened empty)
+  if (!fs.existsSync(path.join(dir, c.name + '.gpr'))) {
+    ghidraOwn.said = `Ghidra didn’t finish the project. What it said is in ${GHIDRA_BRIDGE_LOG}.`;
+    return false;
+  }
+  ghidraOwn.project = dir;
+  try {
+    fs.writeFileSync(OWN_PROJECT_MARK, JSON.stringify({ zoo, zoos: [zoo], built: new Date().toISOString(), project: dir }, null, 1) + '\n');
+  } catch {}
+  ghidraOwn.said = 'The Lab made its own Ghidra project from zoo.exe. Starting on it…';
+  return true;
+}
 function stopOwnGhidra() {
-  const p = ghidraOwn.proc;
-  ghidraOwn.proc = null;
+  const build = ghidraOwn.buildProc;
+  ghidraOwn.buildProc = null;
+  if (build && build.pid) cp.spawnSync('taskkill', ['/PID', String(build.pid), '/T', '/F'], { windowsHide: true });
+  const p = ghidraOwn.proc;  ghidraOwn.proc = null;
   // (the .bat's Java with it: the whole tree)
   if (p && p.pid) cp.spawnSync('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true });
 }
@@ -1555,7 +1742,15 @@ const LOADERS_JSON = at('lab', 'loaders.json');
 // is in re/cloud/README.md. Nothing happens by itself: the Lab only ever runs
 // it when it is asked to, and `pull` writes to re/knowledge.json.
 const CLOUD_CONF = path.join(PRIVATE, 'cloud.json');
-const CLOUD_API = () => (process.env.ZT1_KB_API || (jsonFile(CLOUD_CONF, {}) || {}).api || '').trim();
+// The endpoint is part of the Lab's public release configuration. A player's
+// private setting or environment override can point a checkout elsewhere.
+const CLOUD_RELEASE_CONF = at('cloud', 'config.json');
+const CLOUD_API = () => (
+  process.env.ZT1_KB_API ||
+  (jsonFile(CLOUD_CONF, {}) || {}).api ||
+  (jsonFile(CLOUD_RELEASE_CONF, {}) || {}).api ||
+  ''
+).trim();
 // (10 minutes: sending a whole base goes up in pieces - 2,059 findings and
 // 18,167 situations is 13 requests - so a short timeout would cut it off
 // halfway through)
@@ -1570,7 +1765,7 @@ function cloudZooArgs() {
 function cloudRun(args, timeout = 600000) {
   const api = CLOUD_API();
   if (!api) {
-    return { ok: false, error: 'The Lab has no shared knowledge base to talk to. Point it at one: set ZT1_KB_API, or put it in re/private/cloud.json ({"api": "https://..."}). See re/cloud/README.md.' };
+    return { ok: false, error: 'The Lab has no shared knowledge base configured. Check re/cloud/config.json, ZT1_KB_API, or re/private/cloud.json.' };
   }
   const wantsZoo = args[0] === 'contribute';
   const r = cp.spawnSync(labPython(), [at('cloud', 'sync.py'), ...args, '--api', api, ...(wantsZoo ? cloudZooArgs() : [])], {

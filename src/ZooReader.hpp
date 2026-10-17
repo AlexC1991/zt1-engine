@@ -58,13 +58,78 @@ public:
     std::string name;      // e.g. "Concrete Path"
     std::vector<uint8_t> payload;
 
+    // Read exactly by the original's loaders (decoded: the whole body read
+    // to its stored size - see ZooReader.cpp); else only the fields above,
+    // from their fixed places
+    bool decoded = false;
+    uint32_t direction = 0;          // 0-7 (loadUnitCommon +0x12c)
+    int32_t food = 0;                // scenery's food counter (food, poo)
+    std::vector<uint8_t> colours;    // colour choices, from version 67
+    bool hasCondition = false;       // fences and tank walls, from 55
+    uint32_t strength = 0, life = 0; // (life under 1: broken)
+    bool portal = false;             // a tank wall that's a show portal
+    int movementMode = 0;            // units: 3 inside a tank
+    struct Animal {
+      int32_t happiness = 0, hunger = 0, health = 0, energy = 0;
+      bool female = false;
+      int32_t dung = 0;
+      bool keeperVisited = false, dying = false, mourning = false, crated = false, thirsty = false,
+           rampaging = false, egg = false, escaped = false;
+    };
+    bool hasAnimal = false;
+    Animal animal;
+
     int tileX() const { return x >= 0 ? x / 64 : (x - 63) / 64; }
     int tileY() const { return y >= 0 ? y / 64 : (y - 63) / 64; }
   };
 
   const std::vector<ZooObject> &getObjects() const { return objects; }
 
+  // ---- The whole file, read in the original's order (exact: every section
+  // read to its end - else only the tiles and objects, found by the search)
+  bool isExact() const { return exact; }
+  // A habitat's record (zoo.exe habitatMgrLoad 0x4c7e6c)
+  struct Habitat {
+    int x = 0, y = 0;             // its first tile
+    std::string name;
+    int gateX = -1, gateY = -1;   // its gate's tile (-1: none)
+    int gateSide = -1;            // map direction 0, 2, 4, 6 (-1: none)
+    uint32_t stats[9] = {};
+    bool tank = false, show = false;
+    int tankHeight = 0, waterLevel = 0; // steps above the tank's floor
+    bool salt = true;
+    int purity = 100;
+  };
+  const std::vector<Habitat> &getHabitats() const { return habitats; }
+  uint32_t getLanguage() const { return language; }
+  int getEntranceX() const { return startCameraX; }
+  int getEntranceY() const { return startCameraY; }
+  uint32_t getNextUnitId() const { return nextUnitId; }
+  // The game manager's (zoo.exe gameMgrLoad 0x5948c6): saved games have
+  // these; a map's are its starting ones
+  bool hasGame() const { return game; }
+  float getCash() const { return cash; }
+  float getAdmission() const { return admission; }
+  uint32_t getRating() const { return rating; }
+  const uint16_t *getDate() const { return date; } // SYSTEMTIME: year, month, weekday, day...
+  // The view the zoo was saved with: zoom, rotation, scroll x, scroll y,
+  // the terraform brush's size
+  const int32_t *getView() const { return view; }
+  // How many entity records decoded to exactly their size, of how many
+  int decodedCount() const { return decoded; }
+  // Where the exact read stopped, when it did ("" when it didn't)
+  const std::string &problem() const { return why; }
+
 private:
+  bool exact = false, game = false;
+  uint32_t language = 0, nextUnitId = 0, rating = 0;
+  std::vector<Habitat> habitats;
+  float cash = 0, admission = 49.0f;
+  uint16_t date[8] = {};
+  int32_t view[5] = {};
+  int decoded = 0;
+  std::string why;
+  bool readExact(const uint8_t *data, size_t size);
   int mapWidth = 0;
   int mapHeight = 0;
   uint32_t version = 0;

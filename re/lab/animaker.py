@@ -94,18 +94,23 @@ def parse_ani(text):
 
 
 def parse_frames(data):
-    if struct.unpack_from('<I', data, 0)[0] == 0x5A544146:
-        raise ValueError('FATZ art (a background frame) is not supported yet')
-    ms, n = struct.unpack_from('<II', data, 0)
-    pal = data[8:8 + n].split(b'\0')[0].decode('latin1')
-    pos = 8 + n
-    count = struct.unpack_from('<I', data, pos)[0]
+    # (FATZ art - Marine Mania's: "FATZ", four bytes, a flag byte; with the
+    # flag set one more frame after the ones counted, its background)
+    head, extra, base = b'', 0, 0
+    if data[:4] == b'FATZ':
+        head, extra, base = data[:9], 1 if data[8] else 0, 9
+    ms, n = struct.unpack_from('<II', data, base)
+    pal = data[base + 8:base + 8 + n].split(b'\0')[0].decode('latin1')
+    pos = base + 8 + n
+    count = struct.unpack_from('<I', data, pos)[0] + extra
     pos += 4
     frames = []
     for _ in range(count):
         size, h, w, ox, oy, flags = struct.unpack_from('<IHHhhH', data, pos)
-        if h & 0x8000:
-            raise ValueError('shadow frames are not supported yet')
+        # (the height's top bit: a shadow frame - Marine Mania's "shadow" +
+        # art - whose runs are (skip, length) with no colours: all shadow)
+        shadow = bool(h & 0x8000)
+        h &= 0x7FFF
         p = pos + 14
         lines = []
         for _ in range(h):
@@ -114,29 +119,37 @@ def parse_frames(data):
             p += 1
             for _ in range(k):
                 skip, length = data[p], data[p + 1]
-                runs.append((skip, bytearray(data[p + 2:p + 2 + length])))
-                p += 2 + length
+                if shadow:
+                    runs.append((skip, bytearray(length)))
+                    p += 2
+                else:
+                    runs.append((skip, bytearray(data[p + 2:p + 2 + length])))
+                    p += 2 + length
             lines.append(runs)
-        frames.append({'h': h, 'w': w, 'ox': ox, 'oy': oy, 'flags': flags, 'lines': lines})
+        frames.append({'h': h, 'w': w, 'ox': ox, 'oy': oy, 'flags': flags, 'lines': lines, 'shadow': shadow})
         pos += 4 + size
-    return {'ms': ms, 'pal': pal, 'frames': frames}
+    return {'ms': ms, 'pal': pal, 'frames': frames, 'head': head, 'extra': extra}
 
 
 def write_frames(art):
     out = io.BytesIO()
+    out.write(art.get('head', b''))
     name = art['pal'].encode('latin1') + b'\0'
     out.write(struct.pack('<II', art['ms'], len(name)))
     out.write(name)
-    out.write(struct.pack('<I', len(art['frames'])))
+    out.write(struct.pack('<I', len(art['frames']) - art.get('extra', 0)))
     for f in art['frames']:
         body = io.BytesIO()
+        shadow = f.get('shadow', False)
         for runs in f['lines']:
             body.write(bytes([len(runs)]))
             for skip, colours in runs:
                 body.write(bytes([skip, len(colours)]))
-                body.write(bytes(colours))
+                if not shadow:
+                    body.write(bytes(colours))
         pixels = body.getvalue()
-        out.write(struct.pack('<IHHhhH', 10 + len(pixels), f['h'], f['w'], f['ox'], f['oy'], f['flags']))
+        out.write(struct.pack('<IHHhhH', 10 + len(pixels), f['h'] | (0x8000 if shadow else 0), f['w'], f['ox'],
+                              f['oy'], f['flags']))
         out.write(pixels)
     return out.getvalue()
 

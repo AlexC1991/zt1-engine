@@ -166,6 +166,9 @@ int Staff::typeOfFile(const std::string &file) const {
 void Staff::clear() {
   this->list.clear();
   this->counts.clear();
+  // (a zoo loaded afresh: no exhibit visited yet - the last zoo's visits
+  // kept a reloaded tank "not due" for the service interval)
+  this->lastVisit.clear();
   this->selected = this->hovered = this->carried = -1;
 }
 
@@ -962,7 +965,10 @@ bool Staff::needsVisit(const Member &m, int exhibit, const Fences &fences) const
   if (!ex || ex->animalCount() <= 0 || !this->items)
     return false;
   // Real animals (zoo.exe 0x49d202): one to heal (health 85% or less), one
-  // hungry with no food, any poo, or not visited for a while
+  // hungry with no food, any poo, or not visited for a while - never
+  // visited, or longer ago than the service interval (habitatMgr +100
+  // against the habitat's +0xec stamp), food there or not: a marine
+  // specialist went into a tank with food in it only when an animal starved
   if (ex->animals > 0 && this->animals) {
     bool heal = false, starving = false;
     float food = this->items->foodIn(exhibit);
@@ -974,13 +980,14 @@ bool Staff::needsVisit(const Member &m, int exhibit, const Fences &fences) const
     bool poo = !this->items->ofKind(ZooItems::Kind::Dung, exhibit).empty();
     auto last = this->lastVisit.find(exhibit);
     bool due = last == this->lastVisit.end() || this->clock - last->second > kRevisitSeconds;
-    ZT_STEP("0x49d202", "Does it need a visit? (one to heal, one starving, dung, or due with no food)",
-            {"exhibit", exhibit}, {"to heal", heal ? 1 : 0}, {"starving", starving ? 1 : 0}, {"dung", poo ? 1 : 0},
-            {"due", due ? 1 : 0}, {"food there", food}, {"visit", heal || starving || poo || (due && food <= 0) ? "yes" : "no"});
     // (a tank: its water murky too - under tanks.cfg murkyWaterPurity 60,
     // zoo.exe 0x49f22b)
     bool murky = ex->tank && ex->water > 0 && ex->purity < kMurkyPurity;
-    return heal || starving || poo || (due && food <= 0) || murky;
+    ZT_STEP("0x49d202", "Does it need a visit? (one to heal, one starving, dung, murky water, or due)",
+            {"exhibit", exhibit}, {"to heal", heal ? 1 : 0}, {"starving", starving ? 1 : 0}, {"dung", poo ? 1 : 0},
+            {"murky", murky ? 1 : 0}, {"due", due ? 1 : 0}, {"food there", food},
+            {"visit", heal || starving || poo || due || murky ? "yes" : "no"});
+    return heal || starving || poo || due || murky;
   }
   float low = ex->animalCount() * ZooItems::kFoodPerAnimal * 0.5f;
   bool hungry = this->items->foodIn(exhibit) < low;
@@ -1143,18 +1150,37 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
   };
   if (tank)
     switch (m.phase) {
-    case 0: // outside the gate: climbs up over the wall onto the water
-      // (bClimbUp: fFly(climb, 33))
+    case 0: { // outside the gate: up the wall to its rim (Job20_ClimbUp
+      // 0x49ae22: put at the wall's edge - tankClimbTop 0x499e80 - then up
+      // it to the rim, 0x499f95: the walls' height, tankEntryPoint's z;
+      // bClimbUp: fFly(climb, 33))
       m.access = m.visit;
       m.tank = m.visit;
       m.dutyId = kEntering;
       if (this->animals)
         this->animals->keeperArrives(m.visit);
-      ZT_STEP("0x49ae22", "Climbs up over the tank's wall onto the water (Job20_ClimbUp, bClimbUp)",
-              {"tank", ex->name}, {"water depth", depth});
-      m.phase = 20;
-      climb(m, m.inX, m.inY, depth, false, false, 2, map);
+      const float ex0 = (m.inX + m.outX) * 0.5f, ey0 = (m.inY + m.outY) * 0.5f;
+      const float ground = groundAt(map, m.outX, m.outY);
+      m.x = ex0 + (m.outX - ex0) * 0.2f;
+      m.y = ey0 + (m.outY - ey0) * 0.2f;
+      m.z = ground - groundAt(map, m.x, m.y);
+      ZT_STEP("0x49ae22", "Climbs up the tank's wall to its rim (Job20_ClimbUp, bClimbUp)",
+              {"tank", ex->name}, {"rim", ex->wallTop()}, {"ground", ground}, {"water depth", depth});
+      m.phase = 30;
+      climb(m, ex0, ey0, ex->wallTop() - groundAt(map, ex0, ey0), false, false, 1, map);
       return;
+    }
+    case 30: { // at the rim: down the inside onto the water (Job21_ClimbDown,
+      // 0x49a944: from the rim to tankClimbTop - the water's surface;
+      // bClimbDown: fFlyReverse(climb, 33))
+      const float ex0 = (m.inX + m.outX) * 0.5f, ey0 = (m.inY + m.outY) * 0.5f;
+      const float sx = ex0 + (m.inX - ex0) * 0.2f, sy = ey0 + (m.inY - ey0) * 0.2f;
+      ZT_STEP("0x49a944", "Climbs down the inside onto the water (Job21_ClimbDown, bClimbDown)",
+              {"tank", ex->name}, {"surface", ex->floorHeight + depth});
+      m.phase = 20;
+      climb(m, sx, sy, ex->floorHeight + depth - groundAt(map, sx, sy), true, true, 2, map);
+      return;
+    }
     case 20: { // at the surface: under the water for the work, if there's any
       bool heal = false;
       if (this->animals)
@@ -1170,7 +1196,8 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
         climb(m, m.x, m.y, 0.0f, true, true, 3, map);
         return;
       }
-      m.phase = 26;
+      // (nothing under it: back up the wall from the surface and out)
+      m.phase = 27;
       visitStep(m, map, fences);
       return;
     }
@@ -1216,15 +1243,22 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
                    m.inX, m.inY))
         return;
       [[fallthrough]];
-    case 27: // up to the surface at the wall (Job28_ClimbUpB: bClimbUp)
+    case 27: { // up the inside of the wall to its rim (Job28_ClimbUpB:
+      // bClimbUp)
+      const float ex0 = (m.inX + m.outX) * 0.5f, ey0 = (m.inY + m.outY) * 0.5f;
       m.phase = 26;
-      climb(m, (m.inX + m.outX) * 0.5f, (m.inY + m.outY) * 0.5f, depth, false, true, 2, map);
+      climb(m, ex0, ey0, ex->wallTop() - groundAt(map, ex0, ey0), false, true, 1, map);
       return;
-    case 26: // over the wall and down outside (Job21_ClimbDown: bClimbDown)
+    }
+    case 26: { // from the rim down the outside to the ground (Job21_ClimbDown:
+      // tankClimbTop toward the tile outside, its ground; bClimbDown)
+      const float ex0 = (m.inX + m.outX) * 0.5f, ey0 = (m.inY + m.outY) * 0.5f;
+      const float sx = ex0 + (m.outX - ex0) * 0.2f, sy = ey0 + (m.outY - ey0) * 0.2f;
       m.dutyId = kExiting;
       m.phase = 29;
-      climb(m, m.outX, m.outY, 0.0f, true, false, 0, map);
+      climb(m, sx, sy, groundAt(map, m.outX, m.outY) - groundAt(map, sx, sy), true, false, 0, map);
       return;
+    }
     case 29: // out
       m.tank = -1;
       m.water = 0;
@@ -2089,10 +2123,22 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
             under = this->art(m, key);
         }
       }
-      if (this->onlySurface && !under)
-        continue;
-      if (under && !this->onlySurface)
-        a = under;
+      // (climbing the inside of the wall: over the water while above it -
+      // down from the rim, up to it - under it below)
+      bool above = false;
+      if (m.climbing && this->tankDepth) {
+        const float surface = groundAt(map, m.inX, m.inY) + this->tankDepth(m.tank);
+        above = heightOf(m, map) > surface + 0.05f;
+      }
+      if (m.climbing) {
+        if (above != this->onlySurface)
+          continue;
+      } else {
+        if (this->onlySurface && !under)
+          continue;
+        if (under && !this->onlySurface)
+          a = under;
+      }
     }
     float sx, sy, depth, gsx, gsy;
     float z = heightOf(m, map);

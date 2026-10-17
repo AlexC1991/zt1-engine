@@ -38,6 +38,7 @@ first time). Nothing is uploaded: a release does that.
 """
 import argparse
 import datetime
+import json
 import os
 import re
 import shutil
@@ -264,7 +265,7 @@ def stage_tree(require=False):
             sys.exit("[X] the written offer for the GPL-covered pieces was not written")
 
 
-def pack_app():
+def pack_app(version):
     say("[2/3] Packing the app (electron-builder: the Electron runtime and app.asar)")
     npm = shutil.which("npm") or shutil.which("npm.cmd")
     if not npm:
@@ -272,7 +273,21 @@ def pack_app():
     if not os.path.isdir(os.path.join(APP, "node_modules", "electron-builder")):
         say("    installing electron-builder (once)…")
         run([npm, "install", "--no-save", "--no-audit", "--no-fund", "electron-builder@^26"], cwd=APP)
-    run([npm, "run", "pack"], cwd=APP)
+    package_json = os.path.join(APP, "package.json")
+    with open(package_json, encoding="utf-8") as fh:
+        package = json.load(fh)
+    original_version = package["version"]
+    package["version"] = version
+    with open(package_json, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(package, fh, indent=2)
+        fh.write("\n")
+    try:
+        run([npm, "run", "pack"], cwd=APP)
+    finally:
+        package["version"] = original_version
+        with open(package_json, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(package, fh, indent=2)
+            fh.write("\n")
     out = os.path.join(PACK, "win-unpacked")
     if not os.path.exists(os.path.join(out, "ZT1 Lab.exe")):
         sys.exit("[X] electron-builder said it worked, but there's no " + os.path.relpath(out, ROOT))
@@ -293,7 +308,7 @@ def installer(version):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default="", help="year.month.day, e.g. 2026.10.19 (else today's)")
-    ap.add_argument("--official", action="store_true", help="a release's build (nothing here updates itself: this only says so)")
+    ap.add_argument("--official", action="store_true", help="a release build (the signed updater manifest is made by the release workflow)")
     ap.add_argument("--app-only", action="store_true", help="pack the app, no installer")
     ap.add_argument("--no-stage", action="store_true", help="keep the staged tree as it is")
     ap.add_argument("--no-pack", action="store_true", help="the installer, from the app already packed")
@@ -308,10 +323,17 @@ if __name__ == "__main__":
     if not a.no_stage:
         stage_tree(require=a.require_backend)
     if not a.no_pack:
-        pack_app()
+        pack_app(version)
     if a.app_only:
         say(f"[OK] {os.path.relpath(os.path.join(PACK, 'win-unpacked', 'ZT1 Lab.exe'), ROOT)} (no installer)")
     else:
         setup = installer(version)
+        import hashlib
+        digest = hashlib.sha256()
+        with open(setup, "rb") as binary:
+            for block in iter(lambda: binary.read(1024 * 1024), b""):
+                digest.update(block)
+        with open(setup + ".sha256", "w", encoding="ascii", newline="\n") as fh:
+            fh.write(f"{digest.hexdigest()}  {os.path.basename(setup)}\n")
         size = os.path.getsize(setup) / 1024 / 1024
         say(f"[OK] {os.path.relpath(setup, ROOT)}: {size:.1f} MB")

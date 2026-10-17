@@ -113,7 +113,7 @@ The base game's **freeform** mode is the focus, and most of it works as in the o
 - **The zoo's business:** zoo rating, admissions, marketing, finances, graphs, research and conservation, freeform goals and awards.
 - **Sound:** music, ambience, crowds, guests, animals and buildings.
 
-Marine Mania tanks are partly in. Marine Mania and Dinosaur Digs come after the base game is done.
+**Marine Mania** (Complete Collection) has started: tanks, marine animals, tank filters, and Marine Specialists who climb in, feed and clean underwater as in the original. Its animal shows aren't in yet. **Dinosaur Digs** isn't playable yet.
 
 | | |
 |---|---|
@@ -124,7 +124,7 @@ Marine Mania tanks are partly in. Marine Mania and Dinosaur Digs come after the 
 
 ### Optional extras
 
-Each is a switch; off means the original's behaviour. Flip them in the in-game dev console (`features`, `set <name> on|off`); an options menu for them is planned.
+Each is a switch; off means the original's behaviour. Flip them in **Game Options › Extras** (or the dev console: `features`, `set <name> on|off`).
 
 | Switch | What it does |
 |---|---|
@@ -186,9 +186,9 @@ You're also free to fork it and take it your own way. That's what open source is
 ## Roadmap
 
 1. **Base Zoo Tycoon freeform, one to one with the original.** Every system checked against `zoo.exe`, function by function.
-2. **An options menu** for the extras, and a friendlier mod menu.
+2. ~~An options menu for the extras~~ (done: Game Options › Extras), and a friendlier mod menu.
 3. **Scenarios:** every scenario's goals and events.
-4. **Marine Mania**, then **Dinosaur Digs**.
+4. **Marine Mania** (started: tanks, marine animals, specialists; shows next), then **Dinosaur Digs**.
 5. **The original's `.zoo` saves:** loading them.
 
 ---
@@ -212,7 +212,7 @@ For a one-person project, that's what makes an engine like this possible. You're
 Yes. The engine ships none of the game's art, sound or files. It reads them from your own installed copy, the first time it runs.
 
 **Is the base game enough, or do I need the Complete Collection?**
-The base game is enough. The Complete Collection works too. Marine Mania and Dinosaur Digs content isn't playable yet.
+The base game is enough. The Complete Collection works too, and adds Marine Mania's animals and tanks (the shows come later). Dinosaur Digs content isn't playable yet.
 
 **Which download do I want?**
 Almost everyone wants `ZT1-Engine-Setup`. It's small, needs no admin rights, finds your game by itself and offers each new alpha at the main menu. `ZT1-Game-Build` is the same game as a folder you unzip and run with `start.bat`. It needs Python 3 the first time and doesn't update itself. `ZT1-Lab-Setup` is 570 MB and is only for people who want to look inside `zoo.exe`. You don't need it to play.
@@ -285,6 +285,7 @@ Building your own fork, or something related to Zoo Tycoon, on any system? Open 
 | [sharkwouter/zt1-engine](https://github.com/sharkwouter/zt1-engine) | Linux | The original zt1-engine by Wouter Wijsman, which this project grew from |
 | [sharkwouter/zt1-engine, `openztc` branch](https://github.com/sharkwouter/zt1-engine/tree/openztc) | Cross-platform | A separate cross-platform line, developed independently |
 | [StevenGann/zt1-engine, `linux-port`](https://github.com/StevenGann/zt1-engine/tree/linux-port) | Linux | A Linux port of this engine |
+| [RustyZoo](https://github.com/RustyZoo/RustyZoo) | Windows, macOS, Linux | A separate reimplementation written from scratch in Rust (GPL-3.0), loading your own game's data |
 
 ---
 

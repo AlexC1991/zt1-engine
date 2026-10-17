@@ -24,7 +24,7 @@
 
 namespace {
 constexpr uint32_t kMagic = 0x5A543153; // "S1TZ"
-constexpr uint32_t kVersion = 6; // (1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn)
+constexpr uint32_t kVersion = 7; // (1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
 
 // A little binary writer and reader: numbers as they are, strings with
 // their length, vectors with their count
@@ -109,7 +109,11 @@ static std::string fileDialog(bool saving) {
   // (owned by the game's window: on top of it, the game waiting - with no
   // owner it could open behind the window, the game seeming to hang)
   ofn.hwndOwner = GetActiveWindow() ? GetActiveWindow() : GetForegroundWindow();
-  ofn.lpstrFilter = "Zoo Tycoon Saved Game (*.zt1save)\0*.zt1save\0";
+  // (loading: the original game's own saved zoos too, .zoo)
+  ofn.lpstrFilter = saving ? "Zoo Tycoon Saved Game (*.zt1save)\0*.zt1save\0"
+                           : "All saved zoos (*.zt1save, *.zoo)\0*.zt1save;*.zoo\0"
+                             "Zoo Tycoon Saved Game (*.zt1save)\0*.zt1save\0"
+                             "The original game's saved zoos (*.zoo)\0*.zoo\0";
   ofn.lpstrFile = file;
   ofn.nMaxFile = MAX_PATH;
   ofn.lpstrInitialDir = dir.c_str();
@@ -126,6 +130,184 @@ static std::string fileDialog(bool saving) {
 
 std::string SaveGame::askSavePath() { return fileDialog(true); }
 std::string SaveGame::askLoadPath() { return fileDialog(false); }
+
+// ----------------------------------------------------------------------------
+// The original game's own saved zoos (.zoo, read by ZooReader in zoo.exe's
+// order: loadZoo 0x453000, worldLoad 0x452e13)
+// ----------------------------------------------------------------------------
+bool SaveGame::isOriginal(const std::string &path) {
+  char magic[4] = {};
+  FILE *fp = std::fopen(path.c_str(), "rb");
+  if (!fp)
+    return false;
+  bool ok = std::fread(magic, 1, 4, fp) == 4 && std::memcmp(magic, "TZFB", 4) == 0;
+  std::fclose(fp);
+  return ok;
+}
+
+bool SaveGame::loadOriginal(World &world, ZooSim &sim, UiGameScreen &hud) {
+  if (!loadOriginalWorld(world))
+    return false;
+  const ZooReader &z = world.zooReader;
+  // The books: the cash (gameMgr +0xc), the date (+0x1194), the admission,
+  // the rating
+  if (z.hasGame()) {
+    sim.money = z.getCash();
+    sim.zooRating = z.getRating();
+    const uint16_t *d = z.getDate();
+    if (sim.months.empty())
+      sim.months.push_back({});
+    sim.months.back().month = std::clamp(static_cast<int>(d[1]) - 1, 0, 11);
+    sim.months.back().year = std::max(1, static_cast<int>(d[0]) - 2000);
+    sim.day = std::max(0, static_cast<int>(d[3]) - 1);
+    sim.dirty = true;
+    UiGameScreen::ZooInfo info = hud.zooInfo();
+    info.admission = z.getAdmission();
+    info.cash = static_cast<long>(sim.money);
+    hud.setZooInfo(info);
+  }
+  return true;
+}
+
+bool SaveGame::loadOriginalWorld(World &world) {
+  const ZooReader &z = world.zooReader;
+  if (!z.isExact())
+    return false;
+  WorldMap &map = world.worldMap;
+  Fences &f = world.fences;
+  // The habitats: the map path keeps fenced ground as pockets; a saved zoo's
+  // are exhibits (habitatMgrLoad 0x4c7e6c names each by a tile in it). Its
+  // tanks' ground is sunk already: the heights are kept as the save has them
+  std::vector<std::array<int, 5>> heights;
+  for (int y = 0; y < map.height; y++)
+    for (int x = 0; x < map.width; x++) {
+      const MapTile &t = map.tiles[y][x];
+      heights.push_back({t.height, t.cornerHeight[0], t.cornerHeight[1], t.cornerHeight[2], t.cornerHeight[3]});
+    }
+  f.exhibitList.clear();
+  f.made = 0;
+  f.updateExhibits(map, 1, 0, 1, false);
+  for (int y = 0, k = 0; y < map.height; y++)
+    for (int x = 0; x < map.width; x++, k++) {
+      MapTile &t = map.tiles[y][x];
+      t.height = heights[k][0];
+      for (int c = 0; c < 4; c++)
+        t.cornerHeight[c] = heights[k][1 + c];
+    }
+  map.touch();
+  int named = 0;
+  for (Fences::Exhibit &ex : f.exhibitList) {
+    const ZooReader::Habitat *hab = nullptr;
+    for (const ZooReader::Habitat &h : z.getHabitats())
+      if (ex.tiles.count({h.x, h.y}))
+        hab = &h;
+    if (!hab) {
+      // (no habitat of the save's: ground the walls shut off)
+      ex.pocket = true;
+      ex.named = false;
+      continue;
+    }
+    ex.name = hab->name;
+    ex.named = true;
+    named++;
+    if (ex.tank) {
+      // The floor as the save has it; the ground round it; its walls and
+      // water (in half steps over the floor: 5 and 4 is a new tank's)
+      int floor = INT32_MAX, ground = INT32_MIN;
+      for (auto [x, y] : ex.tiles)
+        if (const MapTile *t = map.getTile(x, y))
+          for (int c = 0; c < 4; c++)
+            floor = std::min(floor, static_cast<int>(t->cornerHeight[c]));
+      for (auto [x, y] : ex.tiles)
+        for (auto [dx, dy] : {std::make_pair(1, 0), std::make_pair(-1, 0), std::make_pair(0, 1), std::make_pair(0, -1)})
+          if (!ex.tiles.count({x + dx, y + dy}))
+            if (const MapTile *t = map.getTile(x + dx, y + dy))
+              for (int c = 0; c < 4; c++)
+                ground = std::max(ground, static_cast<int>(t->cornerHeight[c]));
+      ex.floorHeight = floor;
+      ex.groundHeight = ground > INT32_MIN ? ground : floor + 2;
+      ex.wallSub = std::max(1, hab->tankHeight);
+      ex.water = hab->tankHeight > 1 ? std::clamp(hab->waterLevel / static_cast<float>(hab->tankHeight - 1), 0.0f, 1.0f) : 0.0f;
+      ex.salt = hab->salt;
+      ex.purity = static_cast<float>(std::clamp(hab->purity, 0, 100));
+      ex.filling = true;
+      ex.level = -1e9f;
+    }
+  }
+  // Food and dung down where they lie, with what's left of them
+  ZooItems &items = world.items;
+  int piles = 0;
+  for (const ZooReader::ZooObject &o : z.getObjects()) {
+    if (!o.decoded || (o.className != "food" && o.subClass != "poo" && o.subClass != "dinopoo"))
+      continue;
+    float x = o.x / 64.0f, y = o.y / 64.0f;
+    int ex = f.exhibitAt(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
+    bool dung = o.subClass == "poo" || o.subClass == "dinopoo";
+    items.add(dung ? ZooItems::Kind::Dung : ZooItems::Kind::Food, ex, x, y);
+    ZooItems::Item &it = items.list.back();
+    if (!dung) {
+      it.food = o.subClass;
+      it.units = it.full = static_cast<float>(std::max(0, o.food));
+    }
+    piles++;
+  }
+  // The animals, as they were (ZTAnimal::load 0x455533: their status)
+  Animals &an = world.animals;
+  int animals = 0, staffCount = 0, missed = 0;
+  for (const ZooReader::ZooObject &o : z.getObjects()) {
+    if (!o.hasAnimal)
+      continue;
+    int type = an.typeOfFile("animals/" + o.subClass + ".ai");
+    int id = type >= 0 ? an.adopt(type, o.animal.female, o.x / 64.0f, o.y / 64.0f, map, f, true) : -1;
+    if (id < 0) {
+      SDL_Log("[Save] the original's %s \"%s\" couldn't be put back at %.1f, %.1f", o.subClass.c_str(), o.name.c_str(),
+              o.x / 64.0f, o.y / 64.0f);
+      missed++;
+      continue;
+    }
+    for (Animals::Member &m : an.list)
+      if (m.id == id) {
+        if (!o.name.empty())
+          m.name = o.name;
+        m.happiness = static_cast<float>(std::clamp(o.animal.happiness, -100, 100));
+        m.hunger = static_cast<float>(o.animal.hunger);
+        m.health = static_cast<float>(o.animal.health);
+        m.energy = static_cast<float>(o.animal.energy);
+        m.food = 100 - m.hunger;
+        m.boxed = o.animal.crated;
+        // (loose: the save's escape - its flag, or standing in no exhibit;
+        // still an egg only if the save says so)
+        m.escaped = o.animal.escaped || m.exhibit < 0;
+        if (o.animal.egg && an.typeList[m.type].laysEggs)
+          an.becomeEgg(m);
+      }
+    animals++;
+  }
+  an.markDirty();
+  // The staff, where they stood (ZTStaff 0x455370 and its kinds)
+  Staff &st = world.staff;
+  for (const ZooReader::ZooObject &o : z.getObjects()) {
+    if (!o.decoded || (o.className != "keeper" && o.className != "maint" && o.className != "tour" &&
+                       o.className != "staff" && o.className != "helicopter"))
+      continue;
+    int type = st.typeOfFile("staff/" + o.subClass + ".ai");
+    int id = type >= 0 ? st.hire(type, o.x / 64.0f, o.y / 64.0f, map, f) : -1;
+    if (id < 0) {
+      SDL_Log("[Save] the original's %s \"%s\" couldn't be put back at %.1f, %.1f", o.subClass.c_str(), o.name.c_str(),
+              o.x / 64.0f, o.y / 64.0f);
+      missed++;
+      continue;
+    }
+    if (Staff::Member *m = st.member(id))
+      if (!o.name.empty())
+        m->name = o.name;
+    staffCount++;
+  }
+  SDL_Log("[Save] the original's saved zoo: %d habitats named, %d piles, %d animals, %d staff (%d couldn't be put back; "
+          "its guests aren't read yet)",
+          named, piles, animals, staffCount, missed);
+  return true;
+}
 
 bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameScreen &hud,
                     const std::string &mapPath) {
@@ -560,6 +742,10 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
     i.get(x.wallSub);
     if (version < 5)
       x.wallSub -= x.floorHeight; // (it was the walls' top in height units)
+    if (version < 5)
+      x.wallSub *= 2; // (to the half units of 5 and 6)
+    if (version < 7 && x.tank)
+      x.wallSub = std::max(1, (x.wallSub + 1) / 2); // (half units to the original's whole ones)
     i.get(x.salt);
     i.get(x.filling);
     i.get(x.purity);

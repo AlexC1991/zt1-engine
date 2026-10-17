@@ -3643,6 +3643,11 @@
    "kind": "other",
    "meaning": "cZapCheck"
   },
+  "6532920": {
+   "by": "batty251",
+   "kind": "global",
+   "meaning": "initialSink: tanks.cfg initialSink (4): height units a new tank's floor sinks below its tiles' average (0x45b92f) - the tile's own unit, 16 px"
+  },
   "6559072": {
    "by": "batty251",
    "kind": "global",
@@ -7295,6 +7300,13 @@
    "provisional": false,
    "summary": "An exhibit staff can't get to: 11000 \"%s is inaccessible to zoo staff.\", 11001 \"The entrance to %s is blocked and is not accessible to zoo staff.\""
   },
+  "0x44f280": {
+   "by": "batty251",
+   "confidence": "sure",
+   "name": "entitiesLoad",
+   "provisional": false,
+   "summary": "A saved zoo's entities: the next unit id (nextUnitId 0x638738), the tile grid (0x4c8782), then the count and each record: three strings (class, type, subtype; u32 length under 0x1000), and from version 0x46 (70) the body's size, so an unknown class can be skipped (before 70 the body has to be parsed to find the next record) (checked in its code; the layout after RustyZoo's zoo.rs)"
+  },
   "0x44f625": {
    "by": "batty251 (class slots 0x68 / 0x6c read: crt_fwrite, crt_fread)",
    "confidence": "sure",
@@ -9999,6 +10011,13 @@
    "provisional": false,
    "summary": "Job 0x10 (Job16_GoToFence: maintenance going to a fence) - its destructor (deleting when asked) - class slot 0 (table 0x632804)"
   },
+  "0x49e8fa": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "habitatNextNeedingVisit",
+   "provisional": false,
+   "summary": "Marks the habitat visited (+0x168) and, if it still needs a visit (0x49d202 with connected habitats) and isn't the staff's current one, returns it; else searches connected habitats (+0x48 list). Task 0x6e's last duty: on to the next one"
+  },
   "0x49e97b": {
    "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
    "class": "Task6e_DutiesInHabitat",
@@ -10069,9 +10088,9 @@
   "0x49f165": {
    "by": "batty251",
    "confidence": "likely",
-   "name": "habitatDungCount",
+   "name": "habitatAnimalsToHealCount",
    "provisional": false,
-   "summary": "Task 0x6e's dung duty: the habitat's dung piles not yet taken by another keeper - then job 3"
+   "summary": "Task 0x6e's healing duty: the habitat's animals this staff cares for (0x423f00), not taken by another (staff +0x270), sickly (0x4a88cf) and on a free tile - stored at staff +0x298; over 0 a job (0x49f141). Was misnamed habitatDungCount"
   },
   "0x49f22b": {
    "by": "batty251",
@@ -10711,6 +10730,13 @@
    "name": "ctor",
    "provisional": false,
    "summary": "Task's constructor (unitMakeTask) - a keeper going to a habitat (\"Going to habitat\")"
+  },
+  "0x4a88cf": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "animalIsSickly",
+   "provisional": false,
+   "summary": "True when health x100 <= max health (type +0x234) x (100 - cSicklyAnimalPct): an animal a keeper/specialist goes to heal (0x49d202, 0x49f165)"
   },
   "0x4a8b25": {
    "by": "batty251 (read its code, from the live steps)",
@@ -11411,6 +11437,13 @@
    "provisional": false,
    "summary": "Reads it back from a saved zoo (crt_fread), field by field, by the file's version - class slot 0x6c of ZTMaintenanceWorker"
   },
+  "0x4c6f54": {
+   "by": "batty251",
+   "confidence": "sure",
+   "name": "showsLoad",
+   "provisional": false,
+   "summary": "A saved zoo's shows (0x639008, ZTShowMgr): the show scripts (0x4c6ebd), then from version 0x61 (97) a 2-byte counter into 0x63e480. worldLoad reads it right after the habitats from 97 on, but for versions 0x59-0x60 (89-96) late, after the marketing section (checked in its code; the layout after RustyZoo's zoo.rs)"
+  },
   "0x4c6f95": {
    "by": "batty251 (the UI element numbers it asks uiFind for, from the game's layout files)",
    "confidence": "guess",
@@ -11424,6 +11457,21 @@
    "name": "ui_zooinfo4_4c740a",
    "provisional": true,
    "summary": "Works on Zoo Status (ui/zooinfo4.lyt): Scenario_data"
+  },
+  "0x4c7e6c": {
+   "by": "batty251",
+   "class": "ZTHabitatMgr",
+   "confidence": "sure",
+   "name": "habitatMgrLoad",
+   "provisional": false,
+   "summary": "A saved zoo's habitats, read first by worldLoad: the map's width and height (+8, +0xc), the entrance tile (+0x10, +0x14); then the count and each habitat: its first tile (2 ints), its name (u32 length under 0x1000, then the bytes), from version 0x15 its gate tile and side (3 ints, -1 for none), from 0x22 its nine statistics (9 ints) and a FILETIME, from 0x25 a second FILETIME (creation), from 0x53 an int, from 0x55 a tank byte, from 0x5a a show byte (then the show record, 0x46d779); a tank: height and water level (2 ints, steps above the floor), from 0x58 a salt byte (default 1), from 100 three ints (default 100: maps older than 100 have purity 100). After the list, from 0x40 an int is read into +0x68 and then overwritten with 1 (checked in its code; the layout after RustyZoo's zoo.rs)"
+  },
+  "0x4c8782": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "tileGridLoad",
+   "provisional": false,
+   "summary": "The tile grid of a saved zoo (entitiesLoad calls it after the next unit id; through 0x4c864e) (checked in its code; the layout after RustyZoo's zoo.rs)"
   },
   "0x4c998b": {
    "by": "batty251 (the scenario manager's class table 0x630d7c read from the running game; its functions read)",
@@ -14956,6 +15004,50 @@
    "provisional": false,
    "summary": "A goal group (class table 0x6352f8): its \"optional\" flag and each \"child\" goal made (makeGoal) - goals within goals"
   },
+  "0x594093": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "awardsLoad",
+   "provisional": false,
+   "summary": "After the research: a count and that many ints, each added to a sorted list without repeats (0x5a13ed) - the awards (saveIntList writes it) (checked in its code; the layout after RustyZoo's zoo.rs)"
+  },
+  "0x594197": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "cheatsLoad",
+   "provisional": false,
+   "summary": "The last section before the tail, from version 0x68 (104): a count and that many strings (u32 length under 0x1000), into the list at 0x641860 (emptied first) - the cheats (checked in its code; the layout after RustyZoo's zoo.rs)"
+  },
+  "0x594450": {
+   "by": "batty251",
+   "confidence": "sure",
+   "name": "clocksAndEventsLoad",
+   "provisional": false,
+   "summary": "After the thoughts (ZTThoughtMgr): from version 0x23 two ints (+0xe8, +0xec: the clocks), from 0x61 (97) the event queue (0x594d17) (checked in its code; the layout after RustyZoo's zoo.rs)"
+  },
+  "0x5948c6": {
+   "by": "batty251",
+   "class": "ZTGameMgr",
+   "confidence": "sure",
+   "name": "gameMgrLoad",
+   "provisional": false,
+   "summary": "The game manager read from a saved zoo (ZTGameMgr class slot 0xc, after the entities): an int (dropped), its settings and view block (0x59497f), the date (SYSTEMTIME, 16 bytes at +0x1194), the cash (+0xc), then 0x594cba (from version 0x49 an int at +8) (checked in its code; the layout after RustyZoo's zoo.rs)"
+  },
+  "0x59497f": {
+   "by": "batty251",
+   "class": "ZTGameMgr",
+   "confidence": "likely",
+   "name": "gameMgrLoadSettings",
+   "provisional": false,
+   "summary": "gameMgrLoad's first block, from version 0xd: the zoo's settings and view (+0xc..+0x54, +0x120, from 0x17 +0x14c/+0x150 and two more, version-dependent ranges fixed up for files before 0x19), from 0x27 +0x1150, then the highest price (+0x1178, 8 bytes) (checked in its code; the layout after RustyZoo's zoo.rs)"
+  },
+  "0x594d17": {
+   "by": "batty251",
+   "confidence": "sure",
+   "name": "eventQueueLoad",
+   "provisional": false,
+   "summary": "A saved zoo's event queue, from version 97: the two event buffers in file order (a count and that many records each, through 0x485f08), then one byte saying which is the next buffer (checked in its code; the layout after RustyZoo's zoo.rs)"
+  },
   "0x595083": {
    "by": "batty251 (confirmed 2026-10-12: the scenario and goal class tables read from the running game)",
    "confidence": "likely",
@@ -15388,6 +15480,13 @@
    "name": "guestThinkOverjoyed",
    "provisional": false,
    "summary": "Thinks 10098 \"%s looks overjoyed.\" about an animal"
+  },
+  "0x5a13ed": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "sortedIntSetAdd",
+   "provisional": false,
+   "summary": "Adds an int to a sorted list of ints (+0xc..+0x10) unless it's there already (awardsLoad) (checked in its code; the layout after RustyZoo's zoo.rs)"
   },
   "0x5a1b15": {
    "by": "Lab loader mapper",
@@ -17766,11 +17865,35 @@
    "name": "scenarioMgr",
    "summary": "The scenario manager (ZTScenarioMgr, likely - its class table 0x630d7c): scenarioOpen, scenarioStart, goalsCheckTick, scenarioComplete"
   },
+  "0x639000": {
+   "by": "batty251",
+   "kind": "other",
+   "name": "marketingMgr",
+   "summary": "ZTMarketingMgr (made by 0x525657 with that name): worldLoad's marketing section (its slot 0xc), worldSave's (slot 8)"
+  },
+  "0x639008": {
+   "by": "batty251",
+   "kind": "other",
+   "name": "showMgr",
+   "summary": "ZTShowMgr, the show settings: showsLoad/the show section of worldSave (0x479fa4), the show score thresholds +0x14/+0x18/+0x1c"
+  },
+  "0x639010": {
+   "by": "batty251",
+   "kind": "other",
+   "name": "researchMgr",
+   "summary": "ZTResearchMgr (made by 0x51e103 with that name): worldLoad's research section (its slot 0xc), worldSave's (slot 8)"
+  },
   "0x639024": {
    "by": "Lab loader mapper",
    "kind": "key",
    "name": "cUIThreshold",
    "summary": "Config key cUIThreshold (read at 0x521a5a)"
+  },
+  "0x639090": {
+   "by": "batty251",
+   "kind": "other",
+   "name": "thoughtMgr",
+   "summary": "ZTThoughtMgr (made by 0x4649aa with that name): worldLoad's thoughts section (its slot 8), worldSave's (slot 4)"
   },
   "0x6390a4": {
    "by": "Lab loader mapper",
@@ -30403,6 +30526,141 @@
    "by": "batty251",
    "on": "2026-10-12",
    "what": "Note at 0x42400a: Live order seen: ClimbUp (state 1) -> surface z 16 (state 2) -> ClimbDownB -> under z 0 (state 3) -> GoCleanTank -> CleanTank -> GoToPlatformExitTank -> ClimbUpB -> ClimbDown; each climb ~0.7 s (one play of climb, 125 ms frames)"
+  },
+  {
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "on": "2026-10-14",
+   "what": "Note at 0x4c25cf: The path shape loader stores each [Shapes] shape= code's LIST POSITION into the record's +0x14: the bytes at 0x4c25cf are 89 78 14, i.e. 'mov dword ptr [eax+0x14], edi' - checked against the pinned build (2002 Complete Collection zoo.exe, sha256 61fcc6d1..., 2,449,432 bytes), so the value kept is the index in the repeated-key list, not the code itself. Found by StevenGann, address verified here 2026-10-14."
+  },
+  {
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "on": "2026-10-14",
+   "what": "Asked q5 at 0x4c25cf: StevenGann's independent .zoo findings: (a) entity record = 3 x (u32 len + bytes) = [category, name, code], then u32 blob_len + blob; (b) x = i32 @ blob+0x04 / 64, y = i32 @ blob+0x08 / 64, tile = y*width + x. Verified here 2026-10-14 by parsing 94 shipped .zoo files / 95,951 records with rule (a): zero structural failures, v70-v106 including expansions; and rule (b): 95,950 of 95,951 coordinates land on the map grid. Worth folding into the reader docs."
+  },
+  {
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "on": "2026-10-14",
+   "what": "Asked q6 at 0x4c25cf: Is +0x14 in an entity blob a sequential id? StevenGann says yes; it does not check out here. In deathmtn.zoo objects run 15878-24394 and fences 6844-27544, both non-contiguous, and across 94 maps the values are sparse and large (max 57693 in medium.zoo). Not a per-map counter. Something else - a global id, or another field."
+  },
+  {
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "on": "2026-10-14",
+   "what": "Asked q7 at 0x4c25cf: StevenGann's path shape selection: [Shapes] is a repeated-key list whose values are the codes, and selection is a 4-bit neighbour mask = S*1 + E*2 + N*4 + W*8, giving shape code = 100 + mask and frame = mask + 5, with 21 codes but only 20 frames (the last has no frame). Not reproduced here yet. If it holds it should be written up - it is the most useful thing in his set and the one most likely to be got wrong twice."
+  },
+  {
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "on": "2026-10-14",
+   "what": "Lead q8 at 0x4c25cf: ambient's blob is shaped differently from every other category. The 28-byte prefix is right in spirit but its fields do not line up at +0x04/+0x08/+0x10, and reading +0x08/+0x0C/+0x14 does not fix it either - so an offset inside an ambient blob should be treated as unverified. Evidence: only ambient has negative y (5 records across 94 maps - crows, seagulls, birds; y -7 to -39, i.e. just above the map's top edge, with a sane x), and only ambient has values at +0x10 that are not directions (multiples of 16, -192..192). So StevenGann's 'negative means not placed' and 'direction is only 0/2/4/6' both hold for ordinary categories and fail for ambient."
+  },
+  {
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "on": "2026-10-14",
+   "what": "Asked q9 at 0x4c25cf: StevenGann reports two traps that cost him time: the .spr frame stride is flen + 4 (not flen), and the palette is RGBA rather than BGRA. Neither is confirmed here - this tree has no .spr reader to check the stride against, and our palette path is SDL_PIXELFORMAT_RGBA32 in ResourceManager.cpp, which is consistent with RGBA but is not evidence for it. Worth pinning independently before either is relied on."
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x4c7e6c habitatMgrLoad"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x4c6f54 showsLoad"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x44f280 entitiesLoad"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x4c8782 tileGridLoad"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x5948c6 gameMgrLoad"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x59497f gameMgrLoadSettings"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x594450 clocksAndEventsLoad"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x594d17 eventQueueLoad"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x594093 awardsLoad"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x5a13ed sortedIntSetAdd"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x594197 cheatsLoad"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Global 0x639090 = thoughtMgr"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Global 0x639010 = researchMgr"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Global 0x639000 = marketingMgr"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Global 0x639008 = showMgr"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Note at 0x452e13: Section order of a saved zoo (checked against worldLoad and worldSave, matching RustyZoo's zoo.rs): habitats (habitatMgrLoad, with the map size and entrance), shows from 97 (showsLoad), entities (next id, tile grid, records: entitiesLoad), the game manager (settings/view, date, cash: gameMgrLoad), thoughts (thoughtMgr), clocks and events (clocksAndEventsLoad), research (researchMgr), awards (awardsLoad), marketing (marketingMgr), shows for 89-96, cheats from 104 (cheatsLoad), then the tail: the world's slot 0x40 and, from 0x3a, two ints (+0x208, +0x204), plus one more before 0x43. loadZoo before it: TZFB, version 38..106, language from 69 (0 reads as 0x409), expansions from 82"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Lead q10 at 0x452e13: After entitiesLoad, a saved zoo holds 5 ints RustyZoo calls the view (zoom, rotation, scroll x, scroll y, brush; lab-sweep-marine3: 0, 0, 2984, 608, 5; lab-show-zoo: 0, 0, 1732, -483, 1) before the scenario block and name counters. Which function reads them, and what are the scroll units (the original opened marine3 on its tanks; our engine opens at the entrance)? Not entitiesLoad's freads; gameMgrLoad 0x5948c6 reads one int first, then gameMgrLoadSettings (the status/books)"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Number 0x63af38 = initialSink: tanks.cfg initialSink (4): height units a new tank's floor sinks below its tiles' average (0x45b92f) - the tile's own unit, 16 px"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x49f165 habitatAnimalsToHealCount"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x4a88cf animalIsSickly"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "what": "Named 0x49e8fa habitatNextNeedingVisit"
   }
  ],
  "notes": {
@@ -30415,6 +30673,11 @@
    "by": "batty251",
    "on": "2026-10-12",
    "text": "Part of FUN_00437102 (ZTAnimal's table, slot 0x48): Ghidra made it a function once the class tables were applied (2026-10-12). That function picks a behaviour by name (bSleep, bHatch...) - a sleep ends a rampage here"
+  },
+  "0x452e13": {
+   "by": "batty251",
+   "on": "2026-10-17",
+   "text": "Section order of a saved zoo (checked against worldLoad and worldSave, matching RustyZoo's zoo.rs): habitats (habitatMgrLoad, with the map size and entrance), shows from 97 (showsLoad), entities (next id, tile grid, records: entitiesLoad), the game manager (settings/view, date, cash: gameMgrLoad), thoughts (thoughtMgr), clocks and events (clocksAndEventsLoad), research (researchMgr), awards (awardsLoad), marketing (marketingMgr), shows for 89-96, cheats from 104 (cheatsLoad), then the tail: the world's slot 0x40 and, from 0x3a, two ints (+0x208, +0x204), plus one more before 0x43. loadZoo before it: TZFB, version 38..106, language from 69 (0 reads as 0x409), expansions from 82"
   },
   "0x48d21d": {
    "by": "batty251 (compared while naming)",
@@ -30435,6 +30698,11 @@
    "by": "batty251",
    "on": "2026-10-12",
    "text": "Reads an animal's [m/tricks/<name>] sections (animals/orca.ai): id, type (0 plain, 1 needs a show object, 3 the food reward), complexity, satisfaction, satisfactiondelta, minimumdepth (Play with Ball 8, Wave to Crowd 2 - why a show object is refused in a shallow tank), building (the show object's id: 6502 orca ball), defaultavailable (0 = researched first), visible, normalHelpID/grayedHelpID. Shows run every shows.cfg interval (continuous 65, frequent 90, infrequent 120); a trainer must be assigned to the animal's tank"
+  },
+  "0x4c25cf": {
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "on": "2026-10-14",
+   "text": "The path shape loader stores each [Shapes] shape= code's LIST POSITION into the record's +0x14: the bytes at 0x4c25cf are 89 78 14, i.e. 'mov dword ptr [eax+0x14], edi' - checked against the pinned build (2002 Complete Collection zoo.exe, sha256 61fcc6d1..., 2,449,432 bytes), so the value kept is the index in the repeated-key list, not the code itself. Found by StevenGann, address verified here 2026-10-14."
   },
   "0x611b43": {
    "by": "batty251 (read the code: the fidelity money audit)",
@@ -30544,6 +30812,84 @@
    "on": "2026-10-12",
    "question": "The original pauses with 'The National Organization of Zoos has received numerous complaints... you will not be able to adopt any new animals' when a lone zebra's happiness reached about -60 (Feb 1, Year 1). Our engine has no such ban. Where's the rule (its threshold, and what lifts it)? re/msg.py didn't find the text by 'National Organization'.",
    "status": "answered"
+  },
+  {
+   "address": "0x4c25cf",
+   "answer": "",
+   "answered_by": "",
+   "answered_on": "",
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "for": "assistant",
+   "function": "",
+   "id": "q5",
+   "on": "2026-10-14",
+   "question": "StevenGann's independent .zoo findings: (a) entity record = 3 x (u32 len + bytes) = [category, name, code], then u32 blob_len + blob; (b) x = i32 @ blob+0x04 / 64, y = i32 @ blob+0x08 / 64, tile = y*width + x. Verified here 2026-10-14 by parsing 94 shipped .zoo files / 95,951 records with rule (a): zero structural failures, v70-v106 including expansions; and rule (b): 95,950 of 95,951 coordinates land on the map grid. Worth folding into the reader docs.",
+   "status": "open"
+  },
+  {
+   "address": "0x4c25cf",
+   "answer": "",
+   "answered_by": "",
+   "answered_on": "",
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "for": "assistant",
+   "function": "",
+   "id": "q6",
+   "on": "2026-10-14",
+   "question": "Is +0x14 in an entity blob a sequential id? StevenGann says yes; it does not check out here. In deathmtn.zoo objects run 15878-24394 and fences 6844-27544, both non-contiguous, and across 94 maps the values are sparse and large (max 57693 in medium.zoo). Not a per-map counter. Something else - a global id, or another field.",
+   "status": "open"
+  },
+  {
+   "address": "0x4c25cf",
+   "answer": "",
+   "answered_by": "",
+   "answered_on": "",
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "for": "assistant",
+   "function": "",
+   "id": "q7",
+   "on": "2026-10-14",
+   "question": "StevenGann's path shape selection: [Shapes] is a repeated-key list whose values are the codes, and selection is a 4-bit neighbour mask = S*1 + E*2 + N*4 + W*8, giving shape code = 100 + mask and frame = mask + 5, with 21 codes but only 20 frames (the last has no frame). Not reproduced here yet. If it holds it should be written up - it is the most useful thing in his set and the one most likely to be got wrong twice.",
+   "status": "open"
+  },
+  {
+   "address": "0x4c25cf",
+   "answer": "",
+   "answered_by": "",
+   "answered_on": "",
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "for": "user",
+   "function": "",
+   "id": "q8",
+   "on": "2026-10-14",
+   "question": "ambient's blob is shaped differently from every other category. The 28-byte prefix is right in spirit but its fields do not line up at +0x04/+0x08/+0x10, and reading +0x08/+0x0C/+0x14 does not fix it either - so an offset inside an ambient blob should be treated as unverified. Evidence: only ambient has negative y (5 records across 94 maps - crows, seagulls, birds; y -7 to -39, i.e. just above the map's top edge, with a sane x), and only ambient has values at +0x10 that are not directions (multiples of 16, -192..192). So StevenGann's 'negative means not placed' and 'direction is only 0/2/4/6' both hold for ordinary categories and fail for ambient.",
+   "status": "open"
+  },
+  {
+   "address": "0x4c25cf",
+   "answer": "",
+   "answered_by": "",
+   "answered_on": "",
+   "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
+   "for": "assistant",
+   "function": "",
+   "id": "q9",
+   "on": "2026-10-14",
+   "question": "StevenGann reports two traps that cost him time: the .spr frame stride is flen + 4 (not flen), and the palette is RGBA rather than BGRA. Neither is confirmed here - this tree has no .spr reader to check the stride against, and our palette path is SDL_PIXELFORMAT_RGBA32 in ResourceManager.cpp, which is consistent with RGBA but is not evidence for it. Worth pinning independently before either is relied on.",
+   "status": "open"
+  },
+  {
+   "address": "0x452e13",
+   "answer": "",
+   "answered_by": "",
+   "answered_on": "",
+   "by": "batty251",
+   "for": "user",
+   "function": "worldLoad",
+   "id": "q10",
+   "on": "2026-10-17",
+   "question": "After entitiesLoad, a saved zoo holds 5 ints RustyZoo calls the view (zoom, rotation, scroll x, scroll y, brush; lab-sweep-marine3: 0, 0, 2984, 608, 5; lab-show-zoo: 0, 0, 1732, -483, 1) before the scenario block and name counters. Which function reads them, and what are the scroll units (the original opened marine3 on its tanks; our engine opens at the entrance)? Not entitiesLoad's freads; gameMgrLoad 0x5948c6 reads one int first, then gameMgrLoadSettings (the status/books)",
+   "status": "open"
   }
  ],
  "seen": {

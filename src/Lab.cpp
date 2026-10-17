@@ -25,6 +25,8 @@
 
 #include "Animals.hpp"
 #include "Animation.hpp"
+#include "Paths.hpp"
+#include "SaveGame.hpp"
 #include "EngineScripts.hpp"
 #include "Fences.hpp"
 #include "Goals.hpp"
@@ -1201,6 +1203,23 @@ bool LabApp::setupScene(const std::string &mapStem) {
   ItemCatalog::get().load(rm);
   Research::get().load(rm);
   world->edgeScroll = false;
+  // (save:<name> - one of the original game's own saved zoos, its whole world
+  // put back as the game does it: SaveGame::loadOriginalWorld)
+  if (mapStem.rfind("save:", 0) == 0) {
+    const std::string dir = Paths::originalSavesDir();
+    const std::string path = dir + mapStem.substr(5) + ".zoo";
+    if (dir.empty() || !world->loadFreeform(path) || !SaveGame::loadOriginalWorld(*world)) {
+      addLog("Couldn't load the original's saved zoo " + path);
+      return false;
+    }
+    addLog("Lab zoo: the original's saved zoo " + path);
+    this->mapStem = mapStem;
+    this->mapName = mapStem.substr(5) + " (the original's save)";
+    simClock = 0;
+    setupGoals();
+    goalsDisabled.clear();
+    return true;
+  }
   const FreeformMap *chosen = nullptr;
   for (int i = 0; const FreeformMap *m = sm->getFreeformMap(i); i++)
     if (fs::path(m->path).stem().string() == mapStem)
@@ -2962,6 +2981,14 @@ std::string LabApp::selJson() {
     // (not while stopped at a step: rating the exhibit again could change
     // what the stopped code is using)
     o.num("suitability", m->exhibit >= 0 && !inBreak ? an.suitability(m->id, world->getMap(), fn) : -1);
+    // Its carer's recommendations, as the panel lists them (red: "!")
+    if (!inBreak) {
+      static const char *const carers[3] = {"zookeeper", "scientist", "marine specialist"};
+      std::string recs;
+      for (const auto &[text, red] : an.advice(m->id, world->getMap(), fn))
+        recs += (recs.empty() ? "" : ",") + jq((red ? "! " : "") + text);
+      o.str("carer", carers[an.carerIndex(*m)]).add("recommendations", "[" + recs + "]");
+    }
     o.add("route", routeJson("animal", m->id, m->path, m->pathAt));
     {
       std::string anims, sets;
@@ -3234,6 +3261,16 @@ void LabApp::sendMaps() {
   for (int i = 0; const FreeformMap *m = sm->getFreeformMap(i); i++)
     list += (list.empty() ? "" : ",") +
             JObj().str("stem", fs::path(m->path).stem().string()).str("name", m->name).str("size", m->size).done();
+  // (and the original game's own saved zoos: save:<name>)
+  std::error_code ec;
+  if (const std::string dir = Paths::originalSavesDir(); !dir.empty())
+    for (const auto &e : fs::directory_iterator(dir, ec))
+      if (e.path().extension() == ".zoo")
+        list += (list.empty() ? "" : ",") + JObj()
+                                                .str("stem", "save:" + e.path().stem().string())
+                                                .str("name", e.path().stem().string() + " (the original's save)")
+                                                .str("size", "saved zoo")
+                                                .done();
   host->send("{\"t\":\"maps\",\"list\":[" + list + "]}");
 }
 
@@ -4801,11 +4838,14 @@ void LabApp::hostCommand(const Json &c) {
     static const std::set<std::string> doneFns = {"fplay", "fplaywithsound", "fplaytime", "fplaypingpong",
                                                   "fplayreverse", "fplayset", "fplaysettank", "fplaysetprob",
                                                   "fwalk", "fmove", "frun", "ffacetowardfood", "fplaysetterrain",
-                                                  "ftrot", "fmovewithsound", "fmovereverse"};
+                                                  "ftrot", "fmovewithsound", "fmovereverse", "fhatch",
+                                                  "fhalt", "fsetbase", "fkeepcontrol", "fdie"};
     static const std::set<std::string> playFns = {"fplay", "fplaywithsound", "fplaytime", "fplaypingpong",
                                                   "fplayreverse"};
+    // (prey: the chase is the engine's own - Animals::hunt, with its set's
+    // move - not the step)
     static const std::set<std::string> doneTargets = {"keeperfood", "otherfood", "0", "", "level",
-                                                      "floor", "surface", "dive", "rise"};
+                                                      "floor", "surface", "dive", "rise", "prey"};
     static const CompassDirection dirs[8] = {CompassDirection::N, CompassDirection::NE, CompassDirection::E,
                                              CompassDirection::SE, CompassDirection::S, CompassDirection::SW,
                                              CompassDirection::W, CompassDirection::NW};

@@ -19,7 +19,7 @@ const CONTROL = {
     if (!status || !status.configured) {
       return {
         configured: false,
-        hint: 'No shared knowledge base is set up for this Lab. Point it at one: set ZT1_KB_API, or put {"api": "https://..."} in re/private/cloud.json. See re/cloud/README.md.',
+        hint: 'The shared knowledge base endpoint is missing from re/cloud/config.json. A release includes it by default; ZT1_KB_API or re/private/cloud.json can override it. See re/cloud/README.md.',
       };
     }
     const what = String((a && a.what) || '').trim().toLowerCase();

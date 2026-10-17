@@ -58,6 +58,21 @@ public:
   // Rect last drawn at (screen/layout units), for anchors and hit tests
   SDL_Rect getLastRect() const { return this->last_rect; }
 
+  // Its layout's helpid= (its tooltip is string 30000 + it). Some list one
+  // per carer - zookeeper, scientist, marine specialist (the animal panel's
+  // hunger and suitability icons, its recommendations plaque) - and the
+  // game picks one (zoo.exe 0x4831b2): chooseHelp
+  int helpId() const {
+    if (!this->ini_reader)
+      return 0;
+    std::vector<std::string> ids = this->ini_reader->getList(this->name, "helpid");
+    if (ids.empty())
+      return 0;
+    size_t at = this->help_choice < ids.size() ? this->help_choice : 0;
+    return std::atoi(ids[at].c_str());
+  }
+  void chooseHelp(size_t choice) { this->help_choice = choice; }
+
   UiElement *findById(int targetId) {
     if (this->id == targetId)
       return this;
@@ -105,6 +120,7 @@ protected:
   bool hidden = false;
   bool layout_draws_children = false;
   SDL_Rect last_rect = {0, 0, 0, 0};
+  size_t help_choice = 0;
 
   std::vector<UiElement*> children;
 

@@ -77,6 +77,24 @@ bool World::loadFreeform(const std::string &path) {
   // Load map file
   int size = 0;
   void *raw_data = resourceManager->getFileContent(actualPath, &size);
+  // (a file of its own, not one of the game's - an original saved zoo picked
+  // in Load Game - read from the disk)
+  if (!raw_data) {
+    if (FILE *fp = std::fopen(actualPath.c_str(), "rb")) {
+      std::fseek(fp, 0, SEEK_END);
+      long n = std::ftell(fp);
+      std::fseek(fp, 0, SEEK_SET);
+      if (n > 0 && (raw_data = std::calloc(1, static_cast<size_t>(n) + 1)) != nullptr) {
+        if (std::fread(raw_data, 1, static_cast<size_t>(n), fp) == static_cast<size_t>(n)) {
+          size = static_cast<int>(n);
+        } else {
+          std::free(raw_data);
+          raw_data = nullptr;
+        }
+      }
+      std::fclose(fp);
+    }
+  }
 
   if (!raw_data) {
     SDL_Log("[World] ERROR: Failed to load file!");
@@ -178,9 +196,9 @@ bool World::loadFreeform(const std::string &path) {
     return e ? this->fences.waterSubtiles(*e) * 0.5f : 0.0f;
   };
   staff.tankDepth = animals.tankDepth;
-  animals.tankSubtiles = [this](int tank) {
+  animals.tankLevel = [this](int tank) {
     const Fences::Exhibit *e = this->fences.exhibit(tank);
-    return e ? this->fences.waterSubtiles(*e) : 0;
+    return e ? this->fences.waterLevel(*e) : 0;
   };
   terrain.hasBigObject = [this](int x, int y) {
     WorldIndex::What w = this->index.at(x, y);
@@ -2277,7 +2295,7 @@ Fences::Fit World::objectFit(const std::string &file, float x, float y, int faci
               this->fitMessage = 10559;
               return Fences::Fit::Outside;
             }
-            if (tf.surface && tf.depth > this->fences.waterSubtiles(*e)) {
+            if (tf.surface && tf.depth > this->fences.waterLevel(*e)) {
               this->fitMessage = 10560;
               return Fences::Fit::Outside;
             }
@@ -2361,6 +2379,7 @@ void World::hoverOff() {
   this->fences.previewFilterX = -1;
   this->fences.hoverPlatform = -1;
   this->hoverTipText.clear();
+  this->hoverWallTop = false;
   if (this->dragging)
     return;
   if (this->fenceTool >= 0)
@@ -2482,7 +2501,7 @@ void World::mouseMove(int x, int y) {
     worldRenderer.worldToScreenF(0, 0, 0, x0, y0, d);
     worldRenderer.worldToScreenF(0, 0, 1, x1, y1, d);
     c.zoom = saved;
-    float unit = std::max(1.0f, (y0 - y1) * zoom * 0.5f); // (a step: a subtile)
+    float unit = std::max(1.0f, (y0 - y1) * zoom); // (a step: a height unit)
     int want = static_cast<int>((this->wallDrag.pressY - y) / unit);
     const int id = this->wallDrag.tank;
     while (this->wallDrag.steps < want && this->fences.canAdjustWall(id, 1)) {
@@ -2772,6 +2791,7 @@ void World::mouseMove(int x, int y) {
             ? -1
             : this->fences.platformAt(lx, ly, worldRenderer);
     this->hoverTipText.clear();
+    this->hoverWallTop = false;
     if (this->fences.hoverPlatform >= 0) {
       if (const Fences::Exhibit *ex = this->fences.exhibit(this->fences.hoverPlatform))
         this->hoverTipText = ex->name;
@@ -2789,8 +2809,13 @@ void World::mouseMove(int x, int y) {
       Fences::Edge e;
       if (this->fences.pieceAt(lx, ly, worldRenderer, worldMap, e))
         if (const Fences::Piece *p = this->fences.at(e)) {
-          if (p->tank >= 0 && !p->gate)
+          // (a tank wall's top - within 20 px under its rail, zoo.exe
+          // 0x4fb5ab - drags up and down: its hint, help 1079, and the
+          // up/down cursor, 0x433b34)
+          if (p->tank >= 0 && !p->gate && this->fences.pieceBelowTop <= 20.0f) {
             this->hoverTipText = this->resourceManager->getString(31079);
+            this->hoverWallTop = true;
+          }
           // (an exhibit's gate: lit)
           if (p->gate && p->tank < 0)
             this->fences.hoverGate = e;
@@ -2803,6 +2828,7 @@ void World::mouseMove(int x, int y) {
     this->fences.hoverPlatform = -1;
     this->fences.hoverGate = {false, -1, -1};
     this->hoverTipText.clear();
+    this->hoverWallTop = false;
   }
   if (this->filterTool) {
     float wx, wy;
@@ -3352,7 +3378,8 @@ World::ToolResult World::mouseDown(int x, int y) {
       if (const Fences::Piece *p = this->fences.at(e)) {
         if (p->gate) {
           r.exhibit = this->fences.exhibitOf(e);
-        } else if (p->tank >= 0) {
+        } else if (p->tank >= 0 && this->fences.pieceBelowTop <= 20.0f) {
+          // (from its top only, where the up/down cursor shows - 0x4fb5ab)
           this->wallDrag.tank = p->tank;
           this->wallDrag.pressY = y;
           this->wallDrag.steps = 0;

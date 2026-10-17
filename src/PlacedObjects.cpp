@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <cstring>
 #include <cstdlib>
 
@@ -280,6 +281,12 @@ void PlacedObjects::load(const ZooReader &reader, ResourceManager *rm) {
     if (obj.className == "paths" || obj.className == "ambient" ||
         obj.className == "fences")
       continue;
+    // (a saved zoo's tank walls are Fences', its food and dung ZooItems', its
+    // animals, guests and staff live: SaveGame::loadOriginal)
+    static const std::set<std::string> live = {"tankwall", "food", "animals", "guests", "staff",
+                                               "keeper",   "maint", "tour", "helicopter"};
+    if (live.count(obj.className))
+      continue;
     Object o;
     o.className = obj.className;
     o.subClass = obj.subClass;
@@ -288,8 +295,11 @@ void PlacedObjects::load(const ZooReader &reader, ResourceManager *rm) {
     o.x = obj.x / 64.0f;
     o.y = obj.y / 64.0f;
     o.z = obj.z / 16.0f;
-    // The payload's fifth word is the facing
-    if (obj.payload.size() >= 20) {
+    // Its direction (loadUnitCommon +0x12c; the payload's fifth word for
+    // scenery, where a record wasn't decoded)
+    if (obj.decoded) {
+      o.facing = static_cast<int>(obj.direction & 7);
+    } else if (obj.payload.size() >= 20) {
       uint32_t f = 0;
       std::memcpy(&f, obj.payload.data() + 16, 4);
       o.facing = static_cast<int>(f & 7);

@@ -38,6 +38,9 @@
 #include <sstream>
 #include <queue>
 #include "ZooSim.hpp"
+#include "ZooReader.hpp"
+#include <fstream>
+#include <map>
 #include "OriginalConstants.hpp"
 #include "Paths.hpp"
 #include "Updater.hpp"
@@ -680,7 +683,7 @@ static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
 // ----------------------------------------------------------------------------
 // The map: fences laid, exhibits named, tank walls bulldozed
 // ----------------------------------------------------------------------------
-static SDL_Cursor *g_arrowCursor = nullptr, *g_bulldozeCursor = nullptr;
+static SDL_Cursor *g_arrowCursor = nullptr, *g_bulldozeCursor = nullptr, *g_tankWallCursor = nullptr;
 
 static int g_mouseX = 0, g_mouseY = 0;
 
@@ -1185,6 +1188,10 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
   // The bulldozer's cursor while it's picked
   {
     SDL_Cursor *want = g_world->isBulldozing() && g_bulldozeCursor ? g_bulldozeCursor : g_arrowCursor;
+    // (a tank wall's top, or dragging it: the up/down arrows - zoo.exe
+    // 0x433b34 cursor slot 4)
+    if (!g_world->isBulldozing() && g_tankWallCursor && (g_world->overTankWallTop() || g_world->isAdjustingTank()))
+      want = g_tankWallCursor;
     if (want && SDL_GetCursor() != want)
       SDL_SetCursor(want);
   }
@@ -1283,7 +1290,9 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
            "litter [n]                       scatter litter round the view\n"
            "wear <ex|all> [life] | break <ex|all>   wear fences down / break them\n"
            "filters [health]                 list tank filters / set every one's health (0-10)\n"
+           "zoofiles                         read every .zoo (maps, the original's saves) as the original does\n"
            "dirty <ex> [purity]              a tank's water purity (default 30)\n"
+           "tankwalls <ex> <height>          a tank's walls to that height over its floor\n"
            "staff | assign <staff#> <ex>     list staff / put one on an exhibit\n"
            "money <n> | day [n] | month [n] | speed <x>\n"
            "paths [on|off]                   path debug overlay (and routes to the log)\n"
@@ -1305,6 +1314,22 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
                     items.ofKind(ZooItems::Kind::Dung, e->id).size(),
                     e->tank ? ("  purity " + std::to_string(static_cast<int>(e->purity))).c_str() : "");
       out += std::string(b) + "\n";
+      if (e->tank) {
+        // (its heights and the wall pieces round it it owns)
+        int walls = 0, edges = 0;
+        for (const auto &[pe, pp] : fences.pieces())
+          walls += pp.tank == e->id || pp.tank2 == e->id ? 1 : 0;
+        for (auto [x, y] : e->tiles)
+          for (auto [dx, dy] : {std::make_pair(1, 0), std::make_pair(-1, 0), std::make_pair(0, 1), std::make_pair(0, -1)})
+            edges += e->tiles.count({x + dx, y + dy}) ? 0 : 1;
+        int x0 = 1 << 20, x1 = -1, y0 = 1 << 20, y1 = -1;
+        for (auto [x, y] : e->tiles)
+          x0 = std::min(x0, x), x1 = std::max(x1, x), y0 = std::min(y0, y), y1 = std::max(y1, y);
+        std::snprintf(b, sizeof b, "   tiles x %d-%d, y %d-%d  floor %d  ground %d  walls %d (top %.0f)  water %.0f%% (level %d)  wall pieces %d of %d",
+                      x0, x1, y0, y1, e->floorHeight, e->groundHeight, e->wallSub, e->wallTop(), e->water * 100,
+                      fences.waterLevel(*e), walls, edges);
+        out += std::string(b) + "\n";
+      }
     }
     return out;
   }
@@ -1386,6 +1411,133 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
     }
     return std::to_string(n) + " fence pieces " + (c == "break" ? "broken" : "worn");
   }
+  if (c == "zoofiles") {
+    // Every .zoo the game has (its maps, in the archives) and the original's
+    // own saved games, read in the original's order (ZooReader::readExact):
+    // which read to their end, and how many records decoded to exactly
+    // their stored size
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> files;
+    for (const std::string &name : rm->listResources("", ".zoo")) {
+      int size = 0;
+      if (void *bytes = rm->getFileBytes(name, &size)) {
+        files.push_back({name, std::vector<uint8_t>(static_cast<uint8_t *>(bytes), static_cast<uint8_t *>(bytes) + size)});
+        free(bytes);
+      }
+    }
+    // (the maps folder holds the maps themselves; the archives' copies are
+    // the patches' overrides)
+    const std::string savesDir = Paths::originalSavesDir();
+    for (const char *folder : {"maps", "Saved Games"}) {
+      std::error_code ec;
+      const std::string dir = std::string(folder) == "maps" ? Paths::gameDir() + folder : savesDir;
+      if (dir.empty())
+        continue;
+      for (const auto &e : std::filesystem::directory_iterator(dir, ec)) {
+        std::string ext = e.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext != ".zoo")
+          continue;
+        std::ifstream in(e.path(), std::ios::binary);
+        files.push_back({std::string(folder) + "/" + e.path().filename().string(),
+                         std::vector<uint8_t>(std::istreambuf_iterator<char>(in), {})});
+      }
+    }
+    int exact = 0, withGame = 0, records = 0, decodedRecords = 0, transient = 0;
+    std::string misses;
+    // (zoofiles <part of a name>: that file's records that didn't decode)
+    const std::string only = w.size() > 1 ? w[1] : "";
+    for (auto &[name, bytes] : files) {
+      if (!only.empty()) {
+        if (name.find(only) == std::string::npos)
+          continue;
+        AssetBuffer b;
+        b.data = bytes.data();
+        b.size = bytes.size();
+        ZooReader z;
+        z.load(b);
+        b.data = nullptr;
+        b.size = 0;
+        std::map<std::string, int> kinds;
+        for (const ZooReader::ZooObject &o : z.getObjects())
+          if (!o.decoded)
+            kinds[o.className + "/" + o.subClass + "/" + o.typeName + " (" + std::to_string(o.payload.size()) + " bytes)"]++;
+        std::string out = name + " v" + std::to_string(z.getVersion()) + (z.isExact() ? "" : " (" + z.problem() + ")") + ":\n";
+        for (const auto &[k, n] : kinds)
+          out += "  " + std::to_string(n) + " x " + k + "\n";
+        // (and what it holds of a game: its habitats, money, date)
+        char line[256];
+        for (const ZooReader::Habitat &hb : z.getHabitats()) {
+          snprintf(line, sizeof line, "  habitat \"%s\" at %d,%d gate %d,%d side %d%s", hb.name.c_str(), hb.x, hb.y, hb.gateX,
+                   hb.gateY, hb.gateSide, hb.tank ? "" : "\n");
+          out += line;
+          if (hb.tank) {
+            snprintf(line, sizeof line, " tank height %d water %d %s purity %d%s\n", hb.tankHeight, hb.waterLevel,
+                     hb.salt ? "salt" : "fresh", hb.purity, hb.show ? " (show)" : "");
+            out += line;
+          }
+        }
+        std::map<std::string, int> classes;
+        for (const ZooReader::ZooObject &o : z.getObjects())
+          classes[o.className]++;
+        out += " ";
+        for (const auto &[k, n] : classes)
+          out += " " + k + " " + std::to_string(n);
+        out += "\n";
+        if (z.hasGame()) {
+          const uint16_t *d = z.getDate();
+          snprintf(line, sizeof line, "  cash %.2f, admission %.2f, rating %u, date %u-%02u-%02u\n", z.getCash(), z.getAdmission(),
+                   z.getRating(), d[0], d[1], d[3]);
+          out += line;
+          const int32_t *vw = z.getView();
+          snprintf(line, sizeof line, "  view: zoom %d, rotation %d, scroll %d, %d, brush %d\n", vw[0], vw[1], vw[2], vw[3], vw[4]);
+          out += line;
+        }
+        for (const ZooReader::ZooObject &o : z.getObjects())
+          if (o.hasAnimal) {
+            snprintf(line, sizeof line, "  animal %s \"%s\" %s at %.1f,%.1f happy %d hunger %d health %d energy %d move %d\n",
+                     o.typeName.c_str(), o.name.c_str(), o.animal.female ? "F" : "M", o.x / 64.0, o.y / 64.0, o.animal.happiness,
+                     o.animal.hunger, o.animal.health, o.animal.energy, o.movementMode);
+            out += line;
+          }
+        return out;
+      }
+      AssetBuffer b;
+      b.data = bytes.data();
+      b.size = bytes.size();
+      ZooReader z;
+      z.load(b);
+      b.data = nullptr; // (not its to free)
+      b.size = 0;
+      // (a record of size 0 is a passing effect - a tank's ripples, water
+      // waves - saved as its names alone: nothing to decode)
+      int transientHere = 0;
+      for (const ZooReader::ZooObject &o : z.getObjects())
+        transientHere += o.payload.empty() ? 1 : 0;
+      transient += transientHere;
+      records += static_cast<int>(z.getObjects().size()) - transientHere;
+      decodedRecords += z.decodedCount();
+      if (z.isExact())
+        exact++;
+      if (z.hasGame())
+        withGame++;
+      else
+        misses += "  " + name + ": " + z.problem() + "\n";
+      if (z.isExact() && z.decodedCount() != static_cast<int>(z.getObjects().size()) - transientHere) {
+        std::map<std::string, int> left;
+        for (const ZooReader::ZooObject &o : z.getObjects())
+          if (!o.decoded && !o.payload.empty())
+            left[o.className]++;
+        std::string l;
+        for (const auto &[k, n] : left)
+          l += " " + k + " " + std::to_string(n);
+        misses += "  " + name + " (v" + std::to_string(z.getVersion()) + "): undecoded" + l + "\n";
+      }
+    }
+    return std::to_string(files.size()) + " .zoo files: " + std::to_string(exact) + " read exactly in the original's order (" +
+           std::to_string(withGame) + " to their end, with the saved game's state); " +
+           std::to_string(decodedRecords) + " of " + std::to_string(records) + " records decoded to exactly their size (and " +
+           std::to_string(transient) + " passing effects saved with no body)\n" + misses;
+  }
   if (c == "filters" && w.size() < 2) {
     std::string out;
     for (const Fences::Filter &f : fences.filters())
@@ -1408,6 +1560,21 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
       return "Which tank?";
     e->purity = std::clamp(num(2, 30), 0.0f, 100.0f);
     return e->name + ": water purity " + std::to_string(static_cast<int>(e->purity));
+  }
+  if (c == "tankwalls") {
+    // A tank's walls to a height (units over its floor), a step at a time
+    // as Tank Adjustment does (its limits too: 1 up to maximumTankHeight);
+    // the water follows them up
+    Fences::Exhibit *e = exhibitArg(1);
+    if (!e || !e->tank)
+      return "Which tank?";
+    const int want = static_cast<int>(num(2, static_cast<float>(e->wallSub)));
+    while (e->wallSub < want && fences.canAdjustWall(e->id, 1))
+      fences.adjustWall(e->id, 1);
+    while (e->wallSub > want && fences.canAdjustWall(e->id, -1))
+      fences.adjustWall(e->id, -1);
+    return e->name + ": walls " + std::to_string(e->wallSub) + " over the floor (rim " +
+           std::to_string(static_cast<int>(e->wallTop())) + ", ground " + std::to_string(e->groundHeight) + ")";
   }
   if (c == "staff") {
     if (staff.members().empty())
@@ -2251,6 +2418,25 @@ static bool gameLoad(ResourceManager *rm, const std::string &given = "") {
   std::string path = given.empty() ? SaveGame::askLoadPath() : given;
   if (path.empty())
     return false; // (cancelled)
+  // The original game's own saved zoo: it is its own map
+  if (SaveGame::isOriginal(path)) {
+    if (!g_world->loadFreeform(path)) {
+      if (g_hud)
+        g_hud->showMessage("That saved zoo couldn't be read.", SDL_Color{255, 40, 40, 255});
+      return false;
+    }
+    destroyHud();
+    createHud(rm, g_world, g_currentStartingCash);
+    g_currentMapPath = path;
+    startGoals(rm, path);
+    bool ok = SaveGame::loadOriginal(*g_world, g_sim, *g_hud);
+    resetResearchEffects();
+    updateHudClock(rm);
+    SDL_Log("[Save] the original's %s %s", ok ? "loaded" : "couldn't read", path.c_str());
+    g_hud->showMessage(ok ? "Zoo loaded." : "The saved zoo couldn't be read.",
+                       ok ? SDL_Color{255, 255, 255, 255} : SDL_Color{255, 40, 40, 255});
+    return ok;
+  }
   std::string mapPath = SaveGame::mapOf(path);
   // (a scenario's save: its scenario started afresh, else a freeform map)
   const std::string scn = "scenario:";
@@ -3337,7 +3523,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         capture("tank_wall_hint");
         g_hud->setMouse(-1, -1, 0);
         g_hud->setWorldTip("");
-        const int step = unit / 2; // (a wall step: a subtile, half a height unit)
+        const int step = unit; // (a wall step: a height unit)
         int top0 = mt->wallSub;
         double cash0 = g_sim.cash();
         handleToolResult(world->mouseDown(px, py), rm);
@@ -3355,7 +3541,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         world->getFences().update(0.5f);
         capture("tank_water_rising");
         world->getFences().update(5.0f);
-        check("the water follows the walls up", std::fabs(mt->level - (mt->wallTop() - 0.5f)) < 0.01f);
+        check("the water follows the walls up", std::fabs(mt->level - (mt->wallTop() - 1.0f)) < 0.01f);
         // Waves now and then (one per 40000 / tiles ms), gone after 4 s
         {
           auto &mx = const_cast<Fences::Exhibit &>(*mt);
@@ -3373,12 +3559,17 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           check(("waves on a clean tank (up to " + std::to_string(most) + " at once)").c_str(), most >= 1 && aged);
         }
         capture("tank_raised");
-        // Raised: its hint anywhere on the wall's face, not only at its top
+        // Raised: its hint and up/down cursor only by its top, within 20 px
+        // under the rail (zoo.exe 0x4fb5ab) - not half way down its face
         {
           int fx, fy;
           world->pointToWindow(mx, my, (mt->groundHeight + mt->wallTop()) * 0.5f, fx, fy);
           world->mouseMove(fx, fy);
-          check("a raised tank wall's hint half way down its face", world->hoverTip() == rm->getString(31079));
+          bool lowNone = world->hoverTip().empty() && !world->overTankWallTop();
+          world->pointToWindow(mx, my, mt->wallTop() - 0.25f, fx, fy);
+          world->mouseMove(fx, fy);
+          check("a raised tank wall's hint and up/down cursor by its rail, not half way down",
+                lowNone && world->hoverTip() == rm->getString(31079) && world->overTankWallTop());
         }
         // The diver platform: lit, its tank named; clicking opens the tank
         for (const auto &kv : fences.pieces())
@@ -4510,7 +4701,16 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           world->setPathTool("path", 25);
           auto drag = [&](int x0, int y0, int x1, int y1) {
             int px, py;
-            at(x0, y0, px, py);
+            // (the press on the tile's own top, as every step after it: at()
+            // averages two of its corners, and on the raised block's edge the
+            // outer one takes the ground's height beyond it - the point fell
+            // half-way down the block's side, and whether that picked the
+            // block or its neighbour hung on the window's size and rounding:
+            // pppppp12ppp- on some machines)
+            {
+              const MapTile *t0 = map.getTile(x0, y0);
+              world->pointToWindow(x0 + 0.5f, y0 + 0.5f, t0 ? (float)t0->cornerHeight[0] : 0.0f, px, py);
+            }
             world->mouseMove(px, py);
             handleToolResult(world->mouseDown(px, py), rm);
             int steps = std::abs(x1 - x0) + std::abs(y1 - y0);
@@ -7549,6 +7749,8 @@ int main(int argc, char *argv[]) {
   // the full bulldozer while it's picked
   g_arrowCursor = resource_manager.getCursor(9, 1, 2);
   g_bulldozeCursor = resource_manager.getCursor(16, 2, 29);
+  // (cursor slot 4: res0.dll group 204, its cursor 13 - hot spot 16, 23)
+  g_tankWallCursor = resource_manager.getCursor(13, 16, 23);
   window.set_cursor(g_arrowCursor);
 
   LoadScreen::run(&window, &config, &resource_manager);
@@ -8143,6 +8345,8 @@ int main(int argc, char *argv[]) {
         takeSnapshot(window.renderer, &resource_manager);
       }
       updateZoomButtons(g_world); // the mouse wheel zooms too
+      if (Embed::snapAsked() && g_hud) // (the Lab's Play: snap)
+        g_hud->tooltipShot = true;
       drawHud(window.renderer, &resource_manager);
       drawToolCost(window.renderer, &resource_manager);
       if (g_snapshot == 2) { // (the screen as it is)

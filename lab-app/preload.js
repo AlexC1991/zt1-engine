@@ -15,6 +15,7 @@ const on = (channel, fn) =>
   ipcRenderer.on(channel, (e, ...a) => (ready ? fn(e, ...a) : held.push(() => fn(e, ...a))));
 
 contextBridge.exposeInMainWorld('lab', {
+  checkLabUpdate: () => ipcRenderer.invoke('lab:update'),
   // the Lab engine
   engineSend: (cmd) => ipcRenderer.send('engine:send', cmd),
   engineStart: () => ipcRenderer.invoke('engine:start'),

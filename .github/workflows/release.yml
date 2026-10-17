@@ -119,6 +119,18 @@ jobs:
 
       - name: Build the engine, its installer, the Game Build and the Lab
         run: python engine-build-resources/make_release.py --version ${{ env.VERSION }} ${{ env.OFFICIAL }} --lab
+      - name: Sign the Lab update manifest
+        if: env.IS_TAG == 'true'
+        env:
+          ZT1_LAB_UPDATE_KEY: ${{ secrets.ZT1_LAB_UPDATE_KEY }}
+        shell: bash
+        run: node engine-build-resources/sign_lab_update.js "$VERSION" "dist/ZT1-Lab-Setup-$VERSION.exe" dist/ZT1-Lab-update.json
+      - name: Sign the game update feed
+        if: env.IS_TAG == 'true'
+        env:
+          ZT1_ENGINE_UPDATE_KEY: ${{ secrets.ZT1_ENGINE_UPDATE_KEY }}
+        shell: bash
+        run: node engine-build-resources/sign_engine_update.js "$VERSION" "dist/ZT1-Engine-Setup-$VERSION.exe" dist/latest.yml
       - name: GitHub release
         if: env.IS_TAG == 'true'
         shell: bash
@@ -126,7 +138,7 @@ jobs:
           SETUP="dist/ZT1-Engine-Setup-$VERSION.exe"
           GAME="dist/ZT1-Game-Build-$VERSION-win64.zip"
           LAB="dist/ZT1-Lab-Setup-$VERSION.exe"
-          gh release create "$GITHUB_REF_NAME" "$SETUP" "$SETUP.sha256" "$GAME" "$GAME.sha256" "$LAB" dist/latest.yml \
+          gh release create "$GITHUB_REF_NAME" "$SETUP" "$SETUP.sha256" "$GAME" "$GAME.sha256" "$LAB" "$LAB.sha256" dist/ZT1-Lab-update.json dist/latest.yml \
             --title "Alpha build $VERSION" --notes-file notes.md --verify-tag
 
       - name: CodeRook
@@ -140,7 +152,7 @@ jobs:
             GAME="dist/ZT1-Game-Build-$VERSION-win64.zip"
             LAB="dist/ZT1-Lab-Setup-$VERSION.exe"
             python engine-build-resources/coderook_release.py --name "$GITHUB_REF_NAME" --notes notes.md \
-              --files "$SETUP" "$SETUP.sha256" "$GAME" "$GAME.sha256" "$LAB" dist/latest.yml
+              --files "$SETUP" "$SETUP.sha256" "$GAME" "$GAME.sha256" "$LAB" "$LAB.sha256" dist/ZT1-Lab-update.json dist/latest.yml
           else
             cbx link zt1-engine .
             # (--allow-private: cbx mistakes FreeType's src/cache, its font

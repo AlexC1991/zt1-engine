@@ -420,6 +420,11 @@ private:
   int shownBuilding = -1;
   size_t guestThoughts = 0;
   std::string animalSexImage, animalTopThought;
+  int animalCarer = 0; // (the plaque's picture shown: Animals::carerIndex)
+public:
+  // (the Lab's Play: snap - the next tooltip drawn saved as tooltip.bmp)
+  bool tooltipShot = false;
+private:
   void setupAnimalPanel();
   // The Game Options panel's settings pages, and the Extras tab
   void setupGameOptions();

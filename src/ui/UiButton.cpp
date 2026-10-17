@@ -189,6 +189,18 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   this->dest_rect =
       this->getRect(this->ini_reader->getSection(this->name), layout_rect);
 
+  const std::string justify = this->ini_reader->get(this->name, "justify");
+  const int alignAnchorX = this->dest_rect.x;
+  auto alignedX = [&](int width) {
+    if (justify == "center") return alignAnchorX - width / 2;
+    if (justify == "right") return alignAnchorX - width;
+    return alignAnchorX;
+  };
+  // getRect returns an alignment anchor for centered/right-justified
+  // elements. Buttons need the rectangle's top-left for drawing and hit
+  // testing, just as UiText converts its anchor back to a box before drawing.
+  this->dest_rect.x = alignedX(this->dest_rect.w);
+
   SDL_Rect text_rect = {dest_rect.x, dest_rect.y, 0, 0};
 
   // Check if we already have a valid animation from the INI
@@ -349,6 +361,8 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       // Update the member dest_rect for hit testing
       this->dest_rect.w = tw;
       this->dest_rect.h = th;
+      this->dest_rect.x = alignedX(tw);
+      render_rect.x = this->dest_rect.x;
     }
     RenderSettings::applyArtScaleMode(target);
     if (RenderSettings::drawsUiArt())
@@ -401,6 +415,10 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
         dest_rect.h =
             (text_rect.h + padding_y > 1) ? text_rect.h + padding_y : 1;
       }
+
+      // The button's width may only become known after measuring its label.
+      // Reapply alignment using that final width (preserving nav padding).
+      dest_rect.x = alignedX(dest_rect.w) + (is_nav_button ? offset_x : 0);
 
       // Re-Center Text
       text_rect.x = dest_rect.x + (dest_rect.w - text_rect.w) / 2;

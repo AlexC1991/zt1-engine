@@ -91,8 +91,9 @@ python re/cloud/sync.py pull        # bring in what others have found
 python re/cloud/sync.py contribute  # send what this checkout worked out
 ```
 
-Point a checkout at it once (`re/private/cloud.json`, or `ZT1_KB_API`),
-and the Lab can do the same from its control port, so an AI agent can too
+The released Lab and checkout include the shared endpoint, so no per-user
+setup is needed. `re/private/cloud.json` or `ZT1_KB_API` can override it.
+The Lab can sync from its control port, so an AI agent can too
 (`lab_kb_cloud`). Anything contributed lands **provisional** until it is
 reviewed, and a contribution from a `zoo.exe` build other than the 2002
 Complete Collection is refused - its addresses would land on the wrong
@@ -565,6 +566,11 @@ game code on the live zoo, then move it where it belongs. Copying zoo.exe?
 - **Testing menus in Play:** the Lab can click inside the game
   (`playCmd` action: `click <x> <y>` at the game window's pixels;
   `src/Embed.cpp`), and the game holds still while the Play tab isn't shown.
+  `move <x> <y>` rests the mouse there (hovering: tooltips, lit pieces);
+  `snap` saves the next frame that draws a tooltip as `tooltip.bmp` beside
+  the game - its own frame, as a window grab of the GPU window can come
+  back stale. The dev console's `tankwalls <ex> <height>` sets a tank's
+  walls (a raised tank shows its staff climbing in and out).
 - **Build engine** saves every file and builds the engine. The lab zoo
   restarts on the new build, and **Restart the game** in Play runs it.
 - **Make release** builds the engine x64 Release in `build-x64/` (the C++
@@ -854,6 +860,16 @@ points at: its name), `watch`/`unwatch`. Lab actions for them: `memScan`,
 `origLive`, `origCensus`, and `playSteps` ("click 952 462; wait 1500; ...")
 to get somewhere in the game without the mouse. Actions now give back what
 they return (`lab_action`).
+
+`poke <addr> <value>` (Lab action `memPoke "0xADDRESS value"`) writes a 32-bit
+value into the original, to push it somewhere for a test: births are proved by
+setting a species' cReproductionChance (type +0x278), cReproductionInterval
+(+0x27c) and cHappyReproduceThreshold (+0x378) - on the male's subtype, the
+type at entity +0x128 whose +0xa4 is "m" - then putting them back.
+`origFrames "<folder> [count] [ms]"` films the original: a picture every
+`ms` (default 500), saved f000.png, f001.png... to look through frame by
+frame. Popups (the adoption ban, new items) pause the original; OK is at
+about 712,500 at the Play view's size.
 
 More for reading what the code refers to:
 

@@ -344,7 +344,7 @@ const TOOLS = {
     run: (a) => call('kbCloud', a),
   },
   lab_kb_cloud_status: {
-    description: 'The shared knowledge base: where this Lab is pointed (re/private/cloud.json or ZT1_KB_API), or that it has none set up yet. See re/cloud/README.md.',
+    description: 'The shared knowledge base: uses the endpoint bundled with the Lab by default; re/private/cloud.json or ZT1_KB_API can override it. See re/cloud/README.md.',
     schema: {},
     run: () => call('kbCloud', {}),
   },

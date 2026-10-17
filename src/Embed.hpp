@@ -8,6 +8,8 @@
 //   rect <x> <y> <w> <h>   (device pixels, in the parent's client area)
 //   show | hide | focus | quit
 //   click <x> <y> | rclick <x> <y>   (a mouse click at the window's pixels)
+//   move <x> <y>   (the mouse there, resting: hovering, tooltips)
+//   snap   (the game's own screenshot of the screen as drawn, Screenshots/)
 //   volume <0-100>   (its own volume, src/SessionVolume.hpp)
 #include <SDL2/SDL.h>
 
@@ -22,6 +24,8 @@ bool quitAsked();
 // Embedded and not on show (the Lab on another view, or minimised): the
 // game holds still - no updates, no sound - until it's shown again
 bool hidden();
+// Asked for a screenshot (snap): true once, then cleared
+bool snapAsked();
 } // namespace Embed
 
 #endif

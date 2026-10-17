@@ -28,6 +28,7 @@ files:
   - main.js
   - preload.js
   - runtime.js
+  - update.js
   - sync.js
   - icon.png
   - renderer/**

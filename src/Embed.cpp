@@ -16,7 +16,7 @@
 #include "SessionVolume.hpp"
 
 namespace {
-std::atomic<bool> g_active{false}, g_quit{false}, g_hidden{true};
+std::atomic<bool> g_active{false}, g_quit{false}, g_hidden{true}, g_snap{false};
 HWND g_child = nullptr, g_owner = nullptr;
 SDL_Window *g_window = nullptr;
 
@@ -45,6 +45,97 @@ void clickAt(int x, int y, int button) {
   }
 }
 
+// The Windows dialog the game has open, if any (a visible #32770 of this
+// process: Save a zoo... / Load a zoo...)
+HWND openDialog() {
+  struct Find {
+    HWND found = nullptr;
+  } f;
+  EnumWindows(
+      [](HWND h, LPARAM l) -> BOOL {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        char cls[16] = {};
+        GetClassNameA(h, cls, sizeof cls);
+        if (pid == GetCurrentProcessId() && IsWindowVisible(h) && !std::strcmp(cls, "#32770")) {
+          reinterpret_cast<Find *>(l)->found = h;
+          return FALSE;
+        }
+        return TRUE;
+      },
+      reinterpret_cast<LPARAM>(&f));
+  return f.found;
+}
+
+// "dialog text <name>" fills the open file dialog's name, "dialog ok" /
+// "dialog cancel" presses its button (as the original's hook does for its
+// dialogs: the Lab testing Load Game in Play without anyone's mouse)
+void dialogCommand(const char *arg) {
+  while (*arg == ' ')
+    arg++;
+  HWND d = openDialog();
+  if (!d)
+    return;
+  if (!std::strncmp(arg, "text ", 5)) {
+    std::string name = arg + 5;
+    while (!name.empty() && (name.back() == '\n' || name.back() == '\r'))
+      name.pop_back();
+    // (the old-style dialog's name box is control 1152; the Explorer-style
+    // one's is an Edit two down inside control 1148 - ComboBoxEx32, then
+    // ComboBox - so its children are searched all the way down)
+    auto firstEdit = [](HWND parent) {
+      struct Want {
+        HWND found = nullptr;
+      } w;
+      EnumChildWindows(
+          parent,
+          [](HWND h, LPARAM l) -> BOOL {
+            char cls[16] = {};
+            GetClassNameA(h, cls, sizeof cls);
+            if (!std::strcmp(cls, "Edit")) {
+              reinterpret_cast<Want *>(l)->found = h;
+              return FALSE;
+            }
+            return TRUE;
+          },
+          reinterpret_cast<LPARAM>(&w));
+      return w.found;
+    };
+    HWND edit = GetDlgItem(d, 1152);
+    if (!edit)
+      if (HWND combo = GetDlgItem(d, 1148))
+        edit = firstEdit(combo);
+    if (!edit)
+      edit = firstEdit(d);
+    if (edit)
+      SendMessageA(edit, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(name.c_str()));
+  } else if (!std::strncmp(arg, "ok", 2) || !std::strncmp(arg, "cancel", 6)) {
+    if (HWND b = GetDlgItem(d, arg[0] == 'o' ? IDOK : IDCANCEL))
+      PostMessageA(b, BM_CLICK, 0, 0);
+  }
+}
+
+// A key held down for so long, as SDL events ("hold Right 800": the map
+// scrolled with the arrow keys, the Lab looking round in Play without
+// anyone's keyboard)
+void holdKey(const char *name, int ms) {
+  SDL_Scancode sc = SDL_GetScancodeFromName(name);
+  if (sc == SDL_SCANCODE_UNKNOWN)
+    return;
+  Uint32 id = g_window ? SDL_GetWindowID(g_window) : 0;
+  for (Uint32 type : {static_cast<Uint32>(SDL_KEYDOWN), static_cast<Uint32>(SDL_KEYUP)}) {
+    SDL_Event e{};
+    e.type = type;
+    e.key.windowID = id;
+    e.key.state = type == SDL_KEYDOWN ? SDL_PRESSED : SDL_RELEASED;
+    e.key.keysym.scancode = sc;
+    e.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+    SDL_PushEvent(&e);
+    if (type == SDL_KEYDOWN)
+      SDL_Delay(static_cast<Uint32>(ms > 0 ? ms : 1));
+  }
+}
+
 void listen() {
   // (stdin: one command a line, from the Lab app)
   CoInitializeEx(nullptr, COINIT_MULTITHREADED); // (for volume)
@@ -66,6 +157,20 @@ void listen() {
       clickAt(x, y, SDL_BUTTON_LEFT);
     } else if (std::sscanf(line, "rclick %d %d", &x, &y) == 2) {
       clickAt(x, y, SDL_BUTTON_RIGHT);
+    } else if (std::sscanf(line, "move %d %d", &x, &y) == 2) {
+      // (the mouse there and left: hovering - a tooltip, a lit piece)
+      SDL_Event e{};
+      e.type = SDL_MOUSEMOTION;
+      e.motion.windowID = g_window ? SDL_GetWindowID(g_window) : 0;
+      e.motion.x = x;
+      e.motion.y = y;
+      SDL_PushEvent(&e);
+    } else if (std::strncmp(line, "snap", 4) == 0) {
+      g_snap = true;
+    } else if (std::strncmp(line, "dialog", 6) == 0) {
+      dialogCommand(line + 6);
+    } else if (char key[32] = {}; std::sscanf(line, "hold %31s %d", key, &x) == 2) {
+      holdKey(key, x);
     } else if (std::strncmp(line, "focus", 5) == 0) {
       SetForegroundWindow(g_child);
       SetFocus(g_child);
@@ -111,4 +216,5 @@ bool into(SDL_Window *window, const char *ownerHandle) {
 bool active() { return g_active; }
 bool quitAsked() { return g_quit; }
 bool hidden() { return g_active && g_hidden; }
+bool snapAsked() { return g_snap.exchange(false); }
 } // namespace Embed

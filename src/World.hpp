@@ -127,6 +127,9 @@ public:
     // What the cursor's over with no tool: a tank wall's hint, a diver
     // platform's tank
     const std::string &hoverTip() const { return hoverTipText; }
+    // Over a tank wall's top, where it drags up and down: the original's
+    // up/down cursor (res0.dll cursor 13, zoo.exe cursor slot 4)
+    bool overTankWallTop() const { return hoverWallTop; }
     void mouseMove(int x, int y);
     ToolResult mouseDown(int x, int y);
     ToolResult mouseUp(int x, int y);
@@ -430,6 +433,7 @@ private:
     // The bulldozer over a walkway deck or a path tile: drawn red
     std::pair<int, int> bulldozeDeck = {-1, -1}, bulldozePath = {-1, -1};
     std::string hoverTipText;
+    bool hoverWallTop = false;
     // A tank wall pressed and dragged: its tank, where the press was, the
     // steps it has gone up (down negative)
     struct {

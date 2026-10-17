@@ -243,4 +243,17 @@ std::string scenarioProgressFile() {
   return g_portable ? std::string("../../saves/user_scenarios.json") : g_data + "saves\\user_scenarios.json";
 }
 
+std::string originalSavesDir() {
+  std::error_code ec;
+  fs::path here = fs::path(g_game.empty() ? fs::current_path(ec) : fs::path(g_game)) / "Saved Games";
+  if (fs::is_directory(here, ec))
+    return withSlash(here);
+#ifdef _WIN32
+  fs::path installed = fromRegistry();
+  if (!installed.empty() && fs::is_directory(installed / "Saved Games", ec))
+    return withSlash(installed / "Saved Games");
+#endif
+  return "";
+}
+
 } // namespace Paths

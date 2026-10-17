@@ -193,7 +193,7 @@ HWND WINAPI createWindow(DWORD ex, LPCSTR cls, LPCSTR title, DWORD style, int x,
 }
 
 // It may size, move and restyle its window itself (going windowed does):
-// in the Lab, the size stays the game's, the place the Lab's, the look ours
+// in the Lab, the size and place follow the Play view, the look stays ours
 using SetWindowPosFn = BOOL(WINAPI *)(HWND, HWND, int, int, int, int, UINT);
 SetWindowPosFn realSetWindowPos = nullptr;
 BOOL WINAPI setWindowPos(HWND hwnd, HWND after, int x, int y, int w, int h, UINT flags) {
@@ -705,6 +705,22 @@ bool peek(DWORD at, DWORD n, std::string &hex) {
   }
 }
 
+// A 4-byte value written into the game's memory ("poke <at> <value>": the
+// Lab's tests set a type's numbers - a dolphin's cReproductionChance - to
+// see what the original then does); false where it can't be written
+bool poke(DWORD at, int32_t value) {
+  __try {
+    DWORD old = 0;
+    if (!VirtualProtect(reinterpret_cast<void *>(at), 4, PAGE_READWRITE, &old))
+      return false;
+    *reinterpret_cast<int32_t *>(at) = value;
+    VirtualProtect(reinterpret_cast<void *>(at), 4, old, &old);
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+}
+
 // A list of objects at once: "each <list> <offset>..." - list is where a
 // begin/end pair of pointers sits (a std::vector of object pointers, as the
 // world's entities at [0x638040]+0x80) - each object's address and the 4
@@ -956,6 +972,11 @@ void command(const char *line) {
     g_rx = x, g_ry = y, g_rw = w, g_rh = h;
     g_hidden = false;
     if (g_game) {
+      // The Play view can change size while the game is running (for example,
+      // when the Steps panel opens). Keep the owned popup within that live
+      // area; retaining the launch size makes it cover the Lab's sidebar.
+      g_gw = (std::max)(1, w);
+      g_gh = (std::max)(1, h);
       POINT p = placed();
       realSetWindowPos(g_game, nullptr, p.x, p.y, g_gw, g_gh, SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
     }
@@ -1060,6 +1081,9 @@ void command(const char *line) {
     std::string hex;
     bool ok = n <= 4096 && peek(at, n, hex);
     reply("peek %06lx %s", at, ok ? hex.c_str() : "-");
+  } else if (long v; std::sscanf(line, "poke %lx %ld", &at, &v) == 2) {
+    bool ok = poke(at, static_cast<int32_t>(v));
+    reply("poke %06lx %s", at, ok ? "ok" : "-");
   } else if (std::sscanf(line, "strs %lx %lu", &at, &n) == 2) {
     std::string out = textsOf(at, n) + "\n";
     DWORD wrote;

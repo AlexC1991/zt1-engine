@@ -36,6 +36,10 @@ std::string dataDir();
 std::string configFile();
 // Which scenarios are done (ScenarioDatabase's state)
 std::string scenarioProgressFile();
+// The original game's own saved zoos (.zoo): the game folder's Saved Games,
+// else - a portable copy set up from an install, as the Lab's - the
+// install's (Zoo Tycoon's registry AppPath); "" when there's none
+std::string originalSavesDir();
 
 } // namespace Paths
 

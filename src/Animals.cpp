@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Features.hpp"
 #include "IniReader.hpp"
 #include "ItemCatalog.hpp"
 #include "LabTrace.hpp"
@@ -39,6 +40,73 @@ std::string stripAni(std::string p) {
   p = lower(p);
   size_t dot = p.rfind(".ani");
   return dot == std::string::npos ? p : p.substr(0, dot);
+}
+
+// Marine Mania art its .ai files name wrongly: the art ships, under a near
+// name nothing else points to (re/lab/artkit.py's survey, 41 found, each
+// checked to have the same facings and frames as the animation it goes
+// with; the shadows among them are its black silhouettes). The named
+// folder -> the folder the art is in (Features::misnamedArt)
+std::string misnamedArt(const std::string &path, ResourceManager *rm) {
+  static const std::map<std::string, std::string> fix = {
+      // the hammerhead's underwater thrash and its shadow ("thrsh"/"trsh")
+      {"animals/hhshark/m/subthrsh", "animals/hhshark/m/subtrsh"},
+      {"animals/hhshark/m/ssubthrs", "animals/hhshark/m/ssubtrsh"},
+      {"animals/hhshark/y/subthrsh", "animals/hhshark/y/subtrsh"},
+      {"animals/hhshark/y/ssubthrs", "animals/hhshark/y/ssubtrsh"},
+      // the marlin's surface thrash, its underwater half and shadow
+      {"animals/marlin/m/surftrsh", "animals/marlin/m/surfthrs"},
+      {"animals/marlin/m/usurftrs", "animals/marlin/m/usurfthr"},
+      {"animals/marlin/m/ssurftrs", "animals/marlin/m/ssurfthr"},
+      {"animals/marlin/y/surftrsh", "animals/marlin/y/surfthrs"},
+      {"animals/marlin/y/usurftrs", "animals/marlin/y/usurfthr"},
+      {"animals/marlin/y/ssurftrs", "animals/marlin/y/ssurfthr"},
+      {"animals/morayeel/m/ssurftrs", "animals/morayeel/m/ssurfthr"},
+      {"animals/morayeel/y/ssurftrs", "animals/morayeel/y/ssurfthr"},
+      // the porpoise's surface eating: its underwater half and shadow
+      {"animals/porpoise/m/ssurfeat", "animals/porpoise/m/ssurfea"},
+      {"animals/porpoise/m/usurfeat", "animals/porpoise/m/usurfea"},
+      // sick shadows
+      {"animals/seacow/m/ssubsic", "animals/seacow/m/ssubsick"},
+      {"animals/seacow/y/ssubsic", "animals/seacow/y/ssubsick"},
+      {"animals/beluga/y/ssubsick", "animals/beluga/y/ssubsic"},
+      // the young great white's dive and swim shadows
+      {"animals/gwshark/y/ssubdive", "animals/gwshark/y/ssubdiv"},
+      {"animals/gwshark/y/ssubswim", "animals/gwshark/y/ssubswi"},
+      // the young whale shark's dive and its shadow
+      {"animals/whleshrk/y/subdive", "animals/whleshrk/y/dive"},
+      {"animals/whleshrk/y/ssubdive", "animals/whleshrk/y/sdive"},
+      {"animals/tapir/y/shakhead", "animals/tapir/y/shakehed"},
+      // the elephant seal (female, young): thrash, its shadow, sick turn
+      {"animals/eleseal/f/subtrsh", "animals/eleseal/f/subthrsh"},
+      {"animals/eleseal/f/ssubtrsh", "animals/eleseal/f/ssubthrs"},
+      {"animals/eleseal/f/2subsic", "animals/eleseal/f/2subsick"},
+      {"animals/eleseal/y/subtrsh", "animals/eleseal/y/subthrsh"},
+      {"animals/eleseal/y/ssubtrsh", "animals/eleseal/y/ssubthrs"},
+      {"animals/eleseal/y/2subsic", "animals/eleseal/y/2subsick"},
+      {"animals/swcroc/y/sdive", "animals/swcroc/y/subdive"},
+      // shadowidle: their idle is the subswim art, its shadow ssubswim
+      {"animals/beluga/m/ssubswi", "animals/beluga/m/ssubswim"},
+      {"animals/beluga/y/ssubswi", "animals/beluga/y/ssubswim"},
+      {"animals/narwhal/m/ssubswi", "animals/narwhal/m/ssubswim"},
+      {"animals/narwhal/f/ssubswi", "animals/narwhal/f/ssubswim"},
+      {"animals/narwhal/y/ssubswi", "animals/narwhal/y/ssubswim"},
+      {"animals/dolphin/m/ssubswi", "animals/dolphin/m/ssubswim"},
+      {"animals/dolphin/y/ssubswi", "animals/dolphin/y/ssubswim"},
+      {"animals/seacow/m/ssubswi", "animals/seacow/m/ssubswim"},
+      {"animals/seacow/y/ssubswi", "animals/seacow/y/ssubswim"},
+      {"animals/porpoise/m/ssubswi", "animals/porpoise/m/ssubswim"},
+      {"animals/porpoise/y/ssubswi", "animals/porpoise/y/ssubswim"},
+      {"animals/mmaid/f/ssubswi", "animals/mmaid/f/ssubswim"},
+  };
+  size_t slash = path.find_last_of('/');
+  if (slash == std::string::npos)
+    return path;
+  auto it = fix.find(path.substr(0, slash));
+  if (it == fix.end())
+    return path;
+  std::string to = it->second + it->second.substr(it->second.find_last_of('/'));
+  return rm && rm->hasResource(to + ".ani") ? to : path;
 }
 
 std::string trim(const std::string &s) {
@@ -145,6 +213,11 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.swims = num("cswims", 0) != 0;
     t.underwater = num("cunderwater", 0) != 0;
     t.needDepth = num("cdepth", 0);
+    t.surfaceOnly = num("csurface", 0) == 1; // (0x4b5932: "== 1", into +0x17d)
+    t.onlyUnderwater = num("conlyunderwater", 0) == 1; // (0x4b939f: "== 1", +0x17f)
+    t.depthMin = num("cdepthmin", 0);                   // (0x4b7edd: +0x35c)
+    t.depthMax = num("cdepthmax", 0);                   // (+0x360)
+    t.keeper = num("ckeeper", 9500); // (+0x2f0: 9552 the porpoise's, 9551 the allosaurus')
     t.waterNeeded = num("cwaterneeded", 0);
     t.landNeeded = num("clandneeded", 0);
     t.enterWaterChance = num("centerwaterchance", 0);
@@ -255,7 +328,12 @@ void Animals::loadTypes(ResourceManager *rm) {
           v = trim(v.substr(0, semi));
         if (v.empty())
           continue;
-        t.anims[s][lower(kv.first)] = v.find('/') != std::string::npos ? stripAni(v) : base + "/" + v + "/" + v;
+        std::string path = v.find('/') != std::string::npos ? stripAni(v) : base + "/" + v + "/" + v;
+        // (named wrongly in the game's files, its art shipped under another
+        // name: that art - Features::misnamedArt)
+        if (Features::misnamedArt && !rm->hasResource(path + ".ani"))
+          path = misnamedArt(path, rm);
+        t.anims[s][lower(kv.first)] = path;
       }
     }
     // Behaviour sets: [m\BehaviorSet\bHappy] f = ... (one per step)
@@ -642,7 +720,10 @@ Animation *Animals::underArt(const Member &m, Animation *a) const {
     if (art == a) {
       // (only the animal's own art has layers: a crate's "idle" isn't its
       // idle)
-      if (path.rfind("animals/", 0) != 0)
+      // (and the tank's fight clouds - surfc's undersurfc, subc's shadowsubc
+      // - but not a crate's plain "idle")
+      if (path.rfind("animals/", 0) != 0 && path.rfind("objects/surfcld/", 0) != 0 &&
+          path.rfind("objects/subcld/", 0) != 0)
         break;
       std::string f = path.substr(path.find_last_of("/\\") + 1);
       for (int s : {sub(m), 0}) {
@@ -656,6 +737,35 @@ Animation *Animals::underArt(const Member &m, Animation *a) const {
     }
   this->underCache[a] = u;
   return u;
+}
+
+Animation *Animals::shadowArt(const Member &m, Animation *a) const {
+  auto c = this->shadowCache.find(a);
+  if (c != this->shadowCache.end())
+    return c->second;
+  // (as underArt: the art's own name - subswim's, huntl's - and "shadow" +
+  // that among the type's animations: shadowsubswim, shadowhuntl)
+  Animation *sh = nullptr;
+  const Type &t = this->typeList[m.type];
+  for (const auto &[path, art] : this->artCache)
+    if (art == a) {
+      // (and the tank's fight clouds - surfc's undersurfc, subc's shadowsubc
+      // - but not a crate's plain "idle")
+      if (path.rfind("animals/", 0) != 0 && path.rfind("objects/surfcld/", 0) != 0 &&
+          path.rfind("objects/subcld/", 0) != 0)
+        break;
+      std::string f = path.substr(path.find_last_of("/\\") + 1);
+      for (int s : {sub(m), 0}) {
+        auto it = t.anims[s].find("shadow" + f);
+        if (it != t.anims[s].end() && !it->second.empty()) {
+          sh = this->rm && this->rm->hasResource(it->second + ".ani") ? this->rm->getAnimation(it->second) : nullptr;
+          break;
+        }
+      }
+      break;
+    }
+  this->shadowCache[a] = sh;
+  return sh;
 }
 
 Animation *Animals::art(const Member &m, const std::string &nameIn) const {
@@ -794,9 +904,9 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
       this->placeMessage = 10553;
       return Fences::Fit::Outside;
     }
-    int level = this->tankSubtiles ? this->tankSubtiles(ex) : 0;
+    int level = this->tankLevel ? this->tankLevel(ex) : 0;
     ZT_STEP("0x4df688", "In a tank: its water against what it needs", {"lives underwater (cUnderwater)", t.underwater ? 1 : 0},
-            {"tank water (subtiles)", level}, {"needs (cDepth)", t.needDepth},
+            {"tank water (height units)", level}, {"needs (cDepth)", t.needDepth},
             {"verdict", level <= 0 ? "no water" : level < t.needDepth ? "not deep enough" : "deep enough"});
     if (level <= 0) {
       this->placeMessage = 10554;
@@ -821,14 +931,45 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
   return Fences::Fit::Ok;
 }
 
+// The height a move in a tank ends at, over its floor (zoo.exe 0x43dc11,
+// ZTUnit::tankTargetHeight - class slot 0x1f8): whole height units, from
+// cDepth (type +0x68) up to the water level (tank +0x188), by the move's
+// target; a cSurface type (slot 0xc0) keeps to the surface
+float Animals::tankTargetHeight(Member &m, const std::string &target) {
+  const Type &t = this->typeList[m.type];
+  const int top = this->tankLevel && m.exhibit >= 0 ? this->tankLevel(m.exhibit) : 0;
+  const int low = t.needDepth;
+  // (where it is, in whole units over the floor - FUN_0041426f's z / 16 -
+  // kept between the two)
+  const int here = std::max(0, static_cast<int>(m.swimZ));
+  const int cur = here > top ? top : std::max(here, low);
+  auto roll = [&](int n) { return std::uniform_int_distribution<int>(0, std::max(1, n) - 1)(this->rng); };
+  int z;
+  if (target == "surface" || t.surfaceOnly)
+    z = top;
+  else if (target == "dive")
+    z = low < cur ? low + roll(cur - low) : cur;
+  else if (target == "rise")
+    z = cur < top ? top - roll(top - cur) : cur;
+  else if (target == "level")
+    z = cur;
+  else if (target == "floor")
+    z = low;
+  else
+    z = low + 1 < top ? low + roll(top - low + 1) : cur;
+  ZT_STEP("0x43dc11", "Its height in the tank", {"name", m.name}, {"target", target.empty() ? "anywhere" : target},
+          {"lowest (cDepth)", low}, {"water level", top}, {"now", cur}, {"goes to", z});
+  return static_cast<float>(z);
+}
+
 int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
-                   const Fences &fences) {
+                   const Fences &fences, bool restoring) {
   ZT_FN("", "Adopt an animal");
   Fences::Fit fit = canPlace(type, x, y, map, fences);
   ZT_STEP("", "Can it go there?", {"species", type >= 0 && type < static_cast<int>(this->typeList.size()) ? this->typeList[type].key : "?"},
           {"x", x}, {"y", y}, {"fit", fit == Fences::Fit::Ok ? "yes" : fit == Fences::Fit::InTheWay ? "another's there" : "no"},
           {"message", this->placeMessage});
-  if (fit != Fences::Fit::Ok)
+  if (fit != Fences::Fit::Ok && !(restoring && type >= 0 && type < static_cast<int>(this->typeList.size())))
     return -1;
   const Type &t = this->typeList[type];
   Member m;
@@ -838,8 +979,8 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   m.x = x;
   m.y = y;
   m.exhibit = fences.exhibitAt(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
-  if (this->tankDepth && this->tankAt && this->tankAt(x, y) >= 0)
-    m.swimZ = m.swimTo = this->tankDepth(m.exhibit) * 0.5f;
+  if (this->tankAt && this->tankAt(x, y) >= 0)
+    m.swimZ = m.swimTo = this->tankTargetHeight(m, "");
   m.name = (this->rm ? this->rm->getString(t.nameId) : t.key) + " " + std::to_string(++this->counts[type]);
   m.happiness = static_cast<float>(std::clamp(t.initialHappiness, -100, 100));
   m.energy = 0;
@@ -870,7 +1011,7 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
           {"happiness (cInitialHappiness)", m.happiness}, {"health (cMaxHits)", m.health}, {"energy", m.energy},
           {"life (cTimeDeath)", m.life});
   // A dinosaur comes as an egg (zoo.exe 0x4e2cf8: cLaysEggs)
-  if (t.laysEggs)
+  if (t.laysEggs && !restoring)
     becomeEgg(m);
   this->list.push_back(m);
   return m.id;
@@ -1142,6 +1283,31 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       play(m, arg(0), Member::Mode::PingPong);
     } else if (s.fn == "fplayreverse") {
       play(m, arg(0), Member::Mode::Reverse);
+    } else if (s.fn == "fhalt") {
+      // Stops where it is (zoo.exe 0x601da3: stopMoving)
+      m.path.clear();
+      m.pathAt = 0;
+      m.swimTo = m.swimZ;
+      continue;
+    } else if (s.fn == "fsetbase") {
+      // Its animation from now on, held (0x59639b: the named animation set
+      // on frame 0 as its base - a sick fish lying in the water)
+      play(m, arg(0), Member::Mode::Loop, 1.0f);
+      continue;
+    } else if (s.fn == "fkeepcontrol") {
+      // Keeps this set going on its base while it's sick (behaviourRunFnMoves
+      // 0x4a751e: the step isn't done while its condition holds) - healed,
+      // or dying, something else takes control
+      if (m.sick && !m.dying) {
+        m.stack.back().second--;
+        play(m, m.anim, Member::Mode::Loop, 1.0f);
+        ZT_STEP("0x4a751e", "Keeps control: lies sick on its base", {"anim", m.anim});
+        return;
+      }
+      continue;
+    } else if (s.fn == "fdie") {
+      // (its death is the set ending: dieAfter, as bDie's end on land)
+      continue;
     } else if (s.fn == "fplayset") {
       pushSet(m, arg(0));
       continue;
@@ -1208,9 +1374,9 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
           m.stack.pop_back();
           continue;
         }
-        // (in a tank: down to it on the floor)
+        // (in a tank: a height as any move's there - 0x43dc11)
         if (this->tankAt && this->tankAt(m.x, m.y) >= 0)
-          m.swimTo = 0.3f;
+          m.swimTo = this->tankTargetHeight(m, target);
         // To beside it
         float dx = m.x - food->x, dy = m.y - food->y, d = std::hypot(dx, dy);
         float gx = food->x, gy = food->y;
@@ -1220,12 +1386,14 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
         }
         walking = walkTo(m, gx, gy, map, fences);
       } else if (target == "0" || target.empty()) {
+        if (this->tankAt && this->tankAt(m.x, m.y) >= 0)
+          m.swimTo = this->tankTargetHeight(m, target);
         walking = walkSomewhere(m, map, fences);
       } else if ((target == "level" || target == "floor") && arg(1) == "1" && m.foodItem >= 0 && this->items &&
                  this->items->item(m.foodItem)) {
         // (at the food: its eating move there, down by it)
         const ZooItems::Item *food = this->items->item(m.foodItem);
-        m.swimTo = 0.3f;
+        m.swimTo = this->tankTargetHeight(m, target);
         walking = walkTo(m, food->x, food->y, map, fences);
         if (!walking && art(m, m.moveAnim)) {
           play(m, m.moveAnim, Member::Mode::Loop, std::max(1.5f, animSeconds(m, m.moveAnim)));
@@ -1234,21 +1402,8 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       } else if (target == "surface" || target == "floor" || target == "dive" || target == "rise" ||
                  target == "level") {
         // In a tank: somewhere else in it, at the surface, down at the floor,
-        // deeper, higher or as deep as it is
-        float depth = this->tankDepth ? this->tankDepth(m.exhibit) : 0.0f;
-        float top = std::max(0.3f, depth - 0.25f), low = std::min(0.3f, top);
-        std::uniform_real_distribution<float> u(0.0f, 1.0f);
-        if (target == "surface")
-          m.swimTo = top;
-        else if (target == "floor")
-          m.swimTo = low;
-        else if (target == "dive")
-          m.swimTo = std::max(low, m.swimZ - (0.3f + u(this->rng)) * depth * 0.5f);
-        else if (target == "rise")
-          m.swimTo = std::min(top - 0.4f, m.swimZ + (0.3f + u(this->rng)) * depth * 0.5f);
-        else
-          m.swimTo = std::clamp(m.swimZ, low, top - 0.4f);
-        m.swimTo = std::clamp(m.swimTo, low, top);
+        // deeper, higher or as deep as it is (0x43dc11)
+        m.swimTo = this->tankTargetHeight(m, target);
         walking = walkSomewhere(m, map, fences);
       }
       if (!walking)
@@ -1628,10 +1783,20 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
           m.path.clear();
           m.pathAt = 0;
           m.stack.clear();
-          // (a swimmer's in the water: its water ball)
+          // (by where it is - zoo.exe 0x588d47 on unit +0x258: in a tank at
+          // its surface the surface ball, under it the submerged ball; a
+          // swimmer in the water its water ball; else the dust ball - and
+          // the dust ball if it hasn't the one asked for)
           std::string ball = "dustball";
-          if (onWater(m) && art(m, "waterball"))
+          if (this->tankAt && this->tankAt(m.x, m.y) >= 0) {
+            bool top = this->tankDepth && m.swimZ >= this->tankDepth(m.exhibit) - 0.35f;
+            ball = top ? "surfaceball" : "submergedball";
+          } else if (onWater(m)) {
             ball = "waterball";
+          }
+          if (ball != "dustball" && !this->typeList[m.type].anims[sub(m)].count(ball) &&
+              !this->typeList[m.type].anims[0].count(ball))
+            ball = "dustball";
           float secs = std::max(1.0f, animSeconds(m, ball));
           play(m, ball, Member::Mode::Loop, secs);
           m.killIn = secs;
@@ -1862,6 +2027,18 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
     // In a tank: under the water, its "under" layer if it has one (and then
     // the animation itself on the surface pass); without, all of it under
     Animation *under = this->onlyTank != -2 && !m.boxed ? this->underArt(m, a) : nullptr;
+    // Its shadow on the tank's floor under it, on its frame (zoo.exe
+    // setupShadow 0x43f81c: "shadow%s", at the ground under the unit, the
+    // shadow palette at 0.25)
+    if (this->onlyTank != -2 && !this->onlySurface && !m.boxed)
+      if (Animation *sh = this->shadowArt(m, a)) {
+        float fx, fy, fd;
+        view.worldToScreenF(m.x, m.y, groundAt(map, m.x, m.y), fx, fy, fd);
+        Fences::Drawable sd{depth - 0.3f, fx, fy, sh, sh->hasFrames(side) ? side : CompassDirection::N,
+                            SDL_Color{0, 0, 0, 64}, true};
+        sd.frame = std::min(f, std::max(1, sh->frameCount()) - 1);
+        out.push_back(sd);
+      }
     if (this->onlySurface && !under)
       continue;
     if (under && !this->onlySurface) {
@@ -2281,6 +2458,46 @@ void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
     r.toys = std::min(100 - pen, 100.0f);
     r.score = 0.3f * r.terrain + 0.2f * r.objects +
               0.1f * (r.trees + r.rocks + r.elevation + r.shelters + r.toys);
+    // A tank (zoo.exe 0x444827 from 0x445e17; summed at 0x415e69): no
+    // terrain, its water instead -
+    // - depth: the water's level (tank +0x188) against cDepthMin..Max, 20
+    //   points off a unit out (up to 30), red from 50 off;
+    // - cleanliness: the water's purity (tank +0x1a8);
+    // - salinity (0x4936df): a salt tank for one liking salt water terrain
+    //   at least as much as fresh, a fresh one for the rest - 100, else -400;
+    // 0.15 depth + 0.15 cleanliness + 0.1 salinity + 0.1 each of objects,
+    // trees, rocks, hills, shelters and toys. One that needs land too
+    // (cUnderwater, not cOnlyUnderwater: type slot 0xcc) with none: 50 off
+    // (0x498b93), its hills taken as right (0x445f8b)
+    if (ex->tank) {
+      r.tank = true;
+      r.clean = ex->purity;
+      const int level = fences.waterLevel(*ex);
+      if (t.depthMin != t.depthMax) {
+        float off = 0;
+        if (level < t.depthMin) {
+          off = static_cast<float>(t.depthMin - level);
+          r.shallow = true;
+        } else if (level > t.depthMax) {
+          off = static_cast<float>(level - t.depthMax);
+          r.deep = true;
+        }
+        off = std::clamp(off, 0.0f, 30.0f) * 20.0f;
+        r.depthRed = off >= 50.0f;
+        r.depth = std::min(100.0f - off, 100.0f);
+      }
+      const bool salty = t.compatTerrain[10] >= t.compatTerrain[9];
+      r.saltWrong = ex->salt ? !salty : salty;
+      r.salinity = r.saltWrong ? -400.0f : 100.0f;
+      r.noLand = t.underwater && !t.onlyUnderwater;
+      if (r.noLand)
+        r.elevation = 100.0f;
+      r.score = 0.15f * r.depth + 0.15f * r.clean + 0.1f * r.salinity +
+                0.1f * (r.objects + r.trees + r.rocks + r.elevation + r.shelters + r.toys) - (r.noLand ? 50.0f : 0.0f);
+      ZT_STEP("0x415e69", "A tank's rating", {"species", t.key}, {"water level", level}, {"cDepthMin", t.depthMin},
+              {"cDepthMax", t.depthMax}, {"depth", r.depth}, {"cleanliness", r.clean}, {"salinity", r.salinity},
+              {"needs land", r.noLand ? 1 : 0}, {"score", r.score});
+    }
     // The other kinds of animal there (each kind once): what it thinks of
     // them, their genus and their family
     for (int other : kinds) {
@@ -3002,11 +3219,26 @@ std::vector<std::pair<std::string, bool>> Animals::advice(int id, const WorldMap
     flag(lowBit, tooFew, std::fabs(have - want) > far);
     flag(lowBit + 1, !tooFew && want + near < have, std::fabs(have - want) > far);
   };
-  prefs(12, r->foliage, t.treePref, 4, 8);
+  // (one needing land, in a tank alone: its tree, rock and hill wants aren't
+  // asked - 0x445f8b)
+  if (!r->noLand) {
+    prefs(12, r->foliage, t.treePref, 4, 8);
+    prefs(17, r->hills, t.elevationPref, 10, 20);
+    prefs(19, r->rockShare, t.rockPref, 4, 8);
+  }
   flag(16, adults > 0 && tiles / adults < t.animalDensity, t.allCrowdedChange < -5);
-  prefs(17, r->hills, t.elevationPref, 10, 20);
-  prefs(19, r->rockShare, t.rockPref, 4, 8);
-  for (int k = 0; k < 17; k++) {
+  // A tank's (0x447164: Marine Mania's messages in the base game's unused
+  // slots): too shallow (9909), too deep (9910), the wrong water (9912),
+  // too dirty under 50 (9956, red under 25), no land (9964, red)
+  if (r->tank) {
+    flag(8, r->shallow, r->depthRed);
+    flag(9, r->deep, r->depthRed);
+    flag(11, r->saltWrong, true);
+    flag(55, r->clean < 50, r->clean < 25);
+    flag(63, r->noLand, true);
+  }
+  // (terrain: a land exhibit's only)
+  for (int k = 0; k < 17 && !r->tank; k++) {
     int p = t.compatTerrain[k];
     if (p >= 0) {
       bool red = std::fabs(r->pct[k] - p) > 6;

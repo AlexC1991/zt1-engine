@@ -64,9 +64,19 @@ public:
     int energyIncrement = 10, maxEnergy = 100;
     bool swims = false;
     // Marine (Marine Mania): cUnderwater (it can live in a tank), cDepth (the
-    // water it needs, subtiles: zoo.exe 0x5af392, against the tank's level)
-    bool underwater = false;
+    // water it needs, height units: zoo.exe 0x5af392, against the tank's
+    // level; type +0x68 - the lowest it swims over the floor, 0x43dc11);
+    // cSurface (type +0x17d, 0x402112): swims at the surface only
+    bool underwater = false, surfaceOnly = false;
     int needDepth = 0;
+    // cOnlyUnderwater (+0x17f): a tank's its whole home; without it a
+    // cUnderwater animal needs land too (type slot 0xcc, 0x410e41).
+    // cDepthMin, cDepthMax (+0x35c, +0x360): the water depth it likes
+    bool onlyUnderwater = false;
+    int depthMin = 0, depthMax = 0;
+    // cKeeper (type +0x2f0): who cares for it - 9500 a zookeeper (unset),
+    // 9551 a scientist (dinosaurs), 9552 a marine specialist (tank animals)
+    int keeper = 9500;
     // Water (zoo.exe 0x438f6c, every cWaterCheck ticks): a cEnterWaterChance
     // in 100 to swim with more than cWaterNeeded water tiles in its exhibit,
     // cEnterLandChance to come out with more than cLandNeeded land tiles;
@@ -259,6 +269,13 @@ public:
     float poo = 0;     // the share of its tiles with poo
     // Objects it doesn't like there (their name ids), and how much
     std::vector<std::pair<int, int>> dislikes;
+    // A tank (zoo.exe 0x444827's record +0x50, +0x64, +0x68): the water's
+    // depth against what it likes, its cleanliness, its salt; too shallow
+    // or deep (red when far off), the wrong water, no land for one that
+    // needs it (and its tree, rock and hill wants dropped)
+    bool tank = false;
+    float depth = 100, clean = 100, salinity = 100;
+    bool shallow = false, deep = false, depthRed = false, saltWrong = false, noLand = false;
   };
 
   void loadTypes(ResourceManager *rm);
@@ -277,7 +294,10 @@ public:
   // Where one can go: an exhibit's ground (a land exhibit for a zoo
   // animal), not water, not on top of another
   Fences::Fit canPlace(int type, float x, float y, const WorldMap &map, const Fences &fences) const;
-  int adopt(int type, bool female, float x, float y, const WorldMap &map, const Fences &fences);
+  int adopt(int type, bool female, float x, float y, const WorldMap &map, const Fences &fences,
+            bool restoring = false);
+  // (restoring: an animal of a saved zoo put back as it was - wherever it
+  // stood, loose ones too, and as it is: no egg made of a grown dinosaur)
   void remove(int id);
   // What selling it gives back (zoo.exe ZTAnimal::sellValue 0x48d21d): by
   // how happy and how healthy it is, halved again when sick
@@ -399,15 +419,28 @@ public:
   mutable bool onlySurface = false; // (collect in a tank: its surface pass)
   // An animation's "under" layer (its half below the water), or none
   Animation *underArt(const Member &m, Animation *a) const;
+  // An animation's shadow ("shadow" + its art's name - zoo.exe setupShadow
+  // 0x43f81c, "shadow%s"), drawn on the ground under it; or none
+  Animation *shadowArt(const Member &m, Animation *a) const;
   // Why canPlace refused (the original's message, a lang string; 0 none)
   mutable int placeMessage = 0;
-  // A tank's water level in subtiles (for cDepth)
-  std::function<int(int tank)> tankSubtiles;
+  // A tank's water level in height units over its floor (tank +0x188: for
+  // cDepth and the swimmers' heights)
+  std::function<int(int tank)> tankLevel;
+  // The height a move in a tank ends at (zoo.exe 0x43dc11)
+  float tankTargetHeight(Member &m, const std::string &target);
   Animation *art(const Member &m, const std::string &name) const;
   Animation *preview(int type, bool female) const;
   Animation *crate() const { return this->crateArt; }
   // "Recently", "A short time ago", "A long time ago"
   static int agoText(double since, bool slept);
+  // Its carer as the animal panel shows it (zoo.exe 0x4831b2): 0 the
+  // zookeeper, 1 the scientist, 2 the marine specialist - which plaque,
+  // recommendations title and background, hunger and suitability help
+  int carerIndex(const Member &m) const {
+    int k = m.type >= 0 && m.type < static_cast<int>(this->typeList.size()) ? this->typeList[m.type].keeper : 9500;
+    return k == 9551 ? 1 : k == 9552 ? 2 : 0;
+  }
 
   double clock() const { return this->now; }
 
@@ -487,6 +520,7 @@ private:
   int nextId = 1;
   mutable std::map<std::string, Animation *> artCache;
   mutable std::map<const Animation *, Animation *> underCache; // (an art's "under" layer, or none)
+  mutable std::map<const Animation *, Animation *> shadowCache; // (an art's shadow, or none)
   Animation *selectArrow = nullptr;
   Animation *smileArt = nullptr, *frownArt = nullptr;
   std::map<int, std::map<int, float>> snaps; // exhibit -> kind -> rating

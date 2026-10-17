@@ -4,12 +4,11 @@
 #include <string>
 
 // ours: updates for installed, official builds. At start it looks, in the
-// background, at the release feed - CodeRook's zt1-engine-releases first,
-// GitHub's latest release if CodeRook can't be reached. Both serve the same
-// latest.yml (the electron-updater format: the version, the installer's
-// file name, its SHA-512). When there's a newer release, the main menu asks;
-// yes downloads the installer, checks its SHA-512, starts it silently and
-// quits - the installer puts the new engine in and starts it again.
+// background, at GitHub's latest published release (CodeRook mirrors the
+// releases, but its feed isn't relied on for updates yet). latest.yml carries
+// an ECDSA P-256 signature over the version, installer name, size and
+// SHA-512. The updater verifies that signature before offering an update, then
+// checks the downloaded installer's size and SHA-512 before running it.
 //
 // Only official builds (made by the release workflow, ZT1_OFFICIAL_BUILD)
 // ever update: a copy someone built themselves keeps their own code. The
@@ -22,7 +21,9 @@ struct Release {
   std::string file;    // the installer's name in the feed
   std::string url;     // where to download it
   std::string sha512;  // base64, as the feed gives it
-  std::string from;    // "CodeRook" or "GitHub"
+  std::string signature; // base64 ECDSA P-256 signature (IEEE P1363)
+  std::string size;      // signed installer size in bytes
+  std::string from;    // the feed it came from ("GitHub")
 };
 
 // This build's version ("2026.10.19"; "dev" for a build of one's own)
