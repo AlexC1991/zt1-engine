@@ -8,9 +8,10 @@
 //   ([user] screenwidth/screenheight too, when the Lab gives it a size)
 // - In the Lab (ZT1_HOOK_EMBED, the Lab's window): CreateWindowExA,
 //   SetWindowPos, SetWindowLongA and AdjustWindowRectEx keep the game's
-//   window borderless, owned by the Lab's and where the Lab puts it - over
-//   its Play view, like our engine's (src/Embed.cpp) - taking the same
-//   lines on stdin: rect <x> <y> <w> <h> | show | hide | focus | quit |
+//   window borderless and where the Lab puts it - over its Play view, a
+//   child of the Lab's window from its first frame, like our engine's
+//   (src/Embed.cpp) - taking the same lines on stdin: place <x> <y> <w> <h>
+//   (the Lab's client pixels; rect: screen ones) | show | hide | focus | quit |
 //   volume <0-100>, rearm (the armed functions that ran, armed again), shot <file.bmp> (a picture of what it draws), key <vk>
 //   (a key to it), and dialog [text <name> | ok | cancel] (the Windows file
 //   dialogs it opens - Save a zoo... - which aren't on its surface). It
@@ -52,9 +53,16 @@ namespace {
 // The Lab's window (embedded) and the game's, and the game's size
 HWND g_owner = nullptr, g_game = nullptr;
 int g_gw = 0, g_gh = 0;
-// Where the Lab's Play view is (screen pixels), once it's said
+// Where the Lab's Play view is (pixels in the Lab window's client area),
+// once it's said
 int g_rx = 0, g_ry = 0, g_rw = 0, g_rh = 0;
 bool g_hidden = true;
+// A child of the Lab's window yet (from its first frame on): Windows moves
+// it with the Lab's, in the same step - an owned window of its own, moved
+// after, trailed behind a fast drag. Done on its own thread, by its window
+// procedure: kAdopt; kFocus gives it the keyboard
+bool g_child = false;
+const UINT kAdopt = WM_APP + 0x5a1, kFocus = WM_APP + 0x5a2, kPlace = WM_APP + 0x5a3;
 // (its window procedure, behind ours - "it keeps running", below)
 WNDPROC g_gameProc = nullptr;
 LRESULT CALLBACK gameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -149,17 +157,27 @@ BOOL WINAPI writeProfile(LPCSTR app, LPCSTR key, LPCSTR value, LPCSTR file) {
 // ---------------------------------------------------------------- windows
 using CreateWindowFn = HWND(WINAPI *)(DWORD, LPCSTR, LPCSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
 CreateWindowFn realCreateWindow = nullptr;
-// In the Lab, its window's look: a borderless popup (the Lab's page is drawn
-// over child windows), not on the taskbar, never topmost
-DWORD embedStyle(DWORD style) { return (style & (WS_VISIBLE | WS_DISABLED | WS_CLIPCHILDREN | WS_CLIPSIBLINGS)) | WS_POPUP; }
-DWORD embedExStyle(DWORD ex) { return (ex | WS_EX_TOOLWINDOW) & ~(WS_EX_APPWINDOW | WS_EX_TOPMOST | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME); }
-// Where it goes: the middle of the Play view (its size is the game's)
+// In the Lab, its window's look: borderless, not on the taskbar, never
+// topmost - a popup owned by the Lab's window until its first frame, a
+// child of it from then on
+DWORD embedStyle(DWORD style) {
+  return (style & (WS_VISIBLE | WS_DISABLED | WS_CLIPCHILDREN)) | WS_CLIPSIBLINGS | (g_child ? WS_CHILD : WS_POPUP);
+}
+// (a child's clicks aren't told to the Lab's page: it took the keyboard back
+// on each one)
+DWORD embedExStyle(DWORD ex) {
+  return (ex | WS_EX_TOOLWINDOW | (g_child ? WS_EX_NOPARENTNOTIFY : 0)) & ~(WS_EX_APPWINDOW | WS_EX_TOPMOST | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME);
+}
+// Where it goes: the middle of the Play view (its size is the game's) - in
+// the Lab's client area as a child, on the screen before
 POINT placed() {
   POINT p{g_rx, g_ry};
   if (g_rw > g_gw)
     p.x += (g_rw - g_gw) / 2;
   if (g_rh > g_gh)
     p.y += (g_rh - g_gh) / 2;
+  if (!g_child && g_owner)
+    ClientToScreen(g_owner, &p);
   return p;
 }
 HWND WINAPI createWindow(DWORD ex, LPCSTR cls, LPCSTR title, DWORD style, int x, int y, int w, int h, HWND parent, HMENU menu, HINSTANCE inst, LPVOID param) {
@@ -200,9 +218,14 @@ BOOL WINAPI setWindowPos(HWND hwnd, HWND after, int x, int y, int w, int h, UINT
   if (g_owner && hwnd && hwnd == g_game) {
     say("game SetWindowPos %d,%d %dx%d flags %x: kept in the Lab", x, y, w, h, flags);
     POINT p = placed();
-    flags |= SWP_NOZORDER | SWP_NOACTIVATE;
+    flags |= SWP_NOACTIVATE;
     if (g_hidden)
       flags = (flags & ~SWP_SHOWWINDOW);
+    // (a child stays on top of the Lab's page, its sibling)
+    if (g_child)
+      after = HWND_TOP, flags &= ~SWP_NOZORDER;
+    else
+      flags |= SWP_NOZORDER;
     return realSetWindowPos(hwnd, after, p.x, p.y, g_gw, g_gh, flags & ~(SWP_NOMOVE | SWP_NOSIZE));
   }
   return realSetWindowPos(hwnd, after, x, y, w, h, flags);
@@ -212,8 +235,67 @@ BOOL WINAPI setWindowPos(HWND hwnd, HWND after, int x, int y, int w, int h, UINT
 // fullscreen game's habit - so its window's told it's still active
 // (WM_ACTIVATEAPP, WM_ACTIVATE, WM_NCACTIVATE; WM_KILLFOCUS isn't passed on)
 // and GetForegroundWindow / GetActiveWindow answer its own window
+using SetWindowLongFn = LONG(WINAPI *)(HWND, int, LONG);
+SetWindowLongFn realSetWindowLong = nullptr;
+// Its window where the Lab says, at the size the game draws (it draws at
+// the size it started at, whatever the Play view's since: a window sized to
+// the view had its picture squeezed when the view shrank - the Steps panel
+// opening - and a white strip beside it when it grew). Bigger than the
+// view, it's cut to it; smaller, it's in the middle. On its own thread
+// (kPlace)
+void fit(HWND hwnd, UINT flags = 0) {
+  POINT p = placed();
+  realSetWindowPos(hwnd, g_child ? HWND_TOP : nullptr, p.x, p.y, g_gw, g_gh,
+                   flags | SWP_NOACTIVATE | (g_child ? 0 : SWP_NOZORDER) | (g_hidden ? SWP_HIDEWINDOW : SWP_SHOWWINDOW));
+  if (g_rw <= 0 || g_rh <= 0)
+    return;
+  // (the view, in the window's own pixels)
+  POINT v{g_rx, g_ry};
+  if (!g_child)
+    ClientToScreen(g_owner, &v);
+  const int dx = static_cast<int>(v.x - p.x), dy = static_cast<int>(v.y - p.y);
+  const int l = (std::max)(0, dx), t = (std::max)(0, dy), r = (std::min)(g_gw, dx + g_rw), b = (std::min)(g_gh, dy + g_rh);
+  if (!l && !t && r >= g_gw && b >= g_gh)
+    SetWindowRgn(hwnd, nullptr, TRUE);
+  else
+    SetWindowRgn(hwnd, CreateRectRgn(l, t, (std::max)(l, r), (std::max)(t, b)), TRUE);
+}
+// Its window made a child of the Lab's, where the Lab says (on its own
+// thread: kAdopt, posted once it's drawn a frame - its DirectDraw is set up
+// on it as a window of its own by then)
+void adopt(HWND hwnd) {
+  if (g_child || !g_owner)
+    return;
+  g_child = true;
+  realSetWindowLong(hwnd, GWL_STYLE, static_cast<LONG>(embedStyle(static_cast<DWORD>(GetWindowLongA(hwnd, GWL_STYLE)))));
+  realSetWindowLong(hwnd, GWL_EXSTYLE, static_cast<LONG>(embedExStyle(static_cast<DWORD>(GetWindowLongA(hwnd, GWL_EXSTYLE)))));
+  SetParent(hwnd, g_owner);
+  fit(hwnd, SWP_FRAMECHANGED);
+  POINT p = placed();
+  say("its window's a child of the Lab's now: %d,%d %dx%d", p.x, p.y, g_gw, g_gh);
+}
 LRESULT CALLBACK gameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (g_owner) {
+    if (msg == kAdopt) {
+      adopt(hwnd);
+      return 0;
+    }
+    if (msg == kPlace) {
+      fit(hwnd);
+      return 0;
+    }
+    // (its own answer to a click is "activate, and eat the click" - as a
+    // window of its own that cost the first click; a child's asked on every
+    // one, and every button-down was eaten)
+    if (msg == WM_MOUSEACTIVATE && g_child)
+      return MA_ACTIVATE;
+    if (msg == kFocus || ((msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN) && g_child && GetFocus() != hwnd)) {
+      // (the keyboard to it: asked, or clicked - a child isn't activated
+      // by a click, as a window of its own was)
+      SetFocus(hwnd);
+      if (msg == kFocus)
+        return 0;
+    }
     if (msg == WM_ACTIVATEAPP)
       wp = TRUE;
     else if (msg == WM_ACTIVATE && LOWORD(wp) == WA_INACTIVE)
@@ -230,8 +312,6 @@ HwndFn realGetForeground = nullptr, realGetActive = nullptr;
 HWND WINAPI getForeground() { return g_owner && g_game ? g_game : realGetForeground(); }
 HWND WINAPI getActive() { return g_owner && g_game ? g_game : realGetActive(); }
 
-using SetWindowLongFn = LONG(WINAPI *)(HWND, int, LONG);
-SetWindowLongFn realSetWindowLong = nullptr;
 LONG WINAPI setWindowLong(HWND hwnd, int index, LONG value) {
   if (g_owner && hwnd && hwnd == g_game && index == GWLP_WNDPROC) {
     // (its own window procedure, behind ours: the one it had back - not
@@ -272,6 +352,7 @@ IDirectDrawSurface7 *g_primary = nullptr, *g_back = nullptr;
 DWORD g_descSize = sizeof(DDSURFACEDESC2);
 int g_blts = 0;
 void *patchVtable(void *object, int index, void *hook);
+void shotFrame(IDirectDrawSurface7 *s);
 // The game's DirectDraw is an IDirectDraw4 or 7: each version has its own
 // table of functions (vtable), so its own hooks and its own originals
 template <int V> struct Ddraw {
@@ -282,8 +363,20 @@ template <int V> struct Ddraw {
 
   // A frame to the screen (the primary): what it's from is what it draws on
   static HRESULT STDMETHODCALLTYPE blt(IDirectDrawSurface7 *self, LPRECT dst, IDirectDrawSurface7 *src, LPRECT srcRect, DWORD flags, LPDDBLTFX fx) {
+    RECT here;
     if (self == g_primary && src) {
       g_back = src;
+      shotFrame(src);
+      if (g_owner && g_game && !g_child && !g_blts)
+        PostMessageA(g_game, kAdopt, 0, 0);
+      // (a child isn't told it moved when the Lab's window does: the frame
+      // where it is on the screen now, not where the game last heard - at
+      // the game's own size, as it asked)
+      POINT at{0, 0};
+      if (g_child && dst && ClientToScreen(g_game, &at)) {
+        here = {at.x, at.y, at.x + (dst->right - dst->left), at.y + (dst->bottom - dst->top)};
+        dst = &here;
+      }
       if (g_blts++ < 3)
         say("frame to the screen: %ld,%ld-%ld,%ld from %p %ld,%ld-%ld,%ld flags %lx", dst ? dst->left : -1, dst ? dst->top : -1, dst ? dst->right : -1,
             dst ? dst->bottom : -1, src, srcRect ? srcRect->left : -1, srcRect ? srcRect->top : -1, srcRect ? srcRect->right : -1,
@@ -433,16 +526,20 @@ HMODULE WINAPI loadLib(LPCSTR name) {
   return m;
 }
 
-// A picture of the game's surface as a .bmp (24-bit): whatever its pixel
-// format, from its masks
-bool shot(const char *file) {
-  IDirectDrawSurface7 *s = g_back;
+// A picture of a surface of the game's as a .bmp (24-bit): whatever its
+// pixel format, from its masks
+bool shotOf(IDirectDrawSurface7 *s, const char *file) {
   if (!s)
     return false;
   DDSURFACEDESC2 d{};
   d.dwSize = g_descSize;
-  if (FAILED(s->Lock(nullptr, &d, DDLOCK_WAIT | DDLOCK_READONLY | DDLOCK_SURFACEMEMORYPTR, nullptr)))
+  HRESULT hr = s->Lock(nullptr, &d, DDLOCK_WAIT | DDLOCK_READONLY | DDLOCK_SURFACEMEMORYPTR, nullptr);
+  if (hr == DDERR_SURFACELOST && SUCCEEDED(s->Restore())) // (lost to a display change: back, if not yet drawn on)
+    hr = s->Lock(nullptr, &d, DDLOCK_WAIT | DDLOCK_READONLY | DDLOCK_SURFACEMEMORYPTR, nullptr);
+  if (FAILED(hr)) {
+    say("shot: its surface %p won't lock (%08lx)", s, hr);
     return false;
+  }
   const int w = static_cast<int>(d.dwWidth), h = static_cast<int>(d.dwHeight), bpp = static_cast<int>(d.ddpfPixelFormat.dwRGBBitCount);
   const DWORD masks[3] = {d.ddpfPixelFormat.dwRBitMask, d.ddpfPixelFormat.dwGBitMask, d.ddpfPixelFormat.dwBBitMask};
   const int row = (w * 3 + 3) & ~3;
@@ -484,6 +581,45 @@ bool shot(const char *file) {
   std::fwrite(px.data(), 1, px.size(), f);
   std::fclose(f);
   return true;
+}
+// "shot" is taken by the game's own thread as it sends its next frame to the
+// screen (shotFrame, from blt): the surface that frame's from, as drawn - not
+// one kept from before (a display change can lose or replace it), and never
+// locked from another thread while the game draws on it. With no frame in a
+// second (it isn't drawing: hidden, a dialog up), the last one it drew
+CRITICAL_SECTION g_shotLock;
+std::string g_shotWant;
+bool g_shotOk = false;
+HANDLE g_shotDone = nullptr;
+void shotFrame(IDirectDrawSurface7 *s) {
+  if (!g_shotDone)
+    return;
+  EnterCriticalSection(&g_shotLock);
+  std::string file;
+  file.swap(g_shotWant);
+  LeaveCriticalSection(&g_shotLock);
+  if (file.empty())
+    return;
+  g_shotOk = shotOf(s, file.c_str());
+  SetEvent(g_shotDone);
+}
+bool shot(const char *file) {
+  if (!g_shotDone)
+    return shotOf(g_back, file);
+  ResetEvent(g_shotDone);
+  EnterCriticalSection(&g_shotLock);
+  g_shotWant = file;
+  LeaveCriticalSection(&g_shotLock);
+  if (WaitForSingleObject(g_shotDone, 1000) == WAIT_OBJECT_0)
+    return g_shotOk;
+  EnterCriticalSection(&g_shotLock);
+  bool taken = g_shotWant.empty(); // (a frame came just now: it's being taken)
+  g_shotWant.clear();
+  LeaveCriticalSection(&g_shotLock);
+  if (taken)
+    return WaitForSingleObject(g_shotDone, 5000) == WAIT_OBJECT_0 && g_shotOk;
+  say("shot: no frame drawn in a second - the last one");
+  return shotOf(g_back, file);
 }
 
 // ------------------------------------------------------------ what runs
@@ -968,28 +1104,35 @@ void command(const char *line) {
   int x, y, w, h;
   if (std::sscanf(line, "volume %d", &x) == 1) {
     setSessionVolume(x / 100.0f);
-  } else if (std::sscanf(line, "rect %d %d %d %d", &x, &y, &w, &h) == 4) {
-    g_rx = x, g_ry = y, g_rw = w, g_rh = h;
+  } else if (bool screen = std::sscanf(line, "rect %d %d %d %d", &x, &y, &w, &h) == 4;
+             screen || std::sscanf(line, "place %d %d %d %d", &x, &y, &w, &h) == 4) {
+    // (place: in the Lab window's client area - nothing to say when it
+    // moves; rect: on the screen, as an older Lab says it)
+    POINT at{x, y};
+    if (screen && g_owner)
+      ScreenToClient(g_owner, &at);
+    g_rx = at.x, g_ry = at.y, g_rw = w, g_rh = h;
     g_hidden = false;
-    if (g_game) {
-      // The Play view can change size while the game is running (for example,
-      // when the Steps panel opens). Keep the owned popup within that live
-      // area; retaining the launch size makes it cover the Lab's sidebar.
-      g_gw = (std::max)(1, w);
-      g_gh = (std::max)(1, h);
-      POINT p = placed();
-      realSetWindowPos(g_game, nullptr, p.x, p.y, g_gw, g_gh, SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
-    }
+    // (the Play view can change size while the game runs - the Steps panel
+    // opening: the window's fitted to it, at the game's own size, by the
+    // game's thread - posted, not waited for: waiting a frame for each made
+    // the commands after, shot, wait behind them)
+    if (g_game)
+      PostMessageA(g_game, kPlace, 0, 0);
   } else if (!std::strncmp(line, "hide", 4)) {
     g_hidden = true;
     if (g_game)
-      ShowWindow(g_game, SW_HIDE);
+      ShowWindowAsync(g_game, SW_HIDE);
   } else if (!std::strncmp(line, "show", 4)) {
     g_hidden = false;
     if (g_game)
-      ShowWindow(g_game, SW_SHOWNA);
+      ShowWindowAsync(g_game, SW_SHOWNA);
   } else if (!std::strncmp(line, "focus", 5)) {
-    if (g_game)
+    // (a child can't be the window in front: the keyboard's given it by
+    // its own thread)
+    if (g_game && g_child)
+      PostMessageA(g_game, kFocus, 0, 0);
+    else if (g_game)
       SetForegroundWindow(g_game);
   } else if (!std::strncmp(line, "shot ", 5)) {
     reply(shot(line + 5) ? "shot ok %s" : "shot failed %s", line + 5);
@@ -1147,21 +1290,36 @@ DWORD WINAPI sendHits(LPVOID) {
 }
 DWORD WINAPI listen(LPVOID) {
   CoInitializeEx(nullptr, COINIT_MULTITHREADED); // (for volume)
+  // (rect's screen pixels as they are, even if the game's not per-monitor)
+  using DpiFn = HANDLE(WINAPI *)(HANDLE);
+  if (auto dpi = reinterpret_cast<DpiFn>(GetProcAddress(GetModuleHandleA("user32.dll"), "SetThreadDpiAwarenessContext")))
+    dpi(reinterpret_cast<HANDLE>(-4));
   HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
   std::string buf;
   char chunk[512];
   DWORD n;
   while (in && ReadFile(in, chunk, sizeof chunk, &n, nullptr) && n) {
     buf.append(chunk, n);
+    // (rect/place lines in a row - the Lab being dragged or resized - are
+    // only where it ended up: the last one's done, before what comes after)
+    std::string rect;
     size_t nl;
     while ((nl = buf.find('\n')) != std::string::npos) {
       std::string line = buf.substr(0, nl);
       buf.erase(0, nl + 1);
       while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
         line.pop_back();
+      if (!line.compare(0, 5, "rect ") || !line.compare(0, 6, "place ")) {
+        rect = line;
+        continue;
+      }
+      if (!rect.empty())
+        command(rect.c_str()), rect.clear();
       if (!line.empty())
         command(line.c_str());
     }
+    if (!rect.empty())
+      command(rect.c_str());
   }
   // (the Lab gone: so is the game)
   say("the Lab's gone: closing");
@@ -1243,11 +1401,21 @@ void start() {
   patchImport("user32.dll", "GetKeyState", reinterpret_cast<void *>(getKeyState), reinterpret_cast<void **>(&realGetKeyState));
   if (!realSetWindowPos)
     realSetWindowPos = SetWindowPos;
+  if (!realSetWindowLong)
+    realSetWindowLong = SetWindowLongA;
   // In the Lab: its window, and the size it's to draw at (the Play view's)
   char v[64];
   if (GetEnvironmentVariableA("ZT1_HOOK_EMBED", v, sizeof v)) {
     g_owner = reinterpret_cast<HWND>(static_cast<ULONG_PTR>(std::strtoull(v, nullptr, 0)));
     say("in the Lab: its window %p", g_owner);
+    // (in screen pixels, as the Lab says where - per monitor, before it
+    // makes any window: on a scaled monitor Windows would otherwise take
+    // them as 96-DPI ones and put it, and size it, off the Play view)
+    using DpiFn = BOOL(WINAPI *)(HANDLE);
+    if (auto dpi = reinterpret_cast<DpiFn>(GetProcAddress(GetModuleHandleA("user32.dll"), "SetProcessDpiAwarenessContext")))
+      say("per-monitor DPI: %s", dpi(reinterpret_cast<HANDLE>(-4)) ? "on" : "not set"); // (DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+    InitializeCriticalSection(&g_shotLock);
+    g_shotDone = CreateEventA(nullptr, TRUE, FALSE, nullptr);
     if (GetEnvironmentVariableA("ZT1_HOOK_SIZE", v, sizeof v) && std::sscanf(v, "%dx%d", &g_gw, &g_gh) == 2)
       say("drawing at %dx%d", g_gw, g_gh);
     else

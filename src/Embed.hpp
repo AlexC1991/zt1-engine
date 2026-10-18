@@ -5,7 +5,8 @@
 // zt1-engine.exe --embed <parent window handle>. The game's window becomes a
 // child of that window; the parent says where it goes, and the game is
 // told to come forward or go, as lines on stdin:
-//   rect <x> <y> <w> <h>   (device pixels, in the parent's client area)
+//   place <x> <y> <w> <h>   (device pixels, in the parent's client area;
+//                            rect: the same on the screen)
 //   show | hide | focus | quit
 //   click <x> <y> | rclick <x> <y>   (a mouse click at the window's pixels)
 //   move <x> <y>   (the mouse there, resting: hovering, tooltips)

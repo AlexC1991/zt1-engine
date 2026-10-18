@@ -322,6 +322,7 @@ ipcMain.handle('play:start', () => {
   const proc = cp.spawn(exe, ['--embed', hwnd.toString()], { cwd: roots.engineDir || RELEASE, stdio: ['pipe', 'pipe', 'pipe'] });
   play.proc = proc;
   play.kind = 'engine';
+  proc.stdin.on('error', () => {}); // (gone mid-write: EPIPE - its exit's noticed on its own)
   // (what the game says: re/private/play.log)
   fs.mkdirSync(PRIVATE, { recursive: true });
   const log = fs.createWriteStream(path.join(PRIVATE, 'play.log'));
@@ -398,6 +399,7 @@ ipcMain.handle('play:original', () => {
   const proc = cp.spawn(launcher, args, { cwd: path.dirname(launcher), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   play.proc = proc;
   play.kind = 'original';
+  proc.stdin.on('error', () => {}); // (gone mid-write: EPIPE - its exit's noticed on its own)
   fs.mkdirSync(PRIVATE, { recursive: true });
   const log = fs.createWriteStream(path.join(PRIVATE, 'original.log'));
   // (its hook's lines: the recorder's hits, answers - the rest to the log)
@@ -432,13 +434,49 @@ ipcMain.handle('play:original', () => {
 function playWrite(line) {
   if (play.proc && play.proc.stdin.writable) play.proc.stdin.write(line + '\n');
 }
-// The Play area (page pixels in the window's content) to screen pixels: the
-// game's window is put there, and kept there as this one moves
+// The Play area (page pixels in the window's content) to device pixels in
+// the window's client area: the game's window - a child of this one - is
+// put there. Windows moves it with this window, so a move says nothing (it
+// sent the game's own window a place on each move, and the game, a frame
+// behind each, trailed a fast drag); a resize, a layout change or another
+// monitor's scaling does. Only what changed is sent, and while the game's
+// still to read what was sent before, only the latest waits
+function playClientRect() {
+  const r = playRect();
+  if (!r) return null;
+  const o = screen.dipToScreenRect(win, win.getContentBounds());
+  return { x: r.x - o.x, y: r.y - o.y, width: r.width, height: r.height };
+}
 function placeGame() {
   if (!play.proc || !win) return;
-  if (!play.visible || !play.area || win.isMinimized()) return playWrite('hide');
-  const r = playRect();
-  playWrite(`rect ${r.x} ${r.y} ${r.width} ${r.height}`);
+  if (!play.visible || !play.area || win.isMinimized()) play.placeNext = 'hide';
+  else {
+    const r = playClientRect();
+    play.placeNext = `place ${r.x} ${r.y} ${r.width} ${r.height}`;
+  }
+  placeNow();
+}
+function placeNow() {
+  const s = play.proc && play.proc.stdin;
+  if (play.placedFor !== play.proc) {
+    play.placedFor = play.proc;
+    play.placed = null;
+  }
+  if (!s || !s.writable || !play.placeNext) return;
+  if (play.placeNext === play.placed) return void (play.placeNext = null);
+  if (s.writableNeedDrain) {
+    if (play.placeDrain !== s) {
+      play.placeDrain = s;
+      s.once('drain', () => {
+        if (play.placeDrain === s) play.placeDrain = null;
+        placeNow();
+      });
+    }
+    return;
+  }
+  play.placed = play.placeNext;
+  play.placeNext = null;
+  playWrite(play.placed);
 }
 ipcMain.on('play:area', (_e, area) => {
   play.area = area;
@@ -2664,8 +2702,11 @@ function createWindow() {
   win.on('close', save);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.on('closed', () => (win = null));
-  // (the game's window follows this one)
-  for (const ev of ['move', 'resize', 'maximize', 'unmaximize', 'restore', 'minimize']) win.on(ev, placeGame);
+  // (the game's window follows this one: as a child, by itself when it
+  // moves - but a move to a monitor scaled otherwise changes its pixels)
+  for (const ev of ['moved', 'resize', 'resized', 'maximize', 'unmaximize', 'restore', 'minimize']) win.on(ev, placeGame);
+  // (a monitor's scaling changed, or one came or went: its screen pixels)
+  for (const ev of ['display-metrics-changed', 'display-added', 'display-removed']) screen.on(ev, placeGame);
   // (the page's errors: in this process's output, in .cache/lab-page.log, and
   // in the Lab's Log - a page that breaks says why somewhere you can read)
   const pageLog = path.join(PRIVATE, 'lab-page.log');
@@ -2705,6 +2746,10 @@ async function shotTour(dir) {
   win.close();
 }
 
+// (the page drawn the older way, not with DirectComposition: with it, the
+// page covers every child window - and Play's game is one, so Windows moves
+// it with this window, not a frame behind)
+app.commandLine.appendSwitch('disable-direct-composition');
 app.whenReady().then(() => {
   createWindow();
   startHost();

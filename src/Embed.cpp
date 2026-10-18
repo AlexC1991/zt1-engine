@@ -136,47 +136,89 @@ void holdKey(const char *name, int ms) {
   }
 }
 
+// One command from the Lab app; false: quit
+bool command(const char *line) {
+  int x, y, w, h;
+  if (std::sscanf(line, "volume %d", &x) == 1) {
+    setSessionVolume(x / 100.0f);
+  } else if (bool screen = std::sscanf(line, "rect %d %d %d %d", &x, &y, &w, &h) == 4;
+             screen || std::sscanf(line, "place %d %d %d %d", &x, &y, &w, &h) == 4) {
+    // (place: in the Lab window's client area; rect: on the screen, as an
+    // older Lab says it. On top of the Lab's page, its sibling - and posted
+    // to the game's thread, not waited for)
+    POINT at{x, y};
+    if (screen)
+      ScreenToClient(g_owner, &at);
+    SetWindowPos(g_child, HWND_TOP, at.x, at.y, w > 1 ? w : 1, h > 1 ? h : 1, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
+    g_hidden = false;
+  } else if (std::strncmp(line, "hide", 4) == 0) {
+    ShowWindowAsync(g_child, SW_HIDE);
+    g_hidden = true;
+  } else if (std::strncmp(line, "show", 4) == 0) {
+    ShowWindowAsync(g_child, SW_SHOWNA);
+    g_hidden = false;
+  } else if (std::sscanf(line, "click %d %d", &x, &y) == 2) {
+    clickAt(x, y, SDL_BUTTON_LEFT);
+  } else if (std::sscanf(line, "rclick %d %d", &x, &y) == 2) {
+    clickAt(x, y, SDL_BUTTON_RIGHT);
+  } else if (std::sscanf(line, "move %d %d", &x, &y) == 2) {
+    // (the mouse there and left: hovering - a tooltip, a lit piece)
+    SDL_Event e{};
+    e.type = SDL_MOUSEMOTION;
+    e.motion.windowID = g_window ? SDL_GetWindowID(g_window) : 0;
+    e.motion.x = x;
+    e.motion.y = y;
+    SDL_PushEvent(&e);
+  } else if (std::strncmp(line, "snap", 4) == 0) {
+    g_snap = true;
+  } else if (std::strncmp(line, "dialog", 6) == 0) {
+    dialogCommand(line + 6);
+  } else if (char key[32] = {}; std::sscanf(line, "hold %31s %d", key, &x) == 2) {
+    holdKey(key, x);
+  } else if (std::strncmp(line, "focus", 5) == 0) {
+    // (a child can't be the window in front: the keyboard's given it with
+    // this thread's input joined to the game's for the moment)
+    DWORD game = GetWindowThreadProcessId(g_child, nullptr), self = GetCurrentThreadId();
+    AttachThreadInput(self, game, TRUE);
+    SetFocus(g_child);
+    AttachThreadInput(self, game, FALSE);
+  } else if (std::strncmp(line, "quit", 4) == 0) {
+    return false;
+  }
+  return true;
+}
+
 void listen() {
   // (stdin: one command a line, from the Lab app)
   CoInitializeEx(nullptr, COINIT_MULTITHREADED); // (for volume)
-  char line[256];
-  while (std::fgets(line, sizeof line, stdin)) {
-    int x, y, w, h;
-    if (std::sscanf(line, "volume %d", &x) == 1) {
-      setSessionVolume(x / 100.0f);
-    } else if (std::sscanf(line, "rect %d %d %d %d", &x, &y, &w, &h) == 4) {
-      SetWindowPos(g_child, nullptr, x, y, w > 1 ? w : 1, h > 1 ? h : 1, SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
-      g_hidden = false;
-    } else if (std::strncmp(line, "hide", 4) == 0) {
-      ShowWindow(g_child, SW_HIDE);
-      g_hidden = true;
-    } else if (std::strncmp(line, "show", 4) == 0) {
-      ShowWindow(g_child, SW_SHOWNA);
-      g_hidden = false;
-    } else if (std::sscanf(line, "click %d %d", &x, &y) == 2) {
-      clickAt(x, y, SDL_BUTTON_LEFT);
-    } else if (std::sscanf(line, "rclick %d %d", &x, &y) == 2) {
-      clickAt(x, y, SDL_BUTTON_RIGHT);
-    } else if (std::sscanf(line, "move %d %d", &x, &y) == 2) {
-      // (the mouse there and left: hovering - a tooltip, a lit piece)
-      SDL_Event e{};
-      e.type = SDL_MOUSEMOTION;
-      e.motion.windowID = g_window ? SDL_GetWindowID(g_window) : 0;
-      e.motion.x = x;
-      e.motion.y = y;
-      SDL_PushEvent(&e);
-    } else if (std::strncmp(line, "snap", 4) == 0) {
-      g_snap = true;
-    } else if (std::strncmp(line, "dialog", 6) == 0) {
-      dialogCommand(line + 6);
-    } else if (char key[32] = {}; std::sscanf(line, "hold %31s %d", key, &x) == 2) {
-      holdKey(key, x);
-    } else if (std::strncmp(line, "focus", 5) == 0) {
-      SetForegroundWindow(g_child);
-      SetFocus(g_child);
-    } else if (std::strncmp(line, "quit", 4) == 0) {
-      break;
+  // (the Lab's pixels as they are, on any monitor's scaling)
+  using DpiFn = HANDLE(WINAPI *)(HANDLE);
+  if (auto dpi = reinterpret_cast<DpiFn>(GetProcAddress(GetModuleHandleA("user32.dll"), "SetThreadDpiAwarenessContext")))
+    dpi(reinterpret_cast<HANDLE>(-4)); // (DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+  HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+  std::string buf;
+  char chunk[512];
+  DWORD n;
+  bool going = true;
+  while (going && in && ReadFile(in, chunk, sizeof chunk, &n, nullptr) && n) {
+    buf.append(chunk, n);
+    // (rect/place lines in a row - the Lab being dragged or resized - are
+    // only where it ended up: the last one's done, before what comes after)
+    std::string rect;
+    size_t nl;
+    while (going && (nl = buf.find('\n')) != std::string::npos) {
+      std::string line = buf.substr(0, nl);
+      buf.erase(0, nl + 1);
+      if (!line.compare(0, 5, "rect ") || !line.compare(0, 6, "place ")) {
+        rect = line;
+        continue;
+      }
+      if (!rect.empty())
+        command(rect.c_str()), rect.clear();
+      going = command(line.c_str());
     }
+    if (going && !rect.empty())
+      command(rect.c_str());
   }
   // (asked to, or the Lab app gone: the game goes too)
   g_quit = true;
@@ -197,18 +239,28 @@ bool into(SDL_Window *window, const char *ownerHandle) {
   g_owner = reinterpret_cast<HWND>(static_cast<uintptr_t>(std::strtoull(ownerHandle, nullptr, 0)));
   if (!g_child || !g_owner || !IsWindow(g_owner))
     return false;
-  // A borderless window owned by the Lab's (not a child: the Lab's page is
-  // drawn over child windows): it stays over it, minimises and hides with
-  // it, isn't on the taskbar, and the Lab puts it over its Play view in
-  // screen pixels
+  // A borderless child of the Lab's window, over its Play view: Windows
+  // moves it with the Lab's, in the same step (a window of its own, moved
+  // after, trailed behind a fast drag). The Lab draws its page without
+  // DirectComposition, or the page would cover it
   LONG style = GetWindowLong(g_child, GWL_STYLE);
-  style &= ~(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_CHILD);
-  style |= WS_POPUP;
+  style &= ~(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_POPUP);
+  style |= WS_CHILD | WS_CLIPSIBLINGS;
   SetWindowLong(g_child, GWL_STYLE, style);
   LONG ex = GetWindowLong(g_child, GWL_EXSTYLE);
-  SetWindowLong(g_child, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
-  SetWindowLongPtr(g_child, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(g_owner));
-  SetWindowPos(g_child, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_HIDEWINDOW);
+  // (its clicks aren't told to the Lab's page: it takes the keyboard back)
+  SetWindowLong(g_child, GWL_EXSTYLE, (ex | WS_EX_NOPARENTNOTIFY) & ~WS_EX_APPWINDOW);
+  SetParent(g_child, g_owner);
+  SetWindowPos(g_child, HWND_TOP, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW);
+  // (clicked: the keyboard to it, as a window of its own got it by being
+  // activated)
+  SDL_AddEventWatch(
+      [](void *, SDL_Event *e) -> int {
+        if (e->type == SDL_MOUSEBUTTONDOWN && GetWindowThreadProcessId(g_child, nullptr) == GetCurrentThreadId() && GetFocus() != g_child)
+          SetFocus(g_child);
+        return 0;
+      },
+      nullptr);
   g_active = true;
   std::thread(listen).detach();
   return true;
