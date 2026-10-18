@@ -29,7 +29,8 @@ jobs:
           npm install -g @coderook/cli >/dev/null
           cbx sign-in --token "$CODEROOK_TOKEN"
           cbx link zt1-engine .
-          # (--allow-private: cbx mistakes FreeType's src/cache, its font
-          # cache code, for a browser profile; --no-licence: LICENSE.txt is
-          # the licence)
-          cbx submit . --allow-private --no-licence -m "$(git log -1 --format=%s) (${GITHUB_SHA::7})"
+          # (--sync: a file that's left the repository leaves the mirror too,
+          # rather than staying from the last save; --allow-private: cbx
+          # mistakes FreeType's src/cache, its font cache code, for a browser
+          # profile; --no-licence: LICENSE.txt is the licence)
+          cbx submit . --sync --allow-private --no-licence -m "$(git log -1 --format=%s) (${GITHUB_SHA::7})"
