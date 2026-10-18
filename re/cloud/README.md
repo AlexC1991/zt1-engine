@@ -150,7 +150,26 @@ nothing, and `--all` to send everything rather than only your own work.
 
 A pull adds what the base has and this checkout does not, marked `shared` and
 `provisional`; it never overwrites an answer this checkout already has. Then
-`ZT1_Apply` in Ghidra shows it like anything else in the base.
+`ZT1_Apply` in Ghidra shows it like anything else in the base. It re-reads
+`re/knowledge.json` before each page it merges, so a name saved in the Lab
+while a pull is running isn't written over.
+
+`contribute` remembers what it sent (`re/private/cloud-sent.json`): a
+situation once, since the Worker counts every repeat as another run, and a
+finding by its key *and* what it says, so a finding corrected or renamed
+later goes up again while one sent as it is does not.
+
+### In the Lab: Sharing
+
+The Lab's header has a **Sharing** control (off until the player turns it
+on; `lab-app/renderer/sharing.js`, `main.js` shareTick). On, the Lab pulls
+and then contributes in the background - 30 s after it starts, then every
+half hour - sending only when `re/knowledge.json` has changed since its last
+send. The dialog says what is shared and what never is, when it last sent
+and received and what the server said, and has **Share now**. The setting
+and those times live in `re/private/sharing.json` (an installed Lab's own
+state). It runs `sync.py` as a separate process, so the Lab doesn't freeze
+while a whole base goes up.
 
 ## The API
 

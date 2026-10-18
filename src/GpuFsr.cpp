@@ -41,12 +41,22 @@ struct Gl {
   PFNGLUNIFORM1FPROC Uniform1f;
   PFNGLUNIFORM2FPROC Uniform2f;
   PFNGLUNIFORM4FPROC Uniform4f;
+  void(APIENTRY *CopyTexSubImage2D)(GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei);
+  PFNGLACTIVETEXTUREPROC ActiveTexture;
 };
 
 static Gl gl;
 static bool g_available = false;
+static bool g_upscaling = true; // (FSR picked for the art)
 static float g_con = 1.0f; // RCAS sharpness, as 2^-stops
-static GLuint g_easu = 0, g_rcas = 0;
+static GLuint g_easu = 0, g_rcas = 0, g_colour = 0, g_style = 0;
+static bool g_styled = false; // (Stylized picked: kStyle in RCAS's place)
+// The frame's colour pass: a 3x3 matrix (rows) and a gamma
+static float g_matrix[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+static float g_gamma = 1.0f;
+static bool g_colourOn = false;
+static SDL_Texture *g_frame = nullptr; // (the frame copied for it)
+static int g_frameW = 0, g_frameH = 0;
 
 struct LayerTargets {
   SDL_Texture *low = nullptr; // the art at 1:1
@@ -90,6 +100,9 @@ static bool loadGl() {
   ok &= load(gl.Uniform1f, "glUniform1f");
   ok &= load(gl.Uniform2f, "glUniform2f");
   ok &= load(gl.Uniform4f, "glUniform4f");
+  ok &= load(gl.CopyTexSubImage2D, "glCopyTexSubImage2D");
+  // (for mods' shaders: two textures at once - optional, FSR doesn't need it)
+  gl.ActiveTexture = reinterpret_cast<PFNGLACTIVETEXTUREPROC>(SDL_GL_GetProcAddress("glActiveTexture"));
   return ok;
 }
 
@@ -259,6 +272,82 @@ void main() {
 }
 )";
 
+// Stylized (in RCAS's place, on EASU's smooth-edged upscale): the look of
+// cel-shaded line art, after Anime4K's (bloc97, MIT) line darkening and
+// thinning. Along an edge (a Sobel gradient of the brightness) a pixel darker
+// than its neighbours goes to the darkest of them - the outlines dark,
+// crisp and steady - one lighter is sharpened against its neighbours, and
+// the colours are lifted (vibrance: the dull ones most, skin and sky not
+// blown out). strength: 0 to 1, from Art Sharpness
+static const char *kStyle = R"(
+#version 120
+uniform sampler2D src;
+uniform vec2 texSize;
+uniform vec4 dst;
+uniform float outH;
+uniform float flipY;
+uniform float strength;
+
+vec4 tap(vec2 p) {
+  p = clamp(p, vec2(0.0), dst.zw - 1.0);
+  return texture2D(src, (dst.xy + p + 0.5) / texSize);
+}
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+void main() {
+  vec2 frag = gl_FragCoord.xy;
+  if (flipY > 0.5)
+    frag.y = outH - frag.y;
+  vec2 p = floor(frag - dst.xy);
+  // a b c
+  // d e f
+  // g h i
+  vec4 a = tap(p + vec2(-1.0, -1.0)), b = tap(p + vec2(0.0, -1.0)), c = tap(p + vec2(1.0, -1.0));
+  vec4 d = tap(p + vec2(-1.0, 0.0)), e = tap(p), f = tap(p + vec2(1.0, 0.0));
+  vec4 g = tap(p + vec2(-1.0, 1.0)), h = tap(p + vec2(0.0, 1.0)), i = tap(p + vec2(1.0, 1.0));
+  float la = luma(a.rgb), lb = luma(b.rgb), lc = luma(c.rgb), ld = luma(d.rgb), le = luma(e.rgb);
+  float lf = luma(f.rgb), lg = luma(g.rgb), lh = luma(h.rgb), li = luma(i.rgb);
+  float gx = (lc + 2.0 * lf + li) - (la + 2.0 * ld + lg);
+  float gy = (lg + 2.0 * lh + li) - (la + 2.0 * lb + lc);
+  float edge = clamp(length(vec2(gx, gy)) * 2.0, 0.0, 1.0);
+  vec3 mean = (a.rgb + b.rgb + c.rgb + d.rgb + f.rgb + g.rgb + h.rgb + i.rgb) / 8.0;
+  vec3 mn = min(min(min(a.rgb, b.rgb), min(c.rgb, d.rgb)), min(min(f.rgb, g.rgb), min(h.rgb, i.rgb)));
+  float darker = clamp((luma(mean) - le) * 10.0, 0.0, 1.0);
+  vec3 o = e.rgb;
+  // the outline: to the darkest round it
+  o = mix(o, min(o, mn), edge * darker * strength);
+  // the rest: sharper against its neighbours
+  o += (e.rgb - mean) * 0.6 * strength * (1.0 - darker);
+  // vibrance (premultiplied colours: measured unpremultiplied)
+  float al = max(e.a, 1e-4);
+  vec3 u = clamp(o / al, 0.0, 1.0);
+  float sat = max(u.r, max(u.g, u.b)) - min(u.r, min(u.g, u.b));
+  float lu = luma(u);
+  u = mix(vec3(lu), u, 1.0 + 0.55 * strength * (1.0 - sat));
+  // and a touch more contrast round the middle
+  u = clamp((u - 0.5) * (1.0 + 0.12 * strength) + 0.5, 0.0, 1.0);
+  gl_FragColor = vec4(u * e.a, e.a);
+}
+)";
+
+// The frame's colours: each pixel times a 3x3 matrix, then a gamma. The
+// frame is copied from the window, whose rows and the copy's both run
+// bottom-up, so a pixel reads its own place
+static const char *kColour = R"(
+#version 120
+uniform sampler2D src;
+uniform vec2 size;
+uniform vec4 r0;
+uniform vec4 r1;
+uniform vec4 r2;
+uniform float gamma;
+void main() {
+  vec3 c = texture2D(src, gl_FragCoord.xy / size).rgb;
+  vec3 o = clamp(vec3(dot(r0.xyz, c), dot(r1.xyz, c), dot(r2.xyz, c)), 0.0, 1.0);
+  gl_FragColor = vec4(pow(o, vec3(1.0 / gamma)), 1.0);
+}
+)";
+
 static GLuint compile(GLenum type, const char *source, const char *what) {
   GLuint s = gl.CreateShader(type);
   gl.ShaderSource(s, 1, &source, nullptr);
@@ -323,6 +412,8 @@ bool init(SDL_Renderer *renderer, float sharpness) {
 
   g_easu = link(kEasu, "EASU");
   g_rcas = link(kRcas, "RCAS");
+  g_colour = link(kColour, "colour");
+  g_style = link(kStyle, "stylized");
   g_available = g_easu && g_rcas;
   SDL_Log("[GpuFsr] GPU FSR 1 %s (sharpness %.2f)",
           g_available ? "ready" : "unavailable", sharpness);
@@ -331,7 +422,226 @@ bool init(SDL_Renderer *renderer, float sharpness) {
 
 bool available() { return g_available; }
 
-bool upscales(float scale) { return g_available && scale > 1.001f; }
+void setSharpness(float sharpness) { g_con = std::exp2(-std::max(0.0f, sharpness)); }
+
+static SDL_Texture *target(SDL_Renderer *renderer, SDL_Texture *&tex, int &tw, int &th, int w, int h);
+static void fullQuad();
+
+bool upscales(float scale) { return g_available && g_upscaling && scale > 1.001f; }
+
+void setUpscaling(bool on) { g_upscaling = on; }
+
+void setStyled(bool on) { g_styled = on; }
+
+void setColour(int filter, float strength, float brightness) {
+  // A viewer's sight of each colour (Machado et al. 2009, severity 1), and
+  // where the difference they miss is moved to (Fidaner et al.: red-green
+  // into green and blue; blue-yellow into red and green)
+  static const float sim[4][3][3] = {
+      {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}},
+      {{0.152286f, 1.052583f, -0.204868f}, {0.114503f, 0.786281f, 0.099216f}, {-0.003882f, -0.048116f, 1.051998f}},
+      {{0.367322f, 0.860646f, -0.227968f}, {0.280085f, 0.672501f, 0.047413f}, {-0.011820f, 0.042940f, 0.968881f}},
+      {{1.255528f, -0.076749f, -0.178779f}, {-0.078411f, 0.930809f, 0.147602f}, {0.004733f, 0.691367f, 0.303900f}}};
+  static const float shiftRG[3][3] = {{0, 0, 0}, {0.7f, 1, 0}, {0.7f, 0, 1}};
+  static const float shiftBY[3][3] = {{1, 0, 0.7f}, {0, 1, 0.7f}, {0, 0, 0}};
+  filter = std::clamp(filter, 0, 3);
+  strength = std::clamp(strength, 0.0f, 1.0f);
+  const float(*shift)[3] = filter == 3 ? shiftBY : shiftRG;
+  // M = I + strength * shift * (I - sim)
+  for (int r = 0; r < 3; r++)
+    for (int c = 0; c < 3; c++) {
+      float e = 0.0f;
+      for (int k = 0; k < 3; k++)
+        e += shift[r][k] * ((k == c ? 1.0f : 0.0f) - sim[filter][k][c]);
+      g_matrix[r][c] = (r == c ? 1.0f : 0.0f) + (filter ? strength * e : 0.0f);
+    }
+  g_gamma = std::clamp(brightness, 0.25f, 4.0f);
+  g_colourOn = (filter != 0 && strength > 0.0f) || std::fabs(g_gamma - 1.0f) > 0.001f;
+}
+
+void finishFrame(SDL_Renderer *renderer) {
+  if (!g_available || !g_colour || !g_colourOn || !renderer)
+    return;
+  SDL_Texture *was = SDL_GetRenderTarget(renderer);
+  SDL_SetRenderTarget(renderer, nullptr);
+  int w = 0, h = 0;
+  SDL_GetRendererOutputSize(renderer, &w, &h);
+  if (w <= 0 || h <= 0 || !target(renderer, g_frame, g_frameW, g_frameH, w, h)) {
+    SDL_SetRenderTarget(renderer, was);
+    return;
+  }
+  SDL_RenderFlush(renderer);
+  GLint program = 0;
+  gl.GetIntegerv(GL_CURRENT_PROGRAM, &program);
+  GLboolean blendOn = gl.IsEnabled(GL_BLEND);
+  GLboolean scissorOn = gl.IsEnabled(GL_SCISSOR_TEST);
+  gl.Disable(GL_SCISSOR_TEST);
+  gl.Disable(GL_BLEND);
+  // The window's frame, as drawn, into the copy
+  SDL_GL_BindTexture(g_frame, nullptr, nullptr);
+  gl.CopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
+  // and back over the whole window through the colour pass
+  gl.Viewport(0, 0, w, h);
+  gl.UseProgram(g_colour);
+  gl.Uniform1i(gl.GetUniformLocation(g_colour, "src"), 0);
+  gl.Uniform2f(gl.GetUniformLocation(g_colour, "size"), float(w), float(h));
+  gl.Uniform4f(gl.GetUniformLocation(g_colour, "r0"), g_matrix[0][0], g_matrix[0][1], g_matrix[0][2], 0.0f);
+  gl.Uniform4f(gl.GetUniformLocation(g_colour, "r1"), g_matrix[1][0], g_matrix[1][1], g_matrix[1][2], 0.0f);
+  gl.Uniform4f(gl.GetUniformLocation(g_colour, "r2"), g_matrix[2][0], g_matrix[2][1], g_matrix[2][2], 0.0f);
+  gl.Uniform1f(gl.GetUniformLocation(g_colour, "gamma"), g_gamma);
+  fullQuad();
+  gl.UseProgram(static_cast<GLuint>(program));
+  if (blendOn)
+    gl.Enable(GL_BLEND);
+  if (scissorOn)
+    gl.Enable(GL_SCISSOR_TEST);
+  SDL_SetRenderTarget(renderer, was);
+}
+
+// ---------------------------------------------------------------- shaders
+// Mods' own shaders (ShaderMods.hpp): a fragment shader of theirs, linked
+// with our full-window vertex shader
+unsigned compileShader(const std::string &fragment, std::string &log) {
+  log.clear();
+  if (!g_available)
+    return log = "needs OpenGL on the graphics card", 0;
+  const char *src = fragment.c_str();
+  GLuint vs = compile(GL_VERTEX_SHADER, kVertex, "mod vertex");
+  GLuint fs = gl.CreateShader(GL_FRAGMENT_SHADER);
+  gl.ShaderSource(fs, 1, &src, nullptr);
+  gl.CompileShader(fs);
+  GLint ok = 0;
+  gl.GetShaderiv(fs, GL_COMPILE_STATUS, &ok);
+  if (!ok) {
+    char b[4096] = {};
+    gl.GetShaderInfoLog(fs, sizeof(b) - 1, nullptr, b);
+    log = b;
+    return 0;
+  }
+  GLuint p = gl.CreateProgram();
+  gl.AttachShader(p, vs);
+  gl.AttachShader(p, fs);
+  gl.LinkProgram(p);
+  gl.GetProgramiv(p, GL_LINK_STATUS, &ok);
+  if (!ok) {
+    char b[4096] = {};
+    gl.GetProgramInfoLog(p, sizeof(b) - 1, nullptr, b);
+    log = b;
+    return 0;
+  }
+  return p;
+}
+
+namespace {
+// The renderer's viewport, clip and scale - in the target's own pixels -
+// kept while a pass switches targets, put back after (SDL keeps them for
+// the window only)
+struct Kept {
+  SDL_Texture *target;
+  float sx, sy;
+  SDL_Rect view, clip;
+  bool clipped;
+  void keep(SDL_Renderer *r) {
+    target = SDL_GetRenderTarget(r);
+    SDL_RenderGetScale(r, &sx, &sy);
+    SDL_RenderSetScale(r, 1.0f, 1.0f);
+    SDL_RenderGetViewport(r, &view);
+    clipped = SDL_RenderIsClipEnabled(r);
+    SDL_RenderGetClipRect(r, &clip);
+    SDL_RenderSetScale(r, sx, sy);
+  }
+  void restore(SDL_Renderer *r) {
+    SDL_SetRenderTarget(r, target);
+    SDL_RenderSetScale(r, 1.0f, 1.0f);
+    SDL_RenderSetViewport(r, &view);
+    SDL_RenderSetClipRect(r, clipped ? &clip : nullptr);
+    SDL_RenderSetScale(r, sx, sy);
+  }
+};
+void setUniforms(GLuint prog, float w, float h, const std::vector<std::pair<std::string, float>> &u) {
+  gl.Uniform2f(gl.GetUniformLocation(prog, "uSize"), w, h);
+  gl.Uniform1f(gl.GetUniformLocation(prog, "uTime"), SDL_GetTicks() / 1000.0f);
+  for (const auto &[name, v] : u)
+    gl.Uniform1f(gl.GetUniformLocation(prog, name.c_str()), v);
+}
+} // namespace
+
+bool artPass(SDL_Renderer *renderer, unsigned prog, SDL_Texture *color, SDL_Texture *aux, SDL_Texture *out, int w,
+             int h, const std::vector<std::pair<std::string, float>> &uniforms) {
+  if (!g_available || !prog || !color || !aux || !out || !gl.ActiveTexture)
+    return false;
+  Kept k;
+  k.keep(renderer);
+  SDL_SetRenderTarget(renderer, out);
+  SDL_RenderFlush(renderer);
+  GLint program = 0;
+  gl.GetIntegerv(GL_CURRENT_PROGRAM, &program);
+  GLboolean blendOn = gl.IsEnabled(GL_BLEND), scissorOn = gl.IsEnabled(GL_SCISSOR_TEST);
+  gl.Disable(GL_SCISSOR_TEST);
+  gl.Disable(GL_BLEND);
+  gl.Viewport(0, 0, w, h);
+  // (the frame's colour on unit 0, its normals and height on unit 1; both
+  // read texel for texel)
+  SDL_SetTextureScaleMode(color, SDL_ScaleModeNearest);
+  SDL_SetTextureScaleMode(aux, SDL_ScaleModeNearest);
+  gl.ActiveTexture(GL_TEXTURE1);
+  SDL_GL_BindTexture(aux, nullptr, nullptr);
+  gl.ActiveTexture(GL_TEXTURE0);
+  SDL_GL_BindTexture(color, nullptr, nullptr);
+  gl.UseProgram(prog);
+  gl.Uniform1i(gl.GetUniformLocation(prog, "uColor"), 0);
+  gl.Uniform1i(gl.GetUniformLocation(prog, "uNormal"), 1);
+  setUniforms(prog, float(w), float(h), uniforms);
+  fullQuad();
+  gl.UseProgram(static_cast<GLuint>(program));
+  gl.ActiveTexture(GL_TEXTURE1);
+  SDL_GL_UnbindTexture(aux);
+  gl.ActiveTexture(GL_TEXTURE0);
+  if (blendOn)
+    gl.Enable(GL_BLEND);
+  if (scissorOn)
+    gl.Enable(GL_SCISSOR_TEST);
+  k.restore(renderer);
+  return true;
+}
+
+static SDL_Texture *g_screen = nullptr;
+static int g_screenW = 0, g_screenH = 0;
+
+bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pair<std::string, float>> &uniforms) {
+  if (!g_available || !prog || !renderer)
+    return false;
+  SDL_Texture *was = SDL_GetRenderTarget(renderer);
+  SDL_SetRenderTarget(renderer, nullptr);
+  int w = 0, h = 0;
+  SDL_GetRendererOutputSize(renderer, &w, &h);
+  if (w <= 0 || h <= 0 || !target(renderer, g_screen, g_screenW, g_screenH, w, h)) {
+    SDL_SetRenderTarget(renderer, was);
+    return false;
+  }
+  SDL_RenderFlush(renderer);
+  GLint program = 0;
+  gl.GetIntegerv(GL_CURRENT_PROGRAM, &program);
+  GLboolean blendOn = gl.IsEnabled(GL_BLEND), scissorOn = gl.IsEnabled(GL_SCISSOR_TEST);
+  gl.Disable(GL_SCISSOR_TEST);
+  gl.Disable(GL_BLEND);
+  // (the window's frame copied - its rows bottom-up, as the copy's: a
+  // pixel reads its own place at gl_FragCoord / uSize)
+  SDL_GL_BindTexture(g_screen, nullptr, nullptr);
+  gl.CopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
+  gl.Viewport(0, 0, w, h);
+  gl.UseProgram(prog);
+  gl.Uniform1i(gl.GetUniformLocation(prog, "uColor"), 0);
+  setUniforms(prog, float(w), float(h), uniforms);
+  fullQuad();
+  gl.UseProgram(static_cast<GLuint>(program));
+  if (blendOn)
+    gl.Enable(GL_BLEND);
+  if (scissorOn)
+    gl.Enable(GL_SCISSOR_TEST);
+  SDL_SetRenderTarget(renderer, was);
+  return true;
+}
 
 // A render target of exactly w x h, made or remade as needed
 static SDL_Texture *target(SDL_Renderer *renderer, SDL_Texture *&tex, int &tw,
@@ -437,15 +747,20 @@ void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
                          GL_ONE_MINUS_SRC_ALPHA);
   }
   SDL_GL_BindTexture(lt.mid, nullptr, nullptr);
-  gl.UseProgram(g_rcas);
-  gl.Uniform1i(gl.GetUniformLocation(g_rcas, "src"), 0);
-  gl.Uniform2f(gl.GetUniformLocation(g_rcas, "texSize"), float(outW),
+  // (Stylized: its pass in RCAS's place, its strength from the same slider)
+  const GLuint pass = g_styled && g_style ? g_style : g_rcas;
+  gl.UseProgram(pass);
+  gl.Uniform1i(gl.GetUniformLocation(pass, "src"), 0);
+  gl.Uniform2f(gl.GetUniformLocation(pass, "texSize"), float(outW),
                float(outH));
-  gl.Uniform4f(gl.GetUniformLocation(g_rcas, "dst"), float(dst.x),
+  gl.Uniform4f(gl.GetUniformLocation(pass, "dst"), float(dst.x),
                float(dst.y), float(dst.w), float(dst.h));
-  gl.Uniform1f(gl.GetUniformLocation(g_rcas, "outH"), float(outH));
-  gl.Uniform1f(gl.GetUniformLocation(g_rcas, "flipY"), 1.0f);
-  gl.Uniform1f(gl.GetUniformLocation(g_rcas, "con"), g_con);
+  gl.Uniform1f(gl.GetUniformLocation(pass, "outH"), float(outH));
+  gl.Uniform1f(gl.GetUniformLocation(pass, "flipY"), 1.0f);
+  if (pass == g_rcas)
+    gl.Uniform1f(gl.GetUniformLocation(pass, "con"), g_con);
+  else
+    gl.Uniform1f(gl.GetUniformLocation(pass, "strength"), std::clamp(g_con * 1.15f, 0.0f, 1.0f));
   fullQuad();
 
   // Put back what SDL's renderer expects. The bound texture is left as

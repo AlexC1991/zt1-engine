@@ -1,5 +1,8 @@
 #include "InputManager.hpp"
 
+#include "Features.hpp"
+#include "Window.hpp"
+
 extern float g_ZoomLevel;
 extern bool g_showDiagnostics;
 
@@ -38,10 +41,25 @@ std::vector<Input> InputManager::getInputs() {
           // Toggle the diagnostics overlay
           g_showDiagnostics = !g_showDiagnostics;
           input.event = InputEvent::NONE;
+        } else if (Features::hotkeys && !event.key.repeat &&
+                   (event.key.keysym.sym == SDLK_F11 ||
+                    (event.key.keysym.sym == SDLK_RETURN && (event.key.keysym.mod & KMOD_ALT)))) {
+          // (the hotkeys extra) Alt+Enter or F11: full screen on or off, as
+          // Windows games do (the original: the Game Options' button only)
+          if (SDL_Window *w = SDL_GetWindowFromID(event.key.windowID))
+            Window::setFullscreen(w, !(SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN));
+          input.event = InputEvent::NONE;
         } else {
           input.event = InputEvent::KEY_DOWN;
           input.key = event.key.keysym.sym;
         }
+        break;
+
+      case SDL_WINDOWEVENT:
+        // Moved, resized, maximised or back: the player's window, kept
+        if (event.window.event == SDL_WINDOWEVENT_MOVED || event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+            event.window.event == SDL_WINDOWEVENT_MAXIMIZED || event.window.event == SDL_WINDOWEVENT_RESTORED)
+          Window::windowChanged(SDL_GetWindowFromID(event.window.windowID));
         break;
 
       case SDL_TEXTINPUT:
@@ -95,6 +113,10 @@ std::vector<Input> InputManager::getInputs() {
         break;
     }
     
+    if (event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP) {
+      MouseEvents::x = input.position.x;
+      MouseEvents::y = input.position.y;
+    }
     if (input.type != InputType::NONE && input.event != InputEvent::NONE) {
         inputs.push_back(input);
     }

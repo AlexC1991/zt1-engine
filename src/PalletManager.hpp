@@ -21,6 +21,8 @@ public:
   // While loading art on this thread, frames naming 'from' use 'to'
   static void setOverride(const std::string &from, const std::string &to);
   static void clearOverrides();
+  // Whether art loading now is in a recoloured palette (an override set)
+  static bool overriding();
 
   void addPalletFileToMap(const std::string &pallet_file, std::string ztd_file);
   void loadPalletMap(std::atomic<float> * progress, float progress_goal);

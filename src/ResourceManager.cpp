@@ -209,6 +209,7 @@ void ResourceManager::load_resource_map(std::atomic<float> *progress,
   {
     std::vector<std::string> mods = Mods::enabledPaths();
     resource_paths.insert(resource_paths.begin(), mods.begin(), mods.end());
+    modPaths = static_cast<int>(mods.size());
     for (const std::string &m : mods)
       SDL_Log("Mod loaded: %s", m.c_str());
   }
@@ -826,8 +827,13 @@ static Animation *withArtOptions(Animation *a, const std::string &name,
   std::string dir = slash == std::string::npos ? "" : ani_key.substr(0, slash);
   if (lower.rfind("ui/", 0) == 0)
     a->setArtOptions(true, dir);
-  else
+  else {
     a->setWorldArt(dir);
+    // (loaded in a recoloured palette: its HD art, made from its own, is
+    // recoloured to match)
+    if (PalletManager::overriding())
+      a->setRecoloured(name);
+  }
   return a;
 }
 
@@ -911,12 +917,30 @@ Animation *ResourceManager::getAnimation(const std::string &name_raw) {
   return nullptr;
 }
 
-SDL_Cursor *ResourceManager::getCursor(uint32_t id, int hotX, int hotY) {
+SDL_Cursor *ResourceManager::getCursor(uint32_t id, int hotX, int hotY, int scale) {
   try {
     PeFile pe(config->getResDllName());
     SDL_Surface *s = pe.getCursor(id);
     if (!s)
       return nullptr;
+    // (bigger: each pixel a scale x scale square - Game Options >
+    // Accessibility > Cursor size)
+    if (scale > 1) {
+      if (SDL_Surface *big = SDL_CreateRGBSurfaceWithFormat(0, s->w * scale, s->h * scale, 32, SDL_PIXELFORMAT_ARGB8888)) {
+        SDL_Surface *src = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0);
+        if (src) {
+          SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
+          SDL_BlitScaled(src, nullptr, big, nullptr);
+          SDL_FreeSurface(src);
+          SDL_FreeSurface(s);
+          s = big;
+          hotX *= scale;
+          hotY *= scale;
+        } else {
+          SDL_FreeSurface(big);
+        }
+      }
+    }
     SDL_Cursor *c = SDL_CreateColorCursor(s, hotX, hotY);
     SDL_FreeSurface(s);
     return c;

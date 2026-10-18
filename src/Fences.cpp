@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include "Fences.hpp"
+#include "Features.hpp"
 #include <random>
 #include "Sound.hpp"
 
@@ -12,6 +13,101 @@
 #include "Animation.hpp"
 #include "IniReader.hpp"
 #include "ItemCatalog.hpp"
+#include "RenderSettings.hpp"
+
+// Art laid edge to edge drawn as one picture: at the art's own size into a
+// clear layer, then the layer enlarged into place. A tank's glass and water
+// sides are slanted pieces meeting along stepped edges, a height unit apart:
+// each enlarged on its own (at a fractional zoom, every piece starting from
+// a slightly different pixel) the steps of one no longer met the next's, a
+// line at every piece - in every art look. Drawn 1:1 (or smaller) as it is
+static void layered(SDL_Renderer *r, const std::function<void()> &draw) {
+  float sx = 1.0f, sy = 1.0f;
+  SDL_RenderGetScale(r, &sx, &sy);
+  if (sx <= 1.001f && sy <= 1.001f) {
+    RenderSettings::layeredDirect++;
+    draw();
+    return;
+  }
+  RenderSettings::layeredRuns++;
+  // (what's set now, to put back after: the clip in the screen's own pixels -
+  // the strips' clips are set that way, each edge rounded once; asked and put
+  // back in the zoomed view's units, each lost up to a pixel, and a column
+  // between two strips was left undrawn - the grass showing through)
+  SDL_Texture *was = SDL_GetRenderTarget(r);
+  SDL_Rect view, devView, devClip;
+  SDL_RenderGetViewport(r, &view);
+  const bool clipped = SDL_RenderIsClipEnabled(r);
+  SDL_RenderSetScale(r, 1.0f, 1.0f);
+  SDL_RenderGetClipRect(r, &devClip);
+  // (and the viewport: asked in the view's units it comes back rounded, and
+  // set back it moved the rest of the frame by up to a pixel)
+  SDL_RenderGetViewport(r, &devView);
+  SDL_RenderSetScale(r, sx, sy);
+  // The part to draw, in the view's units: the clip's, a unit wider each
+  // way (the clip, put back, cuts it exactly), kept to the view - a tank's
+  // end strips reach a billion pixels out each way
+  SDL_Rect whole = {0, 0, view.w, view.h}, clip = whole;
+  if (clipped) {
+    int x0 = static_cast<int>(std::floor(devClip.x / sx)) - 1, y0 = static_cast<int>(std::floor(devClip.y / sy)) - 1;
+    int x1 = static_cast<int>(std::ceil((devClip.x + devClip.w) / sx)) + 1;
+    int y1 = static_cast<int>(std::ceil((devClip.y + devClip.h) / sy)) + 1;
+    SDL_Rect want = {x0, y0, x1 - x0, y1 - y0};
+    if (!SDL_IntersectRect(&want, &whole, &clip))
+      return;
+  }
+  if (clip.w <= 0 || clip.h <= 0)
+    return;
+  static SDL_Texture *layer = nullptr;
+  static int lw = 0, lh = 0;
+  if (!layer || lw < view.w || lh < view.h) {
+    if (layer)
+      SDL_DestroyTexture(layer);
+    lw = std::max(lw, view.w);
+    lh = std::max(lh, view.h);
+    layer = SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, lw, lh);
+    if (layer)
+      // (drawn over clear black, its colours already carry their alpha)
+      SDL_SetTextureBlendMode(layer, SDL_ComposeCustomBlendMode(
+                                         SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD,
+                                         SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD));
+  }
+  if (!layer) {
+    draw();
+    return;
+  }
+  SDL_SetRenderTarget(r, layer);
+  SDL_RenderSetScale(r, 1.0f, 1.0f);
+  SDL_RenderSetViewport(r, nullptr);
+  SDL_RenderSetClipRect(r, &clip);
+  SDL_BlendMode mode;
+  SDL_GetRenderDrawBlendMode(r, &mode);
+  SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+  SDL_SetRenderDrawColor(r, 0, 0, 0, 0);
+  SDL_RenderFillRect(r, &clip);
+  SDL_SetRenderDrawBlendMode(r, mode);
+  const bool zoomedIn = RenderSettings::worldZoomedIn;
+  RenderSettings::worldZoomedIn = false; // (the art's own frames, 1:1)
+  // (each piece on whole pixels, as at 1x: zoomed in, the view sits at a
+  // fraction of a pixel, and pieces half a pixel out drew a line at each join)
+  const bool snapWas = RenderSettings::snapEdges;
+  RenderSettings::snapEdges = true;
+  draw();
+  RenderSettings::snapEdges = snapWas;
+  RenderSettings::worldZoomedIn = zoomedIn;
+  SDL_SetTextureScaleMode(layer, RenderSettings::lookFor(sx));
+  SDL_SetRenderTarget(r, was);
+  // (the viewport and clip in the screen's pixels as they were)
+  SDL_RenderSetScale(r, 1.0f, 1.0f);
+  SDL_RenderSetViewport(r, &devView);
+  SDL_RenderSetClipRect(r, clipped ? &devClip : nullptr);
+  SDL_RenderSetScale(r, sx, sy);
+  SDL_FRect dst = {static_cast<float>(clip.x), static_cast<float>(clip.y), static_cast<float>(clip.w),
+                   static_cast<float>(clip.h)};
+  SDL_RenderCopyF(r, layer, &clip, &dst);
+}
+
+void drawLayered(SDL_Renderer *renderer, const std::function<void()> &draw) { layered(renderer, draw); }
 #include "ResourceManager.hpp"
 #include "Utils.hpp"
 #include "WorldMap.hpp"
@@ -394,6 +490,17 @@ Fences::Fit Fences::fit(const Edge &e, const WorldMap &map) const {
     return Fit::InTheWay;
   // The tiles either side: inside the zoo, not water, no building
   int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
+  // Across a path (a path tile both sides): not with Features::noFenceOnPath
+  // (the original lets it, and a tank then asks to clear the path, 10552);
+  // along a path's side is fine
+  if (Features::noFenceOnPath && map.isPath(ax, ay) && map.isPath(e.x, e.y))
+    return Fit::InTheWay;
+  // Not inside a tank (its water): a wall there stood on the water at the
+  // ground's height, over the tank's own (its edge has its wall already,
+  // refused above)
+  for (auto [tx, ty] : {std::make_pair(ax, ay), std::make_pair(e.x, e.y)})
+    if (const Exhibit *x = this->exhibit(this->exhibitAt(tx, ty)); x && x->tank)
+      return Fit::InTheWay;
   Fit worst = Fit::Ok;
   for (auto [tx, ty] : {std::make_pair(ax, ay), std::make_pair(e.x, e.y)}) {
     Fit f = this->tileFit(tx, ty, map);
@@ -611,7 +718,11 @@ void Fences::remove(const Edge &e, WorldMap &map) {
   int tank = it->second.tank;
   if (tank >= 0) {
     if (Exhibit *ex = this->exhibit(tank)) {
+      // (its sea animals go into crates: string 160, "...put any marine
+      // animals in boxes")
+      this->lostTanks.push_back(ex->tiles);
       this->drainTank(*ex);
+      this->restoreGround(*ex, map);
       for (const Edge &w : boundaryOf(*ex)) {
         auto p = this->edges.find(w);
         if (p != this->edges.end() && (p->second.tank == tank || p->second.tank < 0) &&
@@ -780,8 +891,13 @@ std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int y
         taken[id] = true;
     }
     if (!still) {
-      if (it->tank)
+      if (it->tank) {
         this->drainTank(*it);
+        if (!loading)
+          this->restoreGround(*it, map);
+        if (!loading)
+          this->lostTanks.push_back(it->tiles);
+      }
       it = this->exhibitList.erase(it);
     } else {
       ++it;
@@ -921,11 +1037,22 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
   ex.floorHeight = std::max(-12, ground - kTankSink); // (0x458c6a: floors -12..12)
   for (auto [x, y] : ex.tiles)
     if (MapTile *t = map.getTileMutable(x, y)) {
+      Exhibit::Ground &g = ex.before[{x, y}];
+      g.height = t->height;
+      for (int c = 0; c < 4; c++)
+        g.corner[c] = t->cornerHeight[c];
+      g.terrain = t->terrainType;
       for (int c = 0; c < 4; c++)
         t->cornerHeight[c] = ex.floorHeight;
       t->height = ex.floorHeight;
       t->terrainType = kTankTerrain;
     }
+  // Paths inside go: the original clears each tank tile's path piece (tile
+  // +0x81, the path's shape - 0x416504 - set to 0 at zoo.exe 0x45e8c8, in
+  // 0x45b92f; not while a zoo loads, and this isn't reached then)
+  for (auto [x, y] : ex.tiles)
+    if (map.isPath(x, y))
+      map.setPath(x, y, "");
   map.touch();
   SDL_Log("[Fences] tank %d: %zu tiles sunk from %d to %d", ex.id, ex.tiles.size(),
           ex.groundHeight, ex.floorHeight);
@@ -947,7 +1074,32 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
   ex.level = -1e9f;
 }
 
-// The water and the tall walls go; the hole stays
+void Fences::restoreGround(Exhibit &ex, WorldMap &map) {
+  if (!Features::tankGroundBack)
+    return;
+  for (auto [x, y] : ex.tiles)
+    if (MapTile *t = map.getTileMutable(x, y)) {
+      auto it = ex.before.find({x, y});
+      if (it != ex.before.end()) {
+        t->height = it->second.height;
+        for (int c = 0; c < 4; c++)
+          t->cornerHeight[c] = it->second.corner[c];
+        t->terrainType = it->second.terrain;
+      } else {
+        // (a tank from an older save: level with the ground it sank from,
+        // grass)
+        t->height = ex.groundHeight;
+        for (int c = 0; c < 4; c++)
+          t->cornerHeight[c] = ex.groundHeight;
+        t->terrainType = 0;
+      }
+    }
+  ex.before.clear();
+  map.touch();
+}
+
+// The water and the tall walls go; the hole stays (as the original - or
+// the ground back, restoreGround)
 void Fences::drainTank(Exhibit &ex) {
   ex.water = 0;
   ex.tank = false;
@@ -971,7 +1123,9 @@ void Fences::drainExhibit(int id) {
 
 void Fences::fillExhibit(int id, bool salt) {
   Exhibit *ex = this->exhibit(id);
-  if (!ex || ex->groundHeight == ex->floorHeight)
+  // (a tank's plot: its floor moved off the ground - or, raised level with
+  // it on Tank Adjustment, still a tank)
+  if (!ex || (!ex->tank && ex->groundHeight == ex->floorHeight))
     return;
   ex->tank = true;
   ex->salt = salt;
@@ -1033,8 +1187,11 @@ bool Fences::canAdjustBase(int id, int step) const {
   const Exhibit *ex = this->exhibit(id);
   if (!ex || !ex->tank || !this->mapEdit)
     return false;
+  // (as the original: Adjust Base, 0x46937e, takes the floor a step and
+  // 0x458c6a clamps it to -12..12 - nothing more: above the ground round
+  // it too, a tank standing up out of the land)
   int floor = ex->floorHeight + step;
-  return floor < ex->groundHeight && floor >= -12; // (0x458c6a: -12..12)
+  return floor <= 12 && floor >= -12;
 }
 
 void Fences::adjustBase(int id, int step) {
@@ -1815,6 +1972,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
                                            SDL_Color{255, 255, 255, kGlassAlpha}, true}
                                 : Drawable{order, sx, sy, tp.art, tp.ladder ? ladderSide(view, ts) : side,
                                            litLadder ? SDL_Color{255, 255, 80, 255} : tint, tinted || litLadder};
+          d.seamless = !tinted;
           if (tinted || tp.height >= ts.outside + 0.01f) {
             out.push_back(d);
             continue;
@@ -2183,7 +2341,9 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       for (const Sprite &sp : all) {
         float l, rr;
         bounds(sp, l, rr);
-        if (rr > st.x0 && l < st.x1)
+        // (and what's just past its edges: enlarged smoothly, a strip's edge
+        // pixel blends in the one beyond - left out, a light seam showed)
+        if (rr > st.x0 - 2.0f && l < st.x1 + 2.0f)
           some.push_back(sp);
       }
       return some;
@@ -2206,11 +2366,22 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       const int tankId = ex.id;
       part.custom = [this, back = back1, water = water1, frontLow = front1, cover = cover1, rims, wet, level,
                      vp, tankId](SDL_Renderer *r) {
-      for (const Sprite &s : back)
-        s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr);
+      // The tank's walls and water are pieces laid edge to edge (a height
+      // unit each, up the glass): drawn bigger and smoothed piece by piece,
+      // each one's soft edge left a line where it meets the next. They're
+      // drawn with hard pixel edges whatever the art look (flat see-through
+      // colour, they look the same); what swims in the tank stays as picked
+      // So each group of them is drawn at the art's own size into a layer and
+      // the layer enlarged as one picture (Fences::layered); what swims in
+      // the tank is drawn between them, at the zoom, as it was
+      layered(r, [&] {
+        for (const Sprite &s : back)
+          s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr);
+      });
       // (what's in the tank under the water, the water over it)
       if (this->drawTankContents)
         this->drawTankContents(r, tankId, false, level);
+      layered(r, [&] {
       // (the art's diamond - its top, right, bottom and left points - a
       // little inside its stepped edge, whose outer pixels are clear)
       static const SDL_FPoint diamond[4] = {
@@ -2220,12 +2391,15 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           s.art->drawMapped(r, s.side, s.frame, s.q, diamond, s.tint);
         else
           s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr, s.frame);
+      });
       if (this->drawTankContents)
         this->drawTankContents(r, tankId, true, level);
       (void)wet;
       (void)level;
-      for (const Sprite &s : frontLow)
-        s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr);
+      layered(r, [&] {
+        for (const Sprite &s : frontLow)
+          s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr);
+      });
       if (this->redrawGround)
         this->redrawGround(r, cover);
       SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);

@@ -495,7 +495,7 @@ UiAction UiButton::getActionBasedOnName() {
     } else {
     // In-game HUD buttons (ui/main.lyt, ids 1000-1099) report their id
     if (this->id == 7112 || this->id == 7113 || this->id == 11511 || this->id == 11512 || this->id == 50008 ||
-        this->id == 11513 || this->id == 7141 || this->id == 7143 || (this->id >= 1000 && this->id < 1100)) {
+        this->id == 11513 || this->id == 7141 || this->id == 7143 || this->id == 7144 || this->id == 7145 || (this->id >= 1000 && this->id < 1100)) {
       action = static_cast<UiAction>(this->id);
     }
   }

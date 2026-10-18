@@ -1,0 +1,16 @@
+{
+  "name": "ZT1 Toon Shaders",
+  "author": "ZT1 Engine",
+  "version": "1.0",
+  "about": "A toon shader for the map's animals, people, fences and objects (flat colour, hard shadows, tinted shade, gloss, rim light, ink outlines), and a colour grade for the whole picture. Settings in Game Options > Shaders. Also an example of a shader mod: see shaders/*.json and *.frag.",
+  "replaces": [],
+  "settings": [
+    {
+      "name": "peopleOnly",
+      "label": "Animals and people only",
+      "about": "Only animals and people get the toon look; fences, buildings and objects stay as drawn.",
+      "type": "toggle",
+      "value": false
+    }
+  ]
+}

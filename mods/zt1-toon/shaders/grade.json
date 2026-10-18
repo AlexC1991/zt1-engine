@@ -1,0 +1,11 @@
+{
+  "name": "Toon Colour Grade",
+  "about": "The whole picture with livelier colour and a touch more contrast. A screen shader: everything, menus too.",
+  "stage": "screen",
+  "shader": "grade.frag",
+  "on": false,
+  "settings": [
+    {"name": "strength", "label": "Vibrance", "min": 0, "max": 1, "value": 0.45, "about": "How much the dull colours are lifted."},
+    {"name": "contrast", "label": "Contrast", "min": 0, "max": 0.5, "value": 0.08, "about": "A little more difference between light and dark."}
+  ]
+}

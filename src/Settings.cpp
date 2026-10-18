@@ -133,6 +133,8 @@ void apply() {
   // Scrolling at the window's edge: [UI] mouseScrollX, 32 by default
   // (0x51a33c)
   World::kEdgeScrollPixels = static_cast<float>(std::clamp(getInt("UI", "mouseScrollX", 32), 8, 128));
+  // ours: whether the window's edge scrolls at all ([user] edgescroll, on)
+  World::kEdgeScrollOn = getInt("user", "edgescroll", 1) != 0;
 }
 
 } // namespace Settings

@@ -73,6 +73,15 @@ void ZooItems::removeIn(int exhibit, Kind kind) {
                    this->list.end());
 }
 
+void ZooItems::removeOn(const std::set<std::pair<int, int>> &tiles) {
+  this->list.erase(std::remove_if(this->list.begin(), this->list.end(),
+                                  [&](const Item &i) {
+                                    return i.kind != Kind::Litter &&
+                                           tiles.count({static_cast<int>(std::floor(i.x)), static_cast<int>(std::floor(i.y))});
+                                  }),
+                   this->list.end());
+}
+
 float ZooItems::foodIn(int exhibit) const {
   float n = 0;
   for (const Item &i : this->list)
@@ -104,6 +113,7 @@ std::vector<int> ZooItems::ofKind(Kind kind, int exhibit) const {
 }
 
 void ZooItems::update(float seconds, const Fences &fences) {
+  this->clock += seconds;
   for (Item &i : this->list) {
     if (i.kind != Kind::Food)
       continue;
@@ -159,6 +169,10 @@ void ZooItems::collect(const WorldRenderer &view, const WorldMap &map,
     float h = t ? static_cast<float>(t->height) : 0;
     float sx, sy, depth;
     view.worldToScreenF(i.x, i.y, h, sx, sy, depth);
-    out.push_back({depth - 0.01f, sx, sy, a, CompassDirection::SE, white, false});
+    Fences::Drawable d{depth - 0.01f, sx, sy, a, CompassDirection::SE, white, false};
+    // (its frames play, as the original's do: each item from its own start)
+    uint32_t ms = a->frameTimeMs() ? a->frameTimeMs() : 100;
+    d.frame = static_cast<int>((this->clock + i.id * 0.37f) * 1000.0f / ms);
+    out.push_back(d);
   }
 }

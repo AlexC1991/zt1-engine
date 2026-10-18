@@ -394,7 +394,7 @@ const TOOLS = {
     run: (a) => call('engineLog', a),
   },
   lab_play: {
-    description: 'Play view: start (start: true) or stop the whole game inside the Lab - our engine, or game: "original" for the real zoo.exe (windowed by our hook, src/original/). shot: a .png path - a picture of the original as it draws (it isn’t in lab_screenshot).',
+    description: 'Play view: start (start: true) or stop the whole game inside the Lab - our engine, or game: "original" for the real zoo.exe (windowed by our hook, src/original/). shot: a .png path - a picture of the game in Play as it draws, ours or the original (neither is in lab_screenshot).',
     schema: { start: { type: 'boolean' }, game: { type: 'string', enum: ['engine', 'original'] }, shot: { type: 'string' } },
     run: (a) => call('play', a),
   },

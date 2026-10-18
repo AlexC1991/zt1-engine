@@ -372,6 +372,34 @@ def seen_from(kb, who="", client=""):
     return out
 
 
+# How sure each confidence is, for telling a placeholder from an answer
+RANK = {"guess": 0, "likely": 1, "sure": 2}
+
+
+def placeholder(v):
+    """An entry that is not yet anybody's answer: no name, or a name the Lab
+    made up itself (provisional, a guess - "gxvidman_4e027a" from the game's
+    text). A shared name may take its place; what a person worked out stays."""
+    if not isinstance(v, dict):
+        return False
+    if not (v.get("name") or "").strip():
+        return True
+    return bool(v.get("provisional")) and (v.get("confidence") or "guess") == "guess" and not v.get("shared")
+
+
+def better_name(local, e):
+    """Whether a shared finding names a placeholder for real: a different
+    name, and either the placeholder had none or the shared one is surer.
+    A guess never replaces a guess - the Lab's own made-up names travel up
+    and back down unchanged, and those are no news."""
+    name = (e.get("name") or "").strip()
+    if not name or not placeholder(local) or name == (local.get("name") or "").strip():
+        return False
+    if not (local.get("name") or "").strip():
+        return True
+    return RANK.get(e.get("confidence") or "guess", 0) > RANK.get(local.get("confidence") or "guess", 0)
+
+
 def merge(kb, pulled):
     """What came down goes in, as provisional.
 
@@ -397,7 +425,22 @@ def merge(kb, pulled):
         }
         if kind == "function":
             where = kb.setdefault("functions", {})
-            if key not in where:
+            better = key in where and better_name(where[key], e)
+            if better:
+                # (a placeholder named for real: the name, what it does and
+                #  how sure, from the shared base - what else it held, such as
+                #  where it came from, stays; the placeholder's name is kept)
+                old = where[key]
+                where[key] = {
+                    **old,
+                    **shared,
+                    "name": e.get("name") or "",
+                    "summary": e.get("summary") or old.get("summary") or "",
+                    "confidence": e.get("confidence") or "likely",
+                    "was": old.get("name") or "",
+                }
+                added["findings"] += 1
+            elif key not in where:
                 where[key] = {
                     **shared,
                     "name": e.get("name") or "",
@@ -407,7 +450,18 @@ def merge(kb, pulled):
                 added["findings"] += 1
         elif kind == "global":
             where = kb.setdefault("globals", {})
-            if key not in where:
+            if key in where and better_name(where[key], e):
+                old = where[key]
+                where[key] = {
+                    **old,
+                    **shared,
+                    "name": e.get("name") or "",
+                    "summary": e.get("summary") or old.get("summary") or "",
+                    "confidence": e.get("confidence") or "likely",
+                    "was": old.get("name") or "",
+                }
+                added["findings"] += 1
+            elif key not in where:
                 where[key] = {
                     **shared,
                     "name": e.get("name") or "",
@@ -527,6 +581,11 @@ def cmd_pull(a):
         total_s += len(got_s)
         if pages == 1:
             say(f"  {said.get('label')}: reading it a page at a time")
+        # (the file as it is now, not as it was when the pull began: the Lab
+        #  pulls in the background, and a function named in the meantime
+        #  must not be written over by this page)
+        if not a.dry_run:
+            kb = read_json(KB, kb)
         adding = merge(kb, said)
         n_added = sum(adding.values())
         # (kept as it goes: a long pull that is interrupted must not throw away
@@ -553,6 +612,14 @@ def cmd_pull(a):
         say(f"  (dry run: re/knowledge.json not written; {unsaved} things would be added)")
         return
     say("  re/knowledge.json is up to date (what came down is marked shared and provisional)")
+
+
+def entry_mark(e):
+    """What marks a finding as sent: its key and what it says. A finding
+    changed since (renamed, its summary corrected, made sure) is sent again;
+    one sent as it is now is not. Who found it is left out of the print."""
+    said = json.dumps({k: v for k, v in e.items() if k != "by"}, sort_keys=True, ensure_ascii=False)
+    return f"{e['kind']}|{e['key']}|{hashlib.sha1(said.encode('utf-8')).hexdigest()[:16]}"
 
 
 def cmd_contribute(a):
@@ -587,7 +654,10 @@ def cmd_contribute(a):
     sent_s = set(marks.get("seen") or [])
     before_e, before_s = len(entries), len(seen)
     if sent_e or sent_s:
-        entries = [e for e in entries if f"{e['kind']}|{e['key']}" not in sent_e]
+        # (a finding by what it says now, not only its key: one improved
+        #  since it went up goes again - keyed alone, a renamed function
+        #  would never have reached anybody)
+        entries = [e for e in entries if entry_mark(e) not in sent_e]
         seen = [s for s in seen if f"{s['addr']}|{s['from']}|{s['when']}" not in sent_s]
     skipped = (before_e - len(entries)) + (before_s - len(seen))
     say(f"  sending {len(entries)} findings, {len(seen)} situations"
@@ -633,7 +703,7 @@ def cmd_contribute(a):
         # (this piece is on its way: remember it, so an interrupted send can be
         #  resumed without resending what already landed)
         for e in body["entries"]:
-            sent_e.add(f"{e['kind']}|{e['key']}")
+            sent_e.add(entry_mark(e))
         for s in body["seen"]:
             sent_s.add(f"{s['addr']}|{s['from']}|{s['when']}")
         write_json(MARKS, {"entries": sorted(sent_e), "seen": sorted(sent_s)})

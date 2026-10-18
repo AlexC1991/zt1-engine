@@ -748,7 +748,8 @@ const CONTROL = {
   // ---- Play
   async play({ start, game, shot }) {
     setTab('play');
-    // (shot: a picture of the original as it's drawn, saved at that .png)
+    // (shot: a picture of the game in Play, ours or the original, as it's
+    // drawn, saved at that .png)
     if (shot) return lab.playShot(shot);
     if (start && !S.play.running) await (game === 'original' ? ACTIONS.playOriginal() : ACTIONS.playStart());
     // (only start: false stops it - no start at all just asks what's running)

@@ -22,6 +22,8 @@ void PalletManager::setOverride(const std::string &from, const std::string &to) 
 
 void PalletManager::clearOverrides() { g_overrides.clear(); }
 
+bool PalletManager::overriding() { return !g_overrides.empty(); }
+
 void PalletManager::addPallet(const std::string &name, const Pallet &pallet) {
   this->pallet_map[Utils::string_to_lower(name)] = pallet;
 }

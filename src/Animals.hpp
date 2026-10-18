@@ -53,6 +53,8 @@ public:
   struct Type {
     std::string file, key;
     int nameId = 0, cost = 0, expansion = 0;
+    // Its name: cNameID's text, or an APE download's own cName (CatalogItem::name)
+    std::string displayName;
     bool dinosaur = false; // [Member] dinosaur: scientists look after it, not keepers
     // Speeds (cSlowRate, cMediumRate, cFastRate): staff walk at their
     // cSlowRate / 60 tiles a second (a keeper's 33: the 0.55 measured)
@@ -357,6 +359,10 @@ public:
   // A keeper's dart (asleep where it is) and crate
   void tranquilise(int id);
   void box(int id);
+  // A tank taken apart: the sea animals on its tiles crated where they are
+  // (zoo.exe 0x458c2b with 0: each unit of a water-living type, 0x45da65,
+  // through 0x505941 - the land ones and the objects stay as they were)
+  void boxSeaAnimals(const std::set<std::pair<int, int>> &tiles);
   // Fences broken getting out, taken (the world breaks them)
   std::vector<Fences::Edge> takeBreaks() {
     std::vector<Fences::Edge> b;
@@ -431,7 +437,11 @@ public:
   float tankTargetHeight(Member &m, const std::string &target);
   Animation *art(const Member &m, const std::string &name) const;
   Animation *preview(int type, bool female) const;
-  Animation *crate() const { return this->crateArt; }
+  // Its crate: its own box_idle ([<subtype>/Animations], the adult's
+  // else - a sea animal's aquabox, a dinosaur's dinobox: ZTAnimalType's
+  // +0xd4, 0x4b64cf, names the box state's animation "box_idle"), else
+  // the plain objects/box
+  Animation *crate(const Member &m) const;
   // "Recently", "A short time ago", "A long time ago"
   static int agoText(double since, bool slept);
   // Its carer as the animal panel shows it (zoo.exe 0x4831b2): 0 the

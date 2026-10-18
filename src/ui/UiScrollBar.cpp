@@ -39,12 +39,15 @@ UiScrollBar::UiScrollBar(IniReader *ini_reader,
   this->up_arrow = loadPart(ini_reader, resource_manager, name, "upArrow");
   this->down_arrow = loadPart(ini_reader, resource_manager, name, "downArrow");
   this->thumb = loadPart(ini_reader, resource_manager, name, "thumb");
+  // (every slider in the game's layouts gives a dx; the scrollbars their
+  // lists name never do)
+  this->placed = ini_reader->getInt(name, "dx", 0) > 0;
 }
 
 UiScrollBar::~UiScrollBar() {}
 
 bool UiScrollBar::visible() const {
-  return slider() || owner->getScrollMaximum() > 0;
+  return slider() ? this->placed : owner->getScrollMaximum() > 0;
 }
 
 // (a slider: the value under the mouse, along the bar)
@@ -84,10 +87,11 @@ UiAction UiScrollBar::handleInputs(std::vector<Input> &inputs) {
         drag_offset = inside(thumb_rect, mx, my) ? mx - thumb_rect.x : thumb_rect.w / 2;
         sliderTo(mx);
       } else if (input.event == InputEvent::CURSOR_MOVE && dragging) {
-        if (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK)
-          sliderTo(mx);
-        else
-          dragging = false;
+        sliderTo(mx);
+      } else if (input.event == InputEvent::LEFT_RELEASE) {
+        // (let go, from the mouse's own events - not the mouse's state, so
+        // a drag made of events, as the Lab's, works the same)
+        dragging = false;
       }
     }
     return UiAction::NONE;

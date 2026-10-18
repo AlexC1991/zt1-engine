@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <set>
+#include <sstream>
 
 #include "../ItemCatalog.hpp"
 #include "../Research.hpp"
@@ -13,6 +14,7 @@
 #include "../Settings.hpp"
 #include "../RenderSettings.hpp"
 #include "../Embed.hpp"
+#include "../Window.hpp"
 #include "UiScrollBar.hpp"
 #include <cstring>
 #include <map>
@@ -34,17 +36,78 @@
 static const int kExtrasPage = 904, kExtrasTab = 1509, kExtrasFirst = 9050;
 static std::string extrasLabel(const std::string &name) {
   static const std::map<std::string, std::string> labels = {
-      {"allunlocked", "All items unlocked"}, {"fencemodes", "Fence modes"},
-      {"staffpaths", "Staff on paths"},      {"smoothroutes", "Smooth walking"},
-      {"maptooltips", "Map hints"},          {"elevatedpaths", "Raised walkways"},
-      {"pathmodes", "Path modes"},           {"hotkeys", "Extra hotkeys"},
-      {"mods", "Load mods"},                 {"modmenu", "Mod menu"},
-      {"updatechecks", "Update checks"}};
+      {"allunlocked", "All unlocked"},   {"fencemodes", "Fence modes"},
+      {"staffpaths", "Staff on paths"},  {"smoothroutes", "Smooth walking"},
+      {"maptooltips", "Map hints"},      {"elevatedpaths", "Raised paths"},
+      {"pathmodes", "Path modes"},       {"hotkeys", "Extra hotkeys"},
+      {"mods", "Load mods"},             {"modmenu", "Mod menu"},
+      {"updatechecks", "Update checks"}, {"misnamedart", "Misnamed art"},
+      {"optionswindow", "New Options"}};
   auto it = labels.find(name);
   return it == labels.end() ? name : it->second;
 }
+// The Extras page's order: the new Options window's switch first (the way
+// back to it from this panel), then the rest as Features lists them
+static std::vector<Features::Switch *> extrasOrder() {
+  std::vector<Features::Switch *> out;
+  for (Features::Switch &f : Features::all())
+    if (f.name == "optionswindow")
+      out.insert(out.begin(), &f);
+    else
+      out.push_back(&f);
+  return out;
+}
+// A layout's text without the sections named (each "[Name]" to the next
+// section): for the Game Options' old-PC settings, left out (below)
+static std::string dropSections(const std::string &text, const std::set<std::string> &names) {
+  std::string out;
+  bool keep = true;
+  size_t at = 0;
+  while (at < text.size()) {
+    size_t end = text.find('\n', at);
+    end = end == std::string::npos ? text.size() : end + 1;
+    std::string line = text.substr(at, end - at);
+    if (!line.empty() && line[0] == '[') {
+      size_t close = line.find(']');
+      keep = close == std::string::npos || !names.count(line.substr(1, close - 1));
+    }
+    if (keep)
+      out += line;
+    at = end;
+  }
+  return out;
+}
+// Interface Size, on Sound & Video (an addition): its label, slider and note
+// (UiScaleControl, UiOptions.hpp)
+static const int kUiScaleLabel = 9030, kUiScaleBar = 9031, kUiScaleNote = 9032, kUiScaleAuto = 9033;
+// Sound & Video without the old PCs' settings - the fixed window sizes
+// (800 x 600, 1024 x 768, 1280 x 1024: the window is resized, maximised or
+// made full screen now) and Terrain Blending's speed choices (it always
+// blends) - and with Interface Size where they were
+static std::string soundVideoPage(ResourceManager *rm) {
+  std::string t = dropSections(rm->getGameText("ui/gameopt2.lyt"),
+                               {"Video_Mode_Radio_Set", "800x600", "1024x768", "1280x1024", "Terrain_RadioSet",
+                                "Terrain_Option_NoBlending", "Terrain_Option_Speed", "Terrain_Option_Balance",
+                                "Terrain_Option_Quality", "Terrain_NoBlending_Label", "Terrain_Speed_Label",
+                                "Terrain_Balanced_Label", "Terrain_Quality_Label", "Terrain_Option_Label"});
+  // (as the volume's label and slider above it)
+  const std::string gold = "forecolor=237\r\nforecolor=228\r\nforecolor=173\r\nbackcolor=100\r\nbackcolor=108\r\n"
+                           "backcolor=108\r\ntransparent=1\r\nlayer=1\r\n";
+  t += "\r\n[UiScale_Label]\r\ntype=UIText\r\nid=" + std::to_string(kUiScaleLabel) +
+       "\r\nx=38\r\ny=250\r\ndx=110\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\nborder=1\r\n" + gold +
+       "\r\n[UiScale_ScrollBar]\r\ntype = UIScrollBar\r\nid = " + std::to_string(kUiScaleBar) +
+       "\r\nanimation = ui/sharedui/horzslid/horzslid\r\nthumb = ui/sharedui/horzthm/horzthm\r\nx=38\r\ny=265\r\n"
+       "dx=110\r\ndy=26\r\nlayer = 1\r\ntransparent=1\r\n"
+       "\r\n[UiScale_Auto]\r\ntype=UIButton\r\nid=" + std::to_string(kUiScaleAuto) +
+       "\r\nx=36\r\ny=294\r\nanimation=ui/sharedui/checkbx/checkbx\r\nlayer=1\r\ntransparent=1\r\nstate=2048\r\n"
+       "\r\n[UiScale_Note]\r\ntype=UIText\r\nid=" + std::to_string(kUiScaleNote) +
+       "\r\nx=60\r\ny=297\r\ndx=94\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\nborder=0\r\n" + gold;
+  return t;
+}
 static std::string gameOptionsWithExtras(ResourceManager *rm) {
-  std::string t = rm->getGameText("ui/gameopts.lyt");
+  // (the Advanced tab's page held only old PCs' settings - video, sound and
+  // mouse quality: left out with its tab, and Extras takes its place)
+  std::string t = dropSections(rm->getGameText("ui/gameopts.lyt"), {"Advanced Opion Tab", "AdvancedOptionsLayout"});
   auto swap = [&t](const std::string &from, const std::string &to) {
     for (const char *nl : {"\r\n", "\n"}) {
       std::string f = from, r = to;
@@ -59,9 +122,12 @@ static std::string gameOptionsWithExtras(ResourceManager *rm) {
     }
     return false;
   };
+  swap("button = 1530\n", "");
   if (!swap(";state=4096\n;action=3\n;target=903", "state=4096\naction=3\ntarget=" + std::to_string(kExtrasPage)) ||
-      !swap("button = 1530", "button = 1530\nbutton = " + std::to_string(kExtrasTab)))
+      !swap("button = 1508", "button = 1508\nbutton = " + std::to_string(kExtrasTab)))
     return t; // (a gameopts.lyt not like the shipped one: left as it is)
+  // (the update's About tab sat under Advanced, at 213: in its place now)
+  swap("y = 213", "y = 180");
   swap("helpid = 1544", "helpid = 0");
   t += "\r\n[ExtrasLayout]\r\ntype=UILayout\r\nlayout=ui/zt1extras.lyt\r\nstate=1\r\n";
   return t;
@@ -75,19 +141,20 @@ static std::string extrasPage() {
        "border=2\r\nforecolor=206\r\nforecolor=206\r\nforecolor=206\r\nbackcolor=68\r\nbackcolor=36\r\n"
        "backcolor=20\r\ntransparent=1\r\nlayer=1\r\njustify=center\r\n\r\n";
   int i = 0;
-  for (const Features::Switch &f : Features::all()) {
-    // (below the panel's logo, as the original's pages: 22 apart)
-    int y = 150 + i * 22, id = kExtrasFirst + i;
+  for (size_t n = extrasOrder().size(); i < static_cast<int>(n); i++) {
+    // (below the panel's logo, 19 apart - the original's pages use 22, but
+    // 13 switches and the note must fit inside the panel - each the game's
+    // own tick box, its name in the panel's 100 px beside it)
+    int y = 148 + i * 19, id = kExtrasFirst + i;
     t += "[Toggle" + std::to_string(i) + "]\r\ntype=UIButton\r\nid=" + std::to_string(id) +
-         "\r\nanimation=ui/sharedui/radio/radio\r\nx=36\r\ny=" + std::to_string(y) +
+         "\r\nanimation=ui/sharedui/checkbx/checkbx\r\nx=33\r\ny=" + std::to_string(y) +
          "\r\nlayer=1\r\ntransparent=1\r\nstate=2048\r\n\r\n";
     t += "[Label" + std::to_string(i) + "]\r\ntype=UIText\r\nid=" + std::to_string(id + 20) +
-         "\r\nx=54\r\ny=" + std::to_string(y - 1) + "\r\ndx=104\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\n"
+         "\r\nx=57\r\ny=" + std::to_string(y + 2) + "\r\ndx=100\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\n"
          "border=0\r\nalias=" + std::to_string(id) + "\r\n" + gold + "\r\n";
-    i++;
   }
-  t += "[Note]\r\ntype=UIText\r\nid=9049\r\nx=33\r\ny=" + std::to_string(156 + i * 22) +
-       "\r\ndx=121\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\nborder=0\r\njustify=center\r\n" + gold;
+  t += "[Note]\r\ntype=UIText\r\nid=9049\r\nx=33\r\ny=" + std::to_string(152 + i * 19) +
+       "\r\ndx=124\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\nborder=0\r\njustify=center\r\n" + gold;
   return t;
 }
 
@@ -96,6 +163,12 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
                            const std::string &screenLayout) {
   this->resource_manager = resource_manager;
   resource_manager->provide("ui/gameopts.lyt", gameOptionsWithExtras);
+  resource_manager->provide("ui/gameopt2.lyt", soundVideoPage);
+  this->options = new UiOptions(resource_manager);
+  this->options->onTooltips = [this](int delay, int durationMs) {
+    this->tooltipDelayMs = delay;
+    this->tooltipDurationMs = static_cast<Uint32>(std::max(500, durationMs));
+  };
   resource_manager->provide("ui/zt1extras.lyt", [](ResourceManager *) { return extrasPage(); });
 
   IniReader *mainReader = resource_manager->getIniReader(mainLayout);
@@ -197,13 +270,43 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
       b->onClick = [this, a] { this->pendingAction = a; };
 
   if (IniReader *xpac = resource_manager->getIniReader("ui/xpac.lyt")) {
-    this->filter.layout = new UiLayout(xpac, resource_manager);
-    this->filter.list =
-        dynamic_cast<UiListBox *>(this->filter.layout->getElementById(22900));
-    if (this->filter.list)
-      for (int id = 22900; id <= 22903; id++)
-        this->filter.list->addItem(id);
+    this->filter.packs = new UiLayout(xpac, resource_manager);
+    this->filter.packsList = dynamic_cast<UiListBox *>(this->filter.packs->getElementById(22900));
+    // (with Mods: the same layout from xpac.lyt's own text, its box, list
+    // and background a row taller - the original's margin under the rows kept)
+    std::string text = resource_manager->readResources({"ui/xpac.lyt"})["ui/xpac.lyt"];
+    if (!text.empty()) {
+      // (a row as the game's list has it)
+      int row = this->filter.packsList ? this->filter.packsList->getRowHeight() : 18;
+      int boxDy = xpac->getInt("LayoutInfo", "dy", 94), listDy = xpac->getInt("list", "dy", 90);
+      std::string out, section, line;
+      std::istringstream in(text);
+      while (std::getline(in, line)) {
+        std::string t = Utils::string_to_lower(line);
+        t.erase(std::remove_if(t.begin(), t.end(), ::isspace), t.end());
+        if (!t.empty() && t[0] == '[') {
+          section = t;
+          out += line + "\n";
+          if (section == "[background]")
+            out += "dx=" + std::to_string(xpac->getInt("LayoutInfo", "dx", 127)) + "\ndy=" +
+                   std::to_string(boxDy + row) + "\n";
+          continue;
+        }
+        if (t.rfind("dy=", 0) == 0 && (section == "[layoutinfo]" || section == "[list]"))
+          line = "dy=" + std::to_string((section == "[list]" ? listDy : boxDy) + row);
+        out += line + "\n";
+      }
+      this->filter.withModsIni = new IniReader(out.data(), out.size());
+      this->filter.withMods = new UiLayout(this->filter.withModsIni, resource_manager);
+      this->filter.withModsList = dynamic_cast<UiListBox *>(this->filter.withMods->getElementById(22900));
+    }
+    this->filter.layout = this->filter.packs;
+    this->filter.list = this->filter.packsList;
   }
+}
+
+std::string UiGameScreen::filterLabel(int choice) const {
+  return choice == kFilterMods ? "Mods" : this->resource_manager->getString(22900 + choice);
 }
 
 void UiGameScreen::toggleGameMenu() {
@@ -222,8 +325,21 @@ void UiGameScreen::toggleGameMenu() {
 }
 
 void UiGameScreen::openFilter(int panelId) {
+  // (Mods under the packs, in the box a row taller, for the buy panels
+  // with the switch on; Research has none)
+  bool mods = Features::modFilter && panelId != 15 && this->filter.withModsList;
+  this->filter.layout = mods ? this->filter.withMods : this->filter.packs;
+  this->filter.list = mods ? this->filter.withModsList : this->filter.packsList;
   if (!this->filter.list)
     return;
+  this->filter.list->clear();
+  for (int id = 22900; id <= 22903; id++)
+    this->filter.list->addItem(id);
+  if (mods)
+    this->filter.list->addItem(this->filterLabel(kFilterMods));
+  auto had = this->filterChoice.find(panelId);
+  if (!mods && had != this->filterChoice.end() && had->second == kFilterMods)
+    this->setFilter(panelId, 0); // (switched off since: All)
   this->filter.open = true;
   this->filter.owner = panelId;
   // The current choice is highlighted
@@ -242,7 +358,7 @@ void UiGameScreen::setFilter(int panelId, int choice) {
     std::function<void(UiElement *)> label = [&](UiElement *el) {
       if (UiButton *b = dynamic_cast<UiButton *>(el))
         if (b->getActionType() == 1 && b->getActionTarget() == 152)
-          b->setLabel(this->resource_manager->getString(22900 + choice));
+          b->setLabel(this->filterLabel(choice));
       for (UiElement *c : el->getChildren())
         label(c);
     };
@@ -429,7 +545,7 @@ void UiGameScreen::refreshBuyPanel(BuyPanel &p) {
           choice == this->filterChoice.end() ? 0 : choice->second)));
   p.items.clear();
   for (const CatalogItem *item : ItemCatalog::get().inCategory(category))
-    if (this->passesFilter(p.id, item->expansion))
+    if (this->passesFilter(p.id, item->expansion, item->fromMod))
       p.items.push_back(item);
   std::vector<UiScrollingRegion::Item> cells;
   for (const CatalogItem *item : p.items)
@@ -1307,9 +1423,12 @@ void UiGameScreen::refreshZooStatus() {
 }
 
 UiGameScreen::~UiGameScreen() {
+  delete this->options;
   for (Entry &e : this->entries)
     delete e.layout;
-  delete this->filter.layout;
+  delete this->filter.packs;
+  delete this->filter.withMods;
+  delete this->filter.withModsIni;
   delete this->dialog.layout;
 }
 
@@ -1393,9 +1512,12 @@ void UiGameScreen::setupGameOptions() {
   // (0x51a59f: value x 100 + 500 ms, 5000 by default). ours: the delay is
   // kept but not yet used - the original reads it from UIManager+0x20, and
   // its scale against our measured 600 ms isn't traced yet
-  slider(1523, std::clamp((Settings::getInt("UI", "tooltipDelay", 1) - 1) / 10, 0, 100),
-         [](int v) { Settings::setInt("UI", "tooltipDelay", v * 10 + 1); });
-  this->tooltipDurationMs = static_cast<Uint32>(std::max(500, Settings::getInt("UI", "tooltipDuration", 5000)));
+  this->tooltipDelayMs = Settings::getInt("UI", "tooltipDelay", 1);
+  slider(1523, std::clamp((this->tooltipDelayMs - 1) / 10, 0, 100), [this](int v) {
+    this->tooltipDelayMs = v * 10 + 1;
+    Settings::setInt("UI", "tooltipDelay", this->tooltipDelayMs);
+  });
+  this->tooltipDurationMs = static_cast<Uint32>(std::max(500, Settings::getInt("UI", "tooltipDuration", 3000)));
   slider(1525, std::clamp((static_cast<int>(this->tooltipDurationMs) - 500) / 100, 0, 100), [this](int v) {
     this->tooltipDurationMs = static_cast<Uint32>(v * 100 + 500);
     Settings::setInt("UI", "tooltipDuration", static_cast<int>(this->tooltipDurationMs));
@@ -1428,41 +1550,35 @@ void UiGameScreen::setupGameOptions() {
   for (int id : {1587, 1588})
     if (UiButton *b = dynamic_cast<UiButton *>(this->getElementById(id)))
       b->onClick = [id, window, showMode] {
-        if (SDL_Window *w = window()) {
-          bool full = id == 1588;
-          SDL_SetWindowFullscreen(w, full ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-          Settings::setInt("user", "fullscreen", full ? 1 : 0);
-        }
+        if (Embed::active())
+          return;
+        if (SDL_Window *w = window())
+          Window::setFullscreen(w, id == 1588);
         showMode();
       };
   showMode();
-  const int sizes[3][3] = {{1517, 800, 600}, {1518, 1024, 768}, {1519, 1280, 1024}};
-  int savedW = Settings::getInt("user", "screenwidth", 1280);
-  for (const auto &s : sizes)
-    if (UiButton *b = dynamic_cast<UiButton *>(this->getElementById(s[0]))) {
-      if (savedW == s[1])
-        b->choose();
-      int w = s[1], h = s[2];
-      b->onClick = [w, h, window] {
-        if (SDL_Window *win = window()) {
-          SDL_SetWindowFullscreen(win, 0);
-          SDL_SetWindowSize(win, w, h);
-          SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-        }
-        Settings::setInt("user", "screenwidth", w);
-        Settings::setInt("user", "screenheight", h);
-        Settings::setInt("user", "fullscreen", 0);
-      };
-    }
+  if (Embed::active())
+    for (int id : {1587, 1588})
+      if (UiElement *e = this->getElementById(id))
+        e->setDisabled(true);
+  // (the fixed window sizes are left out: soundVideoPage)
+
+  // Interface Size (an addition; UiOptions.hpp's UiScaleControl, as the
+  // Options window's)
+  this->panelScale.attach(dynamic_cast<UiScrollBar *>(this->getElementById(kUiScaleBar)),
+                          dynamic_cast<UiText *>(this->getElementById(kUiScaleLabel)),
+                          dynamic_cast<UiButton *>(this->getElementById(kUiScaleAuto)),
+                          dynamic_cast<UiText *>(this->getElementById(kUiScaleNote)), "Interface Size: ", false);
 
   // Extras (addition): each of the engine's additions on or off, kept in
   // zoo.ini's [Extras]
   if (UiText *title = dynamic_cast<UiText *>(this->getElementById(9040)))
     title->setText("Extras");
   if (UiText *note = dynamic_cast<UiText *>(this->getElementById(9049)))
-    note->setText("Off: as the original game");
+    note->setText("Off: as the original");
   int i = 0;
-  for (Features::Switch &f : Features::all()) {
+  for (Features::Switch *fp : extrasOrder()) {
+    Features::Switch &f = *fp;
     int id = kExtrasFirst + i++;
     if (UiText *label = dynamic_cast<UiText *>(this->getElementById(id + 20)))
       label->setText(extrasLabel(f.name));
@@ -1494,6 +1610,15 @@ void UiGameScreen::showTab(int panelId, int buttonId) {
 }
 
 void UiGameScreen::setPanelOpen(int id, bool open) {
+  // The Game Options (5): the Options window in its place (the optionswindow
+  // extra), the disk button left off
+  if (id == 5 && open && Features::optionsWindow && this->options) {
+    this->options->open(true);
+    for (UiButton *b : this->panelButtons)
+      if (b->getActionTarget() == 5)
+        b->setToggledOn(false);
+    open = false;
+  }
   for (Entry &e : this->entries)
     if (e.panel && e.id == id) {
       if (open && !e.open)
@@ -1522,6 +1647,9 @@ void UiGameScreen::openInfo(int id) {
 }
 
 bool UiGameScreen::closeTopmost() {
+  // (the Options window: Esc closes it, and it takes the Esc itself)
+  if (this->optionsOpen())
+    return true;
   if (this->filter.open) {
     this->filter.open = false;
     return true;
@@ -1611,6 +1739,7 @@ void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
           gate->setHidden(p.category != "fence");
           gate->setDisabled(!this->exhibitsExist || !this->exhibitsExist());
         }
+  this->dragUiScale(renderer);
   for (Entry &e : this->entries) {
     if (!e.open)
       continue;
@@ -1626,7 +1755,28 @@ void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   this->drawStaffPortrait(renderer);
   this->drawAnimalPortrait(renderer);
   this->drawMessage(renderer, layout_rect);
+  // (the Options window goes over all this at a size of its own: main.cpp's
+  // drawOptions)
   this->drawTooltip(renderer, layout_rect);
+}
+
+bool UiGameScreen::optionsOpen() const { return this->options && this->options->isOpen(); }
+
+// The original Game Options panel's live settings, each frame before the
+// panels draw: Interface Size (UiScaleControl), and Window / Full Screen
+void UiGameScreen::dragUiScale(SDL_Renderer *renderer) {
+  if (this->isPanelOpen(5))
+    this->panelScale.update(renderer);
+  // (Window / Full Screen: whichever it can change to, kept up to date -
+  // Alt+Enter or F11 changes it too, with the Game Options open)
+  if (this->isPanelOpen(5)) // (gameopts.lyt's id)
+    if (SDL_Window *w = SDL_GetKeyboardFocus()) {
+      bool full = (SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN) != 0;
+      if (UiElement *e = this->getElementById(1587))
+        e->setHidden(!full);
+      if (UiElement *e = this->getElementById(1588))
+        e->setHidden(full);
+    }
 }
 
 // The button under the cursor with help (the topmost shown one), else over
@@ -1686,15 +1836,29 @@ std::string UiGameScreen::tooltipText() const {
 // A box with a gold edge, the help in white outlined in black, wrapped,
 // centred under the cursor and kept on the screen
 void UiGameScreen::drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
-  // (measured: 600 ms still; then shown for [UI] tooltipDuration -
-  // zoo.exe 0x51a59f)
+  // (measured: 600 ms still at the default delay; then shown for [UI]
+  // tooltipDuration - zoo.exe 0x51a59f. The Tool Tip Delay slider keeps
+  // [UI] tooltipDelay = value x 10 + 1 (0x51a559) in the UI manager - a
+  // static object at 0x638de0: the slider writes its +0x20, 0x638e00, and
+  // the duration its +0x24, 0x638e04; it reads both from [UI] TooltipDelay /
+  // TooltipDuration at start, 0x51e3b8, defaults 1 and 3000 ms, 0x539a66.
+  // It's added here as ms on top of the 600 - UNVERIFIED: the code that
+  // waits on +0x20 is reached only through the manager's pointer and isn't
+  // found yet, so its unit is a guess)
   Uint32 now = SDL_GetTicks();
-  if (now < this->mouseStill + 600 || now > this->mouseStill + 600 + this->tooltipDurationMs)
+  Uint32 wait = 600 + static_cast<Uint32>(std::max(0, this->tooltipDelayMs - 1));
+  if (now < this->mouseStill + wait || now > this->mouseStill + wait + this->tooltipDurationMs)
     return;
   std::string text = this->tooltipText();
   if (text.empty())
     return;
-  const int font = 7002, size = 7003, maxWidth = 285;
+  // Short or long (zoo.exe helpTypeSetting 0x442d19): the widest a tooltip's
+  // line may be - [UI] maxShortTooltipWidth or maxLongTooltipWidth, as
+  // [UI] helpType says (the UI manager's +0x164 / +0x168, 200 and 400 when
+  // zoo.ini hasn't them: its constructor 0x539a66)
+  const int font = 7002, size = 7003;
+  const int maxWidth = Settings::getInt("UI", "helpType", 0) != 0 ? Settings::getInt("UI", "maxLongTooltipWidth", 400)
+                                                                   : Settings::getInt("UI", "maxShortTooltipWidth", 200);
   ResourceManager *rm = this->resource_manager;
   auto width = [&](const std::string &s) {
     SDL_Texture *t = rm->getStringTexture(renderer, font, s, SDL_Color{255, 255, 255, 255}, size);
@@ -1872,6 +2036,10 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
     this->handleDialog(inputs);
     return UiAction::NONE;
   }
+  // So does the Options window (its Game page's Load, Save, Main Menu and
+  // Exit come back as the original panel's do)
+  if (this->optionsOpen())
+    return this->options->handleInputs(inputs);
   // The filter list, while it is down, takes the mouse: a click picks a
   // choice, or (outside it) just closes it
   if (this->filter.open && this->filter.list) {
@@ -1944,7 +2112,7 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
 // The map under the mouse, the fence tool and the bulldozer
 // ----------------------------------------------------------------------------
 bool UiGameScreen::isOverHud(int x, int y) const {
-  if (this->dialog.layout || this->filter.open)
+  if (this->dialog.layout || this->filter.open || this->optionsOpen())
     return true;
   if (this->isOverPanel(x, y))
     return true;
@@ -2841,8 +3009,9 @@ void UiGameScreen::refreshLists() {
     // (by species, then name, then when it came: zoo.exe 0x453643)
     std::stable_sort(ids.begin(), ids.end(), [this](int a, int b) {
       const Animals::Member *x = this->animals->member(a), *y = this->animals->member(b);
-      std::string sx = this->resource_manager->getString(this->animals->types()[x->type].nameId);
-      std::string sy = this->resource_manager->getString(this->animals->types()[y->type].nameId);
+      const auto &tx = this->animals->types()[x->type], &ty = this->animals->types()[y->type];
+      std::string sx = !tx.displayName.empty() ? tx.displayName : this->resource_manager->getString(tx.nameId);
+      std::string sy = !ty.displayName.empty() ? ty.displayName : this->resource_manager->getString(ty.nameId);
       if (sx != sy)
         return sx < sy;
       if (x->name != y->name)
@@ -3510,7 +3679,7 @@ void UiGameScreen::drawAnimalPortrait(SDL_Renderer *renderer) {
   // measured) - a porpoise's swim too, not a land animal's stand
   for (const Entry &e : this->entries)
     if (e.panel && e.id == 6 && e.open) {
-      Animation *a = m->boxed ? this->animals->crate() : this->animals->art(*m, m->anim.empty() ? "stand" : m->anim);
+      Animation *a = m->boxed ? this->animals->crate(*m) : this->animals->art(*m, m->anim.empty() ? "stand" : m->anim);
       if (!a && !m->boxed)
         a = this->animals->art(*m, "stand");
       if (!a)
@@ -3523,24 +3692,97 @@ void UiGameScreen::drawAnimalPortrait(SDL_Renderer *renderer) {
       if (!a->anchoredBounds(0, 0, CompassDirection::SE, l, t, r, b))
         continue;
       // (inside its round window, the Trackanim button's art, as the
-      // original draws it into the button)
+      // original draws it into the button: kept to the round window - a big
+      // animal, a whale shark, filled the button's square past its rim)
       SDL_Rect clip{};
       if (UiElement *track = e.layout->getElementById(3114))
         clip = track->getLastRect();
-      SDL_Rect oldClip;
-      SDL_RenderGetClipRect(renderer, &oldClip);
-      const bool clipped = clip.w > 0 && clip.h > 0;
-      if (clipped)
-        SDL_RenderSetClipRect(renderer, &clip);
       float ul, ut, ur, ub;
-      if (under && under->anchoredBounds(0, 0, CompassDirection::SE, ul, ut, ur, ub)) {
+      const bool hasUnder = under && under->anchoredBounds(0, 0, CompassDirection::SE, ul, ut, ur, ub);
+      if (hasUnder)
         l = std::min(l, ul), t = std::min(t, ut), r = std::max(r, ur), b = std::max(b, ub);
-        under->drawAnchored(renderer, cx - (l + r) * 0.5f, cy - (t + b) * 0.5f, CompassDirection::SE, nullptr, 0);
-      }
-      a->drawAnchored(renderer, cx - (l + r) * 0.5f, cy - (t + b) * 0.5f, CompassDirection::SE, nullptr, 0);
-      if (clipped)
-        SDL_RenderSetClipRect(renderer, oldClip.w > 0 ? &oldClip : nullptr);
+      auto drawIt = [&](float ox, float oy) {
+        float x = cx - (l + r) * 0.5f + ox, y = cy - (t + b) * 0.5f + oy;
+        if (hasUnder)
+          under->drawAnchored(renderer, x, y, CompassDirection::SE, nullptr, 0);
+        a->drawAnchored(renderer, x, y, CompassDirection::SE, nullptr, 0);
+      };
+      if (clip.w > 0 && clip.h > 0)
+        drawRound(renderer, clip, drawIt);
+      else
+        drawIt(0, 0);
     }
+}
+
+// What draw(ox, oy) draws - offset by ox, oy - kept to the circle in box (a
+// round window): drawn into a clear layer the box's size, everything
+// outside the circle wiped, the layer put in place
+void UiGameScreen::drawRound(SDL_Renderer *renderer, const SDL_Rect &box,
+                             const std::function<void(float, float)> &draw) {
+  static SDL_Texture *layer = nullptr, *mask = nullptr;
+  static int lw = 0, lh = 0;
+  if (!layer || lw != box.w || lh != box.h) {
+    if (layer)
+      SDL_DestroyTexture(layer);
+    if (mask)
+      SDL_DestroyTexture(mask);
+    lw = box.w;
+    lh = box.h;
+    layer = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, lw, lh);
+    mask = nullptr;
+    // (the circle: white, opaque inside, clear outside, a pixel's soft edge)
+    if (SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, lw, lh, 32, SDL_PIXELFORMAT_ARGB8888)) {
+      const float rx = lw * 0.5f - 2.0f, ry = lh * 0.5f - 2.0f, mx = lw * 0.5f, my = lh * 0.5f;
+      for (int y = 0; y < lh; y++)
+        for (int x = 0; x < lw; x++) {
+          float dx = (x + 0.5f - mx) / rx, dy = (y + 0.5f - my) / ry;
+          float edge = (1.0f - std::sqrt(dx * dx + dy * dy)) * std::min(rx, ry);
+          Uint8 av = static_cast<Uint8>(std::clamp(edge + 0.5f, 0.0f, 1.0f) * 255.0f);
+          static_cast<Uint32 *>(s->pixels)[y * (s->pitch / 4) + x] = (static_cast<Uint32>(av) << 24) | 0xFFFFFF;
+        }
+      mask = SDL_CreateTextureFromSurface(renderer, s);
+      SDL_FreeSurface(s);
+    }
+    if (layer)
+      // (drawn over clear black, its colours already carry their alpha)
+      SDL_SetTextureBlendMode(layer, SDL_ComposeCustomBlendMode(
+                                         SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD,
+                                         SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD));
+    if (mask)
+      // (what's under it kept as much as the circle's opaque there)
+      SDL_SetTextureBlendMode(mask, SDL_ComposeCustomBlendMode(
+                                        SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_SRC_ALPHA, SDL_BLENDOPERATION_ADD,
+                                        SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_SRC_ALPHA, SDL_BLENDOPERATION_ADD));
+  }
+  if (!layer || !mask) {
+    draw(0, 0);
+    return;
+  }
+  // (what's set now, to put back after)
+  SDL_Texture *was = SDL_GetRenderTarget(renderer);
+  float sx = 1.0f, sy = 1.0f;
+  SDL_RenderGetScale(renderer, &sx, &sy);
+  SDL_Rect view, clip;
+  SDL_RenderGetViewport(renderer, &view);
+  const bool clipped = SDL_RenderIsClipEnabled(renderer);
+  SDL_RenderGetClipRect(renderer, &clip);
+  SDL_BlendMode mode;
+  SDL_GetRenderDrawBlendMode(renderer, &mode);
+  SDL_SetRenderTarget(renderer, layer);
+  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+  SDL_RenderSetViewport(renderer, nullptr);
+  SDL_RenderSetClipRect(renderer, nullptr);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+  SDL_RenderClear(renderer);
+  SDL_SetRenderDrawBlendMode(renderer, mode);
+  draw(static_cast<float>(-box.x), static_cast<float>(-box.y));
+  SDL_RenderCopy(renderer, mask, nullptr, nullptr);
+  SDL_SetRenderTarget(renderer, was);
+  SDL_RenderSetScale(renderer, sx, sy);
+  SDL_RenderSetViewport(renderer, &view);
+  SDL_RenderSetClipRect(renderer, clipped ? &clip : nullptr);
+  SDL_RenderCopy(renderer, layer, nullptr, &box);
 }
 
 void UiGameScreen::showExhibit(int id) {
@@ -3740,7 +3982,7 @@ void UiGameScreen::refreshExhibits() {
   // Tank Adjustment: the wall and base arrows (greyed where they can go no
   // further) and a step's price; filled, the water's salinity and Drain;
   // drained, Fill Tank with salt or fresh at their prices
-  bool tank = ex->groundHeight != ex->floorHeight;
+  bool tank = ex->tank || ex->groundHeight != ex->floorHeight;
   bool full = tank && ex->tank && ex->filling;
   auto show = [&](int eid, bool on) {
     if (UiElement *e = element(eid))

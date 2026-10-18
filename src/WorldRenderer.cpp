@@ -327,6 +327,19 @@ void WorldRenderer::worldToScreenF(float x, float y, float height,
   depth = pu + pv;
 }
 
+void WorldRenderer::screenToWorldAt(float sx, float sy, float h, float &wx, float &wy) const {
+  const float W = static_cast<float>(mapWidthCache), H = static_cast<float>(mapHeightCache);
+  float a = (sx - camera.x - logicalCenterX()) / (tileWidth * 0.5f);
+  float b = (sy + h * getHeightUnitPixels() - camera.y - logicalCenterY()) / (tileHeight * 0.5f);
+  float pu = (a + b) * 0.5f, pv = (b - a) * 0.5f;
+  switch (viewRotation) {
+  case 0: wx = W - pv; wy = pu; break;
+  case 1: wx = W - pu; wy = H - pv; break;
+  case 2: wx = pv; wy = H - pu; break;
+  default: wx = pu; wy = pv; break;
+  }
+}
+
 bool WorldRenderer::screenToWorld(float sx, float sy, const WorldMap &map,
                                   float &x, float &y) const {
   const float W = static_cast<float>(mapWidthCache), H = static_cast<float>(mapHeightCache);

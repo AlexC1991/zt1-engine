@@ -91,6 +91,25 @@ public:
     this->world_art = true;
     this->hd_dir = hdDir;
   }
+  // Map art's own frames (it keeps them), each direction's in order (for
+  // making HD art: HdArt::exportFrames)
+  template <typename F> void forEachFrame(F f) const {
+    for (const auto &[direction, frames] : this->surfaces)
+      for (size_t i = 0; i < frames.size(); i++)
+        if (frames[i])
+          f(direction, static_cast<int>(i), frames[i]);
+  }
+  // Map art drawn in a palette of its own (a building's picked colours, a
+  // keeper's hair and skin, a guest's clothes): its name, for HD art - made
+  // from the art's own palette - to be recoloured to match (HdArt::recolour)
+  void setRecoloured(const std::string &name) { this->recoloured = name; }
+  // One of its own frames (nullptr: it hasn't that one)
+  SDL_Surface *frameSurface(const std::string &direction, int frame) const {
+    auto it = this->surfaces.find(direction);
+    return it == this->surfaces.end() || frame < 0 || frame >= static_cast<int>(it->second.size())
+               ? nullptr
+               : it->second[frame];
+  }
 
 private:
   // Per direction: frame 0's offset from its surface's corner to where the
@@ -99,8 +118,13 @@ private:
   bool upscale = false;
   bool world_art = false;
   std::string hd_dir;
-  // Upscaled frames for the zoomed-in map (map art only)
+  std::string recoloured;
+  // Upscaled frames for the zoomed-in map (map art only), and the HD art
+  // roots they were made from (HdArt::generation: made again on a change)
   std::unordered_map<std::string, std::vector<SDL_Texture *>> textures_hi;
+  int hi_generation = -1;
+  // Whether map art draws from its zoomed-in set now
+  bool usesHi() const;
 
   std::vector<SDL_Texture *> *frameTextures(SDL_Renderer *renderer,
                                             CompassDirection direction,

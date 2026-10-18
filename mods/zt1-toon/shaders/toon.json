@@ -1,0 +1,21 @@
+{
+  "name": "Toon",
+  "about": "Toon shading over the animals', people's, fences' and objects' own art: their texture kept, a toon shadow, rim light and clean ink outlines. Seen zoomed in.",
+  "stage": "art",
+  "shader": "toon.frag",
+  "on": true,
+  "settings": [
+    {"name": "toonStrength", "label": "Toon Strength", "min": 0, "max": 1, "value": 0.7, "about": "From the plain art (left) to the full toon shading (right). The outline has its own sliders."},
+    {"name": "shadowThreshold", "label": "Shadow Start", "min": 0, "max": 1, "value": 0.45, "about": "How much of each animal is in shade: further right, more shade."},
+    {"name": "shadowHardness", "label": "Shadow Edge", "min": 0, "max": 1, "value": 0.75, "about": "The edge between light and shade: right a hard toon line, left a soft blend."},
+    {"name": "shadowDarkness", "label": "Shade Dark", "min": 0, "max": 1, "value": 0.28, "about": "How dark the shaded side is."},
+    {"name": "shadowTint", "label": "Shade Tint", "min": 0, "max": 1, "value": 0.35, "about": "How cool (blue) the shade is, as toon shading tints it (left: plain darker)."},
+    {"name": "lightAngle", "label": "Light From", "min": 0, "max": 360, "value": 120, "about": "Where the light comes from, round the screen: 90 above, 180 the left, 0 the right."},
+    {"name": "rimLight", "label": "Rim Light", "min": 0, "max": 1, "value": 0.25, "about": "A light edge where each animal turns away from you."},
+    {"name": "gloss", "label": "Gloss", "min": 0, "max": 1, "value": 0.12, "about": "A small sharp highlight on the lit side."},
+    {"name": "outlineWidth", "label": "Outline Width", "min": 0, "max": 6, "value": 3, "about": "How thick the ink outline round each one is (0: none)."},
+    {"name": "outlineDarkness", "label": "Outline Dark", "min": 0, "max": 1, "value": 0.9, "about": "How dark the ink lines are - a dark shade of the animal's own colour."},
+    {"name": "smoothGrain", "label": "Smooth Grain", "min": 0, "max": 1, "value": 0.2, "about": "How much the art's rough grain is smoothed (its fur and markings stay)."},
+    {"name": "saturation", "label": "Colour", "min": 0, "max": 2, "value": 1.0, "about": "How strong the colours are (1: as drawn)."}
+  ]
+}

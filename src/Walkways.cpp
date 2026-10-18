@@ -60,6 +60,10 @@ bool Walkways::canBuild(int x, int y, const int h[4], const WorldMap &map,
     return false;
   if (!fences.insideZoo(x, y))
     return false;
+  // Not over an exhibit or a tank (inside the fence: animals would climb
+  // or swim up through it, and guests walk over the animals)
+  if (fences.exhibitAt(x, y) >= 0)
+    return false;
   bool above = false;
   for (int c = 0; c < 4; c++) {
     if (h[c] < t->cornerHeight[c])

@@ -40,6 +40,9 @@ class PlacedObjects {
 public:
   struct Object {
     std::string className, subClass, typeName, name;
+    // Its file's extension: .ai, or a downloaded entity's .ucs (.uca, .ucb:
+    // an old fan download made with APE)
+    std::string ext = ".ai";
     float x = 0, y = 0; // tiles
     float z = 0;        // height units
     int facing = 0;     // 0-7, 0 = north (-y), clockwise
@@ -164,7 +167,8 @@ public:
   // The palette a part shows (its pick, else its default)
   int colourOf(const Object &o, int part);
   // Its catalogue file (scenery/<subclass>/<type>.ai)
-  static std::string fileOf(const Object &o) { return "scenery/" + o.subClass + "/" + o.typeName + ".ai"; }
+  static std::string fileOf(const Object &o) { return "scenery/" + o.subClass + "/" + o.typeName + o.ext; }
+  void resolveExt(Object &o) const;
 
 private:
   int nextId = 1;

@@ -10,9 +10,16 @@
 //   show | hide | focus | quit
 //   click <x> <y> | rclick <x> <y>   (a mouse click at the window's pixels)
 //   move <x> <y>   (the mouse there, resting: hovering, tooltips)
-//   snap   (the game's own screenshot of the screen as drawn, Screenshots/)
+//   press <x> <y> | release <x> <y>   (the left button down / up there:
+//                      with moves between, a drag at the Lab's own pace)
+//   snap   (the screen as drawn with its tooltip, tooltip.bmp)
+//   shot <file.bmp>   (the next frame as drawn, saved there - the same line
+//                      the original's hook answers, so the Lab's Play
+//                      picture works for both games)
 //   volume <0-100>   (its own volume, src/SessionVolume.hpp)
 #include <SDL2/SDL.h>
+
+#include <string>
 
 namespace Embed {
 // Makes the window a child of the parent (a handle as decimal or 0x hex);
@@ -27,6 +34,8 @@ bool quitAsked();
 bool hidden();
 // Asked for a screenshot (snap): true once, then cleared
 bool snapAsked();
+// Where the next frame is to be saved (shot <file>): the path once, then ""
+std::string shotAsked();
 } // namespace Embed
 
 #endif

@@ -24,7 +24,7 @@
 
 namespace {
 constexpr uint32_t kMagic = 0x5A543153; // "S1TZ"
-constexpr uint32_t kVersion = 7; // (1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
+constexpr uint32_t kVersion = 8; // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
 
 // A little binary writer and reader: numbers as they are, strings with
 // their length, vectors with their count
@@ -417,6 +417,15 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
       o.raw(tx);
       o.raw(ty);
     }
+    o.raw(static_cast<uint32_t>(x.before.size()));
+    for (const auto &[at, g] : x.before) {
+      o.raw(at.first);
+      o.raw(at.second);
+      o.raw(g.height);
+      for (int c = 0; c < 4; c++)
+        o.raw(g.corner[c]);
+      o.raw(g.terrain);
+    }
   }
   o.raw(f.made);
   o.raw(f.placed);
@@ -758,6 +767,15 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
       int tx = i.raw<int>(), ty = i.raw<int>();
       x.tiles.insert({tx, ty});
     }
+    if (version >= 8)
+      for (uint32_t t = i.raw<uint32_t>(); t > 0 && !i.bad; t--) {
+        int tx = i.raw<int>(), ty = i.raw<int>();
+        Fences::Exhibit::Ground &g = x.before[{tx, ty}];
+        i.get(g.height);
+        for (int c = 0; c < 4; c++)
+          i.get(g.corner[c]);
+        i.get(g.terrain);
+      }
     f.exhibitList.push_back(x);
   }
   i.get(f.made);
@@ -790,6 +808,7 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
     x.className = i.str();
     x.subClass = i.str();
     x.typeName = i.str();
+    po.resolveExt(x);
     x.name = i.str();
     i.get(x.x);
     i.get(x.y);

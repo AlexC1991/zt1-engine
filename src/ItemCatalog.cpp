@@ -13,6 +13,12 @@
 #include "ResourceManager.hpp"
 #include "Utils.hpp"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 ItemCatalog &ItemCatalog::get() {
   static ItemCatalog catalog;
   return catalog;
@@ -228,11 +234,31 @@ void ItemCatalog::load(ResourceManager *rm) {
     item.expansion = item.members.count("dinosaur") ? 1
                      : item.members.count("aqua")   ? 2
                                                     : 0;
+    item.fromMod = rm->fromMod(file);
     item.height = integer("cheight");
     item.showFence = integer("cisshowfence") != 0;
     item.capacity = integer("ccapacity");
     item.prefIcon = value("characteristics/strings", "cpreficon");
     item.name = item.nameId ? rm->getString(item.nameId) : "";
+    // A user-made entity's own name (APE's): a section per language -
+    // [1033] cName = Rock Cliff 12 - the player's Windows language's, else
+    // its [defaultLCID] LCID's, over cNameID's text (zoo.exe 0x597337)
+    {
+      std::vector<std::string> lcids;
+#ifdef _WIN32
+      lcids.push_back(std::to_string(GetUserDefaultLCID()));
+#endif
+      std::string def = ai.get("defaultlcid", "lcid");
+      if (!def.empty())
+        lcids.push_back(Utils::string_to_lower(def));
+      for (const std::string &lcid : lcids) {
+        std::string own = ai.get(lcid, "cname");
+        if (!own.empty()) {
+          item.name = own;
+          break;
+        }
+      }
+    }
     auto unlock = unlockMonth.find(item.nameId);
     item.unlockMonth = unlock != unlockMonth.end() ? unlock->second
                        : downloaded.count(file) ? 0

@@ -3,6 +3,7 @@
 
 #include <map>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,9 @@ public:
   static constexpr float kChowUnits = 1000.0f;
   void remove(int id);
   void removeIn(int exhibit, Kind kind);
+  // What lay on these tiles (a tank taken away: its food and dung go with
+  // its water, as the original removes the objects in it - 0x458c2b)
+  void removeOn(const std::set<std::pair<int, int>> &tiles);
 
   float foodIn(int exhibit) const;
   // An animal eats from a pile of food: what it got (the pile goes when
@@ -58,6 +62,9 @@ public:
 
   // Fake animals eat their exhibit's food (a few units each an hour)
   void update(float seconds, const Fences &fences);
+  // Game time played (its art plays by it: the fish food's swirl, a pile
+  // of chow's flies - still while paused)
+  float clock = 0;
   void collect(const WorldRenderer &view, const WorldMap &map,
                std::vector<Fences::Drawable> &out) const;
 

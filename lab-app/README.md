@@ -14,7 +14,7 @@ installs its packages (Electron) into `node_modules/`, which isn't
 committed.
 
 **Installed:** `dist/ZT1-Lab-Setup-<version>.exe` (a release's third
-download, or `make_release.py --lab`), which is this app - Electron and
+download), which is this app - Electron and
 all - with the engine and what the Lab needs inside it, and no admin
 prompt. It installs into `%LocalAppData%\Programs\ZT1-Lab`:
 
@@ -68,11 +68,10 @@ because that source is not in the installer. Both sit beside `LICENSE.txt` in
 the install; `engine-build-resources/notices.py` writes them, and
 `fetch_licenses.py` keeps the one text no package provides (unicorn's GPLv2).
 
-Building an installer needs node/npm (electron-builder) and Inno Setup 6;
-`python engine-build-resources/pack_lab.py` does it by hand. That build
-also fetches and checks the backend the Lab carries — `vendor_python.py`
-(a Python with `capstone`, `pefile` and `unicorn`) and `vendor_ghidra.py`
-(Ghidra and the JDK, taken from the building machine's copies).
+The installer is built on the release machine. Its packing and the
+backend it carries (a Python with `capstone`, `pefile` and `unicorn`, and
+Ghidra with its JDK) are part of the release tooling, which isn't in this
+repository.
 
 The **checkout** needs none of that: it runs on the machine's own
 Python 3, so that still needs `unicorn`, `capstone` and `pefile`.
@@ -93,7 +92,10 @@ python re/cloud/sync.py contribute  # send what this checkout worked out
 
 The released Lab and checkout include the shared endpoint, so no per-user
 setup is needed. `re/private/cloud.json` or `ZT1_KB_API` can override it.
-The Lab can sync from its control port, so an AI agent can too
+**Sharing** in the Lab's header turns it on (off until you do): the Lab then
+receives and sends in the background - at start and every half hour, sending
+only what changed - and its dialog shows when it last did and **Share now**.
+The Lab can sync from its control port too, so an AI agent can
 (`lab_kb_cloud`). Anything contributed lands **provisional** until it is
 reviewed, and a contribution from a `zoo.exe` build other than the 2002
 Complete Collection is refused - its addresses would land on the wrong
@@ -197,7 +199,7 @@ engine; then Experiments.
 | **Write Code** | Engine code | Our engine's own source (and, on the left, the game's files): write the feature, **Build engine**. |
 | **Test Zoo** | Scene | Our engine running a test zoo, as a scene editor and debugger (below). |
 | **Play Game** | Play | **Play ZT1 Engine**: the whole game as our engine runs it now. **Play original**: the real zoo.exe, here in the same view, windowed and at the view's size by our hook (see *The original game in Play* below). |
-| **Experiments** | Mods | Small C++ test scripts that run in the test zoo without changing the engine (e.g. checking one of the original's functions against ours): edit, see what it will do in plain words, **Build & test in lab**. |
+| **Experiments** | Mods | Small C++ scripts that run in the test zoo without changing the engine: checking one of the original's functions against ours, or making things such as the HD art mod (see *Making mods with experiments*). Edit, see what it will do in plain words, **Build & test in lab**. |
 
 **Laid out as you like:** Original Game (Find · Code · Name & details), Write
 Code (Files · Editor · Build) and Test Zoo are made of panels. Drag a panel's
@@ -567,24 +569,45 @@ game code on the live zoo, then move it where it belongs. Copying zoo.exe?
   (`playCmd` action: `click <x> <y>` at the game window's pixels;
   `src/Embed.cpp`), and the game holds still while the Play tab isn't shown.
   `move <x> <y>` rests the mouse there (hovering: tooltips, lit pieces);
+  `press <x> <y>` / `release <x> <y>` hold and let go of the left button, so
+  `playSteps "press 870 337; move 920 337; wait 700; release 920 337"` is a
+  drag at your own pace (the game follows the mouse's events, not the real
+  mouse, for drags);
   `snap` saves the next frame that draws a tooltip as `tooltip.bmp` beside
   the game - its own frame, as a window grab of the GPU window can come
-  back stale. The dev console's `tankwalls <ex> <height>` sets a tank's
-  walls (a raised tank shows its staff climbing in and out).
+  back stale. `shot <file.bmp>` saves the next whole frame - the same line
+  the original's hook answers, so `lab_play shot` (a .png) pictures either
+  game in Play. The game holds still while the Play tab is hidden, so a
+  picture needs the Play tab showing. The dev console's
+  `tankwalls <ex> <height>` sets a tank's walls (a raised tank shows its
+  staff climbing in and out).
+- **Screen size in Play:** the game draws 1:1 at the Play view's size, as
+  the original does at any size (menus centred, the in-game screen filling
+  it). The Lab owns the window, so the game's own window-size and full
+  screen buttons are greyed in Play. The game prints `[Embed] ready` once
+  its window exists, and the Lab places it over the Play view then.
+- **Game Options:** the main menu's Game Options (in Get New Zoo Tycoon
+  Items' place) and the in-game disk button open the Options window
+  (`src/ui/UiOptions.cpp`): Game (in a zoo), Graphics, Sound, Controls,
+  Gameplay, Mods & Updates, every setting kept in zoo.ini. The
+  `optionswindow` extra off brings back the original side panel. A
+  checkout's loose `build/Release/ui/startup.lyt` overrides the game's;
+  the engine edits its Game Options line by key, so either works.
 - **Build engine** saves every file and builds the engine. The lab zoo
   restarts on the new build, and **Restart the game** in Play runs it.
 - **Make release** builds the engine x64 Release in `build-x64/` (the C++
   runtime built in, today's date as its version) and its installer,
   `dist/ZT1-Engine-Setup-<version>.exe`, with its `.sha256` and
-  `dist/latest.yml`, the in-game updater's feed
-  (`engine-build-resources/make_release.py`, which also runs by hand; it
-  needs Inno Setup 6).
+  `dist/latest.yml`, the in-game updater's feed. It runs the release
+  tooling (`engine-build-resources/make_release.py`, which needs Inno
+  Setup 6), which is private and only on the release machine; without it
+  the button says so.
   - The installer holds the engine, its fonts, the licences and the
     player's README. It holds none of the original game's files: the engine
     reads the player's own install where it is.
-  - A build made here isn't official, so it never updates itself. Only the
-    release workflow's builds are.
-  - Nothing is uploaded: a `v<year>.<month>.<day>` tag publishes a release
+  - A build made here isn't official, so it never updates itself. Only
+    published releases are.
+  - Nothing is uploaded: releases are published from the release machine
     (CONTRIBUTING.md).
 
 - **Sync** (the tab under the editor) takes the engine to GitHub and CodeRook.
@@ -616,6 +639,45 @@ compiled. Each time the Lab starts clangd it writes
 `.cache/lab-clangd/compile_commands.json` from it (every source in `src/`),
 so clangd indexes the whole engine and **Who calls this** finds callers in
 files that aren't open.
+
+## Your mods (Experiments › Your mods)
+
+Making mods properly, and sharing them. The guide for modders is `docs/MODDING.md`.
+
+- **Down the left** are the mods in the game's mods folder.
+  - **New mod** starts one from a template: game files (a .ztd), a shader, or empty.
+  - **Bring in a mod** takes an old Zoo Tycoon download (.ztd), a .zip, or a mod's folder, and makes it a proper mod. This uses the engine's own importer (`zt1-engine --import-mod <path>`, the same as the game's Mod Menu › Add a mod...).
+- **The picked mod:** edit its mod.json fields (name, id, author, version, about), switch it on or off, **Check it**, and **Upload to the mod repository**.
+  - **Check it** applies the same rules the repository's checks use: game data only, no paths outside the mod, at most 200,000 files, and a mod.json with an id and a name.
+  - **Upload** zips the mod and sends it in chunks to the mod repository (`https://mods.coderook.com/v1/modrepo/zt1`). There it's checked again, including a malware scan, and approved automatically. Then it's in every official game's Mod Menu › Mod repository. Uploading the same mod again updates it.
+- **Your uploads**, on the right, lists the mods you've uploaded and what their checks said. Each has **Take it down**. You sign in with your CodeRook account (`cbx sign-in`, or a pasted personal token, kept in the Lab's own state). Each mod belongs to whoever uploaded it.
+
+## Making mods with experiments (the toolkit)
+
+An experiment can make things as well as test them: mods, art packs, anything a program on your PC makes. Its `Lab *lab` has a small toolkit for this (`re/lab/lab_api.h`, "Making things"), so you can build your own without changing the Lab:
+
+- `start(program, args, cwd)` runs a program in the background and returns a job number. Poll `running(job)` from `lab_step`, then read `exitCode(job)` when it's done; `stop(job)` ends it. Its output goes to the log, except lines that are only a percentage.
+- `engineExe()` is the engine itself, for its tools:
+  - `--hd-export <folder> [prefix…]` writes map art's frames out as PNGs.
+  - `--hd-finish <frames> <upscaled> <out>` tidies upscaled frames into a mod's `hd/` folder.
+  - `--hd-survey [prefix…]` logs how many frames and pixels there are.
+- `makeDir`, `removeDir` (it never removes a drive or a top-level folder), `writeFile`, `exists` and `countFiles(dir, ".png")` handle files and folders.
+- `writeMod(folder, name, author, about)` writes a mod's `mod.json`, unless it already has one. A mod's own settings can go in that file too; see `mods/zt1-toon/README.md`.
+- `useModsFolder(folder)` points the game at a mods folder, so it finds what you made. `modsFolder()` says where it looks now.
+
+### The HD art experiment (`re/lab/scripts/hd_art.cpp`)
+
+This makes a mod of AI-upscaled map art: the animals, people, fences and objects drawn while the map is zoomed in. The game shows the original art until a player switches the mod on in the Mod Menu or Game Options › Mods & Updates, and the switch takes effect at once. It's an ordinary experiment, so copy it to make your own version with another upscaler, model or set of art.
+
+- Its settings are at the top of the file: the mod's name and folder, the mods folder, the art to upscale (folder prefixes such as `animals/lion staff/keeper fences/chainlnk`, or empty for all of it), and the upscaler and its model.
+- Running it does three steps:
+  1. The engine writes out the original frames (`--hd-export`). Each frame's clear edge pixels are filled with neighbouring colours so the upscaler doesn't draw dark fringes.
+  2. [Real-ESRGAN ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN) (BSD-3, works on any Vulkan graphics card) makes them 4x. The inspector shows how many frames are done.
+  3. The engine puts them in the mod's `hd/` folder (`--hd-finish`). Sizes are checked against the originals, the original outline is kept, and the texture's fine detail is put back.
+  The work folders are deleted afterwards.
+- Recoloured art comes out in the right colours. A building's chosen colours, staff hair and skin, and guests' clothes are swapped in when the HD frame loads (`HdArt::recolour`), because the pack is made from each frame's own palette.
+- **In the game's dev console:** `hdart` lists the HD art mods with their counts: frames in use, frames missing, and the zoom the map was last drawn at. `hdart on|off` switches them.
+- **Size and time:** the lion, zookeeper and chain-link fence came to 20,630 frames and 792 MB, and took about 3 minutes on an RX 6600. The scientist's 1,785 frames took 64 s. All the map art is about a million frames.
 
 ## Driving the Lab from an AI agent (MCP)
 

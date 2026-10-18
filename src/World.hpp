@@ -243,6 +243,8 @@ public:
     // Straight; Tab cycles while a path is picked)
     void cyclePathMode(int step);
     FenceMode getPathMode() const { return pathMode; }
+    // A path drag planned as a bridge (the ground too uneven for a path)
+    bool isBridgePlan() const { return this->smartPlan && this->pathDragging; }
     void cycleFenceMode(int step);
     FenceMode getFenceMode() const { return fenceMode; }
     static const char *fenceModeName(FenceMode m);
@@ -279,6 +281,7 @@ public:
     // A step, 30 a second: zoo.ini [UI] mouseScrollX (32 unless the Game
     // Options' scroll speed set it - zoo.exe 0x51a33c, 0x606800)
     static inline float kEdgeScrollPixels = 32.0f;
+    static inline bool kEdgeScrollOn = true;
 
     // Camera control
     void setCameraPosition(int x, int y);
@@ -474,6 +477,11 @@ private:
     // Window pixels to the ground (world tiles); the nearest grid vertex and
     // edge
     bool pick(int x, int y, float &wx, float &wy);
+    void drawPathPreview(SDL_Renderer *renderer, const std::set<std::pair<int, int>> *only);
+    // The same for the fence tool: over a tank's water, the point at its
+    // rim's height (where its walls stand), not its sunken floor's - a wall
+    // under the cursor, not two tiles nearer the viewer
+    bool pickFence(int x, int y, float &wx, float &wy);
     Fences::Edge nearestEdge(float wx, float wy) const;
     ZooReader zooReader;           // Map file parser
 

@@ -9,6 +9,8 @@
 #include "RenderSettings.hpp"
 #include "ArtScaler.hpp"
 #include "GpuFsr.hpp"
+#include "HdArt.hpp"
+#include "ShaderMods.hpp"
 #include "MemoryManager.hpp"
 #include "MemoryTracker.hpp"
 #include <SDL2/SDL.h>
@@ -311,7 +313,11 @@ void World::update(const Uint8 *state, float deltaTime) {
       }
     }
     // Which exhibit each animal is in (one opened up: loose; a fence closed
-    // round them: in that)
+    // round them: in that). A tank taken apart crates its sea animals first
+    for (const auto &tiles : fences.takeLostTanks()) {
+      animals.boxSeaAnimals(tiles);
+      items.removeOn(tiles);
+    }
     animals.rehome(worldMap, fences);
     // Each exhibit's animals, for its keepers
     for (const Fences::Exhibit &ex : fences.exhibits())
@@ -379,7 +385,9 @@ void World::handleCameraInput(const Uint8 *state, float deltaTime) {
   // bottom (8 and 7 in a window), corners both ways, 32 screen pixels 30
   // times a second (mouseScrollX/Y, at every zoom), not while a terraform
   // drag is under way; while the window has the mouse and the focus
-  if (this->edgeScroll && !this->terrain.isHeld())
+  // (unless the player switched it off: Game Options > Controls, [user]
+  // edgescroll - an addition, on as the original)
+  if (this->edgeScroll && kEdgeScrollOn && !this->terrain.isHeld())
     if (SDL_Window *w = SDL_GetMouseFocus())
       if (SDL_GetKeyboardFocus() == w) {
         int mx = 0, my = 0, ww = 0, wh = 0;
@@ -524,14 +532,25 @@ void World::draw(SDL_Renderer *renderer) {
   // Zoomed in past 1x, GPU FSR draws the map at 1:1 into a layer and
   // upscales it into the view; without it the map's art is drawn from its
   // upscaled textures.
-  const bool gpuFsr = GpuFsr::upscales(zoom);
+  // (with an HD art mod on, the map's art is drawn from its HD frames at the
+  // zoom - FSR, or Smooth's layer, would draw the original's frames)
+  // (a shader mod's art shader too: its frames are made through it, drawn
+  // at the zoom)
+  const bool hdArt = HdArt::active() || Shaders::artActive();
+  const bool gpuFsr = GpuFsr::upscales(zoom) && !hdArt;
   // Zoomed out, the map is drawn at 1:1 into a layer and shrunk into the
   // view smoothly (halving at a time, like mipmaps): shrunk as it's drawn,
   // the art lost most of its pixels and looked rough
   SDL_Texture *savedTarget = SDL_GetRenderTarget(renderer);
   const int fullW = static_cast<int>(std::ceil(view.w / zoom)),
             fullH = static_cast<int>(std::ceil(view.h / zoom));
-  const bool shrink = !gpuFsr && zoom < 0.999f && fullW <= 8192 && fullH <= 8192 &&
+  // Zoomed in with Smooth picked (Art upscaling, no FSR): drawn the same way
+  // and the whole picture smoothed up into the view at once - stretched
+  // piece by piece, the soft edges of art laid edge to edge (tank walls,
+  // water sides, tiles) left lines between the pieces
+  const bool smoothUp =
+      !gpuFsr && !hdArt && zoom > 1.001f && RenderSettings::artLook == RenderSettings::ArtLook::Smooth;
+  const bool shrink = !gpuFsr && (zoom < 0.999f || smoothUp) && fullW <= 8192 && fullH <= 8192 &&
                       shrinkTarget(renderer, 0, fullW, fullH);
   if (shrink) {
     SDL_SetRenderTarget(renderer, this->shrinkLayers[0].tex);
@@ -549,7 +568,14 @@ void World::draw(SDL_Renderer *renderer) {
     SDL_RenderSetScale(renderer, zoom, zoom);
   }
   RenderSettings::worldZoomedIn =
-      !gpuFsr && zoom > 1.001f && ArtScaler::worldFactor() > 1;
+      !gpuFsr && !shrink && zoom > 1.001f && (ArtScaler::worldFactor() > 1 || hdArt);
+  // (zoomed in without FSR, drawn bigger as it goes: the art sharp or
+  // smooth as picked - Art upscaling)
+  RenderSettings::lastWorldZoom = zoom;
+  RenderSettings::lastWorldZoomedIn = RenderSettings::worldZoomedIn;
+  const SDL_ScaleMode lookWas = RenderSettings::artScaleMode;
+  if (!gpuFsr && !shrink && zoom > 1.001f)
+    RenderSettings::artScaleMode = RenderSettings::lookFor(zoom);
 
   // Render terrain layer
   worldRenderer.renderTerrain(renderer, worldMap, SpriteDatabase::get());
@@ -661,6 +687,10 @@ void World::draw(SDL_Renderer *renderer) {
   }
   this->deckOverlay.clear();
   this->drawBrush(renderer);
+  // The path tool's tiles, over everything: under the objects, a tank's
+  // ground drawn again in front of it and the fences hid them, and a path
+  // being laid there looked refused
+  this->drawPathPreview(renderer, nullptr);
   // (debug) over the objects, so blocked tiles under rocks show
   if (this->debugPaths)
     this->drawPathDebug(renderer);
@@ -698,12 +728,53 @@ void World::draw(SDL_Renderer *renderer) {
   SDL_RenderSetScale(renderer, 1.0f, 1.0f);
   SDL_RenderSetViewport(renderer, nullptr);
   RenderSettings::worldZoomedIn = false;
+  RenderSettings::artScaleMode = lookWas;
   cam.zoom = userZoom;
 }
 
 // Laying fence: the grid line under each piece of it, green where it can
 // go and red where it can't, and (as the original) the tile under the
 // cursor outlined
+// The path tool's tiles (green / orange / red). only: just those tiles - the
+// ground a tank draws again in front of itself covered them (paths near a
+// tank looked refused, 4-5 tiles out), so they're drawn again after it
+void World::drawPathPreview(SDL_Renderer *renderer, const std::set<std::pair<int, int>> *only) {
+  if (this->pathTool.empty())
+    return;
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    for (auto &p : this->pathPreview) {
+      auto [x, y] = p.first;
+      if (only && !only->count({x, y}))
+        continue;
+      if (this->line.active || this->smartPlan) {
+        bool ground = false;
+        for (const DeckPreview &d : this->deckPreview)
+          if (d.x == x && d.y == y)
+            ground = d.ground;
+        if (!ground)
+          continue;
+      }
+      const MapTile *t = this->worldMap.getTile(x, y);
+      if (!t)
+        continue;
+      const float cx[4] = {0, 1, 1, 0}, cy[4] = {0, 0, 1, 1};
+      const int ci[4] = {CORNER_X0Y0, CORNER_X1Y0, CORNER_X1Y1, CORNER_X0Y1};
+      SDL_Vertex v[4];
+      // (measured: the tile filled green or orange, nearly solid)
+      SDL_Color c = p.second == Fences::Fit::Ok         ? SDL_Color{49, 150, 24, 225}
+                    : p.second == Fences::Fit::InTheWay ? SDL_Color{165, 97, 24, 225}
+                                                        : SDL_Color{170, 30, 24, 225};
+      for (int i = 0; i < 4; i++) {
+        float sx, sy, d;
+        this->worldRenderer.worldToScreenF(x + cx[i], y + cy[i],
+                                           static_cast<float>(t->cornerHeight[ci[i]]), sx, sy, d);
+        v[i] = {{sx, sy}, c, {0, 0}};
+      }
+      int idx[6] = {0, 1, 2, 0, 2, 3};
+      SDL_RenderGeometry(renderer, nullptr, v, 4, idx, 6);
+    }
+}
+
 void World::drawToolOverlay(SDL_Renderer *renderer) {
   // The bulldozer's path tile: red (measured from the original)
   if (this->bulldozer && this->bulldozePath.first >= 0) {
@@ -744,36 +815,7 @@ void World::drawToolOverlay(SDL_Renderer *renderer) {
         this->deckOverlay.assign(v, v + 4);
         (void)idx;
       }
-    for (auto &p : this->pathPreview) {
-      auto [x, y] = p.first;
-      if (this->line.active || this->smartPlan) {
-        bool ground = false;
-        for (const DeckPreview &d : this->deckPreview)
-          if (d.x == x && d.y == y)
-            ground = d.ground;
-        if (!ground)
-          continue;
-      }
-      const MapTile *t = this->worldMap.getTile(x, y);
-      if (!t)
-        continue;
-      const float cx[4] = {0, 1, 1, 0}, cy[4] = {0, 0, 1, 1};
-      const int ci[4] = {CORNER_X0Y0, CORNER_X1Y0, CORNER_X1Y1, CORNER_X0Y1};
-      SDL_Vertex v[4];
-      // (measured: the tile filled green or orange, nearly solid)
-      SDL_Color c = p.second == Fences::Fit::Ok         ? SDL_Color{49, 150, 24, 225}
-                    : p.second == Fences::Fit::InTheWay ? SDL_Color{165, 97, 24, 225}
-                                                        : SDL_Color{170, 30, 24, 225};
-      for (int i = 0; i < 4; i++) {
-        float sx, sy, d;
-        this->worldRenderer.worldToScreenF(x + cx[i], y + cy[i],
-                                           static_cast<float>(t->cornerHeight[ci[i]]), sx, sy, d);
-        v[i] = {{sx, sy}, c, {0, 0}};
-      }
-      int idx[6] = {0, 1, 2, 0, 2, 3};
-      SDL_RenderGeometry(renderer, nullptr, v, 4, idx, 6);
-    }
-    return;
+    return; // (its tiles: drawPathPreview, over everything, at the end)
   }
   if (!filter && (this->fenceTool < 0 || this->hoverTileX < 0))
     return;
@@ -1064,6 +1106,29 @@ bool World::pickFence(int x, int y, Fences::Edge &e) {
 }
 
 // The tile edge nearest a point on the ground
+bool World::pickFence(int x, int y, float &wx, float &wy) {
+  if (!this->pick(x, y, wx, wy))
+    return false;
+  int ex = this->fences.exhibitAt(static_cast<int>(std::floor(wx)), static_cast<int>(std::floor(wy)));
+  const Fences::Exhibit *t = this->fences.exhibit(ex);
+  if (!t || !t->tank)
+    return true;
+  const Camera &cam = worldRenderer.getCamera();
+  float zoom = (cam.zoom > 0 ? cam.zoom : 1.0f) * this->viewScale;
+  float lx = (x - this->viewRect.x) / zoom, ly = (y - this->viewRect.y) / zoom;
+  Camera &c = worldRenderer.getCamera();
+  float saved = c.zoom;
+  c.zoom = zoom;
+  float rx, ry;
+  worldRenderer.screenToWorldAt(lx, ly, static_cast<float>(t->groundHeight), rx, ry);
+  c.zoom = saved;
+  if (this->worldMap.getTile(static_cast<int>(std::floor(rx)), static_cast<int>(std::floor(ry)))) {
+    wx = rx;
+    wy = ry;
+  }
+  return true;
+}
+
 Fences::Edge World::nearestEdge(float wx, float wy) const {
   float fx = wx - std::floor(wx), fy = wy - std::floor(wy);
   int tx = static_cast<int>(std::floor(wx)), ty = static_cast<int>(std::floor(wy));
@@ -2852,7 +2917,7 @@ void World::mouseMove(int x, int y) {
   if (this->fenceTool < 0)
     return;
   float wx, wy;
-  if (!this->pick(x, y, wx, wy)) {
+  if (!this->pickFence(x, y, wx, wy)) {
     if (!this->dragging) {
       this->fences.preview.clear();
       this->hoverPrice = -1; // off the map: no price
@@ -3394,6 +3459,7 @@ World::ToolResult World::mouseDown(int x, int y) {
   // lays more along the grid lines
   this->dragging = true;
   this->dragCount++;
+  this->pickFence(x, y, wx, wy);
   this->pressEdge = this->nearestEdge(wx, wy);
   // The press's grid point: the end of that piece nearest the cursor
   int ax = this->pressEdge.x, ay = this->pressEdge.y;
@@ -3591,6 +3657,10 @@ World::UndoMoney World::undo() {
   if (fences) {
     this->fences.updateExhibits(this->worldMap, date.day, date.month, date.year);
     this->fences.dropOrphanGates();
+    for (const auto &tiles : this->fences.takeLostTanks()) {
+      this->animals.boxSeaAnimals(tiles);
+      this->items.removeOn(tiles);
+    }
     this->animals.rehome(this->worldMap, this->fences);
   }
   this->animals.markDirty();
@@ -3604,6 +3674,10 @@ int World::removeFence(const Fences::Edge &e) {
   this->highlight = {false, -1, -1};
   this->fences.updateExhibits(this->worldMap, date.day, date.month, date.year);
   this->fences.dropOrphanGates();
+  for (const auto &tiles : this->fences.takeLostTanks()) {
+    this->animals.boxSeaAnimals(tiles);
+    this->items.removeOn(tiles);
+  }
   this->animals.markDirty();
   this->animals.rehome(this->worldMap, this->fences);
   return refund;
@@ -3625,5 +3699,13 @@ int World::confirmDrain() {
   this->pendingDrain = {false, -1, -1};
   this->highlight = {false, -1, -1};
   this->fences.updateExhibits(this->worldMap, date.day, date.month, date.year);
+  // (its sea animals crated there and then, paused or not, as the original's
+  // Yes does: zoo.exe 0x50c3d8 -> 0x458c2b)
+  for (const auto &tiles : this->fences.takeLostTanks()) {
+    this->animals.boxSeaAnimals(tiles);
+    this->items.removeOn(tiles);
+  }
+  this->animals.markDirty();
+  this->animals.rehome(this->worldMap, this->fences);
   return refund;
 }

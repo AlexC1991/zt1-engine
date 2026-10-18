@@ -73,4 +73,35 @@ struct Lab {
   // A mapped struct field's offset from re/knowledge.json ("ZTAnimal",
   // "happiness"): -1 if it isn't mapped
   virtual int offsetOf(const char *structName, const char *field) = 0;
+
+  // --- Making things: mods, art packs, anything a program on your PC makes
+  // A program started in the background (args as one command line; cwd:
+  // where it runs, null for the engine's own folder); its job number, -1 if
+  // it didn't start. It doesn't wait: poll running() in lab_step. Its output
+  // comes to the log (not lines that are only a percentage)
+  virtual int start(const char *program, const char *args, const char *cwd) = 0;
+  // Whether it's still going (and its new output logged); exitCode once it's
+  // done (-1 while it runs); stop ends it
+  virtual bool running(int job) = 0;
+  virtual int exitCode(int job) = 0;
+  virtual void stop(int job) = 0;
+  // The engine's own exe, to start() with its tools: --hd-export <folder>
+  // [prefix...] writes map art's frames out as PNGs, --hd-finish <frames>
+  // <upscaled> <out> tidies upscaled ones into a mod's hd/ folder,
+  // --hd-survey [prefix...] logs how many frames and pixels there are
+  virtual const char *engineExe() = 0;
+  // Files and folders (removeDir never takes a drive or a top folder)
+  virtual bool makeDir(const char *path) = 0;
+  virtual bool removeDir(const char *path) = 0;
+  virtual bool writeFile(const char *path, const char *text) = 0;
+  virtual bool exists(const char *path) = 0;
+  // How many files a folder has (extension ".png", or null for all)
+  virtual int countFiles(const char *dir, const char *extension) = 0;
+  // A mod's mod.json (name, author, about), unless it has one already
+  virtual bool writeMod(const char *folder, const char *name, const char *author, const char *about) = 0;
+  // The game's mods folder (mods.cfg folder=: the Mod Menu's), here and in
+  // the game, so it finds what you made there
+  virtual void useModsFolder(const char *folder) = 0;
+  // The game's mods folder now
+  virtual const char *modsFolder() = 0;
 };

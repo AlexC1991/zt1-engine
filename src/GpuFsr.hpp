@@ -1,6 +1,10 @@
 #ifndef GPU_FSR_HPP
 #define GPU_FSR_HPP
 
+#include <string>
+#include <utility>
+#include <vector>
+
 #include <SDL2/SDL.h>
 
 // ============================================================================
@@ -28,9 +32,40 @@ enum class Layer { World = 0, Ui = 1 };
 // Sets up the shaders on an OpenGL renderer. Returns whether GPU FSR works.
 bool init(SDL_Renderer *renderer, float sharpness);
 bool available();
+// RCAS's sharpening, in stops (0 the sharpest): at once, the next frame
+// (the Game Options' Art sharpness)
+void setSharpness(float sharpness);
 
 // Whether something drawn at this scale gets upscaled by FSR
 bool upscales(float scale);
+// FSR picked for the art (Game Options > Graphics > Art upscaling): at once.
+// Off, things drawn bigger are stretched the plain way (sharp or smooth)
+void setUpscaling(bool on);
+// Stylized picked (with upscaling on): FSR's upscale, then line art's look -
+// dark steady outlines, sharper detail, livelier colours - in RCAS's place
+void setStyled(bool on);
+
+// The finished frame's colours, as the last thing drawn before it's shown
+// (an addition): a colour-blind filter - 0 off, 1 protanopia, 2
+// deuteranopia, 3 tritanopia - at a strength (0-1), and the brightness (a
+// gamma: 1 as drawn, above brighter). Daltonised: the colours a viewer with
+// that colour blindness can't tell apart are moved into ones they can
+// (Machado, Oliveira & Fernandes 2009's simulation, Fidaner et al.'s error
+// shift)
+void setColour(int filter, float strength, float brightness);
+// Applies setColour's to the window's frame (nothing when they're off)
+void finishFrame(SDL_Renderer *renderer);
+
+// Mods' shaders (ShaderMods.hpp). A fragment shader of theirs linked with
+// ours; 0 and log when it won't compile or link
+unsigned compileShader(const std::string &fragment, std::string &log);
+// An art pass: prog run over w x h - uColor (unit 0) the frame's colour,
+// uNormal (unit 1) its normals (rgb, 0.5 is 0) and height (a), uSize,
+// uTime and the shader's settings - written into out (a target texture)
+bool artPass(SDL_Renderer *renderer, unsigned prog, SDL_Texture *color, SDL_Texture *aux, SDL_Texture *out, int w,
+             int h, const std::vector<std::pair<std::string, float>> &uniforms);
+// A screen pass: prog run over the window's finished frame (uColor)
+bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pair<std::string, float>> &uniforms);
 
 // Starts a layer of lowW x lowH art pixels (cleared to clear) and makes it
 // the render target

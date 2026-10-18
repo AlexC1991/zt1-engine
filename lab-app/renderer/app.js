@@ -915,10 +915,12 @@ function renderMods() {
   }
   const will = e.stem ? modWill(e.file === 'cpp' ? e.text : '', kbFns()) : [];
   if (!S.modsLeft) S.modsLeft = store.get('modsLeft', 'mods');
+  // (the HD art panel became an experiment of its own: re/lab/scripts/hd_art.cpp;
+  // Your mods - making mods and sharing them - is modkit.js)
+  if (S.modsLeft === 'gamemods') return renderModKit();
+  if (S.modsLeft !== 'game') S.modsLeft = 'mods';
   const g = S.modsLeft === 'game' && S.modsGame;
-  $('v-mods').innerHTML = `<div class="modlist" style="width:${S.modsLeft === 'game' ? 360 : 240}px"><div class="seg mini lefttabs"><div class="${S.modsLeft !== 'game' ? 'on' : ''}" data-act="modsLeft" data-arg="mods">Your experiments</div><div class="${
-    S.modsLeft === 'game' ? 'on' : ''
-  }" data-act="modsLeft" data-arg="game">Game files</div></div>${
+  $('v-mods').innerHTML = `<div class="modlist" style="width:${S.modsLeft === 'game' ? 360 : 240}px">${modkitTabs()}${
     S.modsLeft === 'game'
       ? '<div class="gfslot" id="mods-gf"></div>'
       : `${S.mods
@@ -2205,21 +2207,35 @@ const ACTIONS = {
   // A line to the game in Play (src/Embed.hpp): "click <x> <y>" at its
   // window's pixels, for testing menus without the mouse
   playCmd: (line) => lab.playCmd(String(line || '')),
+  // The header's update button: Check updates, or - one downloaded and
+  // checked - Restart to update
   checkLabUpdate: async () => {
-    const button = $('lab-update-btn');
-    button.classList.add('disabled');
-    button.textContent = 'Checking…';
-    try {
-      const result = await lab.checkLabUpdate();
-      if (result.status !== 'installing') alert(result.message);
-    } catch (e) {
-      alert(`Could not check for updates: ${e.message}`);
-    } finally {
-      button.classList.remove('disabled');
-      button.textContent = 'Check updates';
+    if (LAB_UPDATE.state === 'ready') {
+      const r = await lab.labUpdateInstall();
+      if (!r.ok) toast(esc(r.message), 6000);
+      return;
     }
+    const st = await lab.checkLabUpdate();
+    showLabUpdate(st);
+    if (st.state !== 'downloading' && st.state !== 'checking') toast(esc(st.message), 5000);
   },
 };
+
+// The Lab's update state (main.js labUpdater), on the header's button
+let LAB_UPDATE = { state: 'idle', message: '' };
+function showLabUpdate(st) {
+  LAB_UPDATE = st || LAB_UPDATE;
+  const b = $('lab-update-btn');
+  if (!b) return;
+  const s = LAB_UPDATE.state;
+  b.textContent = s === 'checking' ? 'Checking…' : s === 'downloading' ? 'Downloading update…' : s === 'ready' ? 'Restart to update' : 'Check updates';
+  b.classList.toggle('disabled', s === 'checking' || s === 'downloading');
+  b.classList.toggle('primary', s === 'ready');
+  b.classList.toggle('ghost', s !== 'ready');
+  b.title = LAB_UPDATE.message || 'Check for a signed ZT1 Lab update';
+}
+lab.onLabUpdate((st) => showLabUpdate(st));
+lab.labUpdateState().then(showLabUpdate);
 
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');

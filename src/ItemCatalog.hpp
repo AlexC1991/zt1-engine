@@ -63,6 +63,8 @@ struct CatalogItem {
   // the original files the Loch Ness Monster, the dinosaur fences and
   // buildings, which have none, under Dinosaur Digs.)
   int expansion = 0;
+  // From a switched-on mod (Features::modFilter: the content filter's Mods)
+  bool fromMod = false;
 };
 
 class ItemCatalog {

@@ -30,7 +30,10 @@
 #include "EngineScripts.hpp"
 #include "Fences.hpp"
 #include "Goals.hpp"
+#include "HdArt.hpp"
 #include "IniReader.hpp"
+#include "Mods.hpp"
+#include "ShaderMods.hpp"
 #include "ItemCatalog.hpp"
 #include "LabTrace.hpp"
 #include "OriginalConstants.hpp"
@@ -258,13 +261,16 @@ int guardedStep(StepFn f, Lab *lab, int step, bool *more) {
 std::string findVcvars() {
   if (const char *v = std::getenv("ZT1_VCVARS"))
     return v;
-  for (const char *p : {"C:/Program Files/Microsoft Visual Studio/18/Community/VC/Auxiliary/Build/vcvars32.bat",
-                        "C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Auxiliary/Build/vcvars32.bat",
-                        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build/vcvars32.bat",
-                        "C:/Program Files/Microsoft Visual Studio/2022/Professional/VC/Auxiliary/Build/vcvars32.bat",
-                        "C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Auxiliary/Build/vcvars32.bat"})
-    if (fs::exists(p))
-      return p;
+  // (a script's DLL is built for the engine it loads into: the Lab runs the
+  // 64-bit build when there is one, and a 32-bit DLL wouldn't load in it)
+  const char *bat = sizeof(void *) == 8 ? "vcvars64.bat" : "vcvars32.bat";
+  for (const char *dir : {"C:/Program Files/Microsoft Visual Studio/18/Community/VC/Auxiliary/Build/",
+                          "C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Auxiliary/Build/",
+                          "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build/",
+                          "C:/Program Files/Microsoft Visual Studio/2022/Professional/VC/Auxiliary/Build/",
+                          "C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Auxiliary/Build/"})
+    if (fs::exists(std::string(dir) + bat))
+      return std::string(dir) + bat;
   return "";
 }
 
@@ -872,7 +878,194 @@ public:
     return -1;
   }
 
+  // ---- Making things: a program run in the background, files, a mod
+  int start(const char *program, const char *args, const char *cwd) override {
+    auto job = std::make_unique<Job>();
+    SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
+    HANDLE readEnd = nullptr, writeEnd = nullptr;
+    if (!CreatePipe(&readEnd, &writeEnd, &sa, 0)) {
+      log("Couldn't start %s (no pipe)", program ? program : "");
+      return -1;
+    }
+    SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOA si{};
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = si.hStdError = writeEnd;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    PROCESS_INFORMATION pi{};
+    std::string line = std::string("\"") + (program ? program : "") + "\" " + (args ? args : "");
+    std::vector<char> cmd(line.begin(), line.end());
+    cmd.push_back(0);
+    BOOL ok = CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
+                             cwd && *cwd ? cwd : nullptr, &si, &pi);
+    CloseHandle(writeEnd);
+    if (!ok) {
+      CloseHandle(readEnd);
+      log("Couldn't start %s (error %lu)", program ? program : "", GetLastError());
+      return -1;
+    }
+    CloseHandle(pi.hThread);
+    job->process = pi.hProcess;
+    job->name = fs::path(program ? program : "").filename().string();
+    Job *j = job.get();
+    // (its output read as it comes, a line at a time, for the log)
+    job->reader = std::thread([j, readEnd] {
+      char buf[4096];
+      DWORD n = 0;
+      std::string part;
+      while (ReadFile(readEnd, buf, sizeof buf, &n, nullptr) && n) {
+        part.append(buf, n);
+        size_t nl;
+        while ((nl = part.find_first_of("\r\n")) != std::string::npos) {
+          std::string l = part.substr(0, nl);
+          part.erase(0, nl + 1);
+          if (!l.empty()) {
+            std::lock_guard<std::mutex> g(j->lock);
+            j->lines.push_back(l);
+          }
+        }
+      }
+      if (!part.empty()) {
+        std::lock_guard<std::mutex> g(j->lock);
+        j->lines.push_back(part);
+      }
+      CloseHandle(readEnd);
+    });
+    jobs.push_back(std::move(job));
+    log("Started %s %s", jobs.back()->name.c_str(), args ? args : "");
+    return static_cast<int>(jobs.size()) - 1;
+  }
+  bool running(int id) override {
+    Job *j = id >= 0 && id < static_cast<int>(jobs.size()) ? jobs[id].get() : nullptr;
+    if (!j)
+      return false;
+    // (its new output to the log: not lines that are only a percentage - an
+    // upscaler's progress - and at most 200 lines a program)
+    std::deque<std::string> lines;
+    {
+      std::lock_guard<std::mutex> g(j->lock);
+      lines.swap(j->lines);
+    }
+    for (const std::string &l : lines) {
+      bool percent = !l.empty() && l.back() == '%' && l.find_first_not_of("0123456789.% ") == std::string::npos;
+      if (percent)
+        continue;
+      if (j->logged++ < 200)
+        addLog("  " + j->name + ": " + l);
+      else if (j->logged == 201)
+        addLog("  " + j->name + ": ... (more not shown)");
+    }
+    if (j->process && WaitForSingleObject(j->process, 0) == WAIT_OBJECT_0) {
+      DWORD code = 0;
+      GetExitCodeProcess(j->process, &code);
+      j->code = static_cast<int>(code);
+      CloseHandle(j->process);
+      j->process = nullptr;
+      if (j->reader.joinable())
+        j->reader.join();
+      log("%s finished (%d)", j->name.c_str(), j->code);
+      running(id); // (its last lines)
+    }
+    return j->process != nullptr;
+  }
+  int exitCode(int id) override {
+    return id >= 0 && id < static_cast<int>(jobs.size()) && !jobs[id]->process ? jobs[id]->code : -1;
+  }
+  void stop(int id) override {
+    if (id >= 0 && id < static_cast<int>(jobs.size()) && jobs[id]->process)
+      TerminateProcess(jobs[id]->process, 1);
+  }
+  const char *engineExe() override {
+    char b[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, b, MAX_PATH);
+    paths.push_back(b);
+    return paths.back().c_str();
+  }
+  bool makeDir(const char *path) override {
+    std::error_code ec;
+    fs::create_directories(path ? path : "", ec);
+    return fs::is_directory(path ? path : "", ec);
+  }
+  bool removeDir(const char *path) override {
+    // (never a drive or a folder near the top of one)
+    fs::path p = fs::absolute(path ? path : "");
+    int depth = 0;
+    for (const auto &part : p.relative_path())
+      depth += !part.empty();
+    std::error_code ec;
+    if (depth < 2 || !fs::is_directory(p, ec)) {
+      log("Not removed: %s", p.string().c_str());
+      return false;
+    }
+    fs::remove_all(p, ec);
+    return !ec;
+  }
+  bool writeFile(const char *path, const char *text) override {
+    std::ofstream out(path ? path : "", std::ios::binary | std::ios::trunc);
+    out << (text ? text : "");
+    return static_cast<bool>(out);
+  }
+  bool exists(const char *path) override {
+    std::error_code ec;
+    return fs::exists(path ? path : "", ec);
+  }
+  int countFiles(const char *dir, const char *extension) override {
+    std::error_code ec;
+    int n = 0;
+    for (const auto &e : fs::directory_iterator(dir ? dir : "", ec))
+      if (e.is_regular_file(ec) && (!extension || !*extension || e.path().extension() == extension))
+        n++;
+    return n;
+  }
+  bool writeMod(const char *folder, const char *name, const char *author, const char *about) override {
+    // (a mod.json already there - one you've edited - is kept)
+    fs::path json = fs::path(folder ? folder : "") / "mod.json";
+    std::error_code ec;
+    if (fs::exists(json, ec))
+      return true;
+    fs::create_directories(json.parent_path(), ec);
+    auto quoted = [](const char *s) {
+      std::string o = "\"";
+      for (const char *c = s ? s : ""; *c; c++)
+        o += *c == '"' || *c == '\\' ? std::string("\\") + *c : std::string(1, *c);
+      return o + "\"";
+    };
+    std::string text = "{\n  \"name\": " + quoted(name) + ",\n  \"author\": " + quoted(author) +
+                       ",\n  \"version\": \"1.0\",\n  \"about\": " + quoted(about) + ",\n  \"replaces\": []\n}\n";
+    return writeFile(json.string().c_str(), text.c_str());
+  }
+  void useModsFolder(const char *folder) override {
+    Mods::setFolder(folder ? folder : "");
+    HdArt::refresh();
+    Shaders::refresh();
+    log("The game's mods folder: %s", folder ? folder : "");
+  }
+  const char *modsFolder() override {
+    paths.push_back(Mods::folder());
+    return paths.back().c_str();
+  }
+
 private:
+  // A program a script started (start), its output waiting for the log
+  struct Job {
+    HANDLE process = nullptr;
+    std::thread reader;
+    std::mutex lock;
+    std::deque<std::string> lines;
+    std::string name;
+    int code = -1, logged = 0;
+    ~Job() {
+      if (process) {
+        TerminateProcess(process, 1);
+        CloseHandle(process);
+      }
+      if (reader.joinable())
+        reader.join();
+    }
+  };
+  std::vector<std::unique_ptr<Job>> jobs;
+  std::deque<std::string> paths;
   struct Watch {
     std::string label;
     double value;
@@ -1447,7 +1640,8 @@ void LabApp::startBuild(int s) {
     buildThread.join();
   std::string vcvars = findVcvars();
   if (vcvars.empty()) {
-    addLog("Build: no Visual Studio (vcvars32.bat) found. Set ZT1_VCVARS to its path.");
+    addLog(std::string("Build: no Visual Studio (") + (sizeof(void *) == 8 ? "vcvars64" : "vcvars32") +
+           ".bat) found. Set ZT1_VCVARS to its path.");
     return;
   }
   fs::path out = repo / "build" / "lab";
@@ -1766,6 +1960,12 @@ void LabApp::drawArt() {
 void LabApp::drawView() {
   if (viewMode == "scene") {
     world->setView(viewRect, 1.0f);
+    // What the inspector has picked gets the game's own arrow over it
+    // (ui/select/selsmall, loaded at 0x51efcd), as the game's info panels
+    // set it (UiGameScreen)
+    world->getAnimals().selected = sel.kind == "animal" ? sel.id : -1;
+    world->getGuests().selected = sel.kind == "guest" ? sel.id : -1;
+    world->getStaff().selected = sel.kind == "staff" ? sel.id : -1;
     world->draw(ren);
     SDL_RenderSetViewport(ren, nullptr);
     SDL_RenderSetClipRect(ren, nullptr);
@@ -2732,10 +2932,8 @@ std::string base64(const std::vector<unsigned char> &b) {
 }
 
 // A placed object's catalogue file (as PlacedObjects reads it back:
-// scenery/<subclass>/<type>.ai)
-std::string objectFile(const PlacedObjects::Object &o) {
-  return "scenery/" + o.subClass + "/" + o.typeName + ".ai";
-}
+// scenery/<subclass>/<type>.ai, or a downloaded entity's .ucs)
+std::string objectFile(const PlacedObjects::Object &o) { return PlacedObjects::fileOf(o); }
 
 // "ttConiferousForestFloor" -> "Coniferous Forest Floor"
 std::string spaced(const std::string &key) {
@@ -4839,7 +5037,8 @@ void LabApp::hostCommand(const Json &c) {
                                                   "fplayreverse", "fplayset", "fplaysettank", "fplaysetprob",
                                                   "fwalk", "fmove", "frun", "ffacetowardfood", "fplaysetterrain",
                                                   "ftrot", "fmovewithsound", "fmovereverse", "fhatch",
-                                                  "fhalt", "fsetbase", "fkeepcontrol", "fdie"};
+                                                  "fhalt", "fsetbase", "fkeepcontrol", "fdie", "fdustball",
+                                                  "fenterbuilding", "fexitbuilding"};
     static const std::set<std::string> playFns = {"fplay", "fplaywithsound", "fplaytime", "fplaypingpong",
                                                   "fplayreverse"};
     // (prey: the chase is the engine's own - Animals::hunt, with its set's
@@ -4858,7 +5057,81 @@ void LabApp::hostCommand(const Json &c) {
         continue;
       std::string missing, layers, refs, ambient;
       std::map<std::string, int> fns, targets;
-      int nAnims = 0, nSets = 0, nLayered = 0, badLayers = 0;
+      int nAnims = 0, nSets = 0, nLayered = 0, badLayers = 0, unreachable = 0;
+      // The sets the game can start: from its code (names zoo.exe holds:
+      // bSick, bCaughtPrey...), the engine's (bAfterCaught, bIdle1...), the
+      // species' moods (its [Ambient] lists), an object's ("b" + the object's
+      // file name + what it satisfies + n: bicefloeanimalrest0,
+      // botthoophoopjump0), and every set those call, on and on
+      std::set<std::string> reachable;
+      {
+        static std::string exeText;
+        static bool exeRead = false;
+        if (!exeRead) {
+          exeRead = true;
+          if (FILE *f = fopen((Paths::gameDir() + "zoo.exe").c_str(), "rb")) {
+            char buf[65536];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof buf, f)) > 0)
+              exeText.append(buf, n);
+            fclose(f);
+            for (char &ch : exeText)
+              ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+          }
+        }
+        static std::vector<std::string> objectStems;
+        if (objectStems.empty())
+          for (const CatalogItem &it : ItemCatalog::get().all()) {
+            std::string f = it.file;
+            for (char &ch : f)
+              ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            std::string stem = f.substr(f.find_last_of('/') + 1);
+            stem = stem.substr(0, stem.find('.'));
+            if (stem.size() >= 3 && f.rfind("animals/", 0) != 0)
+              objectStems.push_back("b" + stem);
+          }
+        static const std::set<std::string> engineRoots = {"baftercaught", "bidle1", "beat", "bfindkeeperfood",
+                                                          "bsleep", "bsick", "bdie", "bhatch", "bescaped",
+                                                          "btestfence", "bcaughtprey"};
+        std::vector<std::string> todo;
+        auto add = [&](const std::string &name) {
+          if (reachable.insert(name).second)
+            todo.push_back(name);
+        };
+        for (const auto &sets : t.sets)
+          for (const auto &[name, steps] : sets) {
+            bool root = engineRoots.count(name) ||
+                        (!exeText.empty() && exeText.find(std::string(name) + '\0') != std::string::npos);
+            for (const std::string &o : objectStems)
+              root = root || name.rfind(o, 0) == 0;
+            // (a show's: "b" + a trick's name= - bTrickBreach, bfoodtrick)
+            root = root || name.rfind("btrick", 0) == 0 ||
+                   (name.size() > 5 && name.compare(name.size() - 5, 5, "trick") == 0);
+            if (root)
+              add(name);
+          }
+        for (const auto *list : {&t.ambient, &t.ambientWater, &t.ambientUnder, &t.ambientSurface})
+          for (const Animals::Ambient &am : *list)
+            add(am.set);
+        while (!todo.empty()) {
+          std::string name = todo.back();
+          todo.pop_back();
+          for (const auto &sets : t.sets) {
+            auto it = sets.find(name);
+            if (it == sets.end())
+              continue;
+            for (const Animals::Step &st : it->second)
+              for (const std::string &a : st.args) {
+                std::string l = a;
+                for (char &ch : l)
+                  ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                for (const auto &other : t.sets)
+                  if (other.count(l))
+                    add(l);
+              }
+          }
+        }
+      }
       // (each art's name written down before it's loaded, flushed: if one
       // never loads, the last line of species_check_trail.txt names it)
       FILE *trail = fopen("species_check_trail.txt", "w");
@@ -4915,6 +5188,13 @@ void LabApp::hostCommand(const Json &c) {
         }
         for (const auto &[setName, steps] : t.sets[s]) {
           nSets++;
+          // (a set the game can never start - none of its own sets call it,
+          // nor its code: the leftover bBabyActions and the bBaby1 / bBaby2
+          // it picks from, in 75 species - is left out of the counts)
+          if (!reachable.count(setName)) {
+            unreachable++;
+            continue;
+          }
           for (const Animals::Step &st : steps) {
             std::string fn = st.fn;
             for (char &ch : fn)
@@ -4942,7 +5222,8 @@ void LabApp::hostCommand(const Json &c) {
       }
       for (const auto *list : {&t.ambient, &t.ambientWater, &t.ambientUnder, &t.ambientSurface})
         for (const Animals::Ambient &am : *list)
-          if (!t.sets[0].count(am.set))
+          // (in any of its kinds: the mermaid's are all "f", she has no "m")
+          if (!t.sets[0].count(am.set) && !t.sets[1].count(am.set) && !t.sets[2].count(am.set))
             ambient += (ambient.empty() ? "" : ",") + jq(am.set);
       auto counts = [](const std::map<std::string, int> &m) {
         std::string s;
@@ -4955,6 +5236,7 @@ void LabApp::hostCommand(const Json &c) {
       out += (out.empty() ? "" : ",") + std::string("{\"species\":") + jq(stem) + ",\"underwater\":" +
              (t.underwater ? "true" : "false") + ",\"depth\":" + std::to_string(t.needDepth) +
              ",\"anims\":" + std::to_string(nAnims) + ",\"sets\":" + std::to_string(nSets) +
+             ",\"setsNeverStarted\":" + std::to_string(unreachable) +
              ",\"layered\":" + std::to_string(nLayered) + ",\"badLayers\":" + std::to_string(badLayers) +
              ",\"missingArt\":[" + missing + "],\"layers\":[" + layers + "],\"stepsNotDone\":" + counts(fns) +
              ",\"movesNotKnown\":" + counts(targets) + ",\"namedNotThere\":[" + refs +

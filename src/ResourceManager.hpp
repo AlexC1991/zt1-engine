@@ -53,7 +53,8 @@ public:
                              const std::string &raw_name,
                              const std::string &pal_name);
 
-  SDL_Cursor *getCursor(uint32_t cursor_id, int hotX = 0, int hotY = 0);
+  // scale: each pixel that many times bigger (the Cursor size setting)
+  SDL_Cursor *getCursor(uint32_t cursor_id, int hotX = 0, int hotY = 0, int scale = 1);
   Mix_Music *getMusic(const std::string &file_name);
   IniReader *getIniReader(const std::string &file_name);
   // ours: a file the engine supplies in place of the game's, or beside it
@@ -97,6 +98,9 @@ public:
   // path): 0 = the first directory (the highest priority, e.g. dlupdate);
   // bigger = later (the base game's own archives are last)
   int getResourcePriority(const std::string &name);
+  // Whether a switched-on mod supplies it (a mod's folder is ahead of the
+  // game's in the path: what it adds, and what it changes)
+  bool fromMod(const std::string &name) { return getResourcePriority(name) < modPaths; }
   // The archive (or folder) a resource is read from: the one that wins
   std::string archiveOf(const std::string &name) { return getResourceLocation(name); }
   // Every resource and the archive it's read from, as loaded (loose files
@@ -115,6 +119,7 @@ private:
   std::unordered_map<std::string, std::function<std::string(ResourceManager *)>> provided;
   std::unordered_map<std::string, std::string> resource_map;
   std::unordered_map<std::string, int> archive_priority; // archive -> path index
+  int modPaths = 0; // the mods' folders, first in the path
   std::unordered_map<uint32_t, std::string> string_map;
   std::unordered_map<std::string, Animation *> animation_map;
   std::unordered_map<std::string, Pallet *> pallet_map;

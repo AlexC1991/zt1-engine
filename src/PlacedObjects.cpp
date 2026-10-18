@@ -164,6 +164,20 @@ void PlacedObjects::setColour(Object &o, int part, int choice) {
   this->loadLayers(o);
 }
 
+// A map's or save's object names only its type: its file is the .ai, or a
+// downloaded entity's .ucs / .ucb / .uca when there's no .ai by that name
+void PlacedObjects::resolveExt(Object &o) const {
+  o.ext = ".ai";
+  if (!this->rm || this->rm->hasResource(fileOf(o)))
+    return;
+  for (const char *e : {".ucs", ".ucb", ".uca"}) {
+    o.ext = e;
+    if (this->rm->hasResource(fileOf(o)))
+      return;
+  }
+  o.ext = ".ai";
+}
+
 bool PlacedObjects::add(const std::string &file, float x, float y, int facing) {
   // scenery/<subclass>/<type>.ai
   size_t a = file.find('/'), b = file.find('/', a + 1), dot = file.find_last_of('.');
@@ -172,6 +186,8 @@ bool PlacedObjects::add(const std::string &file, float x, float y, int facing) {
   Object o;
   o.subClass = file.substr(a + 1, b - a - 1);
   o.typeName = file.substr(b + 1, dot == std::string::npos ? std::string::npos : dot - b - 1);
+  if (dot != std::string::npos && dot > b)
+    o.ext = file.substr(dot);
   // (as the map file names them: rocks and foliage are "objects")
   o.className = o.subClass == "building" ? "building" : "objects";
   o.bought = true;
@@ -291,6 +307,7 @@ void PlacedObjects::load(const ZooReader &reader, ResourceManager *rm) {
     o.className = obj.className;
     o.subClass = obj.subClass;
     o.typeName = obj.typeName;
+    resolveExt(o);
     o.name = obj.name;
     o.x = obj.x / 64.0f;
     o.y = obj.y / 64.0f;
@@ -395,6 +412,7 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
     bool clip = false;
     float clipX0 = 0, clipX1 = 0;
     float clipY1 = 1e9f;
+    bool seamless = false; // (a tank wall's piece: drawLayered with its neighbours)
   };
   std::vector<Drawn> drawn;
   drawn.reserve(this->list.size());
@@ -534,7 +552,7 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
   for (const Fences::Drawable &f : fences)
     drawn.push_back({f.depth, f.sx, f.sy, nullptr, f.art, f.side,
                      f.tinted ? &f.tint : nullptr, f.frame, f.custom ? &f.custom : nullptr,
-                     f.clip, f.clipX0, f.clipX1, f.clipY1});
+                     f.clip, f.clipX0, f.clipX1, f.clipY1, f.seamless});
   std::stable_sort(drawn.begin(), drawn.end(),
                    [](const Drawn &a, const Drawn &b) { return a.depth < b.depth; });
 
@@ -555,7 +573,21 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
     SDL_RenderSetClipRect(renderer, r);
     SDL_RenderSetScale(renderer, sxScale, syScale);
   };
-  for (const Drawn &d : drawn) {
+  for (size_t i = 0; i < drawn.size(); i++) {
+    const Drawn &d = drawn[i];
+    // A run of a tank wall's pieces, one after another in the order: drawn
+    // as one picture (Fences.hpp drawLayered)
+    if (d.seamless && !d.clip && !d.custom && d.art) {
+      size_t j = i;
+      while (j < drawn.size() && drawn[j].seamless && !drawn[j].clip && !drawn[j].custom && drawn[j].art)
+        j++;
+      drawLayered(renderer, [&] {
+        for (size_t k = i; k < j; k++)
+          drawn[k].art->drawAnchored(renderer, drawn[k].sx, drawn[k].sy, drawn[k].side, drawn[k].tint, drawn[k].frame);
+      });
+      i = j - 1;
+      continue;
+    }
     if (d.clip) {
       // (the strip's columns, the whole height; within any clip there was)
       int x0 = d.clipX0 < -1e8f ? -1000000 : static_cast<int>(std::lround(d.clipX0 * sxScale));

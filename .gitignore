@@ -65,3 +65,7 @@ lab-app/_dev_*.py
 /private/*
 !/private/.gitkeep
 /engine-build-resources/save_private.py
+/engine-build-resources/verify_release.js
+# The next release's notes, written as the work is done (the tag's message
+# when it's published)
+/engine-build-resources/NEXT_RELEASE_NOTES.md

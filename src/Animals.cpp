@@ -161,6 +161,7 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.file = item->file;
     t.key = item->type;
     t.nameId = item->nameId;
+    t.displayName = item->name;
     t.cost = item->cost;
     t.expansion = item->expansion;
     // ([Member] dinosaur: a scientist's to look after, not a keeper's)
@@ -684,6 +685,15 @@ void Animals::box(int id) {
   play(*m, "stand", Member::Mode::Loop, 1.0f);
 }
 
+void Animals::boxSeaAnimals(const std::set<std::pair<int, int>> &tiles) {
+  for (Member &m : this->list) {
+    if (m.boxed || m.id == this->carried || !this->typeList[m.type].underwater)
+      continue;
+    if (tiles.count({static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y))}))
+      this->box(m.id);
+  }
+}
+
 int Animals::escapedCount() const {
   int n = 0;
   for (const Member &m : this->list)
@@ -811,6 +821,17 @@ Animation *Animals::art(const Member &m, const std::string &nameIn) const {
   Animation *a = this->rm && this->rm->hasResource(path + ".ani") ? this->rm->getAnimation(path) : nullptr;
   this->artCache[path] = a;
   return a;
+}
+
+Animation *Animals::crate(const Member &m) const {
+  if (m.type >= 0 && m.type < static_cast<int>(this->typeList.size())) {
+    const Type &t = this->typeList[m.type];
+    int s = sub(m);
+    if (t.anims[s].count("box_idle") || t.anims[0].count("box_idle"))
+      if (Animation *a = this->art(m, "box_idle"))
+        return a;
+  }
+  return this->crateArt;
 }
 
 Animation *Animals::preview(int type, bool female) const {
@@ -981,7 +1002,8 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   m.exhibit = fences.exhibitAt(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
   if (this->tankAt && this->tankAt(x, y) >= 0)
     m.swimZ = m.swimTo = this->tankTargetHeight(m, "");
-  m.name = (this->rm ? this->rm->getString(t.nameId) : t.key) + " " + std::to_string(++this->counts[type]);
+  m.name = (!t.displayName.empty() ? t.displayName : this->rm ? this->rm->getString(t.nameId) : t.key) + " " +
+           std::to_string(++this->counts[type]);
   m.happiness = static_cast<float>(std::clamp(t.initialHappiness, -100, 100));
   m.energy = 0;
   m.health = static_cast<float>(t.maxHits);
@@ -1420,8 +1442,18 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       this->markDirty(m.exhibit);
       ZT_STEP("0x437860", "Hatched: a baby", {"name", m.name});
       continue;
+    } else if (s.fn == "fdustball") {
+      // (bCaughtPrey's: the catch already showed it - the ball by where the
+      // hunter is, zoo.exe 0x588d47 - and its set runs on after it)
+      continue;
+    } else if (s.fn == "fenterbuilding" || s.fn == "fexitbuilding") {
+      // (an object's animalrest set - an ice floe's, driftwood's: zoo.exe's
+      // fEnterBuilding 0x5ad3a6 finds the building on its tile and sends it
+      // message 0x2722, then stops. Ours: in it from arriving at it, out
+      // when the set's done - leaveShelter)
+      continue;
     } else {
-      // (not yet: fDie, fDustBall, fFollow, ...)
+      // (not yet: fFollow, ...)
       continue;
     }
     return;
@@ -1740,7 +1772,11 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
       continue;
     }
     // The dust ball (bCaughtPrey: fDustBall, zoo.exe 0x588d47): when it's
-    // over the prey's gone (no body, no word of it), and its bAfterCaught
+    // over the prey's gone (no body, no word of it), and its bCaughtPrey
+    // runs on from there - a tiger's picks bAfterCaught on land, bWaterActive
+    // in water; a shark's, fDustBall then fPlaySetTank(bAcsurf, bAcsub), its
+    // after-the-catch at the surface or under it (the dust ball itself was
+    // this catch's: fDustBall is passed over). No bCaughtPrey: bAfterCaught
     if (m.victim >= 0) {
       m.killIn -= seconds;
       if (m.killIn <= 0) {
@@ -1750,8 +1786,9 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
         m.victim = -1;
         m.stack.clear();
         m.stepping = false;
-        if (this->set(m, "baftercaught"))
-          pushSet(m, "baftercaught");
+        const char *after = this->set(m, "bcaughtprey") ? "bcaughtprey" : "baftercaught";
+        if (this->set(m, after))
+          pushSet(m, after);
       }
       continue;
     }
@@ -1986,7 +2023,7 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
     bool inTank = this->tankAt && this->tankAt(m.x, m.y) >= 0;
     if (this->onlyTank != -2 ? (!inTank || this->tankAt(m.x, m.y) != this->onlyTank) : (inTank && m.id != this->carried))
       continue;
-    Animation *a = m.boxed && this->crateArt ? this->crateArt : this->art(m, m.anim);
+    Animation *a = m.boxed ? this->crate(m) : this->art(m, m.anim);
     if (!a)
       continue;
     // Inside a shelter: not seen
@@ -2150,9 +2187,23 @@ void Animals::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, cons
   this->onlySurface = false;
   std::stable_sort(out.begin(), out.end(),
                    [](const Fences::Drawable &a, const Fences::Drawable &b) { return a.depth < b.depth; });
-  for (Fences::Drawable &d : out)
-    if (d.art)
-      d.art->drawAnchored(renderer, d.sx, d.sy, d.side, d.tinted ? &d.tint : nullptr, d.frame);
+  // (a big one comes as strips, for sorting against the fences outside a
+  // tank: in one it's drawn once - each strip drawn whole, a whale shark
+  // was drawn ten times over itself, its see-through edges darkened)
+  std::vector<const Fences::Drawable *> drawn;
+  for (Fences::Drawable &d : out) {
+    if (!d.art)
+      continue;
+    if (d.animalStrip) {
+      bool again = false;
+      for (const Fences::Drawable *o : drawn)
+        again = again || (o->art == d.art && o->sx == d.sx && o->sy == d.sy && o->frame == d.frame);
+      if (again)
+        continue;
+      drawn.push_back(&d);
+    }
+    d.art->drawAnchored(renderer, d.sx, d.sy, d.side, d.tinted ? &d.tint : nullptr, d.frame);
+  }
 }
 
 int Animals::pick(float px, float py, const WorldRenderer &view, const WorldMap &map) const {
@@ -3051,7 +3102,8 @@ void Animals::lifeEvents(const WorldMap &map, const Fences &fences) {
     b.id = this->nextId++;
     b.baby = true;
     b.female = std::uniform_int_distribution<int>(0, 1)(this->rng) == 1;
-    b.name = (this->rm ? this->rm->getString(t.nameId) : t.key) + " " + std::to_string(++this->counts[kind]);
+    b.name = (!t.displayName.empty() ? t.displayName : this->rm ? this->rm->getString(t.nameId) : t.key) + " " +
+             std::to_string(++this->counts[kind]);
     b.x += 0.3f;
     b.happiness = static_cast<float>(std::clamp(t.initialHappiness, -100, 100));
     b.health = static_cast<float>(t.maxHits);

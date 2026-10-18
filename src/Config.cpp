@@ -101,7 +101,9 @@ bool Config::getTimedUnlocks() {
 }
 
 bool Config::getWidescreen() {
-  return reader->getInt("user", "widescreen", 0) != 0;
+  // (the original fills its screen whatever its size; 0 keeps our old 4:3
+  // box, scaled and centred)
+  return reader->getInt("user", "widescreen", 1) != 0;
 }
 
 float Config::getArtSharpness() {

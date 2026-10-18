@@ -68,6 +68,9 @@ public:
   // (fractional), following the ground's height. False off the map.
   bool screenToWorld(float sx, float sy, const WorldMap &map, float &x,
                      float &y) const;
+  // The world point under a logical screen point at a given height (a
+  // tank's rim: its walls stand there, not on its sunken floor)
+  void screenToWorldAt(float sx, float sy, float h, float &x, float &y) const;
 
   // View rotation in 90 degree steps. 0 = the game's default (north) view,
   // where the map's x = 0 edge faces the lower left of the screen.

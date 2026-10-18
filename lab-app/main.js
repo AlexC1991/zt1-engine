@@ -247,39 +247,25 @@ function onHostData(d) {
 ipcMain.on('engine:send', (_e, cmd) => {
   if (host.sock) host.sock.write(JSON.stringify(cmd) + '\n');
 });
-ipcMain.handle('lab:update', async () => {
-  if (!app.isPackaged) return { status: 'unavailable', message: 'Updates are available in the installed release.' };
-  let manifest;
-  try {
-    manifest = labUpdates.validate(await labUpdates.readManifest());
-  } catch (e) {
-    return { status: 'error', message: `Could not verify the update: ${e.message}` };
-  }
-  const current = app.getVersion();
-  if (labUpdates.compareVersions(manifest.version, current) <= 0)
-    return { status: 'current', message: `ZT1 Lab ${current} is up to date.` };
-  const choice = await dialog.showMessageBox(win, {
-    type: 'info', buttons: ['Download and install', 'Cancel'], defaultId: 0, cancelId: 1,
-    title: 'ZT1 Lab update available',
-    message: `ZT1 Lab ${manifest.version} is available (you have ${current}).`,
-    detail: 'The installer is signed and will be checked before it runs. The Lab will close during installation.'
-  });
-  if (choice.response !== 0) return { status: 'cancelled', message: 'Update cancelled.' };
-  const dir = fs.mkdtempSync(path.join(app.getPath('temp'), 'zt1-lab-update-'));
-  const installer = path.join(dir, manifest.file);
-  try {
-    await labUpdates.download(manifest, installer);
-    const proc = cp.spawn(installer, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/RELAUNCHLAB=1'], { detached: false, stdio: 'ignore', windowsHide: true });
-    await new Promise((resolve, reject) => {
-      proc.once('error', reject);
-      proc.once('spawn', resolve);
-    });
-    app.quit();
-    return { status: 'installing', message: 'The update installer has started.' };
-  } catch (e) {
-    try { fs.rmSync(dir, {recursive:true, force:true}); } catch {}
-    return { status: 'error', message: `Update failed: ${e.message}` };
-  }
+// The Lab's own updates (update.js controller): looked for on a timer,
+// downloaded and checked in the background; the header's button installs
+// one that's ready (the Lab closes and starts again), else it goes in when
+// the Lab closes
+const labUpdater = labUpdates.controller({
+  app,
+  send: (st) => send('lab:updateState', st),
+  spawn: (file, args, opts) => cp.spawn(file, args, opts),
+  log: (line) => console.log(line),
+});
+ipcMain.handle('lab:update', () => labUpdater.check(true));
+ipcMain.handle('lab:updateState', () => labUpdater.state());
+ipcMain.handle('lab:updateInstall', () => {
+  const r = labUpdater.install(true);
+  if (r.ok) setTimeout(() => app.quit(), 300);
+  return r;
+});
+app.on('will-quit', () => {
+  if (labUpdater.ready()) labUpdater.install(false);
 });
 ipcMain.handle('engine:start', () => {
   if (!host.sock) startHost();
@@ -328,6 +314,11 @@ ipcMain.handle('play:start', () => {
   const log = fs.createWriteStream(path.join(PRIVATE, 'play.log'));
   proc.stdout.pipe(log);
   proc.stderr.pipe(log);
+  // (its window made: put it over the Play view now - the page's timers
+  // after starting could all pass before a slow start made it)
+  proc.stdout.on('data', (d) => {
+    if (play.proc === proc && d.toString('utf8').includes('[Embed] ready')) placeGame();
+  });
   proc.on('exit', (code) => {
     if (play.proc !== proc) return;
     play.proc = null;
@@ -535,9 +526,10 @@ ipcMain.handle('orig:nameFn', (_e, address, name, summary, confidence, cls, by) 
   const r = cp.spawnSync(labPython(), args, { cwd: REPO || roots.state, encoding: 'utf8', windowsHide: true, timeout: 60000 });
   return r.status === 0 ? { ok: true } : { error: ((r.stdout || '') + (r.stderr || '')).trim() };
 });
+// (our engine answers the same line, src/Embed.hpp: a picture of either game)
 ipcMain.handle('play:shot', async (_e, file) => {
-  if (!play.proc || play.kind !== 'original') return { error: 'The original isn’t running in Play.' };
-  const bmp = path.join(PRIVATE, 'original-shot.bmp');
+  if (!play.proc) return { error: 'Nothing is running in Play.' };
+  const bmp = path.join(PRIVATE, `${play.kind}-shot.bmp`);
   try {
     fs.unlinkSync(bmp);
   } catch {}
@@ -561,7 +553,7 @@ ipcMain.handle('play:shot', async (_e, file) => {
       px[d + 2] = b[s + 2];
       px[d + 3] = 255;
     }
-  const out = file || path.join(PRIVATE, 'original-shot.png');
+  const out = file || path.join(PRIVATE, `${play.kind}-shot.png`);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, nativeImage.createFromBitmap(px, { width: w, height: h }).toPNG());
   return { file: out, width: w, height: h };
@@ -1777,8 +1769,9 @@ const LOADERS_JSON = at('lab', 'loaders.json');
 // The shared knowledge base (re/cloud): what every install of the Lab has
 // worked out about zoo.exe, moved between checkouts by re/cloud/sync.py. What
 // shares and what doesn't - and why only one build of the game is involved -
-// is in re/cloud/README.md. Nothing happens by itself: the Lab only ever runs
-// it when it is asked to, and `pull` writes to re/knowledge.json.
+// is in re/cloud/README.md. It runs when asked (lab_kb_cloud, Share now) or,
+// with the header's Sharing on, in the background (shareTick below); `pull`
+// writes to re/knowledge.json.
 const CLOUD_CONF = path.join(PRIVATE, 'cloud.json');
 // The endpoint is part of the Lab's public release configuration. A player's
 // private setting or environment override can point a checkout elsewhere.
@@ -1800,21 +1793,112 @@ function cloudZooArgs() {
   const exe = zooExePath();
   return exe && fs.existsSync(exe) ? ['--zoo', exe] : [];
 }
+// (run without holding the Lab up: a whole base going up takes minutes, and
+// spawnSync froze the window and its control port for all of it)
 function cloudRun(args, timeout = 600000) {
   const api = CLOUD_API();
   if (!api) {
-    return { ok: false, error: 'The Lab has no shared knowledge base configured. Check re/cloud/config.json, ZT1_KB_API, or re/private/cloud.json.' };
+    return Promise.resolve({ ok: false, error: 'The Lab has no shared knowledge base configured. Check re/cloud/config.json, ZT1_KB_API, or re/private/cloud.json.' });
   }
   const wantsZoo = args[0] === 'contribute';
-  const r = cp.spawnSync(labPython(), [at('cloud', 'sync.py'), ...args, '--api', api, ...(wantsZoo ? cloudZooArgs() : [])], {
-    cwd: REPO || roots.state,
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout,
+  return new Promise((resolve) => {
+    let said = '';
+    const p = cp.spawn(labPython(), [at('cloud', 'sync.py'), ...args, '--api', api, ...(wantsZoo ? cloudZooArgs() : [])], {
+      cwd: REPO || roots.state,
+      windowsHide: true,
+    });
+    const keep = (d) => (said = (said + d.toString('utf8')).slice(-8000));
+    p.stdout.on('data', keep);
+    p.stderr.on('data', keep);
+    const stop = setTimeout(() => p.kill(), timeout);
+    p.on('error', (e) => {
+      clearTimeout(stop);
+      resolve({ ok: false, said: String(e.message || e), api });
+    });
+    p.on('close', (code) => {
+      clearTimeout(stop);
+      resolve({ ok: code === 0, said: said.trim().slice(-4000), api });
+    });
   });
-  const said = ((r.stdout || '') + (r.stderr || '')).trim();
-  return { ok: r.status === 0, said: said.slice(-4000), api };
 }
+
+// Sharing (the header's Sharing control): with it on, what this Lab works
+// out about zoo.exe goes up to the shared base and what other Labs found
+// comes down, in the background - at start, then every half hour, sending
+// only when re/knowledge.json has changed since the last send. Off by
+// default: it's the player's choice, kept in re/private/sharing.json (an
+// installed Lab's own state). What goes and what never does is in
+// re/cloud/README.md: findings and which functions ran, never a recording,
+// a zoo or anything in re/private.
+const SHARE_CONF = path.join(PRIVATE, 'sharing.json');
+const share = { busy: '', timer: null };
+function shareState() {
+  const s = jsonFile(SHARE_CONF, {}) || {};
+  return { on: !!s.on, lastPull: s.lastPull || null, lastSend: s.lastSend || null, sentKb: s.sentKb || 0 };
+}
+function shareSave(s) {
+  try {
+    fs.mkdirSync(path.dirname(SHARE_CONF), { recursive: true });
+    fs.writeFileSync(SHARE_CONF, JSON.stringify(s, null, 1) + '\n');
+  } catch {}
+}
+function shareReport() {
+  const s = shareState();
+  const out = { ...s, busy: share.busy, api: CLOUD_API() };
+  send('share:state', out);
+  return out;
+}
+// (the last line of what sync.py said: "2080 findings and 18167 situations
+// kept", "read 6 pages: ...")
+const lastLine = (said) => String(said || '').trim().split(/\r?\n/).filter(Boolean).pop() || '';
+async function shareTick(force = false) {
+  const s = shareState();
+  if ((!s.on && !force) || share.busy || !CLOUD_API()) return shareReport();
+  try {
+    share.busy = 'pulling';
+    shareReport();
+    const pulled = await cloudRun(['pull']);
+    s.lastPull = { at: new Date().toISOString(), ok: pulled.ok, said: lastLine(pulled.said) };
+    shareSave(s);
+    // (what came down was written to knowledge.json - its mtime after the
+    // pull is the base line: only a change of this Lab's own goes up)
+    let mtime = 0;
+    try {
+      mtime = fs.statSync(KNOWLEDGE).mtimeMs;
+    } catch {}
+    if (force || !s.sentKb || mtime > s.sentKb + 1000) {
+      share.busy = 'sending';
+      shareReport();
+      const sent = await cloudRun(['contribute']);
+      s.lastSend = { at: new Date().toISOString(), ok: sent.ok, said: lastLine(sent.said) };
+      if (sent.ok) {
+        try {
+          s.sentKb = fs.statSync(KNOWLEDGE).mtimeMs;
+        } catch {}
+      }
+      shareSave(s);
+    }
+  } finally {
+    share.busy = '';
+  }
+  return shareReport();
+}
+function shareSchedule() {
+  if (share.timer) clearInterval(share.timer);
+  share.timer = null;
+  if (!shareState().on) return;
+  share.timer = setInterval(() => shareTick(), 30 * 60 * 1000);
+}
+ipcMain.handle('share:get', () => shareReport());
+ipcMain.handle('share:set', (_e, on) => {
+  const s = shareState();
+  s.on = !!on;
+  shareSave(s);
+  shareSchedule();
+  if (s.on) shareTick();
+  return shareReport();
+});
+ipcMain.handle('share:now', () => shareTick(true));
 // (what the shared base holds right now: the front page is written for a
 // person to read, so it is fetched rather than run through sync.py)
 ipcMain.handle('kb:cloud', () => {
@@ -1822,7 +1906,7 @@ ipcMain.handle('kb:cloud', () => {
   if (!api) return { api: '', configured: false };
   return { api, configured: true };
 });
-ipcMain.handle('kb:cloudSync', (_e, what, dry) => {
+ipcMain.handle('kb:cloudSync', async (_e, what, dry) => {
   const known = ['pull', 'contribute', 'pending'];
   if (!known.includes(what)) return { ok: false, error: 'not a shared-base action: ' + what };
   return cloudRun([what, ...(dry ? ['--dry-run'] : [])]);
@@ -2349,10 +2433,16 @@ let engineRelease = null;
 // "folder=", else mods/ by the engine - each a mod.json and its files;
 // mods.cfg's "enabled=" lines are the ones switched on. The Lab engine
 // loads them when it starts.
+// (the mods.cfg the Lab's engine reads: beside the engine it runs - the
+// 64-bit build's when there is one)
+function modsCfgPath() {
+  const exe = engineExe();
+  return path.join(exe ? path.dirname(exe) : RELEASE, 'mods.cfg');
+}
 function modsCfg() {
   const cfg = { folder: '', enabled: [] };
   try {
-    for (const line of fs.readFileSync(path.join(RELEASE, 'mods.cfg'), 'utf8').split(/\r?\n/)) {
+    for (const line of fs.readFileSync(modsCfgPath(), 'utf8').split(/\r?\n/)) {
       const at = line.indexOf('=');
       if (at < 0) continue;
       const k = line.slice(0, at), v = line.slice(at + 1);
@@ -2389,9 +2479,348 @@ ipcMain.handle('gamemods:enable', (_e, folder, on) => {
   const lines = [];
   if (cfg.folder) lines.push('folder=' + cfg.folder);
   for (const e of set) lines.push('enabled=' + e);
-  fs.writeFileSync(path.join(RELEASE, 'mods.cfg'), lines.join('\n') + '\n');
+  fs.writeFileSync(modsCfgPath(), lines.join('\n') + '\n');
   return { ok: true, enabled: [...set] };
 });
+// ------------------------------------------------------------ Your mods
+// Experiments > Your mods: making mods properly, and sharing them. A mod is
+// a folder in the game's mods folder with a mod.json and its files (the
+// modding guide: docs/MODDING.md). Here: a new one from a template, an old
+// Zoo Tycoon download (.ztd), a .zip or a folder brought in (the engine's own
+// --import-mod, the Mod Menu's Add a mod...), its details, a check against
+// the rules the mod repository's own checks use, uploading it to the mod
+// repository (CodeRook: checked there, then offered in every official
+// game's Mod Menu), and the mods you've uploaded - updated or taken down.
+const MODREPO = process.env.ZT1_MODREPO_URL || 'https://mods.coderook.com/v1/modrepo/zt1';
+const MOD_FILE_OK = new Set(['.ztd', '.ai', '.ani', '.pal', '.tga', '.bmp', '.png', '.webp', '.jpg', '.jpeg', '.wav', '.ogg', '.mp3', '.json', '.ini', '.txt', '.md', '.frag', '.lyt', '.uca', '.ucs', '.ucb', '.scn', '.zoo', '.lng', '.cfg', '.tgs', '.rtf', '.htm', '.html']);
+const modFileOk = (name) => {
+  const ext = path.extname(name).toLowerCase();
+  return ext === '' || MOD_FILE_OK.has(ext);
+};
+const modId = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, 64);
+function modPath(folder) {
+  const root = path.resolve(modsFolder());
+  const p = path.resolve(root, String(folder || ''));
+  return p.startsWith(root + path.sep) ? p : null;
+}
+function readModJson(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, 'mod.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+// Who's uploading: their CodeRook token - the one `cbx sign-in` keeps, or
+// one put in here (kept with the Lab's own state, never in the repository)
+const MODKIT_TOKEN = path.join(PRIVATE, 'coderook-token');
+function coderookToken() {
+  for (const f of [MODKIT_TOKEN, path.join(process.env.APPDATA || '', 'coderook', 'token')])
+    try {
+      const t = fs.readFileSync(f, 'utf8').trim();
+      if (t) return t;
+    } catch {}
+  return '';
+}
+async function repoCall(method, route, body, raw) {
+  const token = coderookToken();
+  if (!token) throw new Error('Sign in to CodeRook first (Your uploads > Sign in).');
+  const headers = { Authorization: 'Bearer ' + token, 'User-Agent': 'ZT1-Lab/1' };
+  if (body !== undefined && !raw) headers['Content-Type'] = 'application/json';
+  // (Electron's own net.fetch - Chromium's network, the PC's proxy and
+  // certificates; Node's fetch failed here)
+  const r = await require('electron').net.fetch(MODREPO + route, { method, headers, body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
+  const text = await r.text();
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {}
+  return { status: r.status, json, text };
+}
+// (everyone's own mods, the owner's too: /my - CodeRook checks each upload
+// and signs the catalogue the games are shown itself)
+function repoMine(method, route, body, raw) {
+  return repoCall(method, '/my' + route, body, raw);
+}
+const repoError = (r) => (r.json && (r.json.message || r.json.error)) || `The mod repository answered ${r.status}.`;
+// One mod as Your uploads shows it: its name, version, and where its checks are
+function uploadRow(m) {
+  const e = m.entry || {};
+  const p = (m.parts || [])[0] || {};
+  const c = p.check || {};
+  const live = !!p.live;
+  const status =
+    c.state === 'queued' || c.state === 'checking' || p.uploading
+      ? 'Being checked'
+      : c.state === 'rejected'
+      ? live ? 'Its new version was turned down (the old one is still offered)' : 'Turned down'
+      : c.state === 'error'
+      ? "The checks couldn't run: upload it again"
+      : live
+      ? 'In the mod repository'
+      : 'Not offered yet';
+  const reason = c.state === 'rejected' || c.state === 'error' ? (c.problems || []).join(' ') : '';
+  return { id: m.mod, name: e.name || m.mod, version: e.version || '', live, status, reason, hidden: !!m.hidden };
+}
+function modkitLog(line) {
+  send('modkit:progress', { line });
+}
+
+// What a file's first bytes say it really is, whatever its name: a program
+// or a script is turned down (as the repository's own checks do), else ''
+function sniffProgram(head) {
+  if (head.length >= 2 && head[0] === 0x4d && head[1] === 0x5a) return 'a Windows program';
+  if (head.length >= 4 && head[0] === 0x7f && head.toString('latin1', 1, 4) === 'ELF') return 'a program';
+  if (head.length >= 2 && head[0] === 0x23 && head[1] === 0x21) return 'a script';
+  return '';
+}
+function fileHead(p) {
+  const fd = fs.openSync(p, 'r');
+  try {
+    const buf = Buffer.alloc(4);
+    return buf.subarray(0, fs.readSync(fd, buf, 0, 4, 0));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+function entryHead(f) {
+  return new Promise((resolve) => {
+    const s = f.stream();
+    let got = Buffer.alloc(0);
+    s.on('data', (d) => {
+      got = Buffer.concat([got, d]);
+      if (got.length >= 4) {
+        s.destroy();
+        resolve(got.subarray(0, 4));
+      }
+    });
+    s.on('end', () => resolve(got));
+    s.on('error', () => resolve(got));
+  });
+}
+
+// What a mod folder breaks of the rules (errors keep it from uploading;
+// warnings don't)
+async function checkMod(dir) {
+  const errors = [], warnings = [];
+  const meta = readModJson(dir);
+  if (!meta) errors.push("It has no mod.json, or it isn't valid JSON.");
+  const id = modId((meta && meta.id) || path.basename(dir));
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(id)) errors.push(`Its id ("${id}") must be lower-case letters, numbers, . _ or -.`);
+  if (meta && !String(meta.name || '').trim()) errors.push('mod.json needs a "name".');
+  if (meta && !String(meta.author || '').trim()) warnings.push('mod.json has no "author": say who made it.');
+  if (meta && !String(meta.version || '').trim()) warnings.push('mod.json has no "version" (e.g. 1.0): the Mod Menu shows updates by it.');
+  if (meta && !String(meta.about || '').trim()) warnings.push('mod.json has no "about": what it does, in a sentence or two.');
+  let files = 0, bytes = 0;
+  const walk = async (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name), rel = path.relative(dir, p);
+      if (e.isSymbolicLink()) errors.push(`${rel} is a link: a mod holds its own files.`);
+      else if (e.isDirectory()) await walk(p);
+      else {
+        files++;
+        bytes += fs.statSync(p).size;
+        if (!modFileOk(e.name)) errors.push(`${rel}: a mod holds game data only (no programs or scripts).`);
+        else {
+          const really = sniffProgram(fileHead(p));
+          if (really) errors.push(`${rel} is really ${really}: a mod holds game data only.`);
+        }
+        if (path.extname(e.name).toLowerCase() === '.ztd') {
+          try {
+            const unzipper = require('unzipper');
+            const z = await unzipper.Open.file(p);
+            for (const f of z.files) {
+              if (f.type !== 'File') continue;
+              if (f.path.includes('..') || path.isAbsolute(f.path) || /^[A-Za-z]:/.test(f.path)) errors.push(`${rel}: ${f.path} points outside the mod.`);
+              else if (!modFileOk(path.basename(f.path))) errors.push(`${rel}: ${f.path} isn't game data.`);
+              else {
+                const really = sniffProgram(await entryHead(f));
+                if (really) errors.push(`${rel}: ${f.path} is really ${really}.`);
+              }
+            }
+          } catch {
+            errors.push(`${rel} isn't a .ztd the game can read (a .ztd is a zip).`);
+          }
+        }
+      }
+    }
+  };
+  try {
+    await walk(dir);
+  } catch (e) {
+    errors.push(String(e.message || e));
+  }
+  if (files > 200000) errors.push(`It has ${files} files: at most 200,000.`);
+  return { ok: errors.length === 0, id, errors, warnings, files, bytes };
+}
+
+ipcMain.handle('modkit:new', (_e, req = {}) => {
+  const name = String(req.name || '').trim() || 'My mod';
+  const root = modsFolder();
+  fs.mkdirSync(root, { recursive: true });
+  const base = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '') || 'My mod';
+  let folder = base;
+  for (let n = 2; fs.existsSync(path.join(root, folder)); n++) folder = `${base} (${n})`;
+  const dir = path.join(root, folder);
+  fs.mkdirSync(dir, { recursive: true });
+  const meta = { id: modId(name), name, author: String(req.author || ''), version: '1.0', about: '', replaces: [] };
+  if (req.template === 'shader') {
+    meta.about = 'A shader mod: Game Options > Shaders.';
+    fs.mkdirSync(path.join(dir, 'shaders'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'shaders', 'look.json'), JSON.stringify({ name, about: 'What it does to the picture.', stage: 'art', settings: [{ name: 'strength', label: 'Strength', min: 0, max: 1, value: 0.5 }] }, null, 2) + '\n');
+    fs.writeFileSync(path.join(dir, 'shaders', 'look.frag'), '#version 120\n// An art shader: each frame of the zoomed-in map art (see mods/zt1-toon/README.md)\nuniform sampler2D uColor;\nuniform vec2 uSize;\nuniform float strength;\n\nvoid main() {\n  vec4 c = texture2D(uColor, (floor(gl_FragCoord.xy) + 0.5) / uSize);\n  gl_FragColor = vec4(mix(c.rgb, c.rgb * 1.2, strength), c.a);\n}\n');
+  } else if (req.template === 'ztd') {
+    meta.about = 'New or changed game files, in a .ztd under their game paths.';
+    fs.writeFileSync(path.join(dir, 'README.md'), '# ' + name + "\n\nPut your files in a .ztd here (a zip, with the game's own paths inside: animals/<name>/..., objects/<name>/...).\nThe Lab's Game files tab shows every path the game has, and its animation maker makes a recoloured copy of an animal as a mod.\n");
+  }
+  fs.writeFileSync(path.join(dir, 'mod.json'), JSON.stringify(meta, null, 2) + '\n');
+  return { ok: true, folder };
+});
+
+ipcMain.handle('modkit:import', async (_e, file) => {
+  if (!file) {
+    const pick = await dialog.showOpenDialog(win, {
+      title: "Bring in a mod: an old Zoo Tycoon download (.ztd), a .zip, or a mod's mod.json",
+      filters: [{ name: 'Mods', extensions: ['ztd', 'zip', 'json'] }, { name: 'All files', extensions: ['*'] }],
+      properties: ['openFile'],
+    });
+    if (pick.canceled || !pick.filePaths.length) return { ok: false, cancelled: true };
+    file = pick.filePaths[0];
+  }
+  const exe = engineExe('import');
+  if (!exe) return { ok: false, message: 'No engine to bring it in with: build it first.' };
+  const r = cp.spawnSync(exe, ['--import-mod', file], { cwd: path.dirname(exe), encoding: 'utf8', windowsHide: true, timeout: 120000 });
+  const line = String(r.stdout || '').split(/\r?\n/).reverse().find((l) => l.trim().startsWith('{'));
+  try {
+    return JSON.parse(line);
+  } catch {
+    return { ok: false, message: "The engine didn't say what happened." };
+  }
+});
+
+ipcMain.handle('modkit:check', async (_e, folder) => {
+  const dir = modPath(folder);
+  return dir ? checkMod(dir) : { ok: false, errors: ['No such mod.'], warnings: [] };
+});
+
+ipcMain.handle('modkit:save', (_e, folder, fields = {}) => {
+  const dir = modPath(folder);
+  if (!dir) return { ok: false };
+  const meta = readModJson(dir) || {};
+  for (const k of ['id', 'name', 'author', 'version', 'about']) if (k in fields) meta[k] = String(fields[k]);
+  if (meta.id) meta.id = modId(meta.id);
+  fs.writeFileSync(path.join(dir, 'mod.json'), JSON.stringify(meta, null, 2) + '\n');
+  return { ok: true, meta };
+});
+
+ipcMain.handle('modkit:open', (_e, folder) => {
+  const dir = folder ? modPath(folder) : modsFolder();
+  if (dir) shell.openPath(dir);
+  return { ok: !!dir };
+});
+
+ipcMain.handle('modkit:token', (_e, token) => {
+  if (typeof token === 'string') {
+    if (token.trim()) fs.writeFileSync(MODKIT_TOKEN, token.trim());
+    else fs.rmSync(MODKIT_TOKEN, { force: true });
+  }
+  return { signedIn: !!coderookToken(), own: fs.existsSync(MODKIT_TOKEN) };
+});
+
+// The mods you've uploaded, and what the repository's checks said
+ipcMain.handle('modkit:mine', async () => {
+  try {
+    const r = await repoMine('GET', '/mods');
+    if (r.status === 200) return { ok: true, mods: ((r.json && r.json.mods) || []).map(uploadRow) };
+    return { ok: false, message: r.status === 401 ? "CodeRook didn't accept your sign-in." : repoError(r) };
+  } catch (e) {
+    return { ok: false, message: String(e.message || e) };
+  }
+});
+
+ipcMain.handle('modkit:takedown', async (_e, id) => {
+  try {
+    const r = await repoMine('DELETE', '/mods/' + encodeURIComponent(id));
+    return { ok: r.status === 200, message: r.status === 200 ? 'Taken down.' : repoError(r) };
+  } catch (e) {
+    return { ok: false, message: String(e.message || e) };
+  }
+});
+
+// Uploading a mod: checked here first, zipped (its folder's files, as the
+// game reads them), sent in chunks, then the repository's own checks; once
+// they pass it's in every official game's Mod Menu. The same again updates it.
+ipcMain.handle('modkit:upload', async (_e, folder) => {
+  const dir = modPath(folder);
+  if (!dir) return { ok: false, message: 'No such mod.' };
+  const check = await checkMod(dir);
+  if (!check.ok) return { ok: false, message: 'Fix these first:\n' + check.errors.join('\n'), check };
+  // (its mod.json names its id and folder: the repository checks they match)
+  const meta = readModJson(dir);
+  if (meta.id !== check.id || meta.folder !== path.basename(dir)) {
+    meta.id = check.id;
+    meta.folder = path.basename(dir);
+    fs.writeFileSync(path.join(dir, 'mod.json'), JSON.stringify(meta, null, 2) + '\n');
+  }
+  if (!/^[A-Za-z0-9 ._-]+$/.test(meta.folder))
+    return { ok: false, message: `Its folder's name ("${meta.folder}") can only have letters, numbers, spaces and . _ - in it: rename the folder.`, check };
+  const work = fs.mkdtempSync(path.join(require('os').tmpdir(), 'zt1-upload-'));
+  const zip = path.join(work, 'part.zip');
+  try {
+    modkitLog('Packing it...');
+    const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    // (its files by name, not ".": that makes "./mod.json", and the
+    // repository wants mod.json at the top of the zip)
+    const top = fs.readdirSync(dir).filter((n) => !n.startsWith('.'));
+    const z = cp.spawnSync(tar, ['-a', '-c', '-f', zip, '-C', dir, ...top], { windowsHide: true });
+    if (z.status !== 0 || !fs.existsSync(zip)) throw new Error("It couldn't be zipped.");
+    const size = fs.statSync(zip).size;
+    const sha256 = require('crypto').createHash('sha256').update(fs.readFileSync(zip)).digest('hex');
+    const entry = { id: check.id, name: meta.name, author: meta.author || '', version: meta.version || '', about: meta.about || '', folder: path.basename(dir), parts: [{ id: 'files', name: 'The mod' }] };
+    modkitLog(`Telling the repository about ${entry.name}...`);
+    let r = await repoMine('POST', '/mods', entry);
+    if (r.status === 409) throw new Error(`The id "${entry.id}" is someone else's mod: give yours another id.`);
+    if (r.status !== 200 && r.status !== 201) throw new Error(repoError(r));
+    r = await repoMine('PUT', `/mods/${entry.id}/parts/files`, { size, sha256 });
+    if (r.status !== 201 && r.status !== 200) throw new Error((r.json && (r.json.message || r.json.error)) || `The mod repository answered ${r.status}.`);
+    const { upload, chunkBytes, chunks } = r.json;
+    const fd = fs.openSync(zip, 'r');
+    try {
+      for (let n = 1; n <= chunks; n++) {
+        const len = Math.min(chunkBytes, size - (n - 1) * chunkBytes);
+        const buf = Buffer.alloc(len);
+        fs.readSync(fd, buf, 0, len, (n - 1) * chunkBytes);
+        modkitLog(`Sending ${n} of ${chunks}...`);
+        const c = await repoMine('PUT', `/mods/${entry.id}/parts/files/chunks/${n}?upload=${encodeURIComponent(upload)}`, buf, true);
+        if (c.status !== 200) throw new Error(`Part ${n} wasn't taken (${c.status}).`);
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    r = await repoMine('POST', `/mods/${entry.id}/parts/files/complete`, { upload });
+    if (r.status !== 202 && r.status !== 200) throw new Error(repoError(r));
+    // Its checks over there (the rules, every file sniffed, a virus scan):
+    // live when they pass, else turned down with the reasons
+    modkitLog('Checking it over there (rules and a virus scan)...');
+    for (let i = 0; i < 120; i++) {
+      await new Promise((res) => setTimeout(res, 5000));
+      const g = await repoMine('GET', '/mods/' + encodeURIComponent(entry.id));
+      if (g.status !== 200) continue;
+      const row = uploadRow(g.json);
+      const part = (g.json.parts || [])[0] || {};
+      const state = (part.check || {}).state;
+      if (state === 'live' || (state !== 'queued' && state !== 'checking' && part.live && !part.uploading))
+        return { ok: true, message: "It passed the checks: it's in every official game's Mod Menu (Mod repository).", check };
+      if (state === 'rejected' || state === 'error')
+        return { ok: false, message: `${row.status}: ${row.reason}`, check };
+    }
+    return { ok: true, message: "Uploaded: it's still being checked. Your uploads shows when it's offered.", check };
+  } catch (e) {
+    return { ok: false, message: String(e.message || e), check };
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
 // The animation maker (re/lab/animaker.py): an animation's colours, or a
 // new one made from it as a mod
 ipcMain.handle('anim:tool', (_e, req) => {
@@ -2419,7 +2848,10 @@ ipcMain.handle('anim:tool', (_e, req) => {
 ipcMain.handle('engine:release', (_e, opts = {}) => {
   if (!REPO) return { error: NO_CHECKOUT };
   if (engineRelease || engineBuild) return { error: 'Already building.' };
-  const args = ['-X', 'utf8', '-u', path.join(REPO, 'engine-build-resources', 'make_release.py')];
+  // (the release tooling is private: only the release machine has it)
+  const script = path.join(REPO, 'engine-build-resources', 'make_release.py');
+  if (!fs.existsSync(script)) return { error: "Releases are made on the release machine: its tooling isn't part of the open-source engine." };
+  const args = ['-X', 'utf8', '-u', script];
   if (opts.noBuild) args.push('--no-build');
   const t0 = Date.now();
   const r = { zip: '', sha: '', error: '', leftOut: [] };
@@ -2752,10 +3184,14 @@ async function shotTour(dir) {
 app.commandLine.appendSwitch('disable-direct-composition');
 app.whenReady().then(() => {
   createWindow();
+  labUpdater.start(win);
   startHost();
   // (Ghidra's bridge too, when no Ghidra of yours has it on)
   startOwnGhidra();
   if (process.env.ZT1_LAB_SHOTS) shotTour(process.env.ZT1_LAB_SHOTS);
+  // (sharing, if it's on: a first exchange once the Lab has settled)
+  shareSchedule();
+  setTimeout(() => shareTick(), 30000);
 });
 app.on('window-all-closed', () => {
   if (host.sock) host.sock.write('{"cmd":"quit"}\n');

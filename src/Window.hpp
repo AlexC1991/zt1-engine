@@ -22,6 +22,19 @@ public:
 
     void clear();
     void present();
+
+    // The player's window, as the original keeps it in zoo.ini [user]
+    // (fullscreen, screenwidth, screenheight; [UI] lastWindowX/Y where it
+    // was) and - ours - maximized. placeSaved() puts it back at start
+    // (full screen, maximised) and turns remembering on: an ordinary run
+    // only, never the Lab's or a test's. Each move or resize after that is
+    // kept (half a second after it settles, not every step of a drag)
+    void placeSaved();
+    static void windowChanged(SDL_Window *w);
+    // Full screen on or off (Alt+Enter, F11, the Game Options), kept
+    static void setFullscreen(SDL_Window *w, bool full);
+    // The part of the window's own monitor a window may use (taskbar left out)
+    static SDL_Rect usableArea(SDL_Window *w);
 private:
     SDL_Cursor * default_cursor = nullptr;
 };

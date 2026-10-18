@@ -43,6 +43,9 @@ public:
   int getValue() const { return this->value; }
   void setValue(int v) { this->value = std::clamp(v, 0, 100); }
   std::function<void(int)> onChange;
+  // Its thumb held and being dragged; its track as last drawn (layout units)
+  bool isDragging() const { return this->dragging; }
+  SDL_Rect trackRect() const { return this->track_rect; }
 
   UiAction handleInputs(std::vector<Input> &inputs) override;
   void draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) override;
@@ -66,6 +69,10 @@ private:
   bool dragging = false;
   int drag_offset = 0;
 
+  // A slider has its own place (x, y, dx in the layout); a scrollbar some
+  // element names but nothing attached (a UIText's: the map description's
+  // 11508) has none and isn't drawn - it sat in the screen's corner
+  bool placed = false;
   bool visible() const;
   bool slider() const { return this->owner == nullptr; }
   int value = 0;

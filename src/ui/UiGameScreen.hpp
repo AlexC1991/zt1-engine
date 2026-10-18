@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "UiElement.hpp"
+#include "UiOptions.hpp"
 #include "../Staff.hpp"
 #include "../Animals.hpp"
 #include "../Guests.hpp"
@@ -166,6 +167,10 @@ public:
   void tell(const std::string &message);
   bool hasDialog() const { return this->dialog.layout != nullptr; }
   void drawDialog(SDL_Renderer *renderer, SDL_Rect *layout_rect);
+  // The Options window (the optionswindow extra: the disk button and Esc
+  // open it in place of the original's side panel)
+  UiOptions *options = nullptr;
+  bool optionsOpen() const;
 
   // The exhibits (Exhibit/Show List, ui/mulhab.lyt)
   void setFences(Fences *fences, std::function<void(float, float)> centreOn);
@@ -366,15 +371,25 @@ private:
     UiListBox *list = nullptr;
     bool open = false;
     int owner = 0; // the panel it dropped down from
+    // The game's list (All and the three packs), and the same a row taller
+    // for Mods under them (Features::modFilter)
+    UiLayout *packs = nullptr, *withMods = nullptr;
+    UiListBox *packsList = nullptr, *withModsList = nullptr;
+    IniReader *withModsIni = nullptr;
   } filter;
-  std::map<int, int> filterChoice; // panel id -> 0 all, 1..3 a pack
+  std::map<int, int> filterChoice; // panel id -> 0 all, 1..3 a pack, 4 mods
+  static constexpr int kFilterMods = 4;
+  std::string filterLabel(int choice) const;
 
   // An action a button the game handles asked for (the game menu's Main
   // Menu and Exit Game), returned from the next handleInputs
   UiAction pendingAction = UiAction::NONE;
-  // Whether an item of a pack (0..2) shows with a panel's filter
-  bool passesFilter(int panelId, int expansion) const {
+  // Whether an item of a pack (0..2) shows with a panel's filter (Mods:
+  // only what a switched-on mod adds or changes)
+  bool passesFilter(int panelId, int expansion, bool fromMod = false) const {
     auto it = this->filterChoice.find(panelId);
+    if (it != this->filterChoice.end() && it->second == kFilterMods)
+      return fromMod;
     return it == this->filterChoice.end() || it->second == 0 ||
            it->second - 1 == expansion;
   }
@@ -425,11 +440,19 @@ public:
   // (the Lab's Play: snap - the next tooltip drawn saved as tooltip.bmp)
   bool tooltipShot = false;
 private:
+  // The original panel's Interface Size slider (Sound & Video), and its
+  // live settings each frame
+  UiScaleControl panelScale;
+  void dragUiScale(SDL_Renderer *renderer);
   void setupAnimalPanel();
   // The Game Options panel's settings pages, and the Extras tab
   void setupGameOptions();
-  Uint32 tooltipDurationMs = 5000; // [UI] tooltipDuration
+  Uint32 tooltipDurationMs = 3000; // [UI] tooltipDuration (zoo.exe 0x539a66: 3000)
+  int tooltipDelayMs = 1;          // [UI] tooltipDelay (drawTooltip)
   void drawAnimalPortrait(SDL_Renderer *renderer);
+  // draw(ox, oy)'s picture kept to the circle in box (the portrait's round
+  // window)
+  static void drawRound(SDL_Renderer *renderer, const SDL_Rect &box, const std::function<void(float, float)> &draw);
   int shownFilter = -1;
   void setupFilterPanel();
   void refreshFilterPanel();

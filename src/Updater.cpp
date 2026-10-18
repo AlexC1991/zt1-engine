@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
@@ -52,8 +54,6 @@ const Feed kFeeds[] = {
 };
 
 std::mutex g_lock;
-bool g_have = false, g_taken = false;
-Updater::Release g_offer;
 
 // "2026.10.19" against "2026.10.5": number by number
 bool newer(const std::string &a, const std::string &b) {
@@ -317,6 +317,182 @@ bool lookUp(Updater::Release &out) {
   return false;
 }
 
+
+// --- Looking, downloading, offering (Updater.hpp)
+// The looking thread sleeps on this between looks; Check now wakes it
+std::condition_variable g_wake;
+bool g_wakeNow = false, g_manual = false, g_started = false;
+Updater::State g_state = Updater::State::Off;
+std::string g_status;
+// The newer release downloaded and checked, waiting to be installed
+bool g_ready = false, g_offered = false, g_installing = false;
+Updater::Release g_readyRelease;
+fs::path g_readyFile;
+
+void setState(Updater::State s, const std::string &status) {
+  std::lock_guard<std::mutex> g(g_lock);
+  g_state = s;
+  g_status = status;
+  SDL_Log("[Updater] %s", status.c_str());
+}
+
+// Where an update waits for its install (the data folder's updates\)
+fs::path pendingDir() { return fs::path(Paths::dataDir()) / "updates"; }
+
+std::string skipped() {
+  std::ifstream in(skipFile());
+  std::string v;
+  std::getline(in, v);
+  return v;
+}
+
+#ifdef _WIN32
+// Its size and SHA-512 against what the signed feed says
+bool matches(const fs::path &file, const Updater::Release &r) {
+  std::error_code ec;
+  auto size = fs::file_size(file, ec);
+  return !ec && std::to_string(size) == r.size && sha512Base64(file) == r.sha512;
+}
+
+// Downloaded (or there already from an earlier look) and checked: where it is
+bool fetch(const Updater::Release &r, fs::path &out, std::string &why) {
+  std::error_code ec;
+  fs::create_directories(pendingDir(), ec);
+  fs::path target = pendingDir() / fs::path(r.file).filename();
+  if (fs::exists(target, ec) && matches(target, r)) {
+    out = target;
+    return true;
+  }
+  fs::path part = target;
+  part += ".part";
+  if (!httpGet(r.url, nullptr, &part, why)) {
+    fs::remove(part, ec);
+    why = "the download failed: " + why;
+    return false;
+  }
+  if (!matches(part, r)) {
+    fs::remove(part, ec);
+    why = "the download didn't match its signed size and SHA-512, so it was thrown away";
+    return false;
+  }
+  fs::rename(part, target, ec);
+  if (ec) {
+    why = "couldn't keep the download";
+    return false;
+  }
+  out = target;
+  return true;
+}
+
+// Installers left from earlier updates (this version or older, or half
+// downloaded) go
+void tidyPending() {
+  std::error_code ec;
+  for (const auto &e : fs::directory_iterator(pendingDir(), ec)) {
+    std::string name = e.path().filename().string();
+    const std::string pre = "ZT1-Engine-Setup-";
+    if (name.rfind(pre, 0) != 0)
+      continue;
+    bool part = name.size() > 5 && name.compare(name.size() - 5, 5, ".part") == 0;
+    std::string v = name.substr(pre.size());
+    v = v.substr(0, v.find(".exe"));
+    if (part || !newer(v, ZT1_VERSION))
+      fs::remove(e.path(), ec);
+  }
+}
+
+// One look: the feed, and a newer release downloaded and checked. False: it
+// couldn't be done (looked again sooner)
+bool lookOnce() {
+  bool manual;
+  {
+    std::lock_guard<std::mutex> g(g_lock);
+    manual = g_manual;
+    g_manual = false;
+  }
+  setState(Updater::State::Checking, "looking...");
+  Updater::Release r;
+  if (!lookUp(r)) {
+    setState(Updater::State::Failed, "couldn't reach the servers (again in 5 min)");
+    return false;
+  }
+  if (!newer(r.version, ZT1_VERSION)) {
+    setState(Updater::State::UpToDate, std::string(ZT1_VERSION) + " is the newest");
+    return true;
+  }
+  if (!manual && skipped() == r.version) {
+    setState(Updater::State::UpToDate, r.version + " is out (skipped)");
+    return true;
+  }
+  {
+    std::lock_guard<std::mutex> g(g_lock);
+    if (g_ready && g_readyRelease.version == r.version) {
+      g_state = Updater::State::Ready;
+      if (manual)
+        g_offered = false; // (Check now: asked again)
+      return true;
+    }
+  }
+  setState(Updater::State::Downloading, "downloading " + r.version + "...");
+  fs::path file;
+  std::string why;
+  if (!fetch(r, file, why)) {
+    setState(Updater::State::Failed, r.version + ": " + why);
+    return false;
+  }
+  std::lock_guard<std::mutex> g(g_lock);
+  g_ready = true;
+  g_offered = false;
+  g_readyRelease = r;
+  g_readyFile = file;
+  g_state = Updater::State::Ready;
+  g_status = r.version + " is ready to install";
+  SDL_Log("[Updater] %s (from %s)", g_status.c_str(), r.from.c_str());
+  return true;
+}
+
+// An installer, checked again first, run silently (relaunch: the game
+// starts again after)
+bool runInstaller(const fs::path &setup, const Updater::Release &r, bool relaunch, std::string &why) {
+  if (!matches(setup, r)) {
+    why = "The update on disk no longer matches its signed size and SHA-512, so it wasn't run.";
+    return false;
+  }
+  std::wstring cmd = L"\"" + setup.wstring() + L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS";
+  if (relaunch)
+    cmd += L" /RELAUNCH";
+  STARTUPINFOW si = {sizeof(si)};
+  PROCESS_INFORMATION pi = {};
+  if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+    why = "Couldn't start the installer.";
+    return false;
+  }
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return true;
+}
+
+// The looking thread: 15 s after start, then every 30 minutes (5 after one
+// that failed), and whenever Check now asks. With Check for updates off it
+// only looks when asked
+void loop() {
+  std::unique_lock<std::mutex> lk(g_lock);
+  g_wake.wait_for(lk, std::chrono::seconds(15), [] { return g_wakeNow; });
+  for (;;) {
+    g_wakeNow = false;
+    bool look = Features::updateChecks || g_manual;
+    lk.unlock();
+    bool ok = true;
+    if (look)
+      ok = lookOnce();
+    else
+      setState(Updater::State::Off, "off (Check now still looks)");
+    lk.lock();
+    g_wake.wait_for(lk, ok ? std::chrono::minutes(30) : std::chrono::minutes(5), [] { return g_wakeNow; });
+  }
+}
+#endif
+
 } // namespace
 
 namespace Updater {
@@ -324,34 +500,132 @@ namespace Updater {
 const char *version() { return ZT1_VERSION; }
 bool official() { return ZT1_OFFICIAL_BUILD != 0; }
 
-void checkInBackground() {
-  if (!official() || Paths::portable() || !Features::updateChecks) {
-    SDL_Log("[Updater] not looking (%s)", !official() ? "a build of one's own: updates are off"
-                                          : Paths::portable() ? "a portable copy"
-                                                              : "updatechecks is off");
-    return;
-  }
-  std::thread([] {
-    Release r;
-    if (!lookUp(r) || !newer(r.version, version())) {
-      SDL_Log("[Updater] %s is the newest", version());
-      return;
-    }
-    std::ifstream in(skipFile());
-    std::string skipped;
-    std::getline(in, skipped);
-    if (skipped == r.version) {
-      SDL_Log("[Updater] %s is out; the player said to skip it", r.version.c_str());
-      return;
-    }
-    SDL_Log("[Updater] %s is out (from %s)", r.version.c_str(), r.from.c_str());
-    std::lock_guard<std::mutex> g(g_lock);
-    g_offer = r;
-    g_have = true;
-  }).detach();
+bool possible(std::string *why) {
+  std::string w;
+  if (!official())
+    w = "none in a build of your own";
+  else if (Paths::portable())
+    w = "none in a portable copy";
+  if (why)
+    *why = w;
+  return w.empty();
 }
 
-int checkNow(bool installIt) {
+void start() {
+#ifdef _WIN32
+  std::string why;
+  if (!possible(&why)) {
+    setState(State::Off, why);
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> g(g_lock);
+    if (g_started)
+      return;
+    g_started = true;
+  }
+  tidyPending();
+  setState(Features::updateChecks ? State::Idle : State::Off,
+           Features::updateChecks ? "looks shortly" : "off (Check now still looks)");
+  std::thread(loop).detach();
+#else
+  setState(State::Off, "Windows only");
+#endif
+}
+
+void checkNow() {
+  if (!possible(nullptr))
+    return;
+  start();
+  std::lock_guard<std::mutex> g(g_lock);
+  g_manual = true;
+  g_wakeNow = true;
+  g_wake.notify_all();
+}
+
+State state() {
+  std::lock_guard<std::mutex> g(g_lock);
+  return g_state;
+}
+
+std::string status() {
+  std::lock_guard<std::mutex> g(g_lock);
+  return g_status;
+}
+
+bool takeOffer(Release &out) {
+  std::lock_guard<std::mutex> g(g_lock);
+  if (!g_ready || g_offered || g_installing)
+    return false;
+  g_offered = true;
+  out = g_readyRelease;
+  return true;
+}
+
+void skip(const Release &r) {
+  {
+    std::ofstream out(skipFile(), std::ios::trunc);
+    out << r.version << "\n";
+  }
+  std::lock_guard<std::mutex> g(g_lock);
+  if (g_ready && g_readyRelease.version == r.version) {
+    g_ready = false; // (not installed on quit either)
+    g_state = State::UpToDate;
+    g_status = r.version + " skipped";
+  }
+}
+
+bool installNow(std::string &why) {
+#ifdef _WIN32
+  Release r;
+  fs::path file;
+  {
+    std::lock_guard<std::mutex> g(g_lock);
+    if (!g_ready) {
+      why = "No update is ready.";
+      return false;
+    }
+    r = g_readyRelease;
+    file = g_readyFile;
+  }
+  if (!runInstaller(file, r, true, why))
+    return false;
+  std::lock_guard<std::mutex> g(g_lock);
+  g_installing = true;
+  return true;
+#else
+  why = "Updates are Windows only.";
+  return false;
+#endif
+}
+
+bool installing() {
+  std::lock_guard<std::mutex> g(g_lock);
+  return g_installing;
+}
+
+void atExit() {
+#ifdef _WIN32
+  Release r;
+  fs::path file;
+  {
+    std::lock_guard<std::mutex> g(g_lock);
+    if (!g_ready || g_installing || !Features::updateChecks)
+      return;
+    r = g_readyRelease;
+    file = g_readyFile;
+    g_installing = true;
+  }
+  std::string why;
+  if (runInstaller(file, r, false, why))
+    SDL_Log("[Updater] installing %s as the game closes", r.version.c_str());
+  else
+    SDL_Log("[Updater] %s", why.c_str());
+#endif
+}
+
+int checkNowCli(bool installIt) {
+#ifdef _WIN32
   Release r;
   if (!lookUp(r)) {
     SDL_Log("[Updater] no feed answered");
@@ -364,61 +638,17 @@ int checkNow(bool installIt) {
   }
   if (!installIt)
     return 0;
+  fs::path file;
   std::string why;
-  if (!install(r, why)) {
+  if (!fetch(r, file, why) || !runInstaller(file, r, true, why)) {
     SDL_Log("[Updater] %s", why.c_str());
     return 3;
   }
   SDL_Log("[Updater] the installer is running");
   return 0;
-}
-
-bool takeOffer(Release &out) {
-  std::lock_guard<std::mutex> g(g_lock);
-  if (!g_have || g_taken)
-    return false;
-  g_taken = true;
-  out = g_offer;
-  return true;
-}
-
-void skip(const Release &r) {
-  std::ofstream out(skipFile(), std::ios::trunc);
-  out << r.version << "\n";
-}
-
-bool install(const Release &r, std::string &why) {
-#ifdef _WIN32
-  wchar_t tmp[MAX_PATH] = {};
-  GetTempPathW(MAX_PATH, tmp);
-  fs::path setup = fs::path(tmp) / fs::path(r.file).filename();
-  if (!httpGet(r.url, nullptr, &setup, why)) {
-    why = "The download failed: " + why;
-    return false;
-  }
-  std::error_code sizeError;
-  const auto actualSize = fs::file_size(setup, sizeError);
-  if (sizeError || std::to_string(actualSize) != r.size || sha512Base64(setup) != r.sha512) {
-    std::error_code ec;
-    fs::remove(setup, ec);
-    why = "The download didn't match its signed size and SHA-512, so it wasn't run.";
-    return false;
-  }
-  // Silently, closing this engine; /RELAUNCH: start it again afterwards
-  std::wstring cmd = L"\"" + setup.wstring() + L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /RELAUNCH";
-  STARTUPINFOW si = {sizeof(si)};
-  PROCESS_INFORMATION pi = {};
-  if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
-    why = "Couldn't start the installer.";
-    return false;
-  }
-  CloseHandle(pi.hThread);
-  CloseHandle(pi.hProcess);
-  return true;
 #else
-  (void)r;
-  why = "Updates are Windows only.";
-  return false;
+  (void)installIt;
+  return 2;
 #endif
 }
 

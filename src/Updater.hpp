@@ -3,17 +3,24 @@
 
 #include <string>
 
-// ours: updates for installed, official builds. At start it looks, in the
-// background, at GitHub's latest published release (CodeRook mirrors the
-// releases, but its feed isn't relied on for updates yet). latest.yml carries
-// an ECDSA P-256 signature over the version, installer name, size and
-// SHA-512. The updater verifies that signature before offering an update, then
-// checks the downloaded installer's size and SHA-512 before running it.
+// ours: updates for installed, official builds, the way VoxAI Coder does
+// them. The feed is CodeRook's zt1-engine release (zt1-update.yml), else
+// GitHub's latest (latest.yml). Either carries an ECDSA P-256 signature over
+// the app, version, installer name, size and SHA-512, verified against the key
+// pinned here before anything is downloaded. Looked at 15 s after start, every
+// 30 min (5 after a look that failed) and on Check now (Game Options › Mods &
+// Updates). A newer release downloads in the background into the data
+// folder's updates\ and its size and SHA-512 are checked; only then is the
+// player asked, at the main menu: Update now (it closes, installs, starts
+// again), Skip this version, or Later (installed quietly when the game
+// closes). The installer is checked again just before it runs.
 //
-// Only official builds (made by the release workflow, ZT1_OFFICIAL_BUILD)
+// Only official builds (made by the release tooling, ZT1_OFFICIAL_BUILD)
 // ever update: a copy someone built themselves keeps their own code. The
-// "updatechecks" switch (Features.hpp) turns the looking off. Never in a
-// portable copy (the checkout, the Lab, a zip): nothing there was installed.
+// "updatechecks" switch (Features.hpp) turns the timed looks off (Check now
+// still looks). Never in a portable copy (the checkout, the Lab's Play, the
+// Game Build zip): nothing there was installed. ZT1_UPDATE_FEED (a folder URL
+// ending in /) takes the feeds' place, for trying an update out.
 namespace Updater {
 
 struct Release {
@@ -30,21 +37,28 @@ struct Release {
 const char *version();
 bool official();
 
-// Look for a newer release in the background (does nothing for a build of
-// one's own, a portable copy, or with the switch off)
-void checkInBackground();
-// A newer release the background look found, once - and not one the player
-// said to skip
+// Whether this copy can update itself (an official install); why not
+bool possible(std::string *why);
+// The looking thread: 15 s after start, every 30 min (5 after a failure);
+// a newer signed release is downloaded and checked in the background
+void start();
+// Look now (Game Options' Check now), even with Check for updates off
+void checkNow();
+enum class State { Off, Idle, Checking, Downloading, Ready, UpToDate, Failed };
+State state();
+std::string status();
+// A downloaded, checked release to offer, once (Check now offers it again)
 bool takeOffer(Release &out);
 // The player said not to be asked about this one again
 void skip(const Release &r);
-// Download, check and start the installer. True: it's running - quit now so
-// it can replace the engine
-bool install(const Release &r, std::string &why);
-// zt1-engine.exe --check-update [--install]: the feed asked now, and what it
-// offers said (and installed with --install), whatever the build - for
-// trying the updater out. 0 when it went as it should
-int checkNow(bool installIt);
+// Run the ready installer now (relaunching the game): quit after
+bool installNow(std::string &why);
+// The installer was started: the game should close now
+bool installing();
+// The game closing with an update ready (Later): installed quietly
+void atExit();
+// zt1-engine.exe --check-update [--install]: for trying the updater out
+int checkNowCli(bool installIt);
 
 } // namespace Updater
 

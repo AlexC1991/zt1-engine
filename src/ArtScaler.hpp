@@ -52,6 +52,14 @@ int worldFactor();
 SDL_Texture *createTexture(SDL_Renderer *renderer, SDL_Surface *surface,
                            int factor = 0, bool tileable = false);
 
+// A texture marked as standing for art scale times smaller (querySize then
+// gives the art's own size)
+void markScale(SDL_Texture *texture, int scale);
+
+// The art made k times bigger (FSR on the CPU, or MMPX as picked at start):
+// a new RGBA surface the caller frees
+SDL_Surface *upscaleSurface(SDL_Surface *surface, int k);
+
 // Texture from an HD pack image standing in for art of size w x h; nullptr
 // (and a log line) when it is not a whole multiple of that size
 SDL_Texture *createHdTexture(SDL_Renderer *renderer, SDL_Surface *hd, int w,

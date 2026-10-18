@@ -21,6 +21,8 @@ enum class UiAction {
     // map-select layout's Play button (11513)
     MOD_FOLDER=7141,
     MOD_RESTART=7143,
+    MOD_REPOSITORY=7144,            // Your mods / Mod repository (ModRepo.hpp)
+    MOD_ADD=7145,                   // Add a mod... (ModImport.hpp: for this game only)
     
     // [PATCH] Starting cash spinner buttons (using button IDs)
     CASH_SPINNER_UP=11511,          // Increase starting cash

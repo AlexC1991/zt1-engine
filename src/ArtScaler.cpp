@@ -10,6 +10,8 @@
 
 #include "SDL_image.h"
 
+#include "HdArt.hpp"
+
 namespace ArtScaler {
 
 static Mode g_mode = Mode::Off;
@@ -508,6 +510,15 @@ static SDL_Surface *upscale(SDL_Surface *surface, int k, bool wrap) {
   return out;
 }
 
+void markScale(SDL_Texture *t, int scale) {
+  if (t && scale > 1) {
+    SDL_SetTextureUserData(t, reinterpret_cast<void *>(intptr_t(scale)));
+    SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+  }
+}
+
+SDL_Surface *upscaleSurface(SDL_Surface *surface, int k) { return surface ? upscale(surface, k, false) : nullptr; }
+
 SDL_Texture *createTexture(SDL_Renderer *renderer, SDL_Surface *surface,
                            int factor, bool tileable) {
   if (!renderer || !surface)
@@ -525,14 +536,8 @@ SDL_Texture *createTexture(SDL_Renderer *renderer, SDL_Surface *surface,
 }
 
 SDL_Surface *loadHdSurface(const std::string &path) {
-  std::string file = "hd/" + path + ".png";
-  std::error_code ec;
-  if (!std::filesystem::exists(file, ec))
-    return nullptr;
-  SDL_Surface *s = IMG_Load(file.c_str());
-  if (!s)
-    SDL_Log("[ArtScaler] could not load %s: %s", file.c_str(), IMG_GetError());
-  return s;
+  // (an HD art mod switched on, then the game's own hd/: HdArt.hpp)
+  return HdArt::load(path);
 }
 
 SDL_Texture *createHdTexture(SDL_Renderer *renderer, SDL_Surface *hd, int w,

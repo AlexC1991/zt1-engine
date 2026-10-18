@@ -3,6 +3,8 @@
 #include <iterator>
 #include "AniFile.hpp"
 #include "ArtScaler.hpp"
+#include "HdArt.hpp"
+#include "ShaderMods.hpp"
 #include "RenderSettings.hpp"
 #include <SDL2/SDL.h>
 #include <assert.h>
@@ -158,8 +160,7 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
     return;
 
   // Map art switches to its upscaled frames while the map is zoomed in
-  bool hi = this->world_art && RenderSettings::worldZoomedIn &&
-            ArtScaler::worldFactor() > 1;
+  bool hi = this->usesHi();
   std::vector<SDL_Texture *> *frames =
       this->frameTextures(renderer, direction, hi);
   if (frames == nullptr || frames->empty())
@@ -199,8 +200,7 @@ bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
   if (key.empty())
     return false;
   SDL_RendererFlip flip = this->renderer_flip;
-  bool hi = this->world_art && RenderSettings::worldZoomedIn &&
-            ArtScaler::worldFactor() > 1;
+  bool hi = this->usesHi();
   std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, hi);
   if (!frames || frames->empty())
     return false;
@@ -216,6 +216,14 @@ bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
   SDL_Point a = this->anchor_points[key];
   float ax = flip == SDL_FLIP_HORIZONTAL ? static_cast<float>(w - a.x) : a.x;
   SDL_FRect dest = {x - ax, y - a.y, static_cast<float>(w), static_cast<float>(h)};
+  if (RenderSettings::snapEdges) {
+    // (each edge on the screen pixel its own position rounds to)
+    float sx = 1.0f, sy = 1.0f;
+    SDL_RenderGetScale(renderer, &sx, &sy);
+    float l = SDL_roundf(dest.x * sx) / sx, t = SDL_roundf(dest.y * sy) / sy;
+    float r = SDL_roundf((dest.x + dest.w) * sx) / sx, b = SDL_roundf((dest.y + dest.h) * sy) / sy;
+    dest = {l, t, r - l, b - t};
+  }
   RenderSettings::applyArtScaleMode(texture);
   if (tint) {
     SDL_SetTextureColorMod(texture, tint->r, tint->g, tint->b);
@@ -236,7 +244,7 @@ bool Animation::drawMapped(SDL_Renderer *renderer, CompassDirection direction, i
   std::string key = convertCompassDirectionToExistingAnimationString(direction, this->anchor_points);
   if (key.empty())
     return false;
-  bool hi = this->world_art && RenderSettings::worldZoomedIn && ArtScaler::worldFactor() > 1;
+  bool hi = this->usesHi();
   std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, hi);
   if (!frames || frames->empty())
     return false;
@@ -276,9 +284,25 @@ bool Animation::anchoredBounds(float x, float y, CompassDirection direction, flo
 // setting; map art is made as is, or upscaled for the zoomed-in map (hi),
 // and keeps its source frames so it can make the other set later. HD pack
 // frames replace any art that is drawn magnified.
+bool Animation::usesHi() const {
+  // (zoomed in: its upscaled set, or an HD art mod's frames when one's on)
+  return this->world_art && RenderSettings::worldZoomedIn &&
+         (ArtScaler::worldFactor() > 1 || HdArt::active() || Shaders::artActive());
+}
+
 std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
                                                      CompassDirection direction,
                                                      bool hi) {
+  // (an HD art mod switched on or off since they were made: made again)
+  // (or a shader mod's art shader changed)
+  if (hi && this->hi_generation != HdArt::generation() * 100000 + Shaders::generation()) {
+    for (auto &kv : this->textures_hi)
+      for (SDL_Texture *t : kv.second)
+        if (t)
+          SDL_DestroyTexture(t);
+    this->textures_hi.clear();
+    this->hi_generation = HdArt::generation() * 100000 + Shaders::generation();
+  }
   auto &set = hi ? this->textures_hi : this->textures;
   // The art's own frames for this direction (or button state) when it has
   // them - even if another one was made first - else the nearest it has
@@ -311,10 +335,39 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
       continue;
     }
     SDL_Texture *t = nullptr;
-    if (magnified && !this->hd_dir.empty()) {
+    // A shader mod's art shader at work (zoomed-in map art; not a tank's
+    // water or the terrain): the frame at 4x - an HD art mod's, else the
+    // original upscaled - through it (ShaderMods.hpp)
+    if (hi && Shaders::artActive() && this->hd_dir.rfind("water/", 0) != 0 &&
+        this->hd_dir.rfind("terrain/", 0) != 0) {
+      std::string hdPath = this->hd_dir + "/" + direction_string + "_" + std::to_string(frame);
+      SDL_Surface *big = nullptr;
+      if (SDL_Surface *hd = ArtScaler::loadHdSurface(hdPath)) {
+        if (!this->recoloured.empty())
+          hd = HdArt::recolour(hd, surface, this->recoloured, direction_string, frame);
+        int k = surface->w > 0 ? hd->w / surface->w : 0;
+        if (k >= 2 && hd->w == surface->w * k && hd->h == surface->h * k)
+          big = SDL_ConvertSurfaceFormat(hd, SDL_PIXELFORMAT_RGBA32, 0);
+        SDL_FreeSurface(hd);
+      }
+      if (!big)
+        big = ArtScaler::upscaleSurface(surface, 4);
+      if (big) {
+        // (what it is, for the shader: 1 a fence's thin lines, 2 an object,
+        // 0 an animal or a person)
+        const int kind = this->hd_dir.rfind("fences/", 0) == 0    ? 1
+                         : this->hd_dir.rfind("objects/", 0) == 0 ? 2
+                                                                  : 0;
+        t = Shaders::applyArt(renderer, big, kind, surface->w, surface->h);
+        SDL_FreeSurface(big);
+      }
+    }
+    if (!t && magnified && !this->hd_dir.empty()) {
       std::string hdPath =
           this->hd_dir + "/" + direction_string + "_" + std::to_string(frame);
       if (SDL_Surface *hd = ArtScaler::loadHdSurface(hdPath)) {
+        if (!this->recoloured.empty())
+          hd = HdArt::recolour(hd, surface, this->recoloured, direction_string, frame);
         t = ArtScaler::createHdTexture(renderer, hd, surface->w, surface->h,
                                        hdPath);
         SDL_FreeSurface(hd);
@@ -518,6 +571,21 @@ void Animation::loadSurfaces(std::string direction_string,
   this->frame_time_in_ms = data->frame_time_in_ms;
   this->has_background = data->has_background;
   this->frame_count = std::max(this->frame_count, static_cast<int>(data->frame_count));
+  // The .ani's box (x0..x1, y0..y1) is the surface's size - the game's own
+  // art's box holds its frames. Art made with APE (an old fan download: RDingFT's
+  // rock cliffs) can say a box far smaller than its frames (22 x 13 for
+  // a 251 x 212 cliff), and each frame was clipped to almost nothing: grown,
+  // round the same centre, to hold the biggest frame
+  if (!data->has_background)
+    for (uint32_t i = 0; i < data->frame_count; i++) {
+      const AnimationFrameData &f = data->frames[i];
+      int needW = f.width + 2 * std::abs(static_cast<int>(f.offset_y) - f.width / 2) + 2;
+      int needH = f.height + 2 * std::abs(static_cast<int>(f.offset_x) - f.height / 2) + 2;
+      if (data->width < needW && f.width > data->width)
+        data->width = needW;
+      if (data->height < needH && f.height > data->height)
+        data->height = needH;
+    }
 
   int16_t offset_x = 0;
   int16_t offset_y = 0;

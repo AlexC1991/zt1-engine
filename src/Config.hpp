@@ -14,16 +14,18 @@ public:
   ~Config();
 
   std::vector<std::string> getResourcePaths();
-  // [user] uiScale: menu scale (0 or missing = fit the window)
+  // [user] uiScale: a fixed scale for the menus, panels and zoo (0 or missing:
+  // 1:1 as the original, whole steps up on a big window with the uiscale
+  // extra, shrunk to fit a window under 800x600)
   float getUiScale();
   // [user] artupscale (fsr default|mmpx|off), artupscalefactor (0 = from the
   // desktop size), artsharpness (FSR sharpening in stops, 0 = sharpest)
   std::string getArtUpscale();
   int getArtUpscaleFactor();
   float getArtSharpness();
-  // [user] widescreen: 1 = the in-game screen fills a wide window (the HUD
-  // stretches across it); 0 (default) = like the original, its 800x600
-  // screen scaled to fit and centred, the same as the menus
+  // [user] widescreen: 1 (default) = the in-game screen fills the window, its
+  // bars and panels pinned to the edges, as the original at any size; 0 =
+  // our old way, its 800x600 screen scaled to fit and centred
   bool getWidescreen();
   // [user] timedunlocks: 1 = freeform items come out month by month as in
   // the original (freeform/unlock*.scn); 0 (default) = all of them from

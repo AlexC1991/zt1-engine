@@ -16,6 +16,9 @@ const on = (channel, fn) =>
 
 contextBridge.exposeInMainWorld('lab', {
   checkLabUpdate: () => ipcRenderer.invoke('lab:update'),
+  labUpdateState: () => ipcRenderer.invoke('lab:updateState'),
+  labUpdateInstall: () => ipcRenderer.invoke('lab:updateInstall'),
+  onLabUpdate: (fn) => on('lab:updateState', (_e, st) => fn(st)),
   // the Lab engine
   engineSend: (cmd) => ipcRenderer.send('engine:send', cmd),
   engineStart: () => ipcRenderer.invoke('engine:start'),
@@ -23,6 +26,7 @@ contextBridge.exposeInMainWorld('lab', {
   onEngine: (fn) => on('engine:msg', (_e, m) => fn(m)),
   onEngineStatus: (fn) => on('engine:status', (_e, m) => fn(m)),
   onFrame: (fn) => on('engine:frame', (_e, f) => fn(f)),
+  // Experiments > HD art: the AI-upscaled map art mod
   // the game, in the Play view
   playStart: () => ipcRenderer.invoke('play:start'),
   playStop: () => ipcRenderer.invoke('play:stop'),
@@ -77,6 +81,11 @@ contextBridge.exposeInMainWorld('lab', {
   // the shared knowledge base: what every install has found (re/cloud)
   kbCloud: () => ipcRenderer.invoke('kb:cloud'),
   kbCloudSync: (what, dry) => ipcRenderer.invoke('kb:cloudSync', what, !!dry),
+  // sharing it in the background (the header's Sharing control)
+  shareGet: () => ipcRenderer.invoke('share:get'),
+  shareSet: (on) => ipcRenderer.invoke('share:set', !!on),
+  shareNow: () => ipcRenderer.invoke('share:now'),
+  onShare: (fn) => on('share:state', (_e, s) => fn(s)),
   // mods, the engine's source
   modsList: () => ipcRenderer.invoke('mods:list'),
   modsRead: (name) => ipcRenderer.invoke('mods:read', name),
@@ -103,6 +112,19 @@ contextBridge.exposeInMainWorld('lab', {
   animTool: (req) => ipcRenderer.invoke('anim:tool', req),
   gameModsList: () => ipcRenderer.invoke('gamemods:list'),
   gameModsEnable: (folder, on) => ipcRenderer.invoke('gamemods:enable', folder, on),
+  // Experiments > Your mods (renderer/modkit.js)
+  modkitNew: (req) => ipcRenderer.invoke('modkit:new', req),
+  modkitImport: (file) => ipcRenderer.invoke('modkit:import', file),
+  modkitCheck: (folder) => ipcRenderer.invoke('modkit:check', folder),
+  modkitSave: (folder, fields) => ipcRenderer.invoke('modkit:save', folder, fields),
+  modkitOpen: (folder) => ipcRenderer.invoke('modkit:open', folder),
+  modkitToken: (token) => ipcRenderer.invoke('modkit:token', token),
+  modkitMine: () => ipcRenderer.invoke('modkit:mine'),
+  modkitTakedown: (id) => ipcRenderer.invoke('modkit:takedown', id),
+  modkitUpload: (folder) => ipcRenderer.invoke('modkit:upload', folder),
+  onModkit: (fn) => on('modkit:progress', (_e, s) => fn(s)),
+  // (a dropped file's path: Electron's webUtils, as File.path is gone)
+  pathForFile: (f) => require('electron').webUtils.getPathForFile(f),
   onReleaseDone: (fn) => on('release:done', (_e, r) => fn(r)),
   // clangd, the C++ language server
   lspStart: () => ipcRenderer.invoke('lsp:start'),

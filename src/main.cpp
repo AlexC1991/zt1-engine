@@ -33,6 +33,11 @@
 #include "DevConsole.hpp"
 #include "Features.hpp"
 #include "ModMenu.hpp"
+#include "DisplaySettings.hpp"
+#include "HdArt.hpp"
+#include "ModImport.hpp"
+#include "Mods.hpp"
+#include "ShaderMods.hpp"
 #include "Pathfinder.hpp"
 #include <random>
 #include <sstream>
@@ -54,6 +59,7 @@
 #include "ui/UiLayout.hpp"
 #include "ui/UiListBox.hpp"
 #include "ui/UiButton.hpp"
+#include "ui/UiOptions.hpp"
 #include "ui/UiGameScreen.hpp"
 #include "ui/UiMiniMap.hpp"
 #include "ui/UiStatusImage.hpp"
@@ -269,15 +275,20 @@ static void setFreeformPreview(UiImage *img, ResourceManager *rm,
 // ============================================================================
 // MENU SCALING
 // ============================================================================
-// The original's menu layouts (*.lyt) are authored for 800x600. Like
-// OpenRCT2's UI scale, they are scaled to fit the window (or to zoo.ini
-// [user] uiScale) and centred. Text is rendered by the font at the final
-// size so it stays sharp; art is filtered smoothly unless the scale is a
-// whole number. Mouse positions are mapped back into layout space.
+// The original's menu layouts (*.lyt) are authored for 800x600. The
+// original draws everything 1:1 whatever its screen size: menus centred,
+// the in-game screen filling it with its bars and panels pinned to the
+// edges. So do we. Game Options > Interface Size (like OpenRCT2's UI scale;
+// zoo.ini [user] uiScale, RenderSettings::uiScaleSetting) makes it bigger:
+// Auto takes whole steps up on a big window - 1600x1200 and up draws it all
+// 2x, 3x..., so the art stays sharp - or a scale picked, kept small enough
+// for the 800x600 screens to fit. A window under 800x600 is shrunk to fit.
+// Text is rendered by the font at the final size so it stays sharp; art is
+// filtered smoothly unless the scale is a whole number. Mouse positions are
+// mapped back into layout space.
 // ============================================================================
 
-static float g_uiScaleSetting = 0.0f; // 0 = fit the window
-static bool g_widescreen = false;     // in-game screen fills the window
+static bool g_widescreen = true;      // in-game screen fills the window
 // Freeform items month by month (the original), or all from the start
 static bool g_timedUnlocks = false;
 // The month the catalogue lists items for: every freeform unlock goal's
@@ -296,14 +307,32 @@ static UiTransform getUiTransform(SDL_Renderer *renderer) {
   int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
   SDL_GetRendererOutputSize(renderer, &w, &h);
   UiTransform t;
-  t.scale = g_uiScaleSetting > 0.0f
-                ? g_uiScaleSetting
-                : std::min(w / float(UI_LAYOUT_W), h / float(UI_LAYOUT_H));
-  t.scale = std::max(0.5f, t.scale);
+  t.scale = RenderSettings::uiScaleFor(w, h);
   // The viewport is set in layout units, so snap the offset to them; mouse
   // mapping uses the same snapped offset
   t.offsetX = std::round((w - UI_LAYOUT_W * t.scale) * 0.5f / t.scale) * t.scale;
   t.offsetY = std::round((h - UI_LAYOUT_H * t.scale) * 0.5f / t.scale) * t.scale;
+  return t;
+}
+
+// The in-game screen's transform: the UI's scale, from the window's corner
+// when it fills the window (widescreen, the default), else the centred box's
+static UiTransform hudTransform(SDL_Renderer *renderer) {
+  UiTransform t = getUiTransform(renderer);
+  if (g_widescreen)
+    t.offsetX = t.offsetY = 0;
+  return t;
+}
+
+// The Options window's transform: from the window's corner (it centres
+// itself), at the UI's scale - or, while its Interface Size slider is
+// dragged, the size it had when the slider was taken, the rest of the UI
+// growing and shrinking around it (RenderSettings::uiScaleHeld)
+static UiTransform optionsTransform(SDL_Renderer *renderer) {
+  int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
+  SDL_GetRendererOutputSize(renderer, &w, &h);
+  UiTransform t;
+  t.scale = RenderSettings::uiScaleHeld > 0.0f ? RenderSettings::uiScaleHeld : RenderSettings::uiScaleFor(w, h);
   return t;
 }
 
@@ -340,16 +369,65 @@ static void drawUiScaled(SDL_Renderer *renderer, ResourceManager *rm,
     GpuFsr::endLayer(renderer, GpuFsr::Layer::Ui, outW / t.scale,
                      outH / t.scale, true);
     RenderSettings::uiPass = RenderSettings::UiPass::Text;
+  } else if (RenderSettings::artLook == RenderSettings::ArtLook::Smooth && std::fabs(t.scale - 1.0f) > 0.001f) {
+    // Smooth (Art upscaling): the art drawn 1:1 into a clear layer and the
+    // whole layer smoothed up to the window at once, as FSR's - each piece
+    // smoothed on its own left lines where pieces meet - then the text sharp
+    // at the window's size over it
+    static SDL_Texture *layer = nullptr;
+    static int lw = 0, lh = 0;
+    int w = static_cast<int>(std::ceil(outW / t.scale)), h = static_cast<int>(std::ceil(outH / t.scale));
+    if (!layer || lw != w || lh != h) {
+      if (layer)
+        SDL_DestroyTexture(layer);
+      layer = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
+      lw = w;
+      lh = h;
+      if (layer) {
+        SDL_SetTextureScaleMode(layer, SDL_ScaleModeLinear);
+        // (drawn over clear black, its colours already carry their alpha)
+        SDL_SetTextureBlendMode(layer, SDL_ComposeCustomBlendMode(
+                                           SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD,
+                                           SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD));
+      }
+    }
+    if (layer) {
+      SDL_Texture *was = SDL_GetRenderTarget(renderer);
+      SDL_SetRenderTarget(renderer, layer);
+      SDL_BlendMode mode;
+      SDL_GetRenderDrawBlendMode(renderer, &mode);
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+      SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+      SDL_RenderClear(renderer);
+      SDL_SetRenderDrawBlendMode(renderer, mode);
+      RenderSettings::artScaleMode = SDL_ScaleModeNearest;
+      RenderSettings::uiPass = RenderSettings::UiPass::Art;
+      draw(renderer);
+      SDL_SetRenderTarget(renderer, was);
+      SDL_FRect dst = {0.0f, 0.0f, w * t.scale, h * t.scale};
+      SDL_RenderCopyF(renderer, layer, nullptr, &dst);
+      RenderSettings::uiPass = RenderSettings::UiPass::Text;
+    }
   } else {
-    bool wholeScale = std::fabs(t.scale - std::round(t.scale)) < 0.01f;
-    RenderSettings::artScaleMode =
-        wholeScale ? SDL_ScaleModeNearest : SDL_ScaleModeLinear;
+    RenderSettings::artScaleMode = RenderSettings::lookFor(t.scale);
   }
   SDL_RenderSetScale(renderer, t.scale, t.scale);
   draw(renderer);
   SDL_RenderSetScale(renderer, 1.0f, 1.0f);
   RenderSettings::uiPass = RenderSettings::UiPass::All;
   RenderSettings::artScaleMode = SDL_ScaleModeNearest;
+}
+
+// The Options window (over the main menu or a zoo), centred in the window
+// at optionsTransform's size
+static void drawOptions(SDL_Renderer *renderer, ResourceManager *rm, UiOptions *options) {
+  if (!options || !options->isOpen())
+    return;
+  UiTransform t = optionsTransform(renderer);
+  int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
+  SDL_GetRendererOutputSize(renderer, &w, &h);
+  SDL_Rect screen = {0, 0, static_cast<int>(w / t.scale), static_cast<int>(h / t.scale)};
+  drawUiScaled(renderer, rm, t, [&](SDL_Renderer *r) { options->draw(r, &screen); });
 }
 
 static void drawLayoutCentered(SDL_Renderer *renderer, UiLayout *layout,
@@ -644,6 +722,10 @@ static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
     if (g_hud->hasPopup())
       drawUiScaled(renderer, rm, t,
                    [&](SDL_Renderer *r) { g_hud->drawPopup(r, &rect); });
+    // A dialog (new exhibit name, are you sure) over everything, centred
+    if (g_hud->hasDialog())
+      drawUiScaled(renderer, rm, t,
+                   [&](SDL_Renderer *r) { g_hud->drawDialog(r, &rect); });
     return;
   }
   // Centred at 800x600, exactly like the menus
@@ -803,9 +885,7 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
     po.hideBuildings = !g_hud->viewShown(1067);
     g_world->getGuests().hideAll = !g_hud->viewShown(1068);
   }
-  UiTransform t = getUiTransform(renderer);
-  if (g_widescreen)
-    t.offsetX = t.offsetY = 0;
+  UiTransform t = hudTransform(renderer);
   // Guests: their admissions on the books, the zoo's counts and the HUD's
   // guest bar
   {
@@ -1300,7 +1380,63 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
            "raise|lower <x> <y> [n]          a grid corner up/down (makes ramps)\n"
            "layroad <x0> <y0> <x1> <y1>      a test path, x first then y\n"
            "flat | terrainids | tiles <+|->   debug views: no heights, terrain ids, tile size\n"
+           "hdart [on|off]                   HD art mods (the zoomed-in map art) listed / switched\n"
+           "art [fsr|stylized|sharp|smooth]  the art upscaling at work (Game Options > Graphics)\n"
+           "shader [<mod/id> on|off] | shader <mod/id> <setting> <value>   shader mods\n"
            "clear";
+  }
+  // Shader mods (ShaderMods.hpp): listed with their settings, one on or
+  // off, a setting set
+  if (c == "shader") {
+    auto &list = Shaders::all();
+    if (w.size() >= 3 && (w[2] == "on" || w[2] == "off"))
+      Shaders::setOn(w[1], w[2] == "on");
+    else if (w.size() >= 4)
+      Shaders::setValue(w[1], w[2], static_cast<float>(std::atof(w[3].c_str())));
+    if (list.empty())
+      return "No shader mods switched on (" + Mods::folder() + ")";
+    for (const Shaders::Shader &s : list) {
+      out += (out.empty() ? "" : "\n") + s.key + "  " + s.stage + "  " + (s.on ? "on" : "off") +
+             (s.failed ? "  FAILED: " + s.log : "");
+      for (const Shaders::Setting &t : s.settings) {
+        char b[160];
+        std::snprintf(b, sizeof b, "\n    %-18s %g  (%g-%g)", t.name.c_str(), t.value, t.min, t.max);
+        out += b;
+      }
+    }
+    return out;
+  }
+  // The art upscaling, as Game Options > Graphics picks it
+  if (c == "art") {
+    if (w.size() > 1)
+      Display::setArt(Display::parseArt(w[1]));
+    return std::string("art upscaling: ") + Display::artName(Display::art());
+  }
+  // HD art mods (HdArt.hpp): the mods with an hd/ folder, listed, or all
+  // switched on or off - at once, as Game Options > Mods & Updates does
+  if (c == "hdart") {
+    std::vector<Mods::Mod> hd;
+    std::error_code ec;
+    for (const Mods::Mod &m : Mods::list())
+      if (std::filesystem::is_directory(std::filesystem::path(m.path) / "hd", ec))
+        hd.push_back(m);
+    if (hd.empty())
+      return "No HD art mods in " + Mods::folder();
+    if (w.size() > 1 && (w[1] == "on" || w[1] == "off")) {
+      for (const Mods::Mod &m : hd)
+        Mods::setEnabled(m.folder, w[1] == "on");
+      HdArt::refresh();
+      Shaders::refresh();
+    }
+    bool switched = w.size() > 1 && (w[1] == "on" || w[1] == "off");
+    for (const Mods::Mod &m : hd)
+      out += (out.empty() ? "" : "\n") + m.name + "  " + (switched ? w[1] : m.enabled ? "on" : "off");
+    char zb[96];
+    std::snprintf(zb, sizeof zb, "\nthe map last drawn at %.2fx%s; layered %d, direct %d", RenderSettings::lastWorldZoom,
+                  RenderSettings::lastWorldZoomedIn ? " from its zoomed-in art" : "", RenderSettings::layeredRuns,
+                  RenderSettings::layeredDirect);
+    return out + (HdArt::active() ? "\n(HD art at work: zoom in)" : "\n(no HD art at work)") + "\n" + HdArt::stats() + zb +
+           (Features::mods ? "" : "\n(Load mods is off: none load)");
   }
   if (c == "exhibits") {
     if (named.empty())
@@ -1729,6 +1865,8 @@ static void drawToolCost(SDL_Renderer *renderer, ResourceManager *rm) {
         lines.push_back({"Walkway +" + std::to_string(g_world->getBuildHeight()) + "   Click: build   Esc: stop", white});
       else if (g_world->getBuildHeight() > 0)
         lines.push_back({"Walkway +" + std::to_string(g_world->getBuildHeight()) + "   Click: start   Wheel: height", white});
+      else if (g_world->isBridgePlan())
+        lines.push_back({"Bridge: the ground is too uneven for a path here", white});
       else
         lines.push_back({"Ground   Wheel: walkway", white});
     }
@@ -1800,7 +1938,7 @@ static UiAction hudInputs(SDL_Renderer *renderer, std::vector<Input> inputs);
 static UiAction gameInputs(SDL_Renderer *renderer, ResourceManager *rm, const std::vector<Input> &inputs) {
   bool dialogBefore = g_hud->hasDialog();
   g_uiClicks.clear();
-  UiTransform ut = getUiTransform(renderer);
+  UiTransform ut = hudTransform(renderer);
   for (const Input &in : inputs)
     if (in.type == InputType::POSITIONED && in.event == InputEvent::LEFT_CLICK &&
         g_hud->isOverHud(static_cast<int>((in.x - ut.offsetX) / ut.scale),
@@ -1815,9 +1953,8 @@ static UiAction gameInputs(SDL_Renderer *renderer, ResourceManager *rm, const st
 static UiAction hudInputs(SDL_Renderer *renderer, std::vector<Input> inputs) {
   if (!g_hud)
     return UiAction::NONE;
-  UiTransform t = getUiTransform(renderer);
-  if (g_widescreen)
-    t.offsetX = t.offsetY = 0; // the HUD covers the whole window
+  // (the Options window, open, takes them all - at its own size)
+  UiTransform t = g_hud->optionsOpen() ? optionsTransform(renderer) : hudTransform(renderer);
   mapInputsToLayout(inputs, t);
   UiAction action = g_hud->handleInputs(inputs);
   // The wheel scrolls an open panel's lists (the panel handles that) and
@@ -1844,6 +1981,87 @@ static std::string getLayoutPath(ResourceManager *rm,
                                  const std::string &filename) {
   // Layout files are in ui/ folder, subfolders contain assets only
   return "ui/" + filename;
+}
+
+// The main menu's Options window (the optionswindow extra)
+static UiOptions *g_menuOptions = nullptr;
+static constexpr int kMainMenuOptions = 7117;
+// The main menu with Game Options (the optionswindow extra; off: as the
+// original) in Get New Zoo Tycoon Items' place - its line, font and spacing:
+// that entry's online service is gone, and the Mod Menu it opened for now is
+// to come back elsewhere
+static std::string mainMenuWithOptions(ResourceManager *rm) {
+  std::string t = rm->getGameText("ui/startup.lyt");
+  if (!Features::optionsWindow)
+    return t;
+  size_t s = t.find("[ZooItems]");
+  if (s == std::string::npos)
+    return t;
+  size_t e = t.find("\n[", s + 1);
+  std::string entry = t.substr(s, e == std::string::npos ? std::string::npos : e + 1 - s);
+  auto swap = [&entry](const std::string &from, const std::string &to) {
+    size_t at = entry.find(from);
+    if (at != std::string::npos)
+      entry.replace(at, from.size(), to);
+  };
+  swap("textid = 7114", "textid = 0"); // (its words: hookMainMenu)
+  swap("id = 7114", "id = " + std::to_string(kMainMenuOptions));
+  swap("helpid = 7124", "helpid = 0");
+  swap("action=1", ";action=1");
+  swap("target=35", ";target=35");
+  t.replace(s, e == std::string::npos ? std::string::npos : e + 1 - s, entry);
+  // A section's key set, whatever its spacing ("x = 295", "x=center": a
+  // checkout's loose ui/startup.lyt places the lines by hand)
+  auto setKey = [&t](const std::string &section, const std::string &key, const std::string &value) {
+    size_t from = t.find("[" + section + "]");
+    if (from == std::string::npos)
+      return;
+    size_t to = t.find("\n[", from + 1);
+    size_t at = from;
+    while ((at = t.find('\n', at)) != std::string::npos && (to == std::string::npos || at < to)) {
+      at++;
+      size_t eq = t.find('=', at), end = t.find_first_of("\r\n", at);
+      if (eq == std::string::npos || end == std::string::npos || eq > end)
+        continue;
+      std::string k = t.substr(at, eq - at);
+      k.erase(k.find_last_not_of(" \t") + 1);
+      if (k == key) {
+        t.replace(at, end - at, key + " = " + value);
+        return;
+      }
+    }
+  };
+  // Game Options and View Game Credits in the big lines' font (7100, as Play
+  // Freeform Game), centred, 40 apart after Continue Saved Game (380); Exit
+  // stays the small one, below
+  for (const char *line : {"ZooItems", "Credits"}) {
+    setKey(line, "x", "center");
+    setKey(line, "justify", "center");
+    setKey(line, "dx", "268");
+    setKey(line, "font", "7100");
+    setKey(line, "fontsize", "7101");
+  }
+  setKey("ZooItems", "y", "420");
+  setKey("Credits", "y", "460");
+  setKey("Exit", "y", "505");
+  // (and no action of its own, whatever the file's spacing - "action = 1":
+  // Get New Zoo Tycoon Items' target 35, the Mod Menu, was still opening
+  // under the window whenever the Mod Menu was switched on; its click opens
+  // the window, hookMainMenu)
+  setKey("ZooItems", "action", "0");
+  setKey("ZooItems", "target", "0");
+  return t;
+}
+static void hookMainMenu(UiLayout *layout) {
+  if (UiButton *b = dynamic_cast<UiButton *>(layout->getElementById(kMainMenuOptions))) {
+    // (string 1540 ends in spaces, so it sat off the centre)
+    b->setLabel("Game Options");
+  }
+  if (UiButton *b = dynamic_cast<UiButton *>(layout->getElementById(kMainMenuOptions)))
+    b->onClick = [] {
+      if (g_menuOptions)
+        g_menuOptions->open(false);
+    };
 }
 
 static void updateScenarioDetails(UiLayout *layout,
@@ -2592,7 +2810,10 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                          ScenarioManager *sm, World *world,
                          const std::string &outDir, const std::string &stem) {
   // As if from the freeform menu: the background preload has finished and
-  // the in-game screen is ready
+  // the in-game screen is ready. (The checks drive the original Game
+  // Options panel - its Extras tab, its Load and Save - so they run with
+  // the Options window off; the window is checked on its own, below)
+  Features::optionsWindow = false;
   ItemCatalog::get().load(rm);
   Research::get().load(rm);
   prepareHud(rm);
@@ -2698,8 +2919,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     for (int frame = 0; frame < 3; frame++) {
       SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
       SDL_RenderClear(renderer);
-      world->setView(gameViewRect(renderer),
-                     g_widescreen ? 1.0f : getUiTransform(renderer).scale);
+      world->setView(gameViewRect(renderer), getUiTransform(renderer).scale);
       world->draw(renderer);
       drawHud(renderer, rm);
       drawToolCost(renderer, rm);
@@ -2958,11 +3178,14 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     g_hud->showPanel(5, "");
     g_hud->showTab(5, 1509);
     capture("gameopts_extras_test");
-    int at = 0;
+    // (the page lists the Options window's switch first, then the rest in
+    // Features' order)
+    int at = 1;
     for (const Features::Switch &f : Features::all()) {
       if (std::string(f.name) == "hotkeys")
         break;
-      at++;
+      if (std::string(f.name) != "optionswindow")
+        at++;
     }
     bool was = Features::hotkeys;
     click(9050 + at);
@@ -2972,6 +3195,30 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           flipped && Features::hotkeys == was && Settings::get("Extras", "hotkeys") == (was ? "1" : "0"));
     g_hud->showTab(5, 1506); // (back on File Options, for the game menu's tests)
     g_hud->showPanel(0, "");
+  }
+
+  // The Options window (an addition): the disk button opens it in place of
+  // the side panel, on its Game page; Esc closes it; Interface Size picks a
+  // size the window can show, and Auto again
+  {
+    Features::optionsWindow = true;
+    g_hud->showPanel(5, "");
+    bool opened = g_hud->optionsOpen() && !g_hud->isPanelOpen(5);
+    capture("options_window_game");
+    check("the Options window opens in place of the Game Options panel", opened);
+    float before = RenderSettings::uiScaleSetting;
+    UiOptions *o = g_hud->options;
+    std::vector<Input> esc(1);
+    esc[0].type = InputType::BUTTON;
+    esc[0].event = InputEvent::KEY_ESCAPE;
+    // (as the game's loop: Esc with nothing open opens it, and the same
+    // frame's inputs then reach it - that Esc mustn't close it again)
+    o->handleInputs(esc);
+    check("the Esc that opened the Options window leaves it open", g_hud->optionsOpen());
+    o->handleInputs(esc);
+    check("Esc closes the Options window", !g_hud->optionsOpen());
+    RenderSettings::uiScaleSetting = before;
+    Features::optionsWindow = false;
   }
 
   // Fences, as done in the original: a chain-link loop round 3 x 3 tiles,
@@ -4699,6 +4946,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           map.touch();
           world->reindex();
           world->setPathTool("path", 25);
+          std::string pressed;
           auto drag = [&](int x0, int y0, int x1, int y1) {
             int px, py;
             // (the press on the tile's own top, as every step after it: at()
@@ -4712,6 +4960,13 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
               world->pointToWindow(x0 + 0.5f, y0 + 0.5f, t0 ? (float)t0->cornerHeight[0] : 0.0f, px, py);
             }
             world->mouseMove(px, py);
+            {
+              // (where the press landed, in the checks' own words: "pressed 11,2")
+              float wx = 0, wy = 0;
+              world->groundAt(px, py, wx, wy);
+              pressed = "pressed " + std::to_string(static_cast<int>(std::floor(wx)) - sx0) + "," +
+                        std::to_string(static_cast<int>(std::floor(wy)) - sy0);
+            }
             handleToolResult(world->mouseDown(px, py), rm);
             int steps = std::abs(x1 - x0) + std::abs(y1 - y0);
             for (int k = 1; k <= steps; k++) {
@@ -4741,7 +4996,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           drag(sx0 + 11, sy0 + 2, sx0, sy0 + 2);
           handleToolResult(world->mouseUp(g_mouseX, g_mouseY), rm);
           std::string down = row(sy0 + 2);
-          check(("and drawn off it, stairs down (" + down + ")").c_str(), down == "pppppp12pppp");
+          check(("and drawn off it, stairs down (" + down + ", " + pressed + ")").c_str(), down == "pppppp12pppp");
           // Carrying on off the end of a raised walkway: a click on the end
           // deck's side starts from the deck (lit, not the ground under it)
           {
@@ -6477,7 +6732,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           bool closed = false;
           if (x) {
             SDL_Rect r = x->getLastRect();
-            UiTransform ut = getUiTransform(renderer);
+            UiTransform ut = hudTransform(renderer);
             Input in{};
             in.type = InputType::POSITIONED;
             in.event = InputEvent::LEFT_CLICK;
@@ -7704,10 +7959,10 @@ int main(int argc, char *argv[]) {
   SDL_Log("ZT1-Engine %s%s", Updater::version(), Updater::official() ? "" : " (a build of one's own)");
   for (int i = 1; i < argc; i++)
     if (std::string(argv[i]) == "--check-update")
-      return Updater::checkNow(i + 1 < argc && std::string(argv[i + 1]) == "--install");
+      return Updater::checkNowCli(i + 1 < argc && std::string(argv[i + 1]) == "--install");
   if (!labHost)
-    Updater::checkInBackground();
-  g_uiScaleSetting = config.getUiScale();
+    Updater::start();
+  RenderSettings::uiScaleSetting = config.getUiScale();
   g_widescreen = config.getWidescreen();
   g_timedUnlocks = config.getTimedUnlocks();
   Features::allUnlocked = !g_timedUnlocks;
@@ -7715,6 +7970,24 @@ int main(int argc, char *argv[]) {
   // and its volumes and scrolling at work
   Settings::loadExtras();
   ResourceManager resource_manager(&config);
+  // (HD art for recoloured art finds the art in its own palette here)
+  HdArt::setResources(&resource_manager);
+  // A mod added from the command line (the Lab's import): --import-mod
+  // <a .ztd, a .zip or a mod's folder> - what happened, as JSON, and done
+  for (int i = 1; i + 1 < argc; i++)
+    if (std::string(argv[i]) == "--import-mod") {
+      ModImport::Result r = ModImport::import(argv[i + 1]);
+      auto q = [](const std::string &s) {
+        std::string o = "\"";
+        for (char c : s)
+          o += c == '"' || c == '\\' ? std::string("\\") + c : std::string(1, c);
+        return o + "\"";
+      };
+      std::printf("{\"ok\": %s, \"folder\": %s, \"name\": %s, \"message\": %s}\n", r.ok ? "true" : "false",
+                  q(r.folder).c_str(), q(r.name).c_str(), q(r.message).c_str());
+      std::fflush(stdout);
+      return r.ok ? 0 : 1;
+    }
   // Sound effects, and every button's click (uiclick.wav)
   Sound::get().init(&resource_manager);
   UiButton::clickSound = [] { Sound::get().play("sounds/uiclick"); };
@@ -7724,11 +7997,15 @@ int main(int argc, char *argv[]) {
 
   // FSR runs on the GPU, which needs SDL's OpenGL renderer (shaders). If
   // that is not available the art is upscaled once when it loads instead.
-  ArtScaler::Mode artMode = ArtScaler::parseMode(config.getArtUpscale());
-  if (artMode == ArtScaler::Mode::Fsr)
-    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
+  // (always asked for: FSR, and the colour-blind filter and brightness, can
+  // be switched on at any time in the Game Options)
+  SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
   Window window("ZT1-Engine", config.getScreenWidth(), config.getScreenHeight(),
                 60.0f);
+  // The Display, Graphics and Accessibility settings at work (frame rate,
+  // vsync, colours, the art's look)
+  Display::init(window.window, window.renderer);
+  const Display::Art artAtStart = Display::artAtStart();
   // The Game Options' volumes and scrolling at work (after the window: it
   // opens the audio)
   Settings::apply();
@@ -7741,19 +8018,61 @@ int main(int argc, char *argv[]) {
   for (int i = 1; i < argc; i++)
     if (std::string(argv[i]) == "--lab-host")
       labHostHide(window.window);
-  bool gpuFsr = artMode == ArtScaler::Mode::Fsr &&
-                GpuFsr::init(window.renderer, config.getArtSharpness());
-  ArtScaler::configure(gpuFsr ? ArtScaler::Mode::Off : artMode,
-                       config.getArtUpscaleFactor(), config.getArtSharpness());
+  // The player's own window put back as they left it (full screen,
+  // maximised, where it was) and kept from now on - an ordinary run only:
+  // never in the Lab, nor a test run, which need the size they're given
+  {
+    bool ordinary = !Embed::active();
+    for (int i = 1; i < argc; i++)
+      for (const char *special :
+           {"--lab-host", "--lab", "--panel-shots", "--render-maps", "--check-update", "--hd-export", "--hd-finish",
+            "--hd-survey"})
+        if (std::string(argv[i]) == special)
+          ordinary = false;
+    if (ordinary)
+      window.placeSaved();
+  }
+  // FSR on the graphics card whenever it can run (used while it's picked);
+  // the art upscaled as it loads only for MMPX, or for FSR without it
+  bool gpuFsr = GpuFsr::init(window.renderer, config.getArtSharpness());
+  ArtScaler::Mode artMode = artAtStart == Display::Art::Mmpx                ? ArtScaler::Mode::Mmpx
+                            : (artAtStart == Display::Art::Fsr || artAtStart == Display::Art::Stylized) && !gpuFsr
+                                ? ArtScaler::Mode::Fsr
+                                                                          : ArtScaler::Mode::Off;
+  ArtScaler::configure(artMode, config.getArtUpscaleFactor(), config.getArtSharpness());
   // The original's cursors (res0.dll): the arrow, hot spot at its tip, and
-  // the full bulldozer while it's picked
-  g_arrowCursor = resource_manager.getCursor(9, 1, 2);
-  g_bulldozeCursor = resource_manager.getCursor(16, 2, 29);
-  // (cursor slot 4: res0.dll group 204, its cursor 13 - hot spot 16, 23)
-  g_tankWallCursor = resource_manager.getCursor(13, 16, 23);
-  window.set_cursor(g_arrowCursor);
+  // the full bulldozer while it's picked - at the Cursor size picked
+  // (Accessibility), made again when it changes
+  auto loadCursors = [&resource_manager, &window](int size) {
+    SDL_Cursor *old[] = {g_arrowCursor, g_bulldozeCursor, g_tankWallCursor};
+    g_arrowCursor = resource_manager.getCursor(9, 1, 2, size);
+    g_bulldozeCursor = resource_manager.getCursor(16, 2, 29, size);
+    // (cursor slot 4: res0.dll group 204, its cursor 13 - hot spot 16, 23)
+    g_tankWallCursor = resource_manager.getCursor(13, 16, 23, size);
+    window.set_cursor(g_arrowCursor);
+    for (SDL_Cursor *c : old)
+      if (c)
+        SDL_FreeCursor(c);
+  };
+  loadCursors(Display::cursorSize());
+  Display::onCursorSize = loadCursors;
 
   LoadScreen::run(&window, &config, &resource_manager);
+  // The Lab's HD art mod (HdArt.hpp): the map art's frames written out
+  // (--hd-export <folder> [prefix...]), or upscaled ones tidied into the mod
+  // (--hd-finish <frames> <upscaled> <mod's hd folder>)
+  for (int i = 1; i < argc; i++) {
+    if (std::string(argv[i]) == "--hd-export" && i + 1 < argc) {
+      std::vector<std::string> prefixes(argv + i + 2, argv + argc);
+      return HdArt::exportFrames(&resource_manager, argv[i + 1], prefixes) >= 0 ? 0 : 1;
+    }
+    if (std::string(argv[i]) == "--hd-survey") {
+      HdArt::survey(&resource_manager, std::vector<std::string>(argv + i + 1, argv + argc));
+      return 0;
+    }
+    if (std::string(argv[i]) == "--hd-finish" && i + 3 < argc)
+      return HdArt::finishFrames(argv[i + 1], argv[i + 2], argv[i + 3]) > 0 ? 0 : 1;
+  }
   // What the in-game screen needs that doesn't depend on the map (every
   // buyable item, the research programs) is read while the menus show, so
   // starting a game doesn't wait for it
@@ -7800,9 +8119,13 @@ int main(int argc, char *argv[]) {
   g_scenarioManager->syncWithDatabase();
   g_scenarioManager->sortByDifficulty();
 
+  // The Options window on the main menu (the optionswindow extra)
+  resource_manager.provide("ui/startup.lyt", mainMenuWithOptions);
+  g_menuOptions = new UiOptions(&resource_manager);
   IniReader *lyt_reader = resource_manager.getIniReader(
       getLayoutPath(&resource_manager, "startup.lyt"));
   UiLayout *layout = new UiLayout(lyt_reader, &resource_manager);
+  hookMainMenu(layout);
   g_currentState = LayoutState::MAIN_MENU;
 
   // ZT1 Lab: the live view for what's found in zoo.exe (--lab [map]); for
@@ -7886,14 +8209,18 @@ int main(int argc, char *argv[]) {
     deltaTime = (currentTime - lastFrameTime) / 1000.0f; // Convert to seconds
     lastFrameTime = currentTime;
 
-    // A newer release, found at start (Updater.hpp): asked once, at the
-    // main menu
+    // Game Options' Install now started the installer: close for it
+    if (Updater::installing())
+      running = 0;
+    // A newer release, downloaded and checked in the background
+    // (Updater.hpp): asked once, at the main menu (never in a zoo)
     if (g_currentState == LayoutState::MAIN_MENU) {
       Updater::Release update;
       if (Updater::takeOffer(update)) {
         std::string text = "ZT1-Engine " + update.version + " is out (you have " + Updater::version() +
-                           ").\n\nUpdate now? It downloads the new version, closes the game, installs it and "
-                           "starts it again. Your saved zoos, mods and settings are kept.";
+                           ").\n\nIt's downloaded and checked. Update now closes the game, installs it and "
+                           "starts it again; Later installs it when you next close the game. Your saved zoos, mods "
+                           "and settings are kept.";
         const SDL_MessageBoxButtonData buttons[] = {
             {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Update now"},
             {0, 2, "Skip this version"},
@@ -7907,7 +8234,7 @@ int main(int argc, char *argv[]) {
           Updater::skip(update);
         if (chosen == 1) {
           std::string why;
-          if (Updater::install(update, why))
+          if (Updater::installNow(why))
             running = 0;
           else
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "Update failed",
@@ -7987,7 +8314,15 @@ int main(int argc, char *argv[]) {
         g_world->cycleFenceMode((SDL_GetModState() & KMOD_SHIFT) ? -1 : 1);
     }
 
-    if (layout) {
+    if (layout && g_menuOptions && g_menuOptions->isOpen()) {
+      // (the Options window over the main menu takes every input)
+      std::vector<Input> layoutInputs = inputs;
+      mapInputsToLayout(layoutInputs, optionsTransform(window.renderer));
+      // (its Mod Menu button gives back the main menu's own action)
+      action = g_menuOptions->handleInputs(layoutInputs);
+      if (action == UiAction::NONE)
+        action = (UiAction)9999;
+    } else if (layout) {
       std::vector<Input> layoutInputs = inputs;
       mapInputsToLayout(layoutInputs, getUiTransform(window.renderer));
       action = layout->handleInputs(layoutInputs);
@@ -8007,6 +8342,9 @@ int main(int argc, char *argv[]) {
     // creditsShowPage): the next every delay; after the last, back to the menu
     if (g_currentState == LayoutState::CREDITS && layout && creditsTick(layout))
       action = UiAction::CREDITS_EXIT;
+    // (the Mod Menu's repository list and its downloads kept up to date)
+    if (g_currentState == LayoutState::MOD_MENU && layout)
+      ModMenu::tick(layout, &resource_manager);
 
     // A menu screen's "close me" button (action=2 target=-1: the map select,
     // scenario and Mod Menu screens' Back): back to the main menu, as the
@@ -8048,12 +8386,21 @@ int main(int argc, char *argv[]) {
       if (!Features::modMenu)
         break;
       delete layout;
-      layout = ModMenu::open(&resource_manager, getLayoutPath(&resource_manager, "mapselec.lyt"));
+      // (on the Tutorial & Scenario screen's layout)
+      layout = ModMenu::open(&resource_manager, getLayoutPath(&resource_manager, "scenario.lyt"));
       g_currentState = LayoutState::MOD_MENU;
       break;
     case UiAction::MOD_LIST_SELECTION:
       if (g_currentState == LayoutState::MOD_MENU)
         ModMenu::selectionChanged(layout, &resource_manager);
+      break;
+    case UiAction::MOD_REPOSITORY:
+      if (g_currentState == LayoutState::MOD_MENU)
+        ModMenu::repository(layout, &resource_manager);
+      break;
+    case UiAction::MOD_ADD:
+      if (g_currentState == LayoutState::MOD_MENU)
+        ModMenu::addMod(layout, &resource_manager);
       break;
     case UiAction::MOD_FOLDER:
       if (g_currentState == LayoutState::MOD_MENU)
@@ -8112,12 +8459,18 @@ int main(int argc, char *argv[]) {
       destroyHud();
       [[fallthrough]];
     case UiAction::CREDITS_EXIT:
-    case UiAction::SCENARIO_BACK_TO_MAIN_MENU:
+    case UiAction::SCENARIO_BACK_TO_MAIN_MENU: {
+      // (the Mod Menu is opened from the Game Options' Mods & Updates: its
+      // Back goes back there)
+      bool backToOptions = g_currentState == LayoutState::MOD_MENU && Features::optionsWindow;
       delete layout;
       lyt_reader = resource_manager.getIniReader(
           getLayoutPath(&resource_manager, "startup.lyt"));
       layout = new UiLayout(lyt_reader, &resource_manager);
+      hookMainMenu(layout);
       g_currentState = LayoutState::MAIN_MENU;
+      if (backToOptions && g_menuOptions)
+        g_menuOptions->open(false, UiOptions::kModsPage);
 
       g_scenarioListBox = nullptr;
       g_freeformListBox = nullptr;
@@ -8126,6 +8479,7 @@ int main(int argc, char *argv[]) {
       g_scenarioMap = nullptr;
       g_freeformMap = nullptr;
       break;
+    }
 
     case UiAction::SCENARIO_LIST_SELECTION:
       updateScenarioDetails(layout, g_scenarioManager, &resource_manager);
@@ -8148,6 +8502,11 @@ int main(int argc, char *argv[]) {
       break;
 
     case UiAction::PLAY_SCENARIO_START:
+      // (in the Mod Menu that button is Switch on / off, or Download)
+      if (g_currentState == LayoutState::MOD_MENU) {
+        ModMenu::toggle(layout, &resource_manager);
+        break;
+      }
       if (g_scenarioListBox && g_scenarioListBox->getSelectedIndex() >= 0) {
         int idx = g_scenarioListBox->getSelectedIndex();
         const ScenarioInfo *info = g_scenarioManager->getScenario(idx);
@@ -8166,11 +8525,6 @@ int main(int argc, char *argv[]) {
       break;
 
     case UiAction::PLAY_FREEFORM_START:
-      // (in the Mod Menu that button is Switch on / off)
-      if (g_currentState == LayoutState::MOD_MENU) {
-        ModMenu::toggle(layout, &resource_manager);
-        break;
-      }
       if (g_freeformListBox && g_freeformListBox->getSelectedIndex() >= 0) {
         int idx = g_freeformListBox->getSelectedIndex();
         const FreeformMap *map = g_scenarioManager->getFreeformMap(idx);
@@ -8336,9 +8690,9 @@ int main(int argc, char *argv[]) {
       // SDL_Log("MainLoop: Post-Update");
 
       // SDL_Log("MainLoop: Pre-Draw");
-      g_world->setView(gameViewRect(window.renderer),
-                       g_widescreen ? 1.0f
-                                    : getUiTransform(window.renderer).scale);
+      // (the zoo at the UI's scale: 1:1 as the original, or the uiscale
+      // extra's whole steps)
+      g_world->setView(gameViewRect(window.renderer), getUiTransform(window.renderer).scale);
       g_world->draw(window.renderer);
       if (g_snapshot == 1) { // (the map alone)
         g_snapshot = 0;
@@ -8349,6 +8703,8 @@ int main(int argc, char *argv[]) {
         g_hud->tooltipShot = true;
       drawHud(window.renderer, &resource_manager);
       drawToolCost(window.renderer, &resource_manager);
+      if (g_hud)
+        drawOptions(window.renderer, &resource_manager, g_hud->options);
       if (g_snapshot == 2) { // (the screen as it is)
         g_snapshot = 0;
         takeSnapshot(window.renderer, &resource_manager);
@@ -8361,6 +8717,7 @@ int main(int argc, char *argv[]) {
       // SDL_Log("MainLoop: Post-Draw");
     } else if (layout) {
       drawLayoutCentered(window.renderer, layout, &resource_manager);
+      drawOptions(window.renderer, &resource_manager, g_menuOptions); // (over the menu)
     }
 
     window.present();
@@ -8368,6 +8725,10 @@ int main(int argc, char *argv[]) {
     // Check if it's time for periodic memory dump
     // ZT_MEMORY_DUMP_CHECK();
   }
+
+  // An update downloaded and checked, waiting (Later): installed as the game
+  // closes
+  Updater::atExit();
 
   // Write final memory report before cleanup
   SDL_Log("Writing final memory report...");

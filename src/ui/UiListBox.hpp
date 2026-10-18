@@ -60,6 +60,8 @@ public:
     std::string getSelectedData() const;
     std::string getSelectedText() const;
     size_t getItemCount() const { return items.size(); }
+    // A row's height, as the layout counts it
+    int getRowHeight() const { return item_height; }
 
     void setSelectionAction(UiAction action) { selection_action = action; }
 

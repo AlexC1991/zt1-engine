@@ -72,6 +72,11 @@ struct FenceType {
   Animation *det[3] = {}, *broke[3] = {};
 };
 
+// Art drawn as one picture when the view is zoomed in: at its own size into a
+// clear layer, enlarged once (pieces laid edge to edge - a tank's glass,
+// walls and water sides - enlarged one by one left a line at every join)
+void drawLayered(SDL_Renderer *renderer, const std::function<void()> &draw);
+
 class Fences {
   friend class SaveGame; // (saving and loading a game)
 public:
@@ -113,6 +118,14 @@ public:
     int constructedDay = 1, constructedMonth = 0, constructedYear = 1;
     // Tanks: the ground they sank from, and the water (0-1 full)
     int groundHeight = 0, floorHeight = 0;
+    // Tanks: the ground as it was before it sank (each tile's corners,
+    // height and terrain), put back when the tank goes
+    // (Features::tankGroundBack)
+    struct Ground {
+      int32_t height = 0, corner[4] = {0, 0, 0, 0};
+      uint8_t terrain = 0;
+    };
+    std::map<std::pair<int, int>, Ground> before;
     float water = 0;
     // Tanks: the walls' height over the floor in height units (tanks.cfg's
     // units are the tiles': tankEntryPoint 0x499cfa counts the walls x16
@@ -292,6 +305,9 @@ public:
   int fillCost(int id, bool salt) const;
   // The exhibit a tank wall piece belongs to (-1: none)
   int tankOf(const Edge &e) const;
+  // Tanks taken apart since last asked (their tiles): the sea animals in
+  // each go into crates (zoo.exe 0x50c3d8 -> 0x458c2b(tank, 0) -> 0x505941)
+  std::vector<std::set<std::pair<int, int>>> takeLostTanks() { return std::move(this->lostTanks); }
   // The (named) exhibit a tile is in, or a piece walls (-1: none)
   int exhibitAt(int x, int y) const;
   int exhibitOf(const Edge &e) const;
@@ -398,6 +414,9 @@ public:
     // A strip of a big animal (Animals::collect): where it stands
     bool animalStrip = false;
     float wx = 0, wy = 0;
+    // A tank wall's piece: drawn with the pieces next to it in one picture,
+    // enlarged together (drawLayered: piece by piece, a line at each)
+    bool seamless = false;
   };
   // A big animal's strips put on the right side of the fence pieces in
   // their own columns: one inside a fence drawn before the pieces in front
@@ -445,6 +464,7 @@ private:
   double upkeepOwed = 0;
   float filterGround(const Filter &f, const WorldMap &map) const;
   std::vector<Exhibit> exhibitList;
+  std::vector<std::set<std::pair<int, int>>> lostTanks;
   int lastRemovedGateOf = -1, lastRemovedOwner = -1;
   long placed = 0;
   int made = 0; // exhibits ever made (for "Exhibit N")
@@ -474,6 +494,9 @@ private:
                     int &ay, int &bx, int &by, int &h0, int &h1) const;
   static Piece ownerFor(const Edge &e, const WorldMap &map);
   void makeTank(Exhibit &ex, WorldMap &map);
+  // A tank gone: its ground back as it was (Features::tankGroundBack; off:
+  // the hole stays, as the original)
+  void restoreGround(Exhibit &ex, WorldMap &map);
   void drainTank(Exhibit &ex);
 };
 

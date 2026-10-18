@@ -21,13 +21,20 @@ std::pair<int, int> WorldIndex::footprintOf(const std::string &subClass, const s
       return this->footprintCache[i];
   std::pair<int, int> fp{0, 0};
   bool read = false;
+  // (its .ai, or a downloaded entity's .ucs / .ucb / .uca: an old fan
+  // download made with APE)
   if (rm)
-    if (IniReader *ai = rm->getIniReader("scenery/" + Utils::string_to_lower(subClass) + "/" +
-                                         Utils::string_to_lower(type) + ".ai")) {
-      fp.first = ai->getInt("characteristics/integers", "cfootprintx", 0);
-      fp.second = ai->getInt("characteristics/integers", "cfootprinty", 0);
-      delete ai;
-      read = true;
+    for (const char *ext : {".ai", ".ucs", ".ucb", ".uca"}) {
+      std::string file = "scenery/" + Utils::string_to_lower(subClass) + "/" + Utils::string_to_lower(type) + ext;
+      if (!rm->hasResource(file))
+        continue;
+      if (IniReader *ai = rm->getIniReader(file)) {
+        fp.first = ai->getInt("characteristics/integers", "cfootprintx", 0);
+        fp.second = ai->getInt("characteristics/integers", "cfootprinty", 0);
+        delete ai;
+        read = true;
+      }
+      break;
     }
   if (rm && !read)
     for (const CatalogItem &item : ItemCatalog::get().all()) {

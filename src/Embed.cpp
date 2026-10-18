@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -17,6 +18,10 @@
 
 namespace {
 std::atomic<bool> g_active{false}, g_quit{false}, g_hidden{true}, g_snap{false};
+std::atomic<bool> g_pressed{false}; // (press / release: a drag's button held)
+// (shot <file>: set by the listening thread, taken by the game's)
+std::mutex g_shotLock;
+std::string g_shotPath;
 HWND g_child = nullptr, g_owner = nullptr;
 SDL_Window *g_window = nullptr;
 
@@ -162,15 +167,37 @@ bool command(const char *line) {
   } else if (std::sscanf(line, "rclick %d %d", &x, &y) == 2) {
     clickAt(x, y, SDL_BUTTON_RIGHT);
   } else if (std::sscanf(line, "move %d %d", &x, &y) == 2) {
-    // (the mouse there and left: hovering - a tooltip, a lit piece)
+    // (the mouse there and left: hovering - a tooltip, a lit piece; with
+    // the button pressed, a drag)
     SDL_Event e{};
     e.type = SDL_MOUSEMOTION;
     e.motion.windowID = g_window ? SDL_GetWindowID(g_window) : 0;
     e.motion.x = x;
     e.motion.y = y;
+    e.motion.state = g_pressed ? SDL_BUTTON_LMASK : 0;
     SDL_PushEvent(&e);
+  } else if (std::sscanf(line, "press %d %d", &x, &y) == 2 || std::sscanf(line, "release %d %d", &x, &y) == 2) {
+    // The left button pressed or let go there: with moves between, a drag at
+    // the Lab's own pace - a slider held still on a stop, a fence dragged out
+    bool down = line[0] == 'p';
+    g_pressed = down;
+    SDL_Event b{};
+    b.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+    b.button.windowID = g_window ? SDL_GetWindowID(g_window) : 0;
+    b.button.button = SDL_BUTTON_LEFT;
+    b.button.state = down ? SDL_PRESSED : SDL_RELEASED;
+    b.button.clicks = 1;
+    b.button.x = x;
+    b.button.y = y;
+    SDL_PushEvent(&b);
   } else if (std::strncmp(line, "snap", 4) == 0) {
     g_snap = true;
+  } else if (std::strncmp(line, "shot ", 5) == 0) {
+    std::string path = line + 5;
+    while (!path.empty() && (path.back() == '\n' || path.back() == '\r' || path.back() == ' '))
+      path.pop_back();
+    std::lock_guard<std::mutex> hold(g_shotLock);
+    g_shotPath = path;
   } else if (std::strncmp(line, "dialog", 6) == 0) {
     dialogCommand(line + 6);
   } else if (char key[32] = {}; std::sscanf(line, "hold %31s %d", key, &x) == 2) {
@@ -263,10 +290,20 @@ bool into(SDL_Window *window, const char *ownerHandle) {
       nullptr);
   g_active = true;
   std::thread(listen).detach();
+  // (the Lab places the window once it reads this: its own timers could
+  // all pass before a slow start made the window, which then stayed hidden)
+  std::printf("[Embed] ready\n");
+  std::fflush(stdout);
   return true;
 }
 bool active() { return g_active; }
 bool quitAsked() { return g_quit; }
 bool hidden() { return g_active && g_hidden; }
 bool snapAsked() { return g_snap.exchange(false); }
+std::string shotAsked() {
+  std::lock_guard<std::mutex> hold(g_shotLock);
+  std::string path;
+  path.swap(g_shotPath);
+  return path;
+}
 } // namespace Embed
