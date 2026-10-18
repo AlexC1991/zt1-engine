@@ -82,18 +82,18 @@ You're welcome to use AI tools, or not. If you do, the ZT1 Lab's MCP server lets
 
 Builds are made in the cloud (`.github/workflows/`):
 
-- **Every push and pull request** is built, to check that it compiles and packages.
-- **Every push to `main`** is built too, and `main`'s code is mirrored to the `zt1-engine` project on CodeRook.
-- **A weekly alpha** is an annotated tag named for its version, `v<year>.<month>.<day>` with no leading zeros. Its message is the release notes:
+- **Every push and pull request** is built, to check that the engine compiles (`.github/workflows/build.yml`).
+- **Every push to `main`** is also mirrored to the `zt1-engine` project on CodeRook (`mirror.yml`).
+- **Releases** are made outside this repository. The installer, the Game Build, the Lab's installer and their signed update feeds are built and signed on the release machine. They are published as a GitHub release and as a named release of the `zt1-engine` project on CodeRook, whose downloads and update feed are public. The open-source part is the engine; how the official client is packaged and signed is not published.
 
-  ```bash
-  git tag -a v2026.10.19 -F notes.md
-  git push origin v2026.10.19
-  ```
+To build the engine yourself, use CMake (Visual Studio 2022 or later):
 
-  The engine is built as an official release, the only kind that can update itself. Its installer, the installer's checksum and `latest.yml` (the in-game updater's feed) become a GitHub release and a named version of `zt1-engine-releases` on CodeRook.
+```bash
+cmake -S . -B build-x64 -A x64
+cmake --build build-x64 --config Release --target zt1-engine
+```
 
-`python engine-build-resources/make_release.py` builds the same installer on your own PC, into `dist/`. It needs Inno Setup 6. It isn't official unless you pass `--official`, so it never updates itself.
+A build of your own is never official, so it never updates itself.
 
 The cloud can't run the self-test or the formula checks, because they need Zoo Tycoon's own files. Run them in the ZT1 Lab before tagging an alpha.
 

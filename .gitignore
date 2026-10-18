@@ -44,3 +44,24 @@ re/lab/design/
 /_run.*
 /selectWrite-windows-build*.log
 lab-app/_dev_*.py
+
+# Private: how the official client is made - the installer (setup.exe), the
+# release, packing and update-signing tooling, and the mod repository's client
+# (kept in the private zt1-engine-build project on CodeRook). The open-source
+# part is the engine; these stay on the release machine.
+/installer/*
+!/installer/.gitkeep
+/engine-build-resources/make_release.py
+/engine-build-resources/publish_release.py
+/engine-build-resources/coderook_release.py
+/engine-build-resources/pack_lab.py
+/engine-build-resources/sign_engine_update.js
+/engine-build-resources/sign_lab_update.js
+/engine-build-resources/vendor_ghidra.py
+/engine-build-resources/vendor_python.py
+/engine-build-resources/ENGINE_UPDATES.md
+/engine-build-resources/LAB_UPDATES.md
+/.github/workflows/release.yml
+/private/*
+!/private/.gitkeep
+/engine-build-resources/save_private.py

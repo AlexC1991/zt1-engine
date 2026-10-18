@@ -37,15 +37,18 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// GitHub is the canonical published release, and the only feed for now.
-// CodeRook mirrors each release, but its update feed isn't reliable yet (its
-// publisher promotes a version before every file is attached), so the game
-// doesn't update from it; put it back here once it is.
+// Where releases are looked for, in turn: CodeRook's zt1-engine project (a
+// release there offers its downloads while the files are attached before it's
+// named, so its feed never runs ahead of its installer), then GitHub's latest
+// release. Each one's signed feed: CodeRook writes a latest.yml of its own
+// (no signature), so ours is attached there as zt1-update.yml. Either way an
+// unsigned or wrongly signed feed is turned down.
 struct Feed {
-  const char *name, *base;
+  const char *name, *base, *yml;
 };
 const Feed kFeeds[] = {
-    {"GitHub", "https://github.com/AlexC1991/zt1-engine/releases/latest/download/"},
+    {"CodeRook", "https://api.coderook.com/v1/public/projects/batty-251/zt1-engine/updates/", "zt1-update.yml"},
+    {"GitHub", "https://github.com/AlexC1991/zt1-engine/releases/latest/download/", "latest.yml"},
 };
 
 std::mutex g_lock;
@@ -271,10 +274,10 @@ bool lookUp(Updater::Release &out) {
 #ifdef _WIN32
   std::vector<Feed> feeds(std::begin(kFeeds), std::end(kFeeds));
   if (const char *test = std::getenv("ZT1_UPDATE_FEED"))
-    feeds = {{"ZT1_UPDATE_FEED", test}};
+    feeds = {{"ZT1_UPDATE_FEED", test, "latest.yml"}};
   for (const Feed &f : feeds) {
     std::string yml, why;
-    if (!httpGet(std::string(f.base) + "latest.yml", &yml, nullptr, why)) {
+    if (!httpGet(std::string(f.base) + f.yml, &yml, nullptr, why)) {
       SDL_Log("[Updater] %s: %s", f.name, why.c_str());
       continue;
     }

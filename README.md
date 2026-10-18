@@ -61,7 +61,7 @@ This is made out of love for the game. It isn't affiliated with Microsoft or Blu
 | Where | What |
 |---|---|
 | **[GitHub Releases](https://github.com/AlexC1991/zt1-engine/releases)** | Every weekly alpha, with release notes |
-| **CodeRook** | The same builds |
+| **CodeRook** | The same builds, as releases of the `zt1-engine` project (the game and the Lab update from there first) |
 
 Both places get the same three files each week. **Two of them play the game; the third is for looking inside it.**
 

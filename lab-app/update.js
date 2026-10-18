@@ -5,7 +5,13 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const MANIFEST_URL = 'https://github.com/AlexC1991/zt1-engine/releases/latest/download/ZT1-Lab-update.json';
+// Where the Lab's releases are looked for, in turn: CodeRook's zt1-engine
+// project (its release's downloads), then GitHub's latest release. The
+// manifest is signed either way, and the first that's valid is taken.
+const SOURCES = [
+  'https://api.coderook.com/v1/public/projects/batty-251/zt1-engine/updates/',
+  'https://github.com/AlexC1991/zt1-engine/releases/latest/download/',
+];
 const PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEABGQRg9tkIg53GGoBPFrdqdi1DV5/6sAa3Np2bYdA+hE=\n-----END PUBLIC KEY-----\n`;
 const APP_ID = 'zt1-lab';
 
@@ -34,13 +40,28 @@ function request(url, onResponse, redirects = 0) {
   });
 }
 
-function readManifest() {
-  return request(MANIFEST_URL, (res) => new Promise((resolve, reject) => {
+function readFrom(base) {
+  return request(base + 'ZT1-Lab-update.json', (res) => new Promise((resolve, reject) => {
     const chunks = []; let size = 0;
     res.on('data', (b) => { size += b.length; if (size > 64 * 1024) res.destroy(new Error('Update manifest is too large')); else chunks.push(b); });
     res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch { reject(new Error('Update manifest is invalid JSON')); } });
     res.on('error', reject);
   }));
+}
+
+// The first source whose manifest is valid (and where its installer is)
+async function readManifest() {
+  let last = new Error('No update source answered');
+  for (const base of SOURCES) {
+    try {
+      const m = validate(await readFrom(base));
+      m.base = base;
+      return m;
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last;
 }
 
 function validate(m) {
@@ -55,7 +76,7 @@ function validate(m) {
 }
 
 function download(m, destination) {
-  const url = `https://github.com/AlexC1991/zt1-engine/releases/latest/download/${encodeURIComponent(m.file)}`;
+  const url = `${SOURCES.includes(m.base) ? m.base : SOURCES[SOURCES.length - 1]}${encodeURIComponent(m.file)}`;
   return request(url, (res) => new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha512'); let bytes = 0;
     const out = fs.createWriteStream(destination, {flags:'wx'});
