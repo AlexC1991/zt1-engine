@@ -8,6 +8,9 @@ name: Build
 
 on:
   push:
+    # (a tag filter alone would leave branches out: GitHub runs a push
+    # workflow for a ref only when its own filter names it)
+    branches: ['**']
     tags-ignore: ['*']
   pull_request:
 
