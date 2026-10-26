@@ -28,6 +28,12 @@ jobs:
         run: |
           npm install -g @coderook/cli@0.39.0 >/dev/null
           cbx sign-in --token "$CODEROOK_TOKEN"
+          message="$(git log -1 --format=%s) (${GITHUB_SHA::7})"
+          # Send exactly the committed tree, including tracked files that an
+          # ignore rule may name. No local ignored files enter this export.
+          mirror="$(mktemp -d)"
+          git archive HEAD | tar -x -C "$mirror"
+          cd "$mirror"
           cbx link zt1-engine .
           # This checkout never had CodeRook's private release tooling. Preserve
           # it, while --sync still removes public files deliberately deleted in Git.
@@ -36,4 +42,6 @@ jobs:
           # rather than staying from the last save; --allow-private: cbx
           # mistakes FreeType's src/cache, its font cache code, for a browser
           # profile; --no-licence: LICENSE.txt is the licence)
-          cbx submit . --sync --allow-private --no-licence -m "$(git log -1 --format=%s) (${GITHUB_SHA::7})"
+          # --allow-ignored also acknowledges the protected remote tooling
+          # retained above; CodeRook still enforces its private-path settings.
+          cbx submit . --sync --allow-private --allow-ignored --no-licence -m "$message"
