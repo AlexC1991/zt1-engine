@@ -135,6 +135,25 @@ void ItemCatalog::load(ResourceManager *rm) {
           downloaded.insert(file);
         }
 
+  // The zoo entrances' pieces no registry lists (Marine Mania's aqgate and
+  // its ticket booths, the side pieces): placed by the game's maps only, so
+  // here for map making. (Of [Member] zoogate and developer, no buy panel's)
+  {
+    std::vector<std::string> other;
+    for (const std::string &file : rm->listResources("scenery/other", ".ai"))
+      if (!seen.count(file))
+        other.push_back(file);
+    std::unordered_map<std::string, std::string> otherText = rm->readResources(other);
+    for (const std::string &file : other) {
+      AiFile ai(otherText[file]);
+      const auto &members = ai.lines["member"];
+      if (std::find(members.begin(), members.end(), "zoogate") != members.end() && seen.insert(file).second) {
+        files.push_back(file);
+        fileSection[file] = "building";
+      }
+    }
+  }
+
   // 2. Freeform availability: the unlock goals' item lists (by cNameID)
   std::map<int, int> unlockMonth;
   std::vector<std::string> unlocks = rm->listResources("freeform/unlock", ".scn");
@@ -174,6 +193,8 @@ void ItemCatalog::load(ResourceManager *rm) {
     item.type = ai.get("global", "type");
     for (const std::string &m : ai.lines["member"])
       item.members.insert(m);
+    if (item.members.empty() && item.registrySection == "food")
+      item.members.insert("food");
     if (item.members.empty())
       continue;
 
@@ -261,7 +282,7 @@ void ItemCatalog::load(ResourceManager *rm) {
     }
     auto unlock = unlockMonth.find(item.nameId);
     item.unlockMonth = unlock != unlockMonth.end() ? unlock->second
-                       : downloaded.count(file) ? 0
+                       : (downloaded.count(file) || item.fromMod) ? 0
                                                 : -1;
     this->items.push_back(item);
   }

@@ -1180,6 +1180,10 @@ public:
   LabConsole console;
 private:
   std::string mapStem, mapName;
+  std::string mapScn; // (the map's .scn: Save as a map makes a design over it)
+  bool toolHeld = false; // (a tool pressed and not let go: its drag kept for the rebuild)
+  int heldX = -1, heldY = -1;
+  int pressPX = 0, pressPY = 0; // (where mouseTile last pressed, on the screen)
   bool mapFlat = false;
   int loads = 0; // (maps loaded: the app waits for the next)
   // ---- the Watch log: the animals you follow, a row each time one starts
@@ -1396,6 +1400,27 @@ bool LabApp::setupScene(const std::string &mapStem) {
   ItemCatalog::get().load(rm);
   Research::get().load(rm);
   world->edgeScroll = false;
+  world->getFences().setEditing(false);
+  // (blank:<w>x<h> - a blank map, flat grass with nothing on it, to make a
+  // map from: the map editor - editing, so walls, entrances and scenery go
+  // anywhere; its goals, research and ambience the Basic Grass map's)
+  if (mapStem.rfind("blank:", 0) == 0) {
+    int w = 0, h = 0;
+    if (std::sscanf(mapStem.c_str() + 6, "%dx%d", &w, &h) != 2 || !world->loadBlank(w, h)) {
+      addLog("Couldn't make a blank map " + mapStem.substr(6) + " (16 to 512 tiles a side)");
+      return false;
+    }
+    addLog("Lab zoo: a blank map, " + std::to_string(w) + " x " + std::to_string(h));
+    this->mapStem = mapStem;
+    this->mapName = "A blank map (" + std::to_string(w) + " x " + std::to_string(h) + ")";
+    mapScn = "freeform/ff01.scn";
+    simClock = 0;
+    setupGoals();
+    goalsDisabled.clear();
+    goals.load(rm, mapScn);
+    world->getFences().setEditing(true);
+    return true;
+  }
   // (save:<name> - one of the original game's own saved zoos, its whole world
   // put back as the game does it: SaveGame::loadOriginalWorld)
   if (mapStem.rfind("save:", 0) == 0) {
@@ -1417,13 +1442,17 @@ bool LabApp::setupScene(const std::string &mapStem) {
   for (int i = 0; const FreeformMap *m = sm->getFreeformMap(i); i++)
     if (fs::path(m->path).stem().string() == mapStem)
       chosen = m;
-  if (!chosen && sm->getFreeformMap(0))
+  if (!chosen && sm->getFreeformMap(0)) {
     chosen = sm->getFreeformMap(0);
+    addLog("No map called " + mapStem + " (a mod's map is listed once the mod is on and the engine started again): " +
+           chosen->name + " instead");
+  }
   if (!chosen || !world->loadFreeform(chosen->path)) {
     addLog("Couldn't load a map for the lab zoo");
     return false;
   }
   addLog("Lab zoo: " + chosen->path);
+  mapScn = chosen->path;
   this->mapStem = fs::path(chosen->path).stem().string();
   this->mapName = chosen->name;
   simClock = 0;
@@ -1895,6 +1924,13 @@ void LabApp::drawHeightmap() {
         lo = std::min(lo, t->cornerHeight[0]);
         hi = std::max(hi, t->cornerHeight[0]);
       }
+  // (each tile its ground's colour - grass green, savannah gold, water
+  // blue... - lit by its height, paths pale: the whole map at once, for
+  // designing one; the lab exhibit tinted green)
+  static const Uint8 ground[18][3] = {
+      {86, 128, 48},   {196, 160, 60},  {220, 200, 140}, {140, 100, 60},  {70, 95, 40},    {130, 95, 70},
+      {128, 128, 128}, {170, 165, 150}, {240, 240, 245}, {60, 120, 200},  {40, 90, 170},   {115, 105, 55},
+      {150, 190, 230}, {80, 85, 50},    {190, 190, 185}, {70, 70, 75},    {150, 130, 80},  {150, 170, 180}};
   void *pixels;
   int pitch;
   if (SDL_LockTexture(heightTex, nullptr, &pixels, &pitch) == 0) {
@@ -1903,9 +1939,17 @@ void LabApp::drawHeightmap() {
       for (int x = 0; x < w; x++) {
         const MapTile *t = map.getTile(x, y);
         int v = t ? (t->cornerHeight[0] + t->cornerHeight[1] + t->cornerHeight[2] + t->cornerHeight[3]) / 4 : lo;
-        int g = hi > lo ? 40 + (v - lo) * 215 / (hi - lo) : 128;
-        bool lab = x >= labX && x < labX + labW && y >= labY && y < labY + labH;
-        row[x] = lab ? 0xFF000000u | (g / 2 << 16) | (g << 8) | (g / 2) : 0xFF000000u | (g << 16) | (g << 8) | g;
+        float lit = hi > lo ? 0.6f + 0.6f * (v - lo) / static_cast<float>(hi - lo) : 1.0f;
+        const Uint8 *c = ground[t ? std::min<int>(t->terrainType, 17) : 0];
+        int r = c[0], g = c[1], b = c[2];
+        if (map.isPath(x, y))
+          r = 222, g = 212, b = 186;
+        r = std::min(255, static_cast<int>(r * lit));
+        g = std::min(255, static_cast<int>(g * lit));
+        b = std::min(255, static_cast<int>(b * lit));
+        if (x >= labX && x < labX + labW && y >= labY && y < labY + labH)
+          r /= 2, b /= 2;
+        row[x] = 0xFF000000u | (r << 16) | (g << 8) | b;
       }
     }
     SDL_UnlockTexture(heightTex);
@@ -1914,6 +1958,28 @@ void LabApp::drawHeightmap() {
   SDL_Rect dst{viewRect.x + static_cast<int>((viewRect.w - w * s) / 2), viewRect.y + static_cast<int>((viewRect.h - h * s) / 2),
                static_cast<int>(w * s), static_cast<int>(h * s)};
   SDL_RenderCopy(ren, heightTex, nullptr, &dst);
+  // (its fences as lines along the tiles' sides: the zoo wall red, the
+  // rest dark - the map's outline, for drawing one by hand)
+  const Fences &fn = world->getFences();
+  for (const auto &[e, p] : fn.pieces()) {
+    const bool wall = fn.types()[static_cast<size_t>(p.type)].zooWall;
+    SDL_SetRenderDrawColor(ren, wall ? 230 : 40, wall ? 60 : 40, wall ? 50 : 40, 255);
+    const float x0 = dst.x + e.x * s, y0 = dst.y + e.y * s;
+    const int th = std::max(1, static_cast<int>(s / 3));
+    SDL_Rect r = e.alongX ? SDL_Rect{static_cast<int>(x0), static_cast<int>(y0) - th / 2, std::max(1, static_cast<int>(s + 0.5f)), th}
+                          : SDL_Rect{static_cast<int>(x0) - th / 2, static_cast<int>(y0), th, std::max(1, static_cast<int>(s + 0.5f))};
+    SDL_RenderFillRect(ren, &r);
+  }
+  // (the map's objects as dots: plants green, buildings and the rest brown)
+  for (const PlacedObjects::Object &o : world->getObjects().objects()) {
+    if (o.fence)
+      continue;
+    const bool plant = o.subClass == "foliage";
+    SDL_SetRenderDrawColor(ren, plant ? 30 : 110, plant ? 70 : 70, plant ? 25 : 45, 255);
+    const int d = std::max(2, static_cast<int>(s * (o.className == "building" ? 2.0f : 0.6f)));
+    SDL_Rect r{dst.x + static_cast<int>(o.x * s) - d / 2, dst.y + static_cast<int>(o.y * s) - d / 2, d, d};
+    SDL_RenderFillRect(ren, &r);
+  }
   // (the lab animals as dots)
   SDL_SetRenderDrawColor(ren, 255, 80, 40, 255);
   for (int id : labAnimals)
@@ -2547,7 +2613,7 @@ void LabApp::ui() {
     if (ImGui::SmallButton("To the lab exhibit"))
       world->centreOn(labX + labW / 2.0f, labY + labH / 2.0f);
   } else if (viewMode == "heightmap") {
-    ImGui::Text("Heightmap: the map's tile heights, top down (lab exhibit green, its animals red)");
+    ImGui::Text("Terrain: the whole map from above - each tile its ground, lit by its height; paths, objects (lab exhibit green, its animals red)");
   } else {
     ImGui::Text("%s: %s", viewMode.c_str(), viewWhat.c_str());
     ImGui::SetNextItemWidth(260);
@@ -2791,6 +2857,7 @@ std::string LabApp::sceneJson() {
       .str("map", mapStem)
       .str("mapName", mapName)
       .flag("flat", mapFlat)
+      .flag("editing", world->getFences().isEditing())
       .num("loads", loads)
       .num("clock", simClock)
       .num("speed", speed)
@@ -2991,7 +3058,7 @@ void LabApp::applyTool() {
   else if (k == "gate")
     world->setGateTool(true);
   else if (k == "filter")
-    world->setFilterTool(true);
+    world->setFilterTool(world->getFences().selectFilter(tool.item));
   else if (k == "fence") {
     const auto &types = world->getFences().types();
     for (size_t i = 0; i < types.size(); i++)
@@ -3041,17 +3108,30 @@ void LabApp::sceneMouse(const std::string &ev, int x, int y) {
       hoverX = static_cast<int>(std::floor(wx));
       hoverY = static_cast<int>(std::floor(wy));
     }
+    // (a drag with a tool held - painting the ground, raising it - kept in
+    // the rebuild list a tile at a time too: its press and release alone
+    // made only its two ends again)
+    if (toolHeld && hoverOn && (hoverX != heldX || hoverY != heldY) && rebuild.size() < 4000) {
+      heldX = hoverX;
+      heldY = hoverY;
+      char b[160];
+      snprintf(b, sizeof b, "{\"cmd\":\"mouseWorld\",\"wx\":%.4f,\"wy\":%.4f,\"ev\":\"move\"}", wx, wy);
+      rebuild.push_back(Json::parse(b));
+    }
   } else if (ev == "leave") {
     world->hoverOff();
     hoverOn = false;
   } else if (ev == "down" || ev == "up" || ev == "click") {
     // (a tool used: kept in the rebuild list at its world place)
-    float rx, ry;
+    float rx = 0, ry = 0;
     if (tool.kind != "select" && tool.kind != "route" && world->groundAt(x, y, rx, ry) && rebuild.size() < 4000) {
       char b[160];
       snprintf(b, sizeof b, "{\"cmd\":\"mouseWorld\",\"wx\":%.4f,\"wy\":%.4f,\"ev\":\"%s\"}", rx, ry, ev.c_str());
       rebuild.push_back(Json::parse(b));
     }
+    toolHeld = ev == "down" && tool.kind != "select" && tool.kind != "route";
+    heldX = static_cast<int>(std::floor(rx));
+    heldY = static_cast<int>(std::floor(ry));
   }
   if (ev == "down") {
     float wx, wy;
@@ -3169,7 +3249,7 @@ std::string LabApp::selJson() {
     if (!m)
       return sel = {}, "null";
     const Animals::Type &t = an.types()[m->type];
-    o.str("name", m->name).str("species", t.key).str("speciesName", rm->getString(t.nameId)).str("file", t.file);
+    o.str("name", m->name).str("species", t.key).str("speciesName", t.displayName.empty() ? rm->getString(t.nameId) : t.displayName).str("file", t.file);
     o.flag("female", m->female).flag("baby", m->baby).num("exhibit", m->exhibit).str("exhibitName", exName(m->exhibit));
     o.flag("egg", m->egg).num("hatchIn", m->hatchIn);
     o.num("x", m->x).num("y", m->y).str("doing", m->anim);
@@ -3210,6 +3290,7 @@ std::string LabApp::selJson() {
     o.num("happiness", g->happiness).num("hunger", g->hunger).num("thirst", g->thirst).num("bathroom", g->bathroom);
     o.num("tired", g->tired).flag("souvenir", g->souvenir).flag("trash", g->trash).flag("leaving", g->leaving);
     o.num("seen", static_cast<double>(g->seen.size())).add("thoughts", "[" + thoughts + "]");
+    o.num("guide", g->guide).flag("tourHeard", g->tourHeard);
     o.add("route", routeJson("guest", g->id, g->path, g->pathAt));
     {
       std::string anims;
@@ -3231,9 +3312,12 @@ std::string LabApp::selJson() {
     std::string exs;
     for (int e : m->exhibits)
       exs += (exs.empty() ? "" : ",") + jq(exName(e));
-    o.str("name", m->name).str("type", rm->getString(t.nameId)).str("file", t.file).flag("female", m->female);
+    const CatalogItem *ci = ItemCatalog::get().find(t.file);
+    o.str("name", m->name).str("type", ci ? ci->name : rm->getString(t.nameId)).str("file", t.file).flag("female", m->female);
     o.str("duty", duty).str("job", jobs[std::clamp(static_cast<int>(m->job), 0, 8)]).add("exhibits", "[" + exs + "]");
     o.num("x", m->x).num("y", m->y).str("doing", m->anim);
+    if (t.kind == Staff::Kind::Guide)
+      o.num("followers", static_cast<double>(m->followers.size())).flag("speaking", m->speaking);
     o.add("route", routeJson("staff", m->id, m->path, m->pathAt));
     {
       std::string anims;
@@ -3281,7 +3365,7 @@ std::string LabApp::selJson() {
         animals += (animals.empty() ? "" : ",") +
                    JObj()
                        .num("id", m.id)
-                       .str("species", rm->getString(an.types()[m.type].nameId))
+                       .str("species", an.types()[m.type].displayName.empty() ? rm->getString(an.types()[m.type].nameId) : an.types()[m.type].displayName)
                        .num("happiness", m.happiness)
                        .num("suitability", inBreak ? -1 : an.suitability(m.id, world->getMap(), fn))
                        .done();
@@ -3417,7 +3501,7 @@ void LabApp::sendOutline() {
     animals += (animals.empty() ? "" : ",") + JObj()
                                                   .num("id", m.id)
                                                   .str("name", m.name)
-                                                  .str("species", rm->getString(an.types()[m.type].nameId))
+                                                  .str("species", an.types()[m.type].displayName.empty() ? rm->getString(an.types()[m.type].nameId) : an.types()[m.type].displayName)
                                                   .num("exhibit", m.exhibit)
                                                   .done();
   for (const Staff::Member &m : world->getStaff().members())
@@ -3486,9 +3570,12 @@ void LabApp::sendCatalog() {
                                               .str("file", ci.file)
                                               .str("name", ci.name)
                                               .num("cost", ci.cost)
+                                              .num("nameId", ci.nameId)
                                               .str("icon", ci.icon)
                                               .num("facings", static_cast<double>(ci.icons.size()))
                                               .str("section", ci.registrySection)
+                                              .str("type", ci.type)
+                                              .flag("fromMod", ci.fromMod)
                                               .num("pack", ci.expansion)
                                               .add("members", "[" + members + "]")
                                               .done();
@@ -3807,6 +3894,9 @@ bool LabApp::loadMap(const std::string &stem, bool flat) {
   searches.clear();
   watchRows.clear();
   watchLast.clear();
+  // (and the Watch panel told: it kept the last zoo's rows)
+  if (host)
+    sendWatch();
   if (!setupScene(stem))
     return false;
   if (flat)
@@ -4395,6 +4485,27 @@ void LabApp::drawFootprints() {
   SDL_SetRenderDrawColor(ren, 240, 110, 240, 230);
   for (auto &box : boxes)
     SDL_RenderDrawLinesF(ren, box.data(), 5);
+  // Each door (entrpos): green on a path a guest can stand on, yellow off one
+  for (const PlacedObjects::Object &o : world->getObjects().objects()) {
+    if (o.fence)
+      continue;
+    for (const auto &[dx, dy] : world->getGuests().doorTiles(o)) {
+      SDL_FPoint d[5];
+      at(dx + 0.15f, dy + 0.15f, d[0]);
+      at(dx + 0.85f, dy + 0.15f, d[1]);
+      at(dx + 0.85f, dy + 0.85f, d[2]);
+      at(dx + 0.15f, dy + 0.85f, d[3]);
+      d[4] = d[0];
+      bool onPath = world->getGuests().canWalk(dx, dy);
+      SDL_SetRenderDrawColor(ren, onPath ? 60 : 255, onPath ? 230 : 220, onPath ? 90 : 40, 255);
+      for (int k = -1; k <= 1; k++) {
+        SDL_FPoint s[5];
+        for (int j = 0; j < 5; j++)
+          s[j] = {d[j].x, d[j].y + k};
+        SDL_RenderDrawLinesF(ren, s, 5);
+      }
+    }
+  }
   SDL_SetRenderDrawColor(ren, 255, 60, 50, 255);
   for (const SDL_FPoint &c : missing)
     for (int d = -1; d <= 1; d++) {
@@ -4700,7 +4811,7 @@ void LabApp::hostCommand(const Json &c) {
   // tools used - in world places, recorded as they're used - what's picked,
   // pinned, followed, changed. A new map starts the list again)
   static const std::set<std::string> kSetup = {"load", "tool", "lineMode", "walkway", "pin", "watch", "select",
-                                               "set", "remove", "undo", "confirm", "act", "rotate", "scriptOn"};
+                                               "set", "remove", "undo", "confirm", "act", "rotate", "scriptOn", "mapEdit"};
   if (kSetup.count(cmd)) {
     if (cmd == "load")
       rebuild.clear();
@@ -4817,6 +4928,14 @@ void LabApp::hostCommand(const Json &c) {
   } else if (cmd == "load") {
     if (loadMap(c["map"].str(mapStem), c["flat"].truthy()))
       sendOutline();
+  } else if (cmd == "mapEdit") {
+    // Editing the map (the map editor): walls, entrances and scenery go
+    // anywhere; off, the zoo's inside worked out again from its wall
+    world->getFences().setEditing(c["on"].truthy());
+    if (!c["on"].truthy())
+      world->refindInside();
+    note(c["on"].truthy() ? "Editing the map: walls, entrances and scenery go anywhere."
+                          : "Editing off: the zoo's inside is what its wall and entrance close in.");
   } else if (cmd == "catalog") {
     sendCatalog();
   } else if (cmd == "icon") {
@@ -5310,7 +5429,19 @@ void LabApp::hostCommand(const Json &c) {
         world->pointToWindow(tx, ty, h, x, y);
         addLog("mouseTile: brought " + std::to_string(static_cast<int>(tx)) + "," + std::to_string(static_cast<int>(ty)) + " into view");
       }
+      // (dy: that many pixels up or down the screen from where it was
+      // pressed, at 1x - a hills tool's drag: 16 a step, as the original's.
+      // From the press, not the tile: the ground it raises moves the tile
+      // up the screen, and the drag would raise it more and more)
       std::string ev = c["ev"].str();
+      if (ev == "down") {
+        pressPX = x;
+        pressPY = y;
+      } else if (c["dy"].kind != Json::Kind::Null) {
+        const float zoom = world->getRenderer().getCamera().zoom;
+        x = pressPX;
+        y = pressPY + static_cast<int>(c["dy"].num() * (zoom > 0 ? zoom : 1.0f));
+      }
       sceneMouse("move", x, y);
       if (ev != "move")
         sceneMouse(ev, x, y);
@@ -5374,6 +5505,31 @@ void LabApp::hostCommand(const Json &c) {
     else
       text = console(words);
     host->send("{\"t\":\"console\",\"line\":" + jq(line) + ",\"text\":" + jq(text) + "}");
+  } else if (cmd == "saveMap") {
+    // The lab zoo as a map design (Test Zoo > Save as a map): over the map
+    // it was loaded from - its .scn's [start] savegame= (a map from a mod:
+    // the map that one's over), written to the path given; the Lab puts it
+    // in a mod with its .scn
+    std::string over;
+    // (a blank map's: over nothing - its .scn says how big a blank map it's
+    // drawn on, [start] blank)
+    bool blank = mapStem.rfind("blank:", 0) == 0;
+    if (IniReader *scn = rm->getIniReader(mapScn)) {
+      blank = blank || !scn->get("start", "blank").empty();
+      over = scn->get("start", "savegame");
+      delete scn;
+    }
+    if (blank) over = "blank";
+    // (the inside as the wall and entrance now close it in, for the game)
+    world->refindInside();
+    const std::string path = c["path"].str();
+    const bool ok = !over.empty() && !path.empty() && SaveGame::saveMap(path, *world, over);
+    if (!ok)
+      note(over.empty() ? "This zoo isn't from one of the game's freeform maps: load one first." : "The map couldn't be saved.");
+    const WorldMap &map = world->getMap();
+    host->send("{\"t\":\"mapSaved\",\"ok\":" + std::string(ok ? "true" : "false") + ",\"path\":" + jq(path) +
+               ",\"over\":" + jq(over) + ",\"scn\":" + jq(mapScn) + ",\"w\":" + std::to_string(map.getWidth()) +
+               ",\"h\":" + std::to_string(map.getHeight()) + ",\"blank\":" + (blank ? "true" : "false") + "}");
   } else if (cmd == "quit") {
     hostQuit = true;
   }

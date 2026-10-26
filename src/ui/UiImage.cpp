@@ -6,6 +6,8 @@
 #include "../CompassDirection.hpp"
 #include "../Utils.hpp"
 
+#include "SDL_image.h"
+
 // =================================================================================
 //  USER CONFIGURATION: PREVIEW IMAGE ADJUSTMENTS
 // =================================================================================
@@ -94,7 +96,7 @@ UiImage::~UiImage() {
 }
 
 void UiImage::setImage(const std::string &path) {
-  if (this->image_path == path && !this->is_zt1_preview)
+  if (this->image_path == path && !this->is_zt1_preview && this->png_bytes.empty())
     return;
 
   if (this->image != nullptr) {
@@ -105,10 +107,28 @@ void UiImage::setImage(const std::string &path) {
   this->animation = nullptr;
 
   this->is_zt1_preview = false;
+  this->is_file = false;
   this->zt1_raw_path.clear();
   this->zt1_pal_path.clear();
 
   this->image_path = path;
+  this->png_bytes.clear();
+  this->is_dynamic = true;
+}
+
+void UiImage::setFileImage(const std::string &file) {
+  if (this->is_file && this->image_path == file)
+    return;
+  this->image_path.clear(); // (the same path as a game file: loaded again, as a file)
+  this->setImage(file);
+  this->is_file = true;
+}
+
+void UiImage::setPngImage(const std::string &bytes) {
+  if (this->png_bytes == bytes && this->image_path.empty() && !this->is_file && !this->is_zt1_preview)
+    return;
+  this->setImage("");
+  this->png_bytes = bytes;
   this->is_dynamic = true;
 }
 
@@ -127,10 +147,12 @@ void UiImage::setZt1Image(const std::string &raw_path,
   this->animation = nullptr;
 
   this->is_zt1_preview = true;
+  this->is_file = false;
   this->zt1_raw_path = raw_path;
   this->zt1_pal_path = pal_path;
 
   this->image_path.clear();
+  this->png_bytes.clear();
   this->is_dynamic = true;
 }
 
@@ -143,15 +165,22 @@ void UiImage::ensureLoaded(SDL_Renderer *renderer) {
     return;
 
   if (((this->image == nullptr && this->animation == nullptr &&
-        !this->image_path.empty()) ||
+        (!this->image_path.empty() || !this->png_bytes.empty())) ||
        this->is_dynamic) &&
-      (this->is_zt1_preview || !this->image_path.empty())) {
+      (this->is_zt1_preview || !this->image_path.empty() || !this->png_bytes.empty())) {
     this->is_dynamic = false;
 
-    if (this->is_zt1_preview) {
+    if (!this->png_bytes.empty()) {
+      SDL_RWops *source = SDL_RWFromConstMem(this->png_bytes.data(), static_cast<int>(this->png_bytes.size()));
+      this->image = source ? IMG_LoadTexture_RW(renderer, source, 1) : nullptr;
+    } else if (this->is_zt1_preview) {
       this->image = this->resource_manager->getZt1Texture(
           renderer, this->zt1_raw_path, this->zt1_pal_path);
       // Logging suppressed to keep console clean
+    } else if (this->is_file) {
+      this->image = IMG_LoadTexture(renderer, this->image_path.c_str());
+      if (!this->image)
+        SDL_Log("UiImage: couldn't read %s: %s", this->image_path.c_str(), IMG_GetError());
     } else if (!this->image_path.empty()) {
       std::string ext =
           Utils::string_to_lower(Utils::getFileExtension(this->image_path));

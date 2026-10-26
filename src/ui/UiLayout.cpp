@@ -109,8 +109,17 @@ void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   int maxDepth = 0;
   std::function<void(UiElement *, SDL_Rect, int)> visit =
       [&](UiElement *e, SDL_Rect parent, int depth) {
-        if (e->isHidden())
+        if (e->isHidden()) {
+          // (a hidden button's anchored elements still show where it is:
+          // the HUD's date sits on the Pause button, hidden while paused,
+          // and the original shows the date then too)
+          if (dynamic_cast<UiButton *>(e)) {
+            SDL_Rect r = e->computeRect(renderer, &parent);
+            for (UiElement *c : e->getChildren())
+              visit(c, r, depth + 1);
+          }
           return;
+        }
         items.push_back({e, parent, depth});
         maxDepth = std::max(maxDepth, depth);
         if (dynamic_cast<UiLayout *>(e))
@@ -132,10 +141,15 @@ void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
            dynamic_cast<UiListBox *>(e) || dynamic_cast<UiLayout *>(e) ||
            dynamic_cast<UiGraph *>(e);
   };
-  for (int layer = 0; layer <= maxLayer; layer++) {
+  // (and a layer's text after its pictures: the main menu's Version_Label,
+  // anchored to the background on its layer, shows over it in the original)
+  for (int layer = 0; layer <= maxLayer; layer++)
+    for (int textPass = 0; textPass < 2; textPass++)
     for (int depth = maxDepth; depth >= 0; depth--)
     for (Item &it : items) {
       if (it.element->getLayer() != layer || it.depth != depth)
+        continue;
+      if ((dynamic_cast<UiText *>(it.element) != nullptr) != (textPass == 1))
         continue;
       if (!RenderSettings::drawsUiArt() && !hasText(it.element))
         continue;
@@ -145,7 +159,6 @@ void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
           sub->setAnchorRect(this->anchor_rect);
       it.element->draw(renderer, &it.parent);
     }
-  }
 }
 
 void UiLayout::process_sections(IniReader *ini_reader,

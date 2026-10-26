@@ -187,8 +187,10 @@ std::string sizeText(long long bytes) {
   char b[32];
   if (bytes >= 1024LL * 1024 * 1024)
     std::snprintf(b, sizeof b, "%.1f GB", bytes / (1024.0 * 1024 * 1024));
+  else if (bytes >= 1024LL * 1024)
+    std::snprintf(b, sizeof b, "%.1f MB", bytes / (1024.0 * 1024));
   else
-    std::snprintf(b, sizeof b, "%.0f MB", bytes / (1024.0 * 1024));
+    std::snprintf(b, sizeof b, "%.0f KB", bytes / 1024.0);
   return b;
 }
 
@@ -269,6 +271,12 @@ void repositorySelection(UiLayout *layout) {
   }
   const ModRepo::Mod &m = g_repoMods[g_repoRows[i].mod];
   const ModRepo::Part &p = m.parts[g_repoRows[i].part];
+  if (!m.picture.empty()) {
+    if (UiImage *art = el<UiImage>(layout, kArt)) {
+      art->setPngImage(m.picture);
+      art->setHidden(false);
+    }
+  }
   std::string have = ModRepo::installedVersion(m, p);
   std::string about = m.name + (m.version.empty() ? "" : "  (version " + m.version + ")");
   if (!m.author.empty())
@@ -390,11 +398,15 @@ void selectionChanged(UiLayout *layout, ResourceManager *rm) {
   if (lines.empty())
     lines.push_back(m.settings.empty() ? "(it doesn't say)" : "Its own settings: Game Options > Mods & Updates");
   setDetails(layout, "It changes", lines);
-  // Its art: the first frame it changes (as loaded now: the mod's own when
-  // it's on), with the palette it names
+  // Its picture: its own (mod.json "picture"), else the first frame it
+  // changes (as loaded now: the mod's own when it's on), with the palette it
+  // names
   if (UiImage *art = el<UiImage>(layout, kArt)) {
     art->setHidden(true);
-    if (!m.preview.empty() && !m.palette.empty() && rm->hasResource(m.preview)) {
+    if (!m.picture.empty()) {
+      art->setFileImage(m.picture);
+      art->setHidden(false);
+    } else if (!m.preview.empty() && !m.palette.empty() && rm->hasResource(m.preview)) {
       art->setZt1Image(m.preview, g_loaded.count(m.folder) ? m.palette : m.originalPalette);
       art->setHidden(false);
     }

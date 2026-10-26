@@ -269,6 +269,12 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.facesYOffset = num("cfacesyoffset", 0);
     t.attractiveness = num("cattractiveness", 0);
     t.keeperFood = std::max(0, num("ckeeperfoodtype", 0));
+    if (Features::mods) {
+      std::string food = lower(trim(ai->get("m/characteristics/strings", "ckeeperfood")));
+      for (const CatalogItem &candidate : catalog.all())
+        if (candidate.registrySection == "food" && candidate.type == food && candidate.fromMod)
+          t.customFood = food;
+    }
     t.jumper = num("cisjumper", 0) == 1;
     t.climber = num("cisclimber", 0) == 1;
     t.bash = num("cbashstrength", 0);
@@ -1533,9 +1539,13 @@ std::vector<std::string> Animals::labAnims(int id) const {
 
 std::vector<std::string> Animals::labSets(int id) const {
   std::vector<std::string> out;
+  // (its own, and the male's it falls back on - set(): a female or young
+  // one with no sets of its own plays the male's)
   if (const Member *m = this->member(id))
-    for (const auto &kv : this->typeList[m->type].sets[sub(*m)])
-      out.push_back(kv.first);
+    for (int s : {sub(*m), 0})
+      for (const auto &kv : this->typeList[m->type].sets[s])
+        if (std::find(out.begin(), out.end(), kv.first) == out.end())
+          out.push_back(kv.first);
   return out;
 }
 
@@ -1978,7 +1988,7 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
     // Playing
     if (m.stepping && m.animTime < m.playFor)
       continue;
-    if (m.stepping && (m.anim == "eat" || m.anim.find("_eat") != std::string::npos) && m.foodItem >= 0 &&
+    if (m.stepping && (m.anim == "eat" || m.anim.rfind("eat_", 0) == 0 || m.anim.find("_eat") != std::string::npos) && m.foodItem >= 0 &&
         this->items) {
       // A mouthful (cKeeperFoodUnitsEaten) of the food it's at
       float got = this->items->eat(m.foodItem, static_cast<float>(t.foodEaten));

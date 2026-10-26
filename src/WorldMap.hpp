@@ -45,6 +45,9 @@ public:
 
     // Load map from .zoo file via ZooReader
     bool loadFromZooReader(const ZooReader& reader);
+    // A blank map: w x h tiles of flat grass at one height, no paths (a map
+    // made from nothing in the Lab's map editor - Features::customMaps)
+    void makeBlank(int w, int h, int groundHeight);
 
     // Get tile at position (returns nullptr if out of bounds)
     const MapTile* getTile(int x, int y) const;

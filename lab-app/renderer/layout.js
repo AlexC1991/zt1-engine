@@ -172,6 +172,34 @@ function showPanel(id) {
   }
   p.api.setActive();
 }
+// The Scene view as big as the tab (and back): every other panel hidden a
+// while - for looking at a zoo, designing a map, or recording one
+function sceneBig(on) {
+  const a = LAYOUT.api;
+  const p = a && a.getPanel('scene');
+  if (!p) return false;
+  const big = a.hasMaximizedGroup && a.hasMaximizedGroup();
+  if (on === undefined) on = !big;
+  // (the layout as it was kept, and put back exactly: dockview's own way out
+  // of a maximised group left the side panels squeezed)
+  if (on && !big) {
+    LAYOUT.beforeBig = a.toJSON();
+    a.maximizeGroup(p);
+  } else if (!on && big) {
+    a.exitMaximizedGroup();
+    if (LAYOUT.beforeBig) {
+      a.fromJSON(LAYOUT.beforeBig);
+      LAYOUT.beforeBig = null;
+    }
+  }
+  setTimeout(() => {
+    sizeCanvas();
+    if (typeof renderStageUi === 'function') renderStageUi();
+  }, 60);
+  return on;
+}
+ACTIONS.scBig = (arg) => sceneBig(arg === undefined || arg === '' ? undefined : arg === 'on' || arg === true);
+
 function closePanel(id) {
   const p = LAYOUT.api && LAYOUT.api.getPanel(id);
   if (p) p.api.close();
@@ -265,7 +293,12 @@ Object.assign(ACTIONS, {
   watchClear: () => lab.engineSend({ cmd: 'watch', clear: true }),
 });
 function fillLog(el, lines, empty) {
-  const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+  // (at the end, it follows; and a command just run always shows its answer,
+  // wherever the log had been scrolled to)
+  const had = +(el.dataset.n || 0);
+  const ran = lines.length > had && lines.slice(had).some((l) => l.startsWith('› '));
+  el.dataset.n = String(lines.length);
+  const atEnd = ran || el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
   setHtml(
     el,
     lines.map((l) => (l.startsWith('› ') ? `<span class="cmd">${esc(l)}</span>` : /FAIL|error|crashed|couldn't/i.test(l) ? `<span class="bad">${esc(l)}</span>` : esc(l))).join('\n') || empty,

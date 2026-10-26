@@ -200,7 +200,7 @@ bool allowed(const std::string &fileName) {
   static const std::set<std::string> ok = {
       ".ztd", ".ai",  ".ani", ".pal", ".tga",  ".bmp", ".png", ".webp", ".jpg", ".jpeg", ".wav", ".ogg",
       ".mp3", ".json", ".ini", ".txt", ".md",  ".frag", ".lyt", ".uca", ".ucs", ".ucb", ".scn", ".zoo",
-      ".lng", ".cfg", ".tgs", ".rtf", ".htm", ".html"};
+      ".zt1map", ".lng", ".cfg", ".tgs", ".rtf", ".htm", ".html"};
   std::string ext = lower(fs::u8path(fileName).extension().string());
   // (a frame of animation has no extension at all: animals/yeti/m/walk/N)
   return ext.empty() || ok.count(ext) > 0;

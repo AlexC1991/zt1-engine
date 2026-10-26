@@ -75,6 +75,7 @@ private:
   std::vector<Item> list;
   int nextId = 1;
   mutable std::map<std::string, Animation *> artCache;
+  mutable std::map<std::string, std::string> foodSlots;
   Animation *art(const std::string &path) const;
 };
 

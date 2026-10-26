@@ -73,6 +73,7 @@ public:
     // half full over 12 (its "full" art never shows in the original:
     // 0x412513); emptied by maintenance workers
     int fill = 0;
+    bool trashCan = false; // Rebuilt from the definition; not saved separately.
     Animation *half = nullptr;
     // A bought building's cNameID, and an animal house's program (an index
     // into its collection, cheapest first: zoo.exe inst+0x188)
@@ -112,6 +113,9 @@ public:
   // The tank a spot is in (-1: none): what's in a tank is drawn with it
   // (drawInTank), under its water and behind its front walls, not here
   std::function<int(float x, float y)> tankAt;
+  // Whether a type is one of the entrance's pieces (Fences::isZooGate): placed,
+  // it's a "building", as the map files have them
+  std::function<bool(const std::string &type)> isEntrance;
   // A tank's objects, back to front: those under the water (surface false)
   // or those on it (true, at the water's level)
   void drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, const WorldMap &map, int tank, bool surface,

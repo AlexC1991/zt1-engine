@@ -154,10 +154,14 @@ const CodeEditor = (() => {
     await ensureRoot();
     let f = files.get(rel);
     if (!f) {
-      // (a game file: read-only, as config text, and nothing for clangd)
-      const uri = m.Uri.parse(opts.game ? 'game:///' + encodeURI(rel.replace(/^game:/, '')) : opts.abs ? 'file:///' + encodeURI(rel.replace(/\\/g, '/')) : uriOf(rel));
-      const model = m.editor.getModel(uri) || m.editor.createModel(text, opts.game ? 'ini' : 'cpp', uri);
-      f = { model, saved: model.getAlternativeVersionId(), crlf: !!opts.crlf, readOnly: !!opts.readOnly || !!opts.game, game: !!opts.game, version: 1, disk: text };
+      // (a game file: read-only, as config text, and nothing for clangd; a
+      // mod's data file - opts.data - the same, but to change)
+      const data = !!opts.game || !!opts.data;
+      const uri = m.Uri.parse(
+        opts.game ? 'game:///' + encodeURI(rel.replace(/^game:/, '')) : opts.data ? 'mod:///' + encodeURI(rel.replace(/^mod:/, '')) : opts.abs ? 'file:///' + encodeURI(rel.replace(/\\/g, '/')) : uriOf(rel),
+      );
+      const model = m.editor.getModel(uri) || m.editor.createModel(text, data ? 'ini' : 'cpp', uri);
+      f = { model, saved: model.getAlternativeVersionId(), crlf: !!opts.crlf, readOnly: !!opts.readOnly || !!opts.game, game: data, version: 1, disk: text };
       files.set(rel, f);
       model.onDidChangeContent(() => {
         f.version++;
@@ -177,14 +181,18 @@ const CodeEditor = (() => {
     if (fresh) editor.setModel(f.model);
     editor.updateOptions({ readOnly: f.readOnly });
     if (line) {
+      f.want = line;
       editor.revealLineInCenter(line);
       editor.setPosition({ lineNumber: line, column: col || 1 });
       // (a file just put in the editor isn't laid out yet: shown at its top
-      // unless the line's brought into view again once it is)
+      // unless the line's brought into view again once it is - and once more
+      // later, as the editor itself, just made, takes longer. The latest line
+      // asked for: a second show soon after the first wins)
       if (fresh)
-        setTimeout(() => {
-          if (editor.getModel() === f.model) editor.revealLineInCenter(line);
-        }, 60);
+        for (const ms of [60, 300])
+          setTimeout(() => {
+            if (editor.getModel() === f.model) editor.revealLineInCenter(f.want);
+          }, ms);
     }
     editor.focus();
   }

@@ -24,7 +24,8 @@
 
 namespace {
 constexpr uint32_t kMagic = 0x5A543153; // "S1TZ"
-constexpr uint32_t kVersion = 8; // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
+constexpr uint32_t kMapMagic = 0x504D3153; // "S1MP": a map design (saveMap)
+constexpr uint32_t kVersion = 9; // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
 
 // A little binary writer and reader: numbers as they are, strings with
 // their length, vectors with their count
@@ -309,45 +310,12 @@ bool SaveGame::loadOriginalWorld(World &world) {
   return true;
 }
 
-bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameScreen &hud,
-                    const std::string &mapPath) {
-  Out o;
-  o.raw(kMagic);
-  o.raw(kVersion);
-  o.str(mapPath);
-  // The books
-  o.raw(sim.money);
-  o.raw(sim.zooRating);
-  o.raw(sim.day);
-  o.raw(sim.dayCount);
-  o.raw(static_cast<uint32_t>(sim.months.size()));
-  for (const ZooSim::Month &m : sim.months) {
-    o.raw(m.month);
-    o.raw(m.year);
-    o.raw(m.lines);
-    o.raw(m.rating);
-  }
-  // The zoo's name and admission
-  const UiGameScreen::ZooInfo &info = hud.zooInfo();
-  o.str(info.name);
-  o.raw(info.admission);
-  o.raw(hud.marketingLevel);
-  // Research
-  auto &branches = Research::get().branches();
-  o.raw(static_cast<uint32_t>(branches.size()));
-  for (const ResearchBranch &b : branches) {
-    o.raw(b.fundingLevel);
-    o.raw(b.currentCategory);
-    o.raw(b.currentProgram);
-    o.raw(static_cast<uint32_t>(b.categories.size()));
-    for (const ResearchCategory &c : b.categories) {
-      o.raw(static_cast<uint32_t>(c.programs.size()));
-      for (const ResearchProgram &p : c.programs) {
-        o.raw(p.progress);
-        o.raw(p.done);
-      }
-    }
-  }
+// The world as it's been made - the ground, paths, walkways, fences and
+// exhibits, objects - written and read: a saved zoo has it, and so does a
+// map design (saveMap: a freeform map made in the ZT1 Lab, over one of the
+// game's maps)
+void SaveGame::putWorld(void *out, World &world) {
+  Out &o = *static_cast<Out *>(out);
   // The ground
   WorldMap &map = world.worldMap;
   o.raw(map.width);
@@ -445,6 +413,7 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
     o.raw(x.upkeepLast);
     o.raw(x.upkeepCurrent);
     o.raw(x.upkeepTotal);
+    o.str(x.file);
   }
   // Objects (the map's and those bought)
   PlacedObjects &po = world.placedObjects;
@@ -487,6 +456,234 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
     o.str(k);
     o.raw(n);
   }
+}
+
+bool SaveGame::getWorld(void *in, World &world, uint32_t version) {
+  In &i = *static_cast<In *>(in);
+  // The ground
+  WorldMap &map = world.worldMap;
+  int w = i.raw<int>(), h = i.raw<int>();
+  if (w != map.width || h != map.height)
+    return false;
+  for (int y = 0; y < h; y++)
+    for (int x = 0; x < w; x++) {
+      MapTile &t = map.tiles[y][x];
+      i.get(t.height);
+      i.get(t.cornerHeight);
+      i.get(t.terrainType);
+      i.get(t.edgeBits);
+      i.get(t.substrate);
+    }
+  map.pathTypes.resize(i.raw<uint32_t>());
+  for (std::string &s : map.pathTypes)
+    s = i.str();
+  map.pathTile.resize(i.raw<uint32_t>());
+  for (int16_t &v : map.pathTile)
+    i.get(v);
+  map.touch();
+  world.walkways.decks.clear();
+  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
+    int x = i.raw<int>(), y = i.raw<int>();
+    Walkways::Deck d;
+    d.type = i.str();
+    i.get(d.h);
+    world.walkways.decks[{x, y}] = d;
+  }
+  // Fences
+  Fences &f = world.fences;
+  f.edges.clear();
+  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
+    Fences::Edge e = getEdge(i);
+    Fences::Piece p;
+    p.type = f.typeIndex(i.str());
+    i.get(p.gate);
+    i.get(p.facing);
+    i.get(p.ownerX);
+    i.get(p.ownerY);
+    i.get(p.order);
+    i.get(p.drag);
+    i.get(p.tank);
+    i.get(p.life);
+    if (version >= 4)
+      i.get(p.tank2);
+    if (p.type >= 0)
+      f.edges[e] = p;
+  }
+  f.exhibitList.clear();
+  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
+    Fences::Exhibit x;
+    i.get(x.id);
+    x.name = i.str();
+    i.get(x.named);
+    i.get(x.pocket);
+    i.get(x.tank);
+    i.get(x.constructedDay);
+    i.get(x.constructedMonth);
+    i.get(x.constructedYear);
+    i.get(x.groundHeight);
+    i.get(x.floorHeight);
+    i.get(x.water);
+    i.get(x.wallSub);
+    if (version < 5)
+      x.wallSub -= x.floorHeight; // (it was the walls' top in height units)
+    if (version < 5)
+      x.wallSub *= 2; // (to the half units of 5 and 6)
+    if (version < 7 && x.tank)
+      x.wallSub = std::max(1, (x.wallSub + 1) / 2); // (half units to the original's whole ones)
+    i.get(x.salt);
+    i.get(x.filling);
+    i.get(x.purity);
+    i.get(x.purityClock);
+    if (version >= 2)
+      for (double *v : {&x.donationsNow, &x.donationsLast, &x.donationsTotal, &x.upkeepNow, &x.upkeepLast,
+                        &x.upkeepTotal, &x.viewed, &x.builtAt})
+        i.get(*v);
+    for (uint32_t t = i.raw<uint32_t>(); t > 0 && !i.bad; t--) {
+      int tx = i.raw<int>(), ty = i.raw<int>();
+      x.tiles.insert({tx, ty});
+    }
+    if (version >= 8)
+      for (uint32_t t = i.raw<uint32_t>(); t > 0 && !i.bad; t--) {
+        int tx = i.raw<int>(), ty = i.raw<int>();
+        Fences::Exhibit::Ground &g = x.before[{tx, ty}];
+        i.get(g.height);
+        for (int c = 0; c < 4; c++)
+          i.get(g.corner[c]);
+        i.get(g.terrain);
+      }
+    f.exhibitList.push_back(x);
+  }
+  i.get(f.made);
+  i.get(f.placed);
+  i.get(f.filtersMade);
+  f.filterList.clear();
+  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
+    Fences::Filter x;
+    i.get(x.x);
+    i.get(x.y);
+    i.get(x.tank);
+    i.get(x.health);
+    i.get(x.decayClock);
+    i.get(x.filterClock);
+    i.get(x.dx);
+    i.get(x.dy);
+    x.name = i.str();
+    i.get(x.placedMonth);
+    i.get(x.upkeepLast);
+    i.get(x.upkeepCurrent);
+    i.get(x.upkeepTotal);
+    if (version >= 9) x.file = i.str();
+    f.filterList.push_back(x);
+  }
+  // Objects: the art found again for each
+  PlacedObjects &po = world.placedObjects;
+  std::vector<PlacedObjects::Object> old = po.list;
+  po.list.clear();
+  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
+    PlacedObjects::Object x;
+    x.className = i.str();
+    x.subClass = i.str();
+    x.typeName = i.str();
+    po.resolveExt(x);
+    x.name = i.str();
+    i.get(x.x);
+    i.get(x.y);
+    i.get(x.z);
+    i.get(x.facing);
+    i.get(x.fence);
+    i.get(x.bought);
+    i.get(x.id);
+    x.label = i.str();
+    i.get(x.price);
+    i.get(x.income);
+    i.get(x.upkeep);
+    i.get(x.openedMonth);
+    if (version >= 2) {
+      i.get(x.visitorsNow);
+      i.get(x.visitorsLast);
+      i.get(x.visitorsTotal);
+      for (uint32_t n = i.raw<uint32_t>(); n > 0 && n < 8 && !i.bad; n--)
+        x.colours.push_back(i.raw<int>());
+      i.get(x.fill);
+      if (version >= 3) {
+        i.get(x.nameId);
+        i.get(x.program);
+      }
+    }
+    for (uint32_t s = i.raw<uint32_t>(); s > 0 && !i.bad; s--) {
+      std::string k = i.str();
+      x.sold[k] = i.raw<int>();
+    }
+    // (its art: the map's own objects as loaded, bought ones by their file)
+    for (const PlacedObjects::Object &m : old)
+      if (m.className == x.className && m.subClass == x.subClass && m.typeName == x.typeName) {
+        x.art = m.art;
+        x.slopeUp = m.slopeUp;
+        x.slopeDown = m.slopeDown;
+        break;
+      }
+    if (!x.art || x.bought)
+      x.art = po.artOfFile(PlacedObjects::fileOf(x));
+    // (painted: its colours' art)
+    if (x.art && !x.colours.empty()) {
+      std::vector<int> picks = x.colours;
+      for (size_t c = 0; c < picks.size(); c++)
+        po.setColour(x, static_cast<int>(c), picks[c]);
+    }
+    if (x.art && x.bought)
+      po.loadLayers(x);
+    if (x.art)
+      po.list.push_back(x);
+  }
+  i.get(po.nextId);
+  po.counts.clear();
+  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
+    std::string k = i.str();
+    po.counts[k] = i.raw<int>();
+  }
+  return !i.bad;
+}
+
+bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameScreen &hud,
+                    const std::string &mapPath) {
+  Out o;
+  o.raw(kMagic);
+  o.raw(kVersion);
+  o.str(mapPath);
+  // The books
+  o.raw(sim.money);
+  o.raw(sim.zooRating);
+  o.raw(sim.day);
+  o.raw(sim.dayCount);
+  o.raw(static_cast<uint32_t>(sim.months.size()));
+  for (const ZooSim::Month &m : sim.months) {
+    o.raw(m.month);
+    o.raw(m.year);
+    o.raw(m.lines);
+    o.raw(m.rating);
+  }
+  // The zoo's name and admission
+  const UiGameScreen::ZooInfo &info = hud.zooInfo();
+  o.str(info.name);
+  o.raw(info.admission);
+  o.raw(hud.marketingLevel);
+  // Research
+  auto &branches = Research::get().branches();
+  o.raw(static_cast<uint32_t>(branches.size()));
+  for (const ResearchBranch &b : branches) {
+    o.raw(b.fundingLevel);
+    o.raw(b.currentCategory);
+    o.raw(b.currentProgram);
+    o.raw(static_cast<uint32_t>(b.categories.size()));
+    for (const ResearchCategory &c : b.categories) {
+      o.raw(static_cast<uint32_t>(c.programs.size()));
+      for (const ResearchProgram &p : c.programs) {
+        o.raw(p.progress);
+        o.raw(p.done);
+      }
+    }
+  }
+  putWorld(&o, world);
   // Food, dung, litter
   o.raw(static_cast<uint32_t>(world.items.list.size()));
   for (const ZooItems::Item &x : world.items.list) {
@@ -685,186 +882,9 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
       }
     }
   }
-  // The ground
-  WorldMap &map = world.worldMap;
-  int w = i.raw<int>(), h = i.raw<int>();
-  if (w != map.width || h != map.height)
+  if (!getWorld(&i, world, version))
     return false;
-  for (int y = 0; y < h; y++)
-    for (int x = 0; x < w; x++) {
-      MapTile &t = map.tiles[y][x];
-      i.get(t.height);
-      i.get(t.cornerHeight);
-      i.get(t.terrainType);
-      i.get(t.edgeBits);
-      i.get(t.substrate);
-    }
-  map.pathTypes.resize(i.raw<uint32_t>());
-  for (std::string &s : map.pathTypes)
-    s = i.str();
-  map.pathTile.resize(i.raw<uint32_t>());
-  for (int16_t &v : map.pathTile)
-    i.get(v);
-  map.touch();
-  world.walkways.decks.clear();
-  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
-    int x = i.raw<int>(), y = i.raw<int>();
-    Walkways::Deck d;
-    d.type = i.str();
-    i.get(d.h);
-    world.walkways.decks[{x, y}] = d;
-  }
-  // Fences
   Fences &f = world.fences;
-  f.edges.clear();
-  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
-    Fences::Edge e = getEdge(i);
-    Fences::Piece p;
-    p.type = f.typeIndex(i.str());
-    i.get(p.gate);
-    i.get(p.facing);
-    i.get(p.ownerX);
-    i.get(p.ownerY);
-    i.get(p.order);
-    i.get(p.drag);
-    i.get(p.tank);
-    i.get(p.life);
-    if (version >= 4)
-      i.get(p.tank2);
-    if (p.type >= 0)
-      f.edges[e] = p;
-  }
-  f.exhibitList.clear();
-  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
-    Fences::Exhibit x;
-    i.get(x.id);
-    x.name = i.str();
-    i.get(x.named);
-    i.get(x.pocket);
-    i.get(x.tank);
-    i.get(x.constructedDay);
-    i.get(x.constructedMonth);
-    i.get(x.constructedYear);
-    i.get(x.groundHeight);
-    i.get(x.floorHeight);
-    i.get(x.water);
-    i.get(x.wallSub);
-    if (version < 5)
-      x.wallSub -= x.floorHeight; // (it was the walls' top in height units)
-    if (version < 5)
-      x.wallSub *= 2; // (to the half units of 5 and 6)
-    if (version < 7 && x.tank)
-      x.wallSub = std::max(1, (x.wallSub + 1) / 2); // (half units to the original's whole ones)
-    i.get(x.salt);
-    i.get(x.filling);
-    i.get(x.purity);
-    i.get(x.purityClock);
-    if (version >= 2)
-      for (double *v : {&x.donationsNow, &x.donationsLast, &x.donationsTotal, &x.upkeepNow, &x.upkeepLast,
-                        &x.upkeepTotal, &x.viewed, &x.builtAt})
-        i.get(*v);
-    for (uint32_t t = i.raw<uint32_t>(); t > 0 && !i.bad; t--) {
-      int tx = i.raw<int>(), ty = i.raw<int>();
-      x.tiles.insert({tx, ty});
-    }
-    if (version >= 8)
-      for (uint32_t t = i.raw<uint32_t>(); t > 0 && !i.bad; t--) {
-        int tx = i.raw<int>(), ty = i.raw<int>();
-        Fences::Exhibit::Ground &g = x.before[{tx, ty}];
-        i.get(g.height);
-        for (int c = 0; c < 4; c++)
-          i.get(g.corner[c]);
-        i.get(g.terrain);
-      }
-    f.exhibitList.push_back(x);
-  }
-  i.get(f.made);
-  i.get(f.placed);
-  i.get(f.filtersMade);
-  f.filterList.clear();
-  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
-    Fences::Filter x;
-    i.get(x.x);
-    i.get(x.y);
-    i.get(x.tank);
-    i.get(x.health);
-    i.get(x.decayClock);
-    i.get(x.filterClock);
-    i.get(x.dx);
-    i.get(x.dy);
-    x.name = i.str();
-    i.get(x.placedMonth);
-    i.get(x.upkeepLast);
-    i.get(x.upkeepCurrent);
-    i.get(x.upkeepTotal);
-    f.filterList.push_back(x);
-  }
-  // Objects: the art found again for each
-  PlacedObjects &po = world.placedObjects;
-  std::vector<PlacedObjects::Object> old = po.list;
-  po.list.clear();
-  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
-    PlacedObjects::Object x;
-    x.className = i.str();
-    x.subClass = i.str();
-    x.typeName = i.str();
-    po.resolveExt(x);
-    x.name = i.str();
-    i.get(x.x);
-    i.get(x.y);
-    i.get(x.z);
-    i.get(x.facing);
-    i.get(x.fence);
-    i.get(x.bought);
-    i.get(x.id);
-    x.label = i.str();
-    i.get(x.price);
-    i.get(x.income);
-    i.get(x.upkeep);
-    i.get(x.openedMonth);
-    if (version >= 2) {
-      i.get(x.visitorsNow);
-      i.get(x.visitorsLast);
-      i.get(x.visitorsTotal);
-      for (uint32_t n = i.raw<uint32_t>(); n > 0 && n < 8 && !i.bad; n--)
-        x.colours.push_back(i.raw<int>());
-      i.get(x.fill);
-      if (version >= 3) {
-        i.get(x.nameId);
-        i.get(x.program);
-      }
-    }
-    for (uint32_t s = i.raw<uint32_t>(); s > 0 && !i.bad; s--) {
-      std::string k = i.str();
-      x.sold[k] = i.raw<int>();
-    }
-    // (its art: the map's own objects as loaded, bought ones by their file)
-    for (const PlacedObjects::Object &m : old)
-      if (m.className == x.className && m.subClass == x.subClass && m.typeName == x.typeName) {
-        x.art = m.art;
-        x.slopeUp = m.slopeUp;
-        x.slopeDown = m.slopeDown;
-        break;
-      }
-    if (!x.art || x.bought)
-      x.art = po.artOfFile(PlacedObjects::fileOf(x));
-    // (painted: its colours' art)
-    if (x.art && !x.colours.empty()) {
-      std::vector<int> picks = x.colours;
-      for (size_t c = 0; c < picks.size(); c++)
-        po.setColour(x, static_cast<int>(c), picks[c]);
-    }
-    if (x.art && x.bought)
-      po.loadLayers(x);
-    if (x.art)
-      po.list.push_back(x);
-  }
-  i.get(po.nextId);
-  po.counts.clear();
-  for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
-    std::string k = i.str();
-    po.counts[k] = i.raw<int>();
-  }
   // Items
   world.items.list.clear();
   for (uint32_t n = i.raw<uint32_t>(); n > 0 && !i.bad; n--) {
@@ -1000,6 +1020,57 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
       cam.y = cy;
       cam.zoom = cz;
     }
+  }
+  world.reindex();
+  return !i.bad;
+}
+
+// A map design: a freeform map made in the ZT1 Lab (Test Zoo > Save as a
+// map), over one of the game's maps - that map's .zoo, then the world as it
+// was made (putWorld) and the view it starts on. A mod's .scn names it in
+// [start] design=, and World::loadFreeform puts it over the map (the
+// "custommaps" switch, Features.hpp)
+bool SaveGame::saveMap(const std::string &path, World &world, const std::string &over) {
+  Out o;
+  o.raw(kMapMagic);
+  o.raw(kVersion);
+  o.str(over);
+  putWorld(&o, world);
+  const Camera &cam = world.worldRenderer.getCamera();
+  o.raw(cam.x);
+  o.raw(cam.y);
+  o.raw(cam.zoom);
+  o.raw(world.worldRenderer.getRotation());
+  FILE *fp = std::fopen(path.c_str(), "wb");
+  if (!fp)
+    return false;
+  bool ok = std::fwrite(o.b.data(), 1, o.b.size(), fp) == o.b.size();
+  std::fclose(fp);
+  return ok;
+}
+
+bool SaveGame::applyMap(const std::vector<char> &b, World &world) {
+  In i{b};
+  if (i.raw<uint32_t>() != kMapMagic)
+    return false;
+  const uint32_t version = i.raw<uint32_t>();
+  if (version < 8 || version > kVersion)
+    return false;
+  i.str(); // the map it's over (already loaded)
+  if (!getWorld(&i, world, version))
+    return false;
+  Camera &cam = world.worldRenderer.getCamera();
+  int cx = 0, cy = 0;
+  float cz = 1;
+  i.get(cx);
+  i.get(cy);
+  i.get(cz);
+  int turn = i.raw<int>();
+  if (!i.bad && turn >= 0 && turn < 4) {
+    world.rotateView((turn - world.worldRenderer.getRotation() + 4) % 4);
+    cam.x = cx;
+    cam.y = cy;
+    cam.zoom = cz;
   }
   world.reindex();
   return !i.bad;

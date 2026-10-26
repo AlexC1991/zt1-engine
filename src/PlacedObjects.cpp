@@ -1,6 +1,9 @@
 #include "PlacedObjects.hpp"
+#include "ItemCatalog.hpp"
+#include "Utils.hpp"
 #include "PalletManager.hpp"
 #include "IniReader.hpp"
+#include "Features.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -39,7 +42,18 @@ Animation *PlacedObjects::artOfFile(const std::string &file) {
   if (slash == std::string::npos)
     return nullptr;
   std::string type = file.substr(slash + 1, dot == std::string::npos ? std::string::npos : dot - slash - 1);
-  return this->artFor("objects/" + type + "/idle/idle");
+  std::string path = "objects/" + type + "/idle/idle";
+  if (this->rm)
+    if (IniReader *ai = this->rm->getIniReader(file)) {
+      std::string own = Utils::string_to_lower(ai->get("animations", "idle"));
+      if (own.empty() && Features::mods) own = Utils::string_to_lower(ai->get("animations", "empty"));
+      delete ai;
+      if (!own.empty()) {
+        if (own.size() > 4 && own.compare(own.size() - 4, 4, ".ani") == 0) own.resize(own.size() - 4);
+        path = own.find('/') == std::string::npos ? "objects/" + type + "/" + own + "/" + own : own;
+      }
+    }
+  return this->artFor(path);
 }
 
 const PlacedObjects::Colouring *PlacedObjects::colouringOf(const std::string &file) {
@@ -99,6 +113,15 @@ int PlacedObjects::colourOf(const Object &o, int part) {
 // ncolors: 16 for the first part, 8 for the second), as guests' clothes
 Animation *PlacedObjects::paintedArtOf(const Object &o, const std::string &layer) {
   std::string path = "objects/" + o.typeName + "/" + layer + "/" + layer;
+  if (this->rm)
+    if (IniReader *ai = this->rm->getIniReader(fileOf(o))) {
+      std::string own = Utils::string_to_lower(ai->get("animations", layer));
+      delete ai;
+      if (!own.empty()) {
+        if (own.size() > 4 && own.compare(own.size() - 4, 4, ".ani") == 0) own.resize(own.size() - 4);
+        path = own.find('/') == std::string::npos ? "objects/" + o.typeName + "/" + own + "/" + own : own;
+      }
+    }
   const Colouring *c = this->colouringOf(fileOf(o));
   if (!c || !this->rm)
     return this->rm && this->rm->hasResource(path + ".ani") ? this->artFor(path) : (layer == "idle" ? o.art : nullptr);
@@ -139,10 +162,14 @@ Animation *PlacedObjects::paintedArtOf(const Object &o, const std::string &layer
 
 void PlacedObjects::loadLayers(Object &o) {
   // (a trash can's half-full art)
-  if (o.typeName == "trshcan") {
-    std::string path = "objects/" + o.typeName + "/half/half";
-    o.half = this->rm && this->rm->hasResource(path + ".ani") ? this->artFor(path) : nullptr;
-  }
+  o.trashCan = o.typeName == "trshcan";
+  if (Features::mods && this->rm)
+    if (IniReader *ai = this->rm->getIniReader(fileOf(o))) {
+      o.trashCan = o.trashCan || (!ai->get("animations", "empty").empty() &&
+                                  !ai->get("animations", "half").empty() && !ai->get("animations", "full").empty());
+      delete ai;
+    }
+  if (o.trashCan) o.half = this->paintedArtOf(o, "half");
   if (o.subClass != "building")
     return;
   // (a building that can be painted starts in its default colours)
@@ -188,8 +215,9 @@ bool PlacedObjects::add(const std::string &file, float x, float y, int facing) {
   o.typeName = file.substr(b + 1, dot == std::string::npos ? std::string::npos : dot - b - 1);
   if (dot != std::string::npos && dot > b)
     o.ext = file.substr(dot);
-  // (as the map file names them: rocks and foliage are "objects")
-  o.className = o.subClass == "building" ? "building" : "objects";
+  // (as the map file names them: rocks and foliage are "objects"; the
+  // entrance's pieces, under scenery/other/, "building")
+  o.className = o.subClass == "building" || (this->isEntrance && this->isEntrance(o.typeName)) ? "building" : "objects";
   o.bought = true;
   o.x = x;
   o.y = y;
@@ -210,7 +238,8 @@ bool PlacedObjects::add(const std::string &file, float x, float y, int facing) {
       std::string cost = ai->get("characteristics/floats", "cdefaultcost");
       o.price = cost.empty() ? -1.0f : static_cast<float>(std::atof(cost.c_str()));
       delete ai;
-      o.label = this->rm->getString(nameId);
+      const CatalogItem *item = ItemCatalog::get().find(file);
+      o.label = item ? item->name : this->rm->getString(nameId);
       if (numbers)
         o.label += " " + std::to_string(++this->counts[o.typeName]);
     }
@@ -328,7 +357,7 @@ void PlacedObjects::load(const ZooReader &reader, ResourceManager *rm) {
       o.slopeUp = this->artFor(base + "idle30p/idle30p");
       o.slopeDown = this->artFor(base + "idle30n/idle30n");
     } else {
-      o.art = this->artFor("objects/" + obj.typeName + "/idle/idle");
+      o.art = this->artOfFile(fileOf(o));
     }
     if (o.art)
       this->list.push_back(o);

@@ -32,6 +32,8 @@ struct Part {
 };
 struct Mod {
   std::string id, name, author, about, notice, version, folder;
+  // A bounded PNG from the verified catalogue, available before installation.
+  std::string picture;
   std::vector<Part> parts;
 };
 

@@ -128,13 +128,17 @@ const CONTROL = {
   },
   // Typing into a box (a CSS selector): as if typed, its input event fires
   type({ selector, text }) {
-    const el = document.querySelector(selector);
+    // (the first one you can see: a selector like "textarea" also matches the
+    // code editor's hidden one, and the text went there)
+    const all = [...document.querySelectorAll(selector)];
+    const el = all.find((e) => e.offsetParent !== null || e.getClientRects().length) || all[0];
     if (!el) return { error: 'no ' + selector };
     el.focus();
     el.value = text;
     el.dispatchEvent(new Event('input', { bubbles: true }));
-    // (a drop-down acts on change, as when one's picked)
-    if (el.tagName === 'SELECT') el.dispatchEvent(new Event('change', { bubbles: true }));
+    // (a drop-down acts on change, as when one's picked; a box as when it's
+    // left after typing - the studio's Inspector saves then)
+    if (el.tagName === 'SELECT' || el.tagName === 'INPUT') el.dispatchEvent(new Event('change', { bubbles: true }));
     return { ok: true };
   },
   // What's shown: the visible text of the view (for reading results)
@@ -249,6 +253,50 @@ const CONTROL = {
       inEngine: S.refs[info.addr] || [],
     };
   },
+  // ---- Deeper questions to Ghidra (ZT1_LabBridge.py's /datatype, /blocks,
+  // /calltargets, /bytes, /flow, /noreturn - after rea's Ghidra bridge)
+  async dataType({ name }) {
+    const r = await lab.ghidra('/datatype?name=' + encodeURIComponent(name || ''));
+    return r && r.json ? r.json : { error: (r && r.error) || 'Ghidra didn’t answer' };
+  },
+  async functionBlocks({ address }) {
+    ACTIONS.openCode(address);
+    const r = await lab.ghidra('/blocks?addr=' + plainHex(address));
+    return r && r.json ? r.json : { error: (r && r.error) || 'Ghidra didn’t answer' };
+  },
+  // (an indirect call through a class table - call [eax+0x16c] - matched
+  // against the class tables the knowledge base knows: each class whose slot
+  // that is, and its function there)
+  async callTargets({ address }) {
+    ACTIONS.openCode(address);
+    const r = await lab.ghidra('/calltargets?addr=' + plainHex(address));
+    if (!r || !r.json) return { error: (r && r.error) || 'Ghidra didn’t answer' };
+    const classes = (S.kb && S.kb.classes) || {};
+    for (const c of r.json.calls || []) {
+      if (c.kind !== 'indirect' || !c.slot) continue;
+      const slot = '0x' + parseInt(c.slot, 16).toString(16);
+      const cands = [];
+      for (const [cls, t] of Object.entries(classes)) {
+        const fa = t.slots && t.slots[slot];
+        if (fa) cands.push({ class: cls, function: hexKey(fa), name: fnInfo(hexKey(fa)).name });
+      }
+      if (cands.length) c.classTable = cands;
+    }
+    return r.json;
+  },
+  async searchBytes({ pattern, limit }) {
+    const r = await lab.ghidra('/bytes?pattern=' + encodeURIComponent(pattern || '') + (limit ? '&limit=' + (+limit || 200) : ''));
+    return r && r.json ? r.json : { error: (r && r.error) || 'Ghidra didn’t answer' };
+  },
+  async valueFlow({ at, dir }) {
+    ACTIONS.openCode(at);
+    const r = await lab.ghidra('/flow?at=' + plainHex(at) + (dir === 'back' ? '&dir=back' : ''));
+    return r && r.json ? r.json : { error: (r && r.error) || 'Ghidra didn’t answer' };
+  },
+  async noReturn() {
+    const r = await lab.ghidra('/noreturn');
+    return r && r.json ? r.json : { error: (r && r.error) || 'Ghidra didn’t answer' };
+  },
   async whereUsed({ address }) {
     await ACTIONS.xrefs(address);
     const r = gNow('/xrefs?addr=' + plainHex(address));
@@ -302,6 +350,15 @@ const CONTROL = {
   async gameFile({ name }) {
     // (through the list, as a click would be: its name in the search box,
     // found and opened there - nothing opens that the list doesn't show)
+    // A mod's own file ("mod:<folder>|<ztd>|<entry>") opens in the editor,
+    // as from the mod's Contents
+    const mod = modKeyParts(name);
+    if (mod) {
+      const r = await lab.modkitEntry(mod.folder, mod.ztd, mod.entry);
+      if (!r || !r.ok) return { name, error: (r && r.error) || 'Couldn’t read it.' };
+      await openModEntry(mod.folder, mod.ztd, mod.entry, r);
+      return { name, kind: 'text', text: r.text, editable: true };
+    }
     gameFilesGo(name, null);
     await new Promise((r) => setTimeout(r, 400));
     await gfOpen(name, 'engine');
@@ -342,6 +399,15 @@ const CONTROL = {
     return { typedBefore: t.before, suggestions: got ? got.items.slice(0, 15).map((i) => `${i.label}  [${i.desc}]  ${i.detail || ''}`) : [] };
   },
   async openEngineFile({ file, line }) {
+    // (a game file by its path - animals/zebra.ai - opens as Game files
+    // opens it, read only, under its game: key)
+    if (!/^(src|vendor)\/|^(game|mod):|^[A-Za-z]:/.test(file)) {
+      if (!CodeEditor.isOpen('game:' + file)) await gfOpen(file, 'engine');
+      file = 'game:' + file;
+    }
+    // (and a mod's own file, from its .ztd)
+    const mod = modKeyParts(file);
+    if (mod && !CodeEditor.isOpen(file)) await openModEntry(mod.folder, mod.ztd, mod.entry);
     await openEngineFile(file, line || 1);
     await new Promise((r) => setTimeout(r, 300));
     return CodeEditor.lines(file, Math.max(1, (line || 1) - 20), (line || 1) + 40);
@@ -425,14 +491,34 @@ const CONTROL = {
   },
   async sceneLoad({ map, flat }) {
     if (!(await showScene())) return { error: 'the engine isn’t running' };
-    const was = (sc() || {}).loads;
+    let was = (sc() || {}).loads;
+    let ups = S.engine.ups;
     lab.engineSend({ cmd: 'load', map, flat: !!flat });
     for (let i = 0; i < 100; i++) {
       await settle(200);
+      // (the engine restarted meanwhile - a mod tried, a build: sent again,
+      // to the new one)
+      if (S.engine.ups !== ups) {
+        if (!(await engineUp())) break;
+        ups = S.engine.ups;
+        was = (sc() || {}).loads;
+        lab.engineSend({ cmd: 'load', map, flat: !!flat });
+        continue;
+      }
       const s = sc();
       if (s && s.loads !== was && s.map === map && s.flat === !!flat) {
         await settle(300);
         return { ok: true, map: s.mapName, flat: s.flat, counts: sc().counts };
+      }
+      // (a map it doesn't know: the engine put its first one down instead -
+      // said, not asked for again)
+      if (s && s.loads !== was && s.map !== map && !String(map).startsWith('blank:') && !String(map).startsWith('save:'))
+        return { error: `there’s no map called ${map} (lab_scene_maps lists them): ${s.mapName} loaded instead` };
+      // (nothing yet: the engine was busy with something else - the lab zoo
+      // made again on an engine just started overtakes it - so asked again)
+      if (i % 20 === 19 && (await engineUp())) {
+        was = (sc() || {}).loads;
+        lab.engineSend({ cmd: 'load', map, flat: !!flat });
       }
     }
     return { error: 'the map didn’t load (see lab_engine_log)' };
@@ -465,8 +551,15 @@ const CONTROL = {
   },
   // A tool used at a tile (or dragged from one tile to another): an item
   // from sceneItems, or select / bulldoze / gate
-  async scenePlace({ item, tool, x, y, toX, toY, female, facing, size, lineMode }) {
+  async scenePlace({ item, tool, x, y, toX, toY, female, facing, size, lineMode, lift }) {
     await showScene();
+    // (the tools work in the Scene view only: from Terrain or the art
+    // viewer, back to the scene first - else the drag does nothing)
+    const view = (S.engine.state || {}).view;
+    if (view && view !== 'scene') {
+      ACTIONS.view('scene');
+      await settle(300);
+    }
     if (!SC.catalog) {
       lab.engineSend({ cmd: 'catalog' });
       for (let i = 0; i < 50 && !SC.catalog; i++) await settle(100);
@@ -491,12 +584,26 @@ const CONTROL = {
       await settle(200);
     }
     const before = S.engine.log.length;
+    const countsBefore = (sc() || {}).counts;
     // fences go from grid point to grid point: x, y is a tile's corner
     const exact = item && toolKindOf(itemOf(item)) === 'fence';
     if (x !== undefined) {
       const ev = (tool || 'select') === 'select' && !item ? 'click' : 'down';
       lab.engineSend({ cmd: 'mouseTile', ev, tx: x, ty: y, exact });
       if (ev === 'down') {
+        lift = Number(lift) || 0;
+        if (lift) {
+          // (the hills tool: pressed, dragged up the screen - 16 pixels a
+          // step, as the original's - and let go; down for a negative lift)
+          for (let i = 1; i <= Math.abs(lift) * 4; i++) {
+            lab.engineSend({ cmd: 'mouseTile', ev: 'move', tx: x, ty: y, dy: -Math.sign(lift) * i * 4 });
+            await settle(25);
+          }
+          lab.engineSend({ cmd: 'mouseTile', ev: 'up', tx: x, ty: y, dy: -lift * 16 });
+          await settle(400);
+          const s = sc() || {};
+          return { tool: s.tool, selected: trimSel(s.sel), counts: s.counts, said: S.engine.log.slice(before) };
+        }
         if (toX !== undefined) {
           // (the drag, a tile at a time, as a mouse would go)
           const n = Math.max(Math.abs(toX - x), Math.abs(toY - y));
@@ -510,7 +617,17 @@ const CONTROL = {
     }
     await settle(400);
     const s = sc() || {};
-    return { tool: s.tool, selected: trimSel(s.sel), counts: s.counts, said: S.engine.log.slice(before) };
+    const said = S.engine.log.slice(before);
+    // (an object or animal the game wouldn't put there - most say why, some
+    // just don't go down: an iceberg off a tank's water - said, not silent)
+    const kind = item && toolKindOf(itemOf(item));
+    const was = countsBefore;
+    if ((kind === 'object' || kind === 'animal') && toX === undefined && was && s.counts) {
+      const n = kind === 'animal' ? 'animals' : 'objects';
+      if (s.counts[n] === was[n] && !said.some((l) => /only|can't|cannot|not enough/i.test(l)))
+        said.push(`Nothing was placed: the game wouldn't put ${itemOf(item).name || item} at ${x},${y} (and didn't say why).`);
+    }
+    return { tool: s.tool, selected: trimSel(s.sel), counts: s.counts, said };
   },
   async sceneSelect({ kind, id, x, y, full }) {
     await showScene();
@@ -753,7 +870,11 @@ const CONTROL = {
     if (shot) return lab.playShot(shot);
     if (start && !S.play.running) await (game === 'original' ? ACTIONS.playOriginal() : ACTIONS.playStart());
     // (only start: false stops it - no start at all just asks what's running)
-    if (start === false && S.play.running) await ACTIONS.playStop();
+    if (start === false && S.play.running) {
+      await ACTIONS.playStop();
+      // (the game closes a moment later: waited for, so the answer is so)
+      for (let i = 0; i < 30 && S.play.running; i++) await settle(100);
+    }
     return { running: S.play.running, game: S.play.running ? S.play.kind : null };
   },
 };

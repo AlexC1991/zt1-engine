@@ -36,6 +36,9 @@ struct Mod {
   // Its art for the Mod Menu: a frame it changes, with its own palette and
   // the original's (mod.json "preview", "palette", "originalPalette")
   std::string preview, palette, originalPalette;
+  // Its own picture (mod.json "picture": an image in its folder, 367 x 276
+  // as the Mod Menu shows it), the full path; empty if it has none
+  std::string picture;
   std::vector<Setting> settings;
   bool enabled = false;
 };

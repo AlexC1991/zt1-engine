@@ -1,0 +1,266 @@
+[
+  {
+    "id": "start",
+    "title": "Start with the Lab",
+    "summary": "Your first mod, the main tabs and where to go next.",
+    "group": "Start here",
+    "tabs": [
+      "mods",
+      "scene"
+    ]
+  },
+  {
+    "id": "workspace",
+    "title": "Find your way around the Lab",
+    "summary": "Explore, Original Game, Write Code, Test Zoo, Play and panel layouts.",
+    "group": "Start here",
+    "tabs": [
+      "explore",
+      "scene"
+    ]
+  },
+  {
+    "id": "art-and-animals",
+    "title": "Draw and import an animal",
+    "summary": "PNG, directional sheets, OBJ poses, needs, pictures and eggs.",
+    "group": "Making mods",
+    "tabs": [
+      "mods"
+    ],
+    "keywords": "dino dinosaur marine sprites animation"
+  },
+  {
+    "id": "test-zoo-and-maps",
+    "title": "Build a test zoo and a custom map",
+    "summary": "Boundaries, entrances, land exhibits, marine tanks and saved maps.",
+    "group": "Making mods",
+    "tabs": [
+      "scene"
+    ],
+    "keywords": "ground path shelter filter fauna"
+  },
+  {
+    "id": "testing",
+    "title": "Check that a mod works",
+    "summary": "Art, care, staff, service states, ordinary Play and evidence.",
+    "group": "Making mods",
+    "tabs": [
+      "scene",
+      "play"
+    ]
+  },
+  {
+    "id": "publish",
+    "title": "Publish, download and update mods",
+    "summary": "Theme packs, cover pictures, server checks and actual game retrieval.",
+    "group": "Making mods",
+    "tabs": [
+      "mods",
+      "play"
+    ]
+  },
+  {
+    "id": "troubleshooting",
+    "title": "Find and fix common problems",
+    "summary": "Missing art, locked downloads, animal care, maps and hidden panels.",
+    "group": "Start here",
+    "tabs": [
+      "mods",
+      "scene"
+    ]
+  },
+  {
+    "id": "animal-imports",
+    "title": "Three animal import workflows",
+    "summary": "One PNG, a directional sheet and OBJ poses through the current studio.",
+    "group": "Recorded tutorials",
+    "tabs": [
+      "mods"
+    ],
+    "legacy": false,
+    "notice": "Recorded workflow from 26 October 2026. Publication state and version numbers in these screenshots are historical; use the current publishing and repository-picture guides for the refreshed releases. Prototype art and gameplay limits remain.",
+    "videos": [
+      {
+        "file": "../../renderer/help/media/59ff7ec94cbed08b5b.mp4",
+        "title": "Recorded tutorial checkpoints",
+        "caption": "Captioned native screenshots. This is a checkpoint walkthrough, not a continuous recording."
+      }
+    ]
+  },
+  {
+    "id": "png-lesson",
+    "title": "PNG lesson: Copperleaf Pika",
+    "summary": "Import one transparent picture and fit its anchor.",
+    "group": "Recorded tutorials",
+    "tabs": [
+      "mods"
+    ],
+    "legacy": false,
+    "notice": "Recorded workflow from 26 October 2026. Publication state and version numbers in these screenshots are historical; use the current publishing and repository-picture guides for the refreshed releases. Prototype art and gameplay limits remain."
+  },
+  {
+    "id": "sheet-lesson",
+    "title": "Sprite-sheet lesson: Indigo Springhare",
+    "summary": "Import a grid of walking frames and directions.",
+    "group": "Recorded tutorials",
+    "tabs": [
+      "mods"
+    ],
+    "legacy": false,
+    "notice": "Recorded workflow from 26 October 2026. Publication state and version numbers in these screenshots are historical; use the current publishing and repository-picture guides for the refreshed releases. Prototype art and gameplay limits remain."
+  },
+  {
+    "id": "obj-lesson",
+    "title": "OBJ lesson: Jade Shellback",
+    "summary": "Convert supplied model poses and materials to game art.",
+    "group": "Recorded tutorials",
+    "tabs": [
+      "mods"
+    ],
+    "legacy": false,
+    "notice": "Recorded workflow from 26 October 2026. Publication state and version numbers in these screenshots are historical; use the current publishing and repository-picture guides for the refreshed releases. Prototype art and gameplay limits remain."
+  },
+  {
+    "id": "aquatic-tutorial",
+    "title": "Swimming and marine animals",
+    "summary": "Hippo land and water behavior, dolphin tanks and appropriate care.",
+    "group": "Recorded tutorials",
+    "tabs": [
+      "mods"
+    ],
+    "legacy": false,
+    "notice": "Recorded workflow from 26 October 2026. Publication state and version numbers in these screenshots are historical; use the current publishing and repository-picture guides for the refreshed releases. Prototype art and gameplay limits remain.",
+    "videos": [
+      {
+        "file": "../../renderer/help/media/6527bb4c32650eccc8.mp4",
+        "title": "Recorded tutorial checkpoints",
+        "caption": "Captioned native screenshots. This is a checkpoint walkthrough, not a continuous recording."
+      },
+      {
+        "file": "../../renderer/help/media/50528d5a315111a6f1.mp4",
+        "title": "Actual gameplay motion",
+        "caption": "Native gameplay clip from the test run."
+      }
+    ]
+  },
+  {
+    "id": "park-tutorial",
+    "title": "Buildings, fences, people and staff",
+    "summary": "Original models and remakes, guest appearances and working filters.",
+    "group": "Recorded tutorials",
+    "tabs": [
+      "mods"
+    ],
+    "legacy": false,
+    "notice": "Recorded workflow from 26 October 2026. Publication state and version numbers in these screenshots are historical; use the current publishing and repository-picture guides for the refreshed releases. Prototype art and gameplay limits remain.",
+    "videos": [
+      {
+        "file": "../../renderer/help/media/d65b1d0296a625ed5d.mp4",
+        "title": "Recorded tutorial checkpoints",
+        "caption": "Captioned native screenshots. This is a checkpoint walkthrough, not a continuous recording."
+      },
+      {
+        "file": "../../renderer/help/media/1257810e10df0d02cc.mp4",
+        "title": "Actual gameplay motion",
+        "caption": "Native gameplay clip from the test run."
+      }
+    ]
+  },
+  {
+    "id": "habitat-tutorial",
+    "title": "Habitat items, maps and theme packs",
+    "summary": "Gates, plants, rocks, shelters, paths, ground, tanks, food and dinosaur eggs.",
+    "group": "Recorded tutorials",
+    "tabs": [
+      "mods"
+    ],
+    "legacy": false,
+    "notice": "Recorded workflow from 26 October 2026. Publication state and version numbers in these screenshots are historical; use the current publishing and repository-picture guides for the refreshed releases. Prototype art and gameplay limits remain.",
+    "videos": [
+      {
+        "file": "../../renderer/help/media/944edcf85fa6a78990.mp4",
+        "title": "Recorded tutorial checkpoints",
+        "caption": "Captioned native screenshots. This is a checkpoint walkthrough, not a continuous recording."
+      }
+    ]
+  },
+  {
+    "id": "publication-tutorial",
+    "title": "Publishing and downloading: recorded run",
+    "summary": "Real upload, approval, download and ordinary-game checks, with retained failures.",
+    "group": "Recorded tutorials",
+    "tabs": [
+      "mods"
+    ],
+    "legacy": false,
+    "notice": "Recorded workflow from 26 October 2026. Publication state and version numbers in these screenshots are historical; use the current publishing and repository-picture guides for the refreshed releases. Prototype art and gameplay limits remain.",
+    "videos": [
+      {
+        "file": "../../renderer/help/media/08ecbc6f36d6a3cc6a.mp4",
+        "title": "Recorded tutorial checkpoints",
+        "caption": "Captioned native screenshots. This is a checkpoint walkthrough, not a continuous recording."
+      }
+    ]
+  },
+  {
+    "id": "preview-tutorial",
+    "title": "Repository pictures before download",
+    "summary": "The fixed cover workflow, four clean-folder previews and a real theme download.",
+    "group": "Recorded tutorials",
+    "tabs": [
+      "mods"
+    ],
+    "legacy": false,
+    "videos": [
+      {
+        "file": "../../renderer/help/media/36604102323fc5863d.mp4",
+        "title": "Recorded tutorial checkpoints",
+        "caption": "Captioned native screenshots. This is a checkpoint walkthrough, not a continuous recording."
+      }
+    ]
+  },
+  {
+    "id": "modding-reference",
+    "title": "Modding reference",
+    "summary": "Package structure, builders, external art, maps, sharing and compatibility.",
+    "group": "Reference",
+    "tabs": [],
+    "legacy": false,
+    "source": "../../docs/MODDING.md"
+  },
+  {
+    "id": "lab-reference",
+    "title": "Complete Lab reference",
+    "summary": "Detailed tools, panels, recordings, traces, scripts and engine investigation.",
+    "group": "Reference",
+    "tabs": [],
+    "legacy": false,
+    "source": "../README.md"
+  },
+  {
+    "id": "binary-reference",
+    "title": "Original-game investigation reference",
+    "summary": "Knowledge-base tools and the earlier binary Lab interface.",
+    "group": "Reference",
+    "tabs": [],
+    "legacy": true,
+    "notice": "This reference includes the earlier binary Lab interface and command-line tools. Use Find your way around the Lab for the current app tabs.",
+    "source": "../../re/README.md"
+  },
+  {
+    "id": "earlier-overview",
+    "title": "Earlier Lab overview",
+    "summary": "The original overview recording and fourteen illustrated workspace examples.",
+    "group": "Recorded tutorials",
+    "tabs": [],
+    "legacy": true,
+    "notice": "Earlier interface: this video predates the redesigned Mods studio. Use Start with the Lab and the current studio tutorials for today’s controls.",
+    "videos": [
+      {
+        "file": "../../renderer/help/media/21e9fd1762507685b9.mp4",
+        "title": "Earlier Lab overview",
+        "caption": "Original overview recording. Some tab layouts and the old Mods menu have changed."
+      }
+    ]
+  }
+]

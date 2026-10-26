@@ -222,6 +222,16 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
 
   // 1. Calculate Container
   dest_rect = this->getRect(this->ini_reader->getSection(this->name), layout_rect);
+  // A fitfont box is a line of its font tall; at y=bottom it sits on the
+  // bottom edge (the main menu's Version_Label), not just under it
+  if (this->ini_reader->get(this->name, "dy") == "fitfont" && dest_rect.h <= 0) {
+    int lineH = resource_manager->getFontLineHeight(font, ini_reader->getInt(name, "fontsize", 0)) +
+                2 * this->ini_reader->getInt(this->name, "border", 0);
+    if (this->ini_reader->get(this->name, "y") == "bottom") {
+      dest_rect.y -= lineH;
+      dest_rect.h = lineH;
+    }
+  }
 
   // getRect shifts justified elements by their width (what buttons need);
   // text justifies itself inside its box below, so undo that shift. Without

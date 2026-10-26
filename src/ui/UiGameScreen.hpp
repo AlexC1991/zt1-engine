@@ -259,7 +259,26 @@ private:
     bool open = false;
     unsigned openedAt = 0;        // when it last opened (ESC closes the latest)
     SDL_Rect rect = {0, 0, 0, 0}; // where it was last drawn
+    // Its drag handle as the original marks it (the element with alias=-1:
+    // Zoo Status' title, Recommendations', a plaque's...; 0: none)
+    int handle = 0;
+    // Dragged somewhere: drawn there (its top-left) until moved again
+    bool moved = false;
+    int moveX = 0, moveY = 0;
+    // Its close button (the gold X: ui/sharedui/close), and - ours - the
+    // lock beside it: locked, it can't be dragged (zoo.ini [Windows] l<id>)
+    int closeId = 0;
+    bool locked = false;
+    SDL_Rect lockRect = {0, 0, 0, 0};
   };
+  bool lockable(const Entry &e) const;
+  // A window being dragged (its id; -1: none), where the mouse took it, and
+  // whether it has moved yet (a click on the title doesn't move it)
+  int dragId = -1, dragGrabX = 0, dragGrabY = 0, dragFromX = 0, dragFromY = 0;
+  bool dragMoving = false;
+  int lockDownId = -1; // (a window's lock held down: its id)
+  bool beginDrag(int x, int y);
+  void placePanels(SDL_Renderer *renderer, SDL_Rect *screen);
   unsigned openCount = 0;
   std::vector<Entry> entries; // in drawing order
   UiLayout *hud = nullptr;
@@ -375,7 +394,7 @@ private:
     // for Mods under them (Features::modFilter)
     UiLayout *packs = nullptr, *withMods = nullptr;
     UiListBox *packsList = nullptr, *withModsList = nullptr;
-    IniReader *withModsIni = nullptr;
+    IniReader *withModsIni = nullptr; // (withMods owns it: deleted with it)
   } filter;
   std::map<int, int> filterChoice; // panel id -> 0 all, 1..3 a pack, 4 mods
   static constexpr int kFilterMods = 4;

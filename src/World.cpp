@@ -1,4 +1,5 @@
 #include "World.hpp"
+#include "SaveGame.hpp"
 #include "EngineScripts.hpp"
 #include "LabTrace.hpp"
 #include "ItemCatalog.hpp"
@@ -45,22 +46,95 @@ World::World(ResourceManager *resourceManager)
   SDL_Log("[World] World systems initialized");
 }
 
-World::~World() {}
+// (its looping sounds stopped: another zoo loaded from a zoo kept the old
+// one's ambience and buildings' loops playing)
+World::~World() {
+  Sound::get().stop(this->ambienceChannel);
+  for (const auto &[i, c] : this->buildingLoops)
+    Sound::get().stop(c);
+  for (const auto &[i, c] : this->filterLoops)
+    Sound::get().stop(c.first);
+}
 
 bool World::loadScenario(const std::string &path) { return loadFreeform(path); }
 
+bool World::loadBlank(int w, int h) {
+  if (w < 16 || h < 16 || w > 512 || h > 512)
+    return false;
+  this->blankW = w;
+  this->blankH = h;
+  bool ok = this->loadFreeform("");
+  this->blankW = this->blankH = 0;
+  return ok;
+}
+
+// An entrance's piece put on the zoo wall (the Lab's map editor): the wall's
+// pieces across its footprint, in the way people walk through it, taken
+// away - the gap the game's own maps leave where their entrance stands (the
+// Basic Grass map's gate, facing west: no wall along x = 11 at y 41 to 43)
+void World::openEntrance(const PlacedObjects::Object &o) {
+  auto [fx, fy] = this->footprintOf(PlacedObjects::fileOf(o));
+  fx = (fx + 1) / 2;
+  fy = (fy + 1) / 2;
+  const bool eastWest = (o.facing & 6) == 2 || (o.facing & 6) == 6;
+  if (eastWest)
+    std::swap(fx, fy);
+  int x0 = static_cast<int>(std::floor(o.x - fx / 2.0f)), y0 = static_cast<int>(std::floor(o.y - fy / 2.0f));
+  int x1 = x0 + std::max(1, fx), y1 = y0 + std::max(1, fy); // (one past the last)
+  std::vector<Fences::Edge> open;
+  for (const auto &[e, p] : this->fences.pieces()) {
+    if (!this->fences.types()[static_cast<size_t>(p.type)].zooWall)
+      continue;
+    // (walked through east-west: the wall's north-south pieces, at the
+    // footprint's sides and between its tiles; the other way round else)
+    if (eastWest ? (!e.alongX && e.x >= x0 && e.x <= x1 && e.y >= y0 && e.y < y1)
+                 : (e.alongX && e.y >= y0 && e.y <= y1 && e.x >= x0 && e.x < x1))
+      open.push_back(e);
+  }
+  for (const Fences::Edge &e : open)
+    this->fences.remove(e, this->worldMap);
+  this->refindInside();
+}
+
+void World::refindInside() {
+  std::vector<Fences::GateSpot> gates;
+  for (const PlacedObjects::Object &o : this->placedObjects.objects())
+    if (!o.fence && o.className == "building" && this->fences.isZooGate(o.typeName)) {
+      Fences::GateSpot g;
+      g.type = o.typeName;
+      g.x = o.x;
+      g.y = o.y;
+      g.facing = static_cast<uint32_t>(o.facing);
+      gates.push_back(g);
+    }
+  this->fences.findInside(gates);
+  this->reindex();
+}
+
 bool World::loadFreeform(const std::string &path) {
   SDL_Log("[World] ========================================");
-  SDL_Log("[World] Loading map: %s", path.c_str());
+  SDL_Log("[World] Loading map: %s", path.empty() ? "(a blank map)" : path.c_str());
   SDL_Log("[World] ========================================");
+  int blankW = this->blankW, blankH = this->blankH;
 
   // Resolve path: a .scn names its map in [start] savegame=, e.g.
   // freeform/ff01.scn -> maps/default.zoo
   std::string actualPath = path;
+  // (a map made in the ZT1 Lab: a design put over the map it names - [start]
+  // design=, a mod's; the "custommaps" switch)
+  std::string design;
   if (actualPath.find(".scn") != std::string::npos) {
     std::string savegame;
     if (IniReader *scn = resourceManager->getIniReader(path)) {
       savegame = scn->get("start", "savegame");
+      if (Features::customMaps) {
+        design = scn->get("start", "design");
+        // (a map made from nothing in the Lab's map editor: a blank map of
+        // its size, "w h", its design over that - no .zoo under it)
+        std::string blank = scn->get("start", "blank");
+        if (!design.empty() && !blank.empty() && std::sscanf(blank.c_str(), "%d %d", &blankW, &blankH) != 2)
+          blankW = blankH = 0;
+      }
       delete scn;
     }
     this->startAmbience(path);
@@ -77,6 +151,7 @@ bool World::loadFreeform(const std::string &path) {
   SDL_Log("[World] Resolved path: %s", actualPath.c_str());
 
   // Load map file
+  auto readZoo = [&]() -> bool {
   int size = 0;
   void *raw_data = resourceManager->getFileContent(actualPath, &size);
   // (a file of its own, not one of the game's - an original saved zoo picked
@@ -116,6 +191,14 @@ bool World::loadFreeform(const std::string &path) {
   // Load map data into WorldMap
   if (!worldMap.loadFromZooReader(zooReader)) {
     SDL_Log("[World] ERROR: WorldMap failed to load!");
+    return false;
+  }
+  return true;
+  };
+  if (blankW > 0 && blankH > 0) {
+    zooReader = ZooReader();
+    worldMap.makeBlank(blankW, blankH, 0);
+  } else if (!readZoo()) {
     return false;
   }
 
@@ -192,6 +275,7 @@ bool World::loadFreeform(const std::string &path) {
     return e && e->tank ? ex : -1;
   };
   animals.tankAt = placedObjects.tankAt;
+  placedObjects.isEntrance = [this](const std::string &t) { return this->fences.isZooGate(t); };
   items.tankAt = placedObjects.tankAt;
   animals.tankDepth = [this](int tank) {
     const Fences::Exhibit *e = this->fences.exhibit(tank);
@@ -222,8 +306,31 @@ bool World::loadFreeform(const std::string &path) {
   // centred on the start tile stored in the map header
   Camera &cam = worldRenderer.getCamera();
   cam.zoom = 1.0f;
-  worldRenderer.startViewAt(worldMap, zooReader.getStartCameraX(),
-                            zooReader.getStartCameraY());
+  // (a map with its view saved - most have - opens on it: zoom, rotation,
+  // scroll; else on the start tile)
+  const int32_t *vw = zooReader.getView();
+  if (blankW > 0)
+    worldRenderer.startViewAt(worldMap, mapW / 2, mapH / 2); // (a blank map: its middle)
+  else if (!zooReader.hasGame() || vw[0] != 0 || !worldRenderer.startViewSaved(worldMap, vw[1], vw[2], vw[3]))
+    worldRenderer.startViewAt(worldMap, zooReader.getStartCameraX(),
+                              zooReader.getStartCameraY());
+
+  if (!design.empty()) {
+    int n = 0;
+    void *d = resourceManager->getFileContent(design, &n);
+    std::vector<char> bytes;
+    if (d) {
+      bytes.assign(static_cast<char *>(d), static_cast<char *>(d) + n);
+      std::free(d);
+    }
+    if (!d || !SaveGame::applyMap(bytes, *this))
+      SDL_Log("[World] The map design %s couldn't be put over the map", design.c_str());
+    else {
+      SDL_Log("[World] The map design %s put over the map", design.c_str());
+      // (its own zoo wall and entrance: the inside from those)
+      this->refindInside();
+    }
+  }
 
   SDL_Log("[World] === WORLD LOADED ===");
   SDL_Log("[World]   Map: %dx%d tiles", mapW, mapH);
@@ -528,6 +635,7 @@ void World::draw(SDL_Renderer *renderer) {
   const float userZoom = cam.zoom > 0.0f ? cam.zoom : 1.0f;
   const float zoom = userZoom * this->viewScale;
   cam.zoom = zoom;
+  worldRenderer.applyPendingView();
 
   // Zoomed in past 1x, GPU FSR draws the map at 1:1 into a layer and
   // upscales it into the view; without it the map's art is drawn from its
@@ -1973,7 +2081,8 @@ void World::findEntrance() {
   const PlacedObjects::Object *gate = nullptr;
   for (const PlacedObjects::Object &o : this->placedObjects.objects()) {
     const std::string &t = o.typeName;
-    if (o.className == "building" && t.size() >= 4 && t.compare(t.size() - 4, 4, "gate") == 0)
+    const bool mainGate = t.size() >= 4 && t.compare(t.size() - 4, 4, "gate") == 0;
+    if (o.className == "building" && (mainGate || (!gate && Features::mods && this->fences.isZooGate(t))))
       gate = &o;
   }
   if (!gate)
@@ -2070,6 +2179,38 @@ void World::updateBuildingSounds(float seconds) {
       this->buildingSoundClock = 0;
     }
   }
+  // Tank filters: the running or the decayed hum where it stands (zoo.exe
+  // 0x497fb2), none broken or off; a change of state changes the sound
+  const auto &filters = this->fences.filters();
+  for (auto it = this->filterLoops.begin(); it != this->filterLoops.end();) {
+    bool gone = it->first >= static_cast<int>(filters.size()) ||
+                this->fences.filterSound(filters[it->first]).first != it->second.second;
+    if (gone) {
+      Sound::get().stop(it->second.first);
+      it = this->filterLoops.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (size_t i = 0; i < filters.size(); i++) {
+    const Fences::FilterType &fk = this->fences.filterType(filters[i].file);
+    auto [file, atten] = this->fences.filterSound(filters[i]);
+    if (file.empty())
+      continue;
+    float dx = 0, dy = 0;
+    this->animals.viewOffset(filters[i].x + fk.footprintX * 0.5f, filters[i].y + fk.footprintY * 0.5f, dx, dy);
+    auto ch = this->filterLoops.find(static_cast<int>(i));
+    if (ch != this->filterLoops.end()) {
+      if (!Sound::get().place(ch->second.first, dx, dy, atten)) {
+        Sound::get().stop(ch->second.first);
+        this->filterLoops.erase(ch);
+      }
+    } else {
+      int c = Sound::get().loopAt(file, dx, dy, atten);
+      if (c >= 0)
+        this->filterLoops[static_cast<int>(i)] = {c, file};
+    }
+  }
 }
 
 void World::exhibitsNear(int x0, int y0, int x1, int y1, std::vector<int> &out) const {
@@ -2152,6 +2293,9 @@ void World::drawBrush(SDL_Renderer *renderer) {
 void World::setObjectTool(const std::string &file, int cost, int facing) {
   if (file == this->objectTool && facing == this->objectFacing && cost == this->objectCost)
     return;
+  // (the same object turned with Q / E: shown turned where it is, at once -
+  // it vanished until the mouse next moved)
+  bool turned = file == this->objectTool && !file.empty() && this->objectGhost;
   this->objectTool = file;
   this->objectCost = cost;
   this->objectFacing = facing;
@@ -2159,6 +2303,8 @@ void World::setObjectTool(const std::string &file, int cost, int facing) {
   this->hoverPrice = -1;
   if (!file.empty())
     this->bulldozer = false;
+  if (turned && this->lastMouseX >= 0)
+    this->mouseMove(this->lastMouseX, this->lastMouseY);
 }
 
 std::pair<int, int> World::footprintOf(const std::string &file) {
@@ -2554,6 +2700,8 @@ int World::wallDragCost() const {
 }
 
 void World::mouseMove(int x, int y) {
+  this->lastMouseX = x;
+  this->lastMouseY = y;
   // A tank wall dragged: the walls follow the cursor up and down, a step
   // a height unit, the price beside it (as the original)
   if (this->wallDrag.tank >= 0) {
@@ -2607,8 +2755,8 @@ void World::mouseMove(int x, int y) {
       c.zoom = saved;
       if (f >= 0) {
         this->fences.highlightFilter = f;
-        this->hoverPrice = static_cast<int>(std::lround(this->fences.filterType().cost * 0.8));
-        if (const CatalogItem *it = item(this->fences.filterType().file))
+        this->hoverPrice = static_cast<int>(std::lround(this->fences.filterType(this->fences.filters()[f].file).cost * 0.8));
+        if (const CatalogItem *it = item(this->fences.filters()[f].file))
           this->bulldozeTip = it->name;
         return;
       }
@@ -3034,7 +3182,7 @@ World::ToolResult World::mouseDown(int x, int y) {
       int f = this->fences.filterAt(lx, ly, worldRenderer, worldMap);
       c.zoom = saved;
       if (f >= 0) {
-        r.refund = static_cast<int>(std::lround(this->fences.filterType().cost * 0.8));
+        r.refund = static_cast<int>(std::lround(this->fences.filterType(this->fences.filters()[f].file).cost * 0.8));
         this->fences.removeFilter(f);
         return r;
       }
@@ -3296,6 +3444,10 @@ World::ToolResult World::mouseDown(int x, int y) {
         u.id = o->id;
         u.money = r.cost;
         this->recordUndo(u);
+        // (an entrance put on the zoo wall in the map editor: the wall opens
+        // where it stands)
+        if (this->fences.isEditing() && o->className == "building" && this->fences.isZooGate(o->typeName))
+          this->openEntrance(*o);
       }
       this->reindex();
       this->animals.markDirty();

@@ -182,7 +182,12 @@ SpriteDatabase::getPathSprite(SDL_Renderer *renderer, const std::string &type,
         delete ini;
       }
     }
-    folder = pathArtFolders.emplace(type, "paths/" + type + "/" + anim).first;
+
+    if (anim.size() > 4 && anim.compare(anim.size() - 4, 4, ".ani") == 0)
+      anim.resize(anim.size() - 4);
+    std::string artFolder = anim.find('/') == std::string::npos ? "paths/" + type + "/" + anim
+                                                              : anim.substr(0, anim.find_last_of('/'));
+    folder = pathArtFolders.emplace(type, artFolder).first;
   }
 
   Sprite sprite;

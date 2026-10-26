@@ -197,6 +197,23 @@ public:
   // objects can only be placed inside the main zoo wall"), not on water.
   // Worked out from the map's zoo walls when it loads.
   bool insideZoo(int x, int y) const;
+  // The entrance's pieces (buildings of [Member] zoogate: the gate, and the
+  // posts or booths either side of it), where they stand, facing
+  struct GateSpot {
+    std::string type;
+    float x = 0, y = 0; // tiles
+    uint32_t facing = 0;
+  };
+  // The inside worked out again from the zoo walls as they are and these
+  // entrance pieces (a map made in the Lab: its own wall and entrance)
+  void findInside(const std::vector<GateSpot> &gates);
+  // Whether a building type is one of the entrance's pieces
+  bool isZooGate(const std::string &type) const;
+  // Editing a map (the Lab's map editor): anywhere on the map counts as
+  // inside - walls, entrances and scenery go anywhere; insideZoo is the
+  // zoo's own inside again when it's off
+  void setEditing(bool on) { this->editing = on; }
+  bool isEditing() const { return this->editing; }
   // Laying fence: whether a piece can go on an edge, and putting it there
   bool canPlace(const Edge &e, const WorldMap &map) const;
   // Why a piece can or can't go somewhere: it can (drawn green), not there
@@ -338,9 +355,12 @@ public:
     int startHealth = 10, decayedHealth = 5;
     float decayTime = 200, filterDelay = 50;
     int upkeep = 50, clean = 10, decayedClean = 5;
-    Animation *idle = nullptr, *decayed = nullptr, *off = nullptr;
+    Animation *idle = nullptr, *decayed = nullptr, *off = nullptr, *broken = nullptr;
+    std::string healthySound, decayedSound;
+    int healthyAtten = 0, decayedAtten = 0;
   };
   struct Filter {
+    std::string file = "scenery/other/filter1.ai";
     int x = 0, y = 0; // the footprint's top-left tile
     int tank = -1;    // the exhibit it cleans
     float health = 10;
@@ -350,7 +370,23 @@ public:
     int placedMonth = 0;  // the game month it went in (for its panel)
     double upkeepLast = 0, upkeepCurrent = 0, upkeepTotal = 0;
   };
-  const FilterType &filterType() const { return this->filterKind; }
+  const FilterType &filterType(const std::string &file = "") const {
+    auto it = this->filterKinds.find(file.empty() ? this->selectedFilter : file);
+    return it == this->filterKinds.end() ? this->filterKind : it->second;
+  }
+  bool selectFilter(const std::string &file) {
+    if (!this->filterKinds.count(file)) return false;
+    this->selectedFilter = file;
+    return true;
+  }
+  // What a filter is doing (zoo.exe 0x45d234): Off while its tank has no
+  // water (the tick 0x497e0f stops it: no cleaning, no sound), Broken at no
+  // health, Decayed at cDecayedHealth or under, else Running
+  enum class FilterState { Running, Decayed, Broken, Off };
+  FilterState filterState(const Filter &f) const;
+  // Its sound file and attenuation now ([FilterSounds]: the healthy one
+  // running, the decayed one decayed, none broken or off; zoo.exe 0x497f5c)
+  std::pair<std::string, int> filterSound(const Filter &f) const;
   const std::vector<Filter> &filters() const { return this->filterList; }
   // A filter with its top-left tile at (x, y): whether it can go there
   // (Ok; Outside: not land in the zoo, or no completed tank beside it
@@ -459,6 +495,8 @@ private:
   std::vector<FenceType> typeList;
   std::map<Edge, Piece> edges;
   FilterType filterKind;
+  std::map<std::string, FilterType> filterKinds;
+  std::string selectedFilter = "scenery/other/filter1.ai";
   std::vector<Filter> filterList;
   int filtersMade = 0, monthNow = 0;
   double upkeepOwed = 0;
@@ -485,6 +523,8 @@ private:
   void tankPieces(const Edge &e, const Piece &p, const Exhibit &ex, const WorldRenderer &view,
                   bool front, std::vector<TankPiece> &out) const;
   std::vector<uint8_t> inside; // per tile: within the main zoo wall
+  bool editing = false;
+  mutable std::map<std::string, bool> gateTypes; // (type -> of [Member] zoogate)
   std::vector<uint8_t> building; // per tile: under a building (the entrance)
   int mapW = 0, mapH = 0;
   const WorldMap *mapRef = nullptr;

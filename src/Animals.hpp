@@ -139,6 +139,7 @@ public:
     // What its keeper puts down (cKeeperFoodType: food.cfg's order,
     // herbchow, carnchow, fruichow, bambchow, graschow, fishchow)
     int keeperFood = 0;
+    std::string customFood; // Enabled mod food key, cKeeperFood in Strings.
     // Care (zoo.exe defaults where a file leaves them out)
     int maxHits = 500, pctHits = 20, sickChange = -20, otherSickChange = -10, sickChance = 10;
     int hungryHealthChange = 5, sickTime = 5, keeperArrivesChange = 25;

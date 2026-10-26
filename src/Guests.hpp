@@ -10,6 +10,7 @@
 
 #include "Animation.hpp"
 #include "Fences.hpp"
+#include "PlacedObjects.hpp"
 
 class Animals;
 class PlacedObjects;
@@ -163,6 +164,10 @@ public:
     this->entranceY = y;
   }
   bool hasEntrance() const { return this->entranceX >= 0; }
+  // A building's door tiles as it stands (its entrpos turned with it; none
+  // when its .ai gives no entrpos: any path tile beside it serves)
+  std::vector<std::pair<int, int>> doorTiles(const PlacedObjects::Object &o) const;
+  bool canWalk(int x, int y) const { return walkable(x, y); }
 
   // The zoo's rating and admission (adult), for who comes
   void update(float seconds, int zooRating, double admission);
@@ -250,6 +255,9 @@ private:
     std::string useSound;
     int useAtten = 0;
     int fx = 2, fy = 2;
+    // Its doors: each [slot]'s entrpos, from its middle facing the way it
+    // was built (64 a tile; ZTBuildingType::loadConfig 0x4c0b4d)
+    std::vector<std::pair<int, int>> doors;
   };
   mutable std::map<std::string, BuildingInfo> buildingInfo;
   const BuildingInfo &infoOf(const std::string &file) const;

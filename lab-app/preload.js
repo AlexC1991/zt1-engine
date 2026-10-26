@@ -15,6 +15,7 @@ const on = (channel, fn) =>
   ipcRenderer.on(channel, (e, ...a) => (ready ? fn(e, ...a) : held.push(() => fn(e, ...a))));
 
 contextBridge.exposeInMainWorld('lab', {
+  helpOpenExternal: (url) => ipcRenderer.invoke('help:openExternal', url),
   checkLabUpdate: () => ipcRenderer.invoke('lab:update'),
   labUpdateState: () => ipcRenderer.invoke('lab:updateState'),
   labUpdateInstall: () => ipcRenderer.invoke('lab:updateInstall'),
@@ -116,7 +117,18 @@ contextBridge.exposeInMainWorld('lab', {
   modkitNew: (req) => ipcRenderer.invoke('modkit:new', req),
   modkitImport: (file) => ipcRenderer.invoke('modkit:import', file),
   modkitCheck: (folder) => ipcRenderer.invoke('modkit:check', folder),
+  modkitContents: (folder) => ipcRenderer.invoke('modkit:contents', folder),
+  modkitSpecies: (req) => ipcRenderer.invoke('modkit:species', req),
+  modkitEntry: (folder, ztd, entry) => ipcRenderer.invoke('modkit:entry', folder, ztd, entry),
+  studioTree: (folder) => ipcRenderer.invoke('studio:tree', folder),
+  modkitEntrySave: (folder, ztd, entry, text, crlf) => ipcRenderer.invoke('modkit:entrySave', folder, ztd, entry, text, crlf),
+  modkitCopyIn: (folder, file) => ipcRenderer.invoke('modkit:copyIn', folder, file),
+  artDo: (folder, req) => ipcRenderer.invoke('art:do', folder, req),
+  animalDo: (folder, req) => ipcRenderer.invoke('animal:do', folder, req),
+  mapTarget: (req) => ipcRenderer.invoke('map:target', req),
+  mapPack: (folder, req) => ipcRenderer.invoke('map:pack', folder, req),
   modkitSave: (folder, fields) => ipcRenderer.invoke('modkit:save', folder, fields),
+  modkitPicture: (folder, req) => ipcRenderer.invoke('modkit:picture', folder, req),
   modkitOpen: (folder) => ipcRenderer.invoke('modkit:open', folder),
   modkitToken: (token) => ipcRenderer.invoke('modkit:token', token),
   modkitMine: () => ipcRenderer.invoke('modkit:mine'),

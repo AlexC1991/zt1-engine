@@ -7594,6 +7594,13 @@
    "provisional": false,
    "summary": "Reads it back from a saved zoo (crt_fread), field by field, by the file's version - class slot 0x6c of ZTTankWall"
   },
+  "0x45d234": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "setArtForState",
+   "provisional": false,
+   "summary": "Picks the filter's animation: \"off\" while stopped (+0x190 set: its tank has no water), \"broken\" at health (+0x15c) under 1, \"decayed\" at or under its type's cDecayedHealth (+0x16c), else \"idle\""
+  },
   "0x45d468": {
    "by": "batty251 (class slots 0x68 / 0x6c read: crt_fwrite, crt_fread)",
    "class": "ZTTankFilter",
@@ -9376,6 +9383,20 @@
    "name": "update",
    "provisional": false,
    "summary": "The tank filter's update (class slot 0x28): the object's update, then its tank's water (habitatMgr)"
+  },
+  "0x497f5c": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "updateSound",
+   "provisional": false,
+   "summary": "Which hum plays: health > 0 and not stopped (+0x190): over cDecayedHealth the healthy sound (0x4980be), else the decayed one (0x4a7a38); broken or stopped, both stopped (0x498270)"
+  },
+  "0x497fb2": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "placeSounds",
+   "provisional": false,
+   "summary": "The playing hum (healthy +0x194, else decayed +0x198) moved to the filter's position with its type's attenuation (cHealthyAtten +0x19c, cDecayedAtten +0x1a0)"
   },
   "0x498cad": {
    "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
@@ -15092,6 +15113,20 @@
    "name": "dtor",
    "provisional": false,
    "summary": "Job 0x1a (Job26_GoToFilter: maintenance going to a tank filter) - its destructor (deleting when asked) - class slot 0 (table 0x632914)"
+  },
+  "0x595c8e": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "service",
+   "provisional": false,
+   "summary": "A maintenance worker's fix (Job27_FixFilter): health (+0x15c) back to its type's cStartingHealth (+0x168), art refreshed; the decay countdown (+0x160) is not restarted"
+  },
+  "0x595cad": {
+   "by": "batty251",
+   "confidence": "likely",
+   "name": "serviceAndDate",
+   "provisional": false,
+   "summary": "service (0x595c8e), then the game date stored at +0x180/+0x184 (when it was last serviced)"
   },
   "0x595d17": {
    "by": "batty251 (the job class tables read from memory; each job's own status text)",
@@ -30690,6 +30725,31 @@
    "by": "batty251",
    "on": "2026-10-19",
    "what": "Named 0x416504 tilePathPieceOk"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-24",
+   "what": "Named 0x45d234 setArtForState"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-24",
+   "what": "Named 0x497f5c updateSound"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-24",
+   "what": "Named 0x497fb2 placeSounds"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-24",
+   "what": "Named 0x595c8e service"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-24",
+   "what": "Named 0x595cad serviceAndDate"
   }
  ],
  "notes": {

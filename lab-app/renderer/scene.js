@@ -34,6 +34,9 @@ const sc = () => (S.engine.state && S.engine.state.scene) || null;
 S.consoleOpen = store.get('dkOpen', true);
 lab.onEngineStatus((st) => {
   if (st.status !== 'connected') return;
+  // (a new engine may have other mods on: what can be put down, asked again)
+  SC.catalog = null;
+  SC.catalogAsked = false;
   lab.engineSend({ cmd: 'breakpoints', list: [...DK.bps] });
   // (a new engine: its steps start again from 1, so the old ones go)
   DK.steps = [];
@@ -68,7 +71,7 @@ const PALETTE = [
   ['scenery', 'Scenery', (i) => i.members.includes('scenery')],
   ['foliage', 'Foliage', (i) => i.members.includes('foliage')],
   ['rocks', 'Rocks', (i) => i.members.includes('rocks')],
-  ['fences', 'Fences', (i) => i.section === 'fences' || i.section === 'tankwall' || i.file === SC.filterFile],
+  ['fences', 'Fences', (i) => i.section === 'fences' || i.section === 'tankwall' || i.section === 'filter' || i.file === SC.filterFile],
   ['paths', 'Paths', (i) => i.section === 'paths'],
   ['staff', 'Staff', (i) => i.section === 'staff'],
   ['terrain', 'Terrain', null],
@@ -83,7 +86,7 @@ const PACKS = ['', 'Dinosaur Digs', 'Marine Mania'];
 
 function toolKindOf(item) {
   if (!item || !item.file) return '';
-  if (item.file === SC.filterFile) return 'filter';
+  if (item.section === 'filter' || item.file === SC.filterFile) return 'filter';
   if (item.section === 'animals' || (item.members || []).includes('animals')) return 'animal';
   if (item.section === 'staff') return 'staff';
   if (item.section === 'fences' || item.section === 'tankwall') return 'fence';
@@ -120,8 +123,9 @@ function paletteItems() {
   }
   return (SC.catalog || [])
     .filter(cat[2])
-    .filter((i) => !q || i.name.toLowerCase().includes(q))
-    .map((i) => ({ key: i.file, name: i.name || i.file, icon: i.icon, cost: i.cost, pack: i.pack }));
+    // (found by its name or its file)
+    .filter((i) => !q || `${i.name} ${i.file}`.toLowerCase().includes(q))
+    .map((i) => ({ key: i.file, name: itemName(i), icon: i.icon, cost: i.cost, pack: i.pack }));
 }
 
 function renderPalette() {
@@ -200,7 +204,13 @@ function toolLabel(t) {
   }
   if (t.kind === 'gate') return 'Gate';
   const it = itemOf(t.item);
-  return it ? it.name : t.item;
+  return it ? itemName(it) : t.item;
+}
+
+// An item's name; one the game has no name for (Marine Mania's entrance)
+// goes by its file's
+function itemName(i) {
+  return i.name || i.file.split('/').pop().replace(/\.ai$/, '');
 }
 
 // ---------------------------------------------------------------- left
@@ -231,7 +241,7 @@ function renderSceneLeft(force) {
     $('sc-lefttabs'),
     [
       ['zoo', 'Zoo'],
-      ['mods', 'Mods'],
+      ['mods', 'Lab scripts'],
     ]
       .map(([id, l]) => `<div class="${SC.left === id ? 'on' : ''}" data-act="scLeft" data-arg="${id}">${l}</div>`)
       .join(''),
@@ -241,7 +251,7 @@ function renderSceneLeft(force) {
     body.dataset.k = 'mods';
     setHtml(
       body,
-      `<div class="sidehead label"><span>Mods</span><span class="green clickable" data-act="newMod">+ New</span></div>` +
+      `<div class="sidehead label"><span>Lab scripts</span><span class="green clickable" data-act="newMod">+ New</span></div>` +
         (S.mods.length
           ? S.mods
               .map((m) => {
@@ -437,7 +447,7 @@ function renderStageUi() {
     ['animal', 'Animal'],
   ];
   const ov = s.overlays;
-  let v = `<div class="mapname" data-act="scMaps" title="Load another map">${esc(s.mapName || s.map)} ▾</div><span class="sep"></span>`;
+  let v = `<div class="mapname" data-act="scMaps" title="Load another map">${esc(s.mapName || s.map)} ▾</div><div class="btn small ghost" data-act="scBig" title="The Scene as big as the tab, the other panels hidden (and back)">${LAYOUT.api && LAYOUT.api.hasMaximizedGroup && LAYOUT.api.hasMaximizedGroup() ? 'Small view' : 'Big view'}</div><div class="btn small ${s.editing ? 'on' : 'ghost'}" data-act="scEdit" title="Editing the map: zoo walls, entrances and scenery go anywhere, not only inside the zoo. Off: the zoo's inside is what its wall and entrance close in">${s.editing ? '✎ Editing the map' : 'Edit the map'}</div><div class="btn small ghost" data-act="scSaveMap" title="This zoo as a freeform map of your own, in a mod: its ground, water, paths, fences and objects, over the map it was loaded from (or a blank map)">Save as a map</div><span class="sep"></span>`;
   v += segs.map(([m, l]) => `<div class="${view === m || (m === 'animal' && view === 'anim') ? 'on' : ''}" data-act="view" data-arg="${m}">${l}</div>`).join('');
   v += '<span class="sep"></span>';
   if (scene)
@@ -466,7 +476,7 @@ function renderStageUi() {
         : ''
     }<div class="${SC.viewLayered ? 'on' : ''}" data-act="scLayers" title="Draw its layers together at one anchor: shadow + art, under + art, then the animation (Marine Mania's tank art)">Layers</div><div data-act="scArtZoom" data-arg="-1" title="Smaller">−</div><div data-act="scArtZoom" data-arg="1" title="Bigger">+</div><div data-act="scArtFrame" data-arg="-1" title="Hold it a frame back">◀</div><div class="${SC.artHeld ? 'on' : ''}" data-act="scArtFrame" data-arg="0" title="${SC.artHeld ? 'Held: click to play' : 'Hold every layer on this frame, to compare them'}">${SC.artHeld ? '❚❚' : '▶'}</div><div data-act="scArtFrame" data-arg="1" title="Hold it a frame on">▶</div><div data-act="scCheck" data-arg="" title="Check this species in bulk: its art, its Marine Mania layers, and its behaviour sets against what the engine does">Check</div><div data-act="scCheck" data-arg="*marine" title="The same for every tank animal">Check marine</div>`;
   }
-  else v += `<div class="on">${esc(st.what || 'heights, top down')}</div>`;
+  else v += `<div class="on">${esc(st.what || 'the whole map from above: ground, heights, paths, objects')}</div>`;
   setHtml($('st-view'), v);
   fitStageBars();
 
@@ -1291,7 +1301,7 @@ function renderDrawer() {
   right.innerHTML = `<div class="dhead"><b>${esc(displayName(f))}</b><div class="links"><span class="blue clickable" data-act="openCode" data-arg="${f.addr}">Open in Original Game</span><span class="clickable" data-act="closeDrawer">✕</span></div></div>
     <div class="plain">${esc(plain || 'Not described yet. Name it and add a note in Original Game.')}${a ? ` <span class="muted">Live values are for the ${esc(prettyStem(a.species))}.</span>` : ''}</div>
     <div class="code" style="flex:1;padding:10px 0">${code}${asm}</div>
-    <div class="dfoot"><div class="btn primary" data-act="modFor" data-arg="${f.addr}">${mods.length ? 'Open its experiment' : 'New experiment'}</div><div class="btn" data-act="openCode" data-arg="${f.addr}">${
+    <div class="dfoot"><div class="btn primary" data-act="modFor" data-arg="${f.addr}">${mods.length ? 'Open its Lab script' : 'New Lab script'}</div><div class="btn" data-act="openCode" data-arg="${f.addr}">${
       S.expert ? 'Assembly' : 'Full code'
     }</div></div>`;
 }
@@ -1551,13 +1561,26 @@ async function chooseMap() {
   const m = $('modal');
   let pick = s.map;
   let flat = false;
+  let blankW = 100,
+    blankH = 100;
   const draw = () => {
     m.innerHTML = `<div class="dialog" style="width:520px"><div class="h">Load a map into the lab zoo</div><div class="muted" style="line-height:1.5">The game’s freeform maps, as our engine loads them. Whatever’s in the lab zoo now goes (a running mod stops).</div><div class="maplist">${(SC.maps || [])
       .map(
         (x) =>
           `<div class="mapitem${x.stem === pick ? ' on' : ''}" data-map="${esc(x.stem)}"><span>${esc(x.name || x.stem)}</span><span class="muted">${esc(x.size || '')}</span></div>`,
       )
-      .join('')}</div><label class="check clickable" data-flat="1"><span class="box2">${flat ? '✓' : ''}</span><span>Make it flat: the zoo all grass, nothing in it (the entrance kept)</span></label><div class="btns"><div class="btn" data-x="no">Cancel</div><div class="btn primary" data-x="ok">Load</div></div></div>`;
+      .join('')}</div>
+      <div class="label" style="margin-top:12px">Or a blank map, to make a map of your own</div>
+      <div class="muted" style="font-size:12px;line-height:1.5">Flat grass and nothing else - no zoo wall, no entrance: draw the wall (Fences › Zoo Fence), put the entrance on it (Buildings › Zoo Entrance), paint the ground and lay the paths. Editing the map is on: they go anywhere.</div>
+      <div class="maplist" style="max-height:none">${[
+        ['blank:75x75', 'Small', '75 x 75'],
+        ['blank:125x125', 'Medium', '125 x 125'],
+        ['blank:150x150', 'Large', '150 x 150'],
+      ]
+        .map(([k, n, sz]) => `<div class="mapitem${k === pick ? ' on' : ''}" data-map="${k}"><span>A blank map (${n})</span><span class="muted">${sz}</span></div>`)
+        .join('')}
+        <div class="mapitem${/^blank:/.test(pick || '') && !['blank:75x75', 'blank:125x125', 'blank:150x150'].includes(pick) ? ' on' : ''}" data-custom="1"><span>A blank map of its own size <span class="muted">(the original's are those three)</span></span><span><input type="number" id="mp-w" min="16" max="512" value="${blankW}" style="width:56px"> x <input type="number" id="mp-h" min="16" max="512" value="${blankH}" style="width:56px"></span></div></div>
+      <label class="check clickable" data-flat="1"><span class="box2">${flat ? '✓' : ''}</span><span>Make it flat: the zoo all grass, nothing in it (the entrance kept)</span></label><div class="btns"><div class="btn" data-x="no">Cancel</div><div class="btn primary" data-x="ok">Load</div></div></div>`;
     m.classList.remove('hidden');
   };
   draw();
@@ -1576,6 +1599,23 @@ async function chooseMap() {
       resolve();
     };
     m.onclick = (e) => {
+      if (e.target.tagName === 'INPUT') {
+        // (the size typed: that's the one picked)
+        e.target.oninput = () => {
+          blankW = Math.max(16, Math.min(512, +($('mp-w') || {}).value || 100));
+          blankH = Math.max(16, Math.min(512, +($('mp-h') || {}).value || 100));
+          pick = `blank:${blankW}x${blankH}`;
+          document.querySelectorAll('.mapitem').forEach((el) => el.classList.toggle('on', !!el.dataset.custom));
+        };
+        return;
+      }
+      const cu = e.target.closest('[data-custom]');
+      if (cu) {
+        blankW = Math.max(16, Math.min(512, +($('mp-w') || {}).value || 100));
+        blankH = Math.max(16, Math.min(512, +($('mp-h') || {}).value || 100));
+        pick = `blank:${blankW}x${blankH}`;
+        return draw();
+      }
       const it = e.target.closest('[data-map]');
       if (it) {
         pick = it.dataset.map;
@@ -1777,6 +1817,48 @@ Object.assign(ACTIONS, {
   scSpeed: (x) => lab.engineSend({ cmd: 'speed', value: +x }),
   scAdvance: (secs) => lab.engineSend({ cmd: 'advance', seconds: +secs }),
   scMaps: () => chooseMap(),
+  scEdit: () => {
+    const s = sc() || {};
+    lab.engineSend({ cmd: 'mapEdit', on: !s.editing });
+  },
+  // The lab zoo as a freeform map of its own, in a mod (the engine's
+  // SaveGame::saveMap; packed by re/lab/mapmaker.py): in the game's map list
+  // while the mod's on
+  scSaveMap: async () => {
+    const r0 = await lab.gameModsList();
+    const mods = (r0.mods || []).filter((m) => !m.folder.startsWith('.'));
+    const s = sc() || {};
+    const a = await ask(
+      'Save this zoo as a freeform map',
+      [
+        { key: 'title', label: 'Its name (in the map list)', hint: 'e.g. Quagga Plains' },
+        { key: 'about', label: 'What it is (the map list shows it)', area: true },
+        // (a blank map's by its width: the game's Small 75, Medium 125, Large 150)
+        { key: 'size', label: 'Its size', value: /blank map \((\d+) x/i.test(s.mapName || '') ? (+RegExp.$1 <= 100 ? 'Small' : +RegExp.$1 <= 137 ? 'Medium' : 'Large') : /large/i.test(s.mapName || '') ? 'Large' : /small/i.test(s.mapName || '') ? 'Small' : 'Medium', options: ['Small', 'Medium', 'Large'].map((x) => ({ value: x, label: x })) },
+        // (the mod the studio's New map started it for, if there is one)
+        { key: 'folder', label: 'Into', value: mods.some((m) => m.folder === store.get('mapTargetMod', '')) ? store.get('mapTargetMod', '') : '', options: [{ value: '', label: 'A new mod' }, ...mods.map((m) => ({ value: m.folder, label: m.name || m.folder }))] },
+      ],
+      'Save the map',
+    );
+    if (!a || !a.title) return;
+    const t = await lab.mapTarget({ folder: a.folder, title: a.title, about: a.about, author: store.get('mkAuthor', '') });
+    if (!t.ok) return toast(esc(t.error), 4000);
+    // (its picture for the map list: the view as it is now)
+    const previewPng = canvas.toDataURL('image/png').split(',')[1];
+    const saved = new Promise((resolve) => {
+      SC.mapSaved = resolve;
+      setTimeout(() => SC.mapSaved && (SC.mapSaved = null, resolve({ ok: false, error: 'The engine didn’t answer.' })), 15000);
+    });
+    lab.engineSend({ cmd: 'saveMap', path: t.design });
+    const m = await saved;
+    if (!m.ok) return toast(esc(m.error || 'The engine couldn’t save it: see its log.'), 5000);
+    toast(`Packing <b>${esc(a.title)}</b> into the mod…`, 3000);
+    const r = await lab.mapPack(t.folder, { design: t.design, scn: m.scn, blank: m.blank ? `${m.w} ${m.h}` : '', id: t.id, title: a.title, about: a.about, size: a.size, preview: t.preview, previewPng });
+    if (!r.ok) return toast(esc(r.error || 'It couldn’t be packed.'), 6000);
+    toast(`<b>${esc(a.title)}</b> is in the mod <b>${esc(r.folder)}</b> (${esc(r.scn)}). Switch the mod on: it’s in the game’s freeform maps.`, 6000);
+    // (the studio's tree shows it next time)
+    if (typeof stInvalidate === 'function') stInvalidate();
+  },
   view: (m) => lab.engineSend({ cmd: 'view', mode: m, what: m === 'animal' ? (currentAnimal() || { species: (S.engine.state || {}).what || 'zebra' }).species : '' }),
   pickSpecies: async () => {
     const animals = (SC.catalog || []).filter((i) => toolKindOf(i) === 'animal');
@@ -1919,6 +2001,11 @@ const SCENE_MSG = {
   outline: (m) => {
     SC.outline = m;
     if (S.tab === 'scene') renderTree();
+  },
+  mapSaved: (m) => {
+    const done = SC.mapSaved;
+    SC.mapSaved = null;
+    if (done) done(m);
   },
   maps: (m) => {
     SC.maps = m.list;

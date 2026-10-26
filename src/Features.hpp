@@ -30,6 +30,10 @@ inline bool optionsWindow = true; // Game Options as a window with every setting
 inline bool tankGroundBack = true; // a tank taken away leaves the ground as it was (off: the sunken hole stays, as the original)
 inline bool noFenceOnPath = true; // fences and tank walls can't be built across a path (off: they can, as the original)
 inline bool modFilter = true;     // the buy panels' content filter has a Mods choice (off: All and the three packs, as the original)
+inline bool customMaps = true;    // freeform maps from mods (a map design over one of the game's maps) are listed and play (off: the game's maps only)
+inline bool infoClosesLists = false; // an information window closes the bottom bar's open list (off: the list stays open under it, as the original)
+inline bool smartStack = true;   // windows that would cover one another are placed beside it (off: where the original puts them)
+inline bool dragWindows = true;  // every window can be dragged by its title and keeps its place (off: only those the original lets you drag)
 
 inline std::vector<Switch> &all() {
   static std::vector<Switch> list = {
@@ -48,6 +52,10 @@ inline std::vector<Switch> &all() {
       {"tankgroundback", "a tank taken away puts its ground back as it was before it sank - heights and terrain (off: the sunken hole stays, as the original)", &tankGroundBack},
       {"nofenceonpath", "fences and tank walls can't be built across a path (off: they can be, as the original - a tank then asks to clear the path before it fills)", &noFenceOnPath},
       {"modfilter", "the buy panels' content filter (All, Zoo Tycoon, Dinosaur Digs, Marine Mania) has a Mods choice too: only what your switched-on mods add or change (off: the original's four choices)", &modFilter},
+      {"custommaps", "freeform maps made in the ZT1 Lab, from mods switched on, are in the map list and play - a map design over one of the game's maps: its ground, paths, fences and objects (off: the game's own maps only)", &customMaps},
+      {"infocloseslists", "opening an information window (an animal, a guest, a keeper...) closes the bottom bar's open list - Animals, Guests, Exhibits or Staff - so it doesn't cover the window (off: the list stays open, as the original)", &infoClosesLists},
+      {"smartstack", "a window opening where it would cover another open window goes beside it instead - above it, or to its left (off: where the original puts it, over the other)", &smartStack},
+      {"dragwindows", "every window can be dragged by its title bar and stays where you leave it, next time too (off: only the windows the original lets you drag - Zoo Status, Recommendations, plaques, messages - and only until the game closes)", &dragWindows},
       {"optionswindow", "Game Options opens as a window with every setting - graphics, sound, controls, gameplay - and the main menu has it too (off: the original's side panel, and no main menu entry)", &optionsWindow},
   };
   return list;

@@ -223,6 +223,7 @@ void WorldRenderer::worldToViewVertex(int x, int y, int &pu, int &pv) const {
 // matches rotation 1 (alignment 0.48 -> 0.70) and airport.zoo (near the far
 // y edge) rotation 3.
 void WorldRenderer::startViewAt(const WorldMap &map, int tileX, int tileY) {
+  pendingScroll = false;
   mapWidthCache = map.getWidth();
   mapHeightCache = map.getHeight();
   const int W = mapWidthCache, H = mapHeightCache;
@@ -247,6 +248,34 @@ void WorldRenderer::startViewAt(const WorldMap &map, int tileX, int tileY) {
   camera.y = static_cast<int>(std::lround(-(u + v) * tileHeight * 0.5f + lift));
   SDL_Log("[WorldRenderer] Start view: tile (%d,%d), rotation %d", tileX,
           tileY, viewRotation);
+}
+
+bool WorldRenderer::startViewSaved(const WorldMap &map, int rotation, int scrollX, int scrollY) {
+  // (measured on Basic Grass Map against the original at the same window
+  // size: the saved scroll is the view's top-left in its pixels, tile (0,0)
+  // at (0,0) - x (x + y) * 32, y (y - x) * 16 - unrotated. The other
+  // rotations' origins aren't measured yet)
+  if (rotation != 0)
+    return false;
+  mapWidthCache = map.getWidth();
+  mapHeightCache = map.getHeight();
+  viewRotation = 0;
+  // (set when it's first drawn: the view's middle, which the camera counts
+  // from, is only known then)
+  pendingScroll = true;
+  pendingScrollX = scrollX;
+  pendingScrollY = scrollY;
+  SDL_Log("[WorldRenderer] Start view: the map's own scroll (%d,%d)", scrollX, scrollY);
+  return true;
+}
+
+void WorldRenderer::applyPendingView() {
+  if (!pendingScroll)
+    return;
+  pendingScroll = false;
+  const float W = static_cast<float>(mapWidthCache);
+  camera.x = static_cast<int>(std::lround(W * tileWidth * 0.5f - pendingScrollX - logicalCenterX()));
+  camera.y = static_cast<int>(std::lround(-W * tileHeight * 0.5f - pendingScrollY - logicalCenterY()));
 }
 
 void WorldRenderer::getViewSize(int &viewU, int &viewV) const {
@@ -277,6 +306,7 @@ void WorldRenderer::getViewCentre(float &u, float &v) const {
 }
 
 void WorldRenderer::centreViewOn(float u, float v) {
+  pendingScroll = false;
   camera.x = static_cast<int>(std::lround(-(u - v) * tileWidth * 0.5f));
   camera.y = static_cast<int>(std::lround(-(u + v) * tileHeight * 0.5f));
 }

@@ -445,6 +445,11 @@ const Guests::BuildingInfo &Guests::infoOf(const std::string &file) const {
       b.priceFactor = factor.empty() ? 1.0f : static_cast<float>(std::atof(factor.c_str()));
       b.useSound = lower(ai->get("usesound", "name"));
       b.useAtten = ai->getInt("usesound", "attenuation", 0);
+      for (const std::string &slot : ai->getList("slots", "name")) {
+        std::vector<int> e = ai->getIntList(slot, "entrpos");
+        for (size_t k = 0; k + 1 < e.size(); k += 2)
+          b.doors.push_back({e[k], e[k + 1]});
+      }
       delete ai;
     }
   // The bare-word sections ([Satisfies], [Sells]), read from the file text
@@ -494,6 +499,22 @@ const Guests::BuildingInfo &Guests::infoOf(const std::string &file) const {
   return this->buildingInfo[file] = b;
 }
 
+std::vector<std::pair<int, int>> Guests::doorTiles(const PlacedObjects::Object &o) const {
+  std::vector<std::pair<int, int>> tiles;
+  const BuildingInfo &b = infoOf(PlacedObjects::fileOf(o));
+  // (its front the way it faces, its x across it)
+  float angle = o.facing * 3.14159265f / 4.0f;
+  float fwdX = std::sin(angle), fwdY = -std::cos(angle);
+  float acrossX = -std::cos(angle), acrossY = -std::sin(angle);
+  for (const auto &[ex, ey] : b.doors) {
+    float x = o.x + (ex * acrossX + ey * fwdX) / 64.0f, y = o.y + (ex * acrossY + ey * fwdY) / 64.0f;
+    std::pair<int, int> t{static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y))};
+    if (std::find(tiles.begin(), tiles.end(), t) == tiles.end())
+      tiles.push_back(t);
+  }
+  return tiles;
+}
+
 // The nearest building for a need it can walk to (in cSearchRadius tiles;
 // not full): off to its door (a path tile beside it)
 bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
@@ -514,7 +535,7 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
     if (d > radius)
       continue;
     // (a full trash can: none of its rubbish taken)
-    if (need == "trash" && o.typeName == "trshcan" && o.fill >= 24)
+    if (need == "trash" && o.trashCan && o.fill >= 24)
       continue;
     int users = 0;
     for (const Guest &o2 : this->list)
@@ -523,18 +544,27 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
       full = true;
       continue;
     }
-    // Its door: a path tile touching its footprint
-    float hx = b.fx / 4.0f, hy = b.fy / 4.0f;
-    int x0 = static_cast<int>(std::floor(o.x - hx)) - 1, x1 = static_cast<int>(std::floor(o.x + hx - 0.01f)) + 1;
-    int y0 = static_cast<int>(std::floor(o.y - hy)) - 1, y1 = static_cast<int>(std::floor(o.y + hy - 0.01f)) + 1;
-    for (int y = y0; y <= y1; y++)
-      for (int x = x0; x <= x1; x++)
-        if (walkable(x, y) && d < bestD) {
-          bestD = d;
-          best = static_cast<int>(i);
-          bx = x;
-          by = y;
-        }
+    // Its door: the tile at its entrpos (one on a path); a building with no
+    // entrpos (a bin), a path tile touching its footprint
+    std::vector<std::pair<int, int>> doors = doorTiles(o);
+    if (doors.empty()) {
+      int fx = b.fx, fy = b.fy;
+      if ((o.facing & 6) == 2 || (o.facing & 6) == 6)
+        std::swap(fx, fy);
+      float hx = fx / 4.0f, hy = fy / 4.0f;
+      int x0 = static_cast<int>(std::floor(o.x - hx)) - 1, x1 = static_cast<int>(std::floor(o.x + hx - 0.01f)) + 1;
+      int y0 = static_cast<int>(std::floor(o.y - hy)) - 1, y1 = static_cast<int>(std::floor(o.y + hy - 0.01f)) + 1;
+      for (int y = y0; y <= y1; y++)
+        for (int x = x0; x <= x1; x++)
+          doors.push_back({x, y});
+    }
+    for (const auto &[x, y] : doors)
+      if (walkable(x, y) && d < bestD) {
+        bestD = d;
+        best = static_cast<int>(i);
+        bx = x;
+        by = y;
+      }
   }
   ZT_STEP("", "Looks for a building for a need", {"need", need}, {"search radius", radius},
           {"found", best >= 0 ? "yes" : full ? "all full" : "none in reach"}, {"distance", best >= 0 ? bestD : 0.0f});
@@ -570,8 +600,8 @@ void Guests::useBuilding(Guest &g) {
   if (g.need == "trash") {
     // A bin: the rubbish in (a full one: dropped beside it as litter)
     PlacedObjects::Object &can = this->objects->all()[g.building];
-    if (can.typeName != "trshcan" || can.fill <= 24) {
-      if (can.typeName == "trshcan")
+    if (!can.trashCan || can.fill <= 24) {
+      if (can.trashCan)
         can.fill++;
     } else if (this->items) {
       this->items->add(ZooItems::Kind::Litter, -1, g.x, g.y);

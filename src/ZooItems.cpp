@@ -4,6 +4,8 @@
 #include <cmath>
 
 #include "ResourceManager.hpp"
+#include "ItemCatalog.hpp"
+#include "IniReader.hpp"
 #include "WorldMap.hpp"
 #include "WorldRenderer.hpp"
 
@@ -46,6 +48,9 @@ static bool marineFood(const std::string &food) {
 }
 
 std::string ZooItems::foodFile(const std::string &food) {
+  for (const CatalogItem &candidate : ItemCatalog::get().all())
+    if (candidate.registrySection == "food" && candidate.type == food)
+      return candidate.file;
   return (marineFood(food) ? "scenery/food/" : "scenery/other/") + food + ".ai";
 }
 
@@ -58,6 +63,12 @@ int ZooItems::addFood(int exhibit, float x, float y, int animals, const std::str
                          ? kChowUnits
                          : std::max(1, animals) * kFoodPerAnimal;
   i.food = food;
+  if (this->rm && this->rm->hasResource(foodFile(food))) {
+    if (IniReader *ai = this->rm->getIniReader(foodFile(food))) {
+      i.units = i.full = std::max(1, ai->getInt("characteristics/integers", "cfoodunits", static_cast<int>(i.full)));
+      delete ai;
+    }
+  }
   return id;
 }
 
@@ -151,7 +162,23 @@ void ZooItems::collect(const WorldRenderer &view, const WorldMap &map,
     case Kind::Food: {
       float share = i.full > 0 ? i.units / i.full : 0;
       std::string size = share > 0.66f ? "full" : share > 0.33f ? "mid" : "small";
-      a = this->art("food/" + i.food + "/" + size + "/" + size);
+      std::string cacheKey = i.food + "/" + size;
+      auto slot = this->foodSlots.find(cacheKey);
+      if (slot == this->foodSlots.end()) {
+        std::string path;
+        if (this->rm && this->rm->hasResource(foodFile(i.food))) {
+          if (IniReader *ai = this->rm->getIniReader(foodFile(i.food))) {
+            path = ai->get("animations", size == "full" ? "full" : size == "mid" ? "half" : "empty");
+            delete ai;
+          }
+        }
+        if (path.size() > 4 && path.compare(path.size() - 4, 4, ".ani") == 0)
+          path.resize(path.size() - 4);
+        if (path.find('/') == std::string::npos)
+          path = "food/" + i.food + "/" + (path.empty() ? size : path) + "/" + (path.empty() ? size : path);
+        slot = this->foodSlots.emplace(cacheKey, path).first;
+      }
+      a = this->art(slot->second);
       if (!a && size == "mid")
         a = this->art("food/" + i.food + "/med/med");
       break;

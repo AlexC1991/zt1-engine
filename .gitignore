@@ -47,7 +47,7 @@ lab-app/_dev_*.py
 
 # Private: how the official client is made - the installer (setup.exe), the
 # release, packing and update-signing tooling, and the mod repository's client
-# (kept in the private zt1-engine-build project on CodeRook). The open-source
+# (kept in owner-only paths in zt1-engine on CodeRook). The open-source
 # part is the engine; these stay on the release machine.
 /installer/*
 !/installer/.gitkeep
@@ -69,3 +69,4 @@ lab-app/_dev_*.py
 # The next release's notes, written as the work is done (the tag's message
 # when it's published)
 /engine-build-resources/NEXT_RELEASE_NOTES.md
+/engine-build-resources/HANDOFF.md

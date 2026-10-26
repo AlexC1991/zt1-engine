@@ -81,6 +81,13 @@ public:
   // map edge nearest the start tile (the entrance side) faces the lower
   // left, with the camera centred on that tile
   void startViewAt(const WorldMap &map, int tileX, int tileY);
+  // The view a map was saved with (its game block: rotation, scroll), as the
+  // original opens it; false where that rotation's origin isn't known
+  bool startViewSaved(const WorldMap &map, int rotation, int scrollX, int scrollY);
+  // (the saved view put in place, at the first draw: World::draw)
+  void applyPendingView();
+  // (another start or a move before then drops it)
+  void dropPendingView() { pendingScroll = false; }
 
   // Tile size configuration (matching original ZT1: 64x32)
   int getTileWidth() const { return tileWidth; }
@@ -163,6 +170,8 @@ private:
   bool toolGrid = false;
   int shadingMode = 0;
   int mapWidthCache = 0;
+  bool pendingScroll = false;
+  int pendingScrollX = 0, pendingScrollY = 0;
   int mapHeightCache = 0;
 
   // Debug flags

@@ -45,9 +45,13 @@ function gfWhere(from) {
   if (f.startsWith('xpack2')) return 'mm';
   if (/^(zupdate1?|dupdate|updates|dlupdate)[\\/]/.test(f)) return 'patch';
   if (/^loc[\\/]/.test(f)) return 'loc';
+  // (the game's own files are in its folder, ".", or one of the folders
+  // above; anything else came from a mod's folder - "Fastsheep/....ztd")
+  if (!/^\.[\\/]/.test(f) && /[\\/]/.test(f)) return 'mod';
   return 'base';
 }
 const GF_WHERE = [
+  ['mod', 'Mods'],
   ['base', 'Base game'],
   ['patch', 'Patches'],
   ['dd', 'Dinosaur Digs'],
@@ -137,7 +141,12 @@ function gfMatches(skip) {
   for (const w of words) {
     const m = /^(type|in|area|has):(.+)$/.exec(w);
     if (!m) plain.push(w);
-    else if (m[1] === 'type') want.type = (GF_TYPES.find(([k, l]) => k === m[2] || l.toLowerCase().startsWith(m[2])) || [m[2]])[0];
+    else if (m[1] === 'type') {
+      // (a kind - type:ai, type:layouts - or a file's extension: type:uca)
+      const kind = GF_TYPES.find(([k, l]) => k === m[2] || l.toLowerCase().startsWith(m[2]));
+      if (kind) want.type = kind[0];
+      else plain.push('.' + m[2].replace(/^\./, ''));
+    }
     else if (m[1] === 'in') want.where = (GF_WHERE.find(([k, l]) => k === m[2] || l.toLowerCase().replace(/\s/g, '').startsWith(m[2])) || [m[2]])[0];
     else if (m[1] === 'has') has = m[2];
     else want.area = m[2];
@@ -309,6 +318,28 @@ function gameFilesGo(q, name) {
   store.set('engLeft', 'game');
   setTab('engine');
   if (name) gfOpen(name, 'engine');
+}
+
+// ------------------------------------------------------- a mod's own files
+// A file inside a mod's .ztd, open to change in Write Code's editor (its key
+// "mod:<folder>|<ztd>|<entry>"; saveEngineFile puts it back in the .ztd)
+function modKeyParts(rel) {
+  const m = /^mod:([^|]+)\|([^|]+)\|(.+)$/.exec(rel || '');
+  return m ? { folder: m[1], ztd: m[2], entry: m[3] } : null;
+}
+async function openModEntry(folder, ztd, entry, have) {
+  const key = `mod:${folder}|${ztd}|${entry}`;
+  if (!CodeEditor.isOpen(key)) {
+    const r = have || (await lab.modkitEntry(folder, ztd, entry));
+    if (!r || !r.ok) return toast(esc((r && r.error) || 'Couldn’t read it.'), 4000);
+    await CodeEditor.open(key, r.text, { crlf: r.crlf, data: true });
+  }
+  const E = S.eng;
+  if (!E.opened.includes(key)) E.opened.push(key);
+  E.file = key;
+  E.goto = E.goto || 1;
+  if (S.tab !== 'engine') setTab('engine');
+  else renderEngine();
 }
 
 // ------------------------------------------------------------ the viewer
@@ -613,8 +644,9 @@ Object.assign(ACTIONS, {
   },
   modsLeft: (k) => {
     S.modsLeft = k;
-    store.set('modsLeft', k);
+    store.set('modsSection', k);
     renderMods();
+    renderTop();
   },
   modsGameClose: () => {
     S.modsGame = null;
@@ -652,10 +684,25 @@ function engBarHtml(rel) {
   if (/^game:/.test(rel || '')) {
     const name = rel.slice(5);
     const text = TEXT_KINDS.has(gfType(name));
+    // (an animal's species file: a new animal from it; any of the game's text
+    // files: a copy in a mod, to change)
+    const animal = /^animals\/[^/]+\.(ai|uca)$/i.test(name);
     return `<div class="engbar"><span class="mono">${esc(name)}</span><span class="muted" id="eng-refs">Looking in our code…</span><div class="spacer"></div>${
+      animal ? `<div class="btn small" data-act="mkSpecies" data-arg="${esc(name)}" title="A new animal made from this one, as a mod: its art copied from your game and tinted, this file as its species file with its own name">＋ New species from this</div>` : ''
+    }${
+      text ? `<div class="btn small" data-act="mkChangeInMod" data-arg="${esc(name)}" title="A copy of this file in a mod, to change: while the mod is on, the game reads yours">✎ Change it in a mod</div>` : ''
+    }${
       text ? `<div class="btn small primary" data-act="engNewReader" data-arg="${esc(name)}" title="Engine code that reads this file, from a template: every value it holds, as steps">＋ New engine code that reads this</div>` : ''
     }</div>`;
   }
+  // (a file inside a mod's .ztd: which mod, saving puts it back, and trying it)
+  const mod = modKeyParts(rel);
+  if (mod)
+    return `<div class="engbar"><span class="mono">${esc(mod.entry)}</span><span class="muted">in the mod <b>${esc(mod.folder)}</b> (${esc(
+      mod.ztd,
+    )}) · Save (Ctrl+S) puts it back in the mod</span><div class="spacer"></div><div class="btn small" data-act="mkShowMod" data-arg="${esc(
+      mod.folder,
+    )}">Open the mod</div><div class="btn small primary" data-act="mkTryMod" data-arg="${esc(mod.folder)}" title="Save, switch the mod on, and restart the Test Zoo with it">▶ Try in the Test Zoo</div></div>`;
   // (a script: its own bar - run it, or switch it on)
   const sb = scriptBarHtml(rel);
   if (sb) return sb;

@@ -241,12 +241,12 @@ void Fences::loadTypes(ResourceManager *rm) {
   this->water = nullptr;
   // The tank filter, listed with the fences
   for (const CatalogItem &item : catalog.all()) {
-    if (item.file != "scenery/other/filter1.ai")
+    if (item.registrySection != "filter" && item.file != "scenery/other/filter1.ai")
       continue;
     IniReader *ai = rm->getIniReader(item.file);
     if (!ai)
-      break;
-    FilterType &f = this->filterKind;
+      continue;
+    FilterType f;
     const std::string ints = "characteristics/integers";
     f.file = item.file;
     f.cost = item.cost;
@@ -255,8 +255,8 @@ void Fences::loadTypes(ResourceManager *rm) {
     f.footprintY = std::max(1, (ai->getInt(ints, "cfootprinty", 2) + 1) / 2);
     f.startHealth = ai->getInt(ints, "cstartinghealth", 10);
     f.decayedHealth = ai->getInt(ints, "cdecayedhealth", 5);
-    f.decayTime = static_cast<float>(ai->getInt(ints, "cdecaytime", 200));
-    f.filterDelay = static_cast<float>(ai->getInt(ints, "cfilterdelay", 50));
+    f.decayTime = static_cast<float>(std::max(1, ai->getInt(ints, "cdecaytime", 200)));
+    f.filterDelay = static_cast<float>(std::max(1, ai->getInt(ints, "cfilterdelay", 50)));
     f.upkeep = ai->getInt(ints, "cfilterupkeep", 50);
     f.clean = ai->getInt(ints, "cfiltercleanamount", 10);
     f.decayedClean = ai->getInt(ints, "cfilterdecayedcleanamount", 5);
@@ -268,8 +268,15 @@ void Fences::loadTypes(ResourceManager *rm) {
     f.idle = art("idle");
     f.decayed = art("decayed");
     f.off = art("off");
+    f.broken = art("broken");
+    // (loadZTTankFilterType 0x4c44aa: [FilterSounds])
+    f.healthySound = Utils::string_to_lower(ai->get("filtersounds", "chealthysound"));
+    f.decayedSound = Utils::string_to_lower(ai->get("filtersounds", "cdecayedsound"));
+    f.healthyAtten = ai->getInt("filtersounds", "chealthyatten", 0);
+    f.decayedAtten = ai->getInt("filtersounds", "cdecayedatten", 0);
     delete ai;
-    break;
+    this->filterKinds[f.file] = f;
+    if (f.file == "scenery/other/filter1.ai") this->filterKind = f;
   }
   SDL_Log("[Fences] %zu fence types", this->typeList.size());
 }
@@ -334,23 +341,40 @@ void Fences::load(const ZooReader &reader, WorldMap &map) {
   // Ground the map already shuts off (pockets behind the zoo's walls) isn't
   // an exhibit: remembered as it is
   this->updateExhibits(map, 1, 0, 1, true);
-  int insideCount = 0;
-  (void)insideCount;
-
-  // Inside the main zoo wall: everything the map's edge can't reach without
-  // crossing a zoo wall (fences of subclass zoowall)
   this->mapRef = &map;
   this->mapEdit = &map;
   this->mapW = map.getWidth();
   this->mapH = map.getHeight();
+  // The entrance's pieces, where the map stands them
+  std::vector<GateSpot> gates;
+  for (const ZooReader::ZooObject &obj : reader.getObjects()) {
+    if (obj.className != "building" || !this->isZooGate(obj.typeName))
+      continue;
+    GateSpot g;
+    g.type = obj.typeName;
+    g.x = obj.x / 64.0f;
+    g.y = obj.y / 64.0f;
+    if (obj.payload.size() >= 20)
+      std::memcpy(&g.facing, obj.payload.data() + 16, 4);
+    gates.push_back(g);
+  }
+  this->findInside(gates);
+  SDL_Log("[Fences] %zu fence pieces from the map", this->edges.size());
+}
+
+// Inside the main zoo wall: everything the map's edge can't reach without
+// crossing a zoo wall (fences of subclass zoowall)
+void Fences::findInside(const std::vector<GateSpot> &gates) {
+  int insideCount = 0;
   this->inside.assign(static_cast<size_t>(mapW) * mapH, 1);
   // The entrance is a building in the wall's gap: its footprint (from
-  // scenery/other/<type>.ai, turned with its facing) closes the gap
+  // scenery/other/<type>.ai, turned with its facing) closes the gap. Its
+  // pieces are the buildings of [Member] zoogate - the gate itself and, on
+  // some maps, side pieces either side of it (Tundra's fgate1 and fgate2:
+  // left out, the inside leaked away through them and nothing could be built)
   std::vector<uint8_t> gate(static_cast<size_t>(mapW) * mapH, 0);
-  for (const ZooReader::ZooObject &obj : reader.getObjects()) {
-    const std::string &t = obj.typeName;
-    if (obj.className != "building" || t.size() < 4 || t.compare(t.size() - 4, 4, "gate") != 0)
-      continue;
+  for (const GateSpot &g : gates) {
+    const std::string &t = g.type;
     int fx = 6, fy = 2;
     if (IniReader *ai = this->rm ? this->rm->getIniReader("scenery/other/" + t + ".ai") : nullptr) {
       fx = ai->getInt("characteristics/integers", "cfootprintx", fx);
@@ -360,12 +384,9 @@ void Fences::load(const ZooReader &reader, WorldMap &map) {
     // Footprints are in half tiles (a bathroom's 2 x 2 is a tile)
     fx = (fx + 1) / 2;
     fy = (fy + 1) / 2;
-    uint32_t facing = 0;
-    if (obj.payload.size() >= 20)
-      std::memcpy(&facing, obj.payload.data() + 16, 4);
-    if ((facing & 6) == 2 || (facing & 6) == 6)
+    if ((g.facing & 6) == 2 || (g.facing & 6) == 6)
       std::swap(fx, fy);
-    float cx = obj.x / 64.0f, cy = obj.y / 64.0f;
+    float cx = g.x, cy = g.y;
     for (int y = static_cast<int>(std::floor(cy - fy / 2.0f)); y < cy + fy / 2.0f; y++)
       for (int x = static_cast<int>(std::floor(cx - fx / 2.0f)); x < cx + fx / 2.0f; x++)
         if (x >= 0 && y >= 0 && x < mapW && y < mapH)
@@ -411,7 +432,41 @@ void Fences::load(const ZooReader &reader, WorldMap &map) {
   for (uint8_t v : this->inside)
     insideCount += v;
   SDL_Log("[Fences] %d of %d tiles inside the zoo wall", insideCount, mapW * mapH);
-  SDL_Log("[Fences] %zu fence pieces from the map", this->edges.size());
+}
+
+// A building of [Member] zoogate (scenery/other/<type>.ai): the entrance's
+// gate, and on some maps the side pieces either side of it - Tundra's
+// fgate1 and fgate2 (left out, the inside leaked away through them and
+// nothing could be built)
+bool Fences::isZooGate(const std::string &t) const {
+  auto it = this->gateTypes.find(t);
+  if (it != this->gateTypes.end())
+    return it->second;
+  int size = 0;
+  char *text = this->rm ? static_cast<char *>(this->rm->getFileContent("scenery/other/" + t + ".ai", &size)) : nullptr;
+  bool found = false;
+  if (!text)
+    found = t.size() >= 4 && t.compare(t.size() - 4, 4, "gate") == 0;
+  else {
+    bool member = false;
+    for (int i = 0; i < size && !found;) {
+      int end = i;
+      while (end < size && text[end] != '\n')
+        end++;
+      std::string line = Utils::string_to_lower(std::string(text + i, static_cast<size_t>(end - i)));
+      line = line.substr(0, line.find(';'));
+      line.erase(0, line.find_first_not_of(" \t\r"));
+      line.erase(line.find_last_not_of(" \t\r") + 1);
+      if (!line.empty() && line.front() == '[')
+        member = line == "[member]";
+      else if (member && line == "zoogate")
+        found = true;
+      i = end + 1;
+    }
+    free(text);
+  }
+  this->gateTypes[t] = found;
+  return found;
 }
 
 const Fences::Piece *Fences::at(const Edge &e) const {
@@ -438,6 +493,9 @@ Fences::Piece Fences::ownerFor(const Edge &e, const WorldMap &map) {
 bool Fences::insideZoo(int x, int y) const {
   if (x < 0 || y < 0 || x >= mapW || y >= mapH || this->inside.empty())
     return false;
+  // (editing a map in the Lab: anywhere on it)
+  if (this->editing)
+    return true;
   return this->inside[y * mapW + x] != 0;
 }
 
@@ -1277,8 +1335,8 @@ void Fences::update(float seconds) {
       ex.purity = std::max(0.0f, ex.purity - 1.0f);
     }
   }
-  const FilterType &k = this->filterKind;
   for (Filter &f : this->filterList) {
+    const FilterType &k = this->filterType(f.file);
     f.decayClock += seconds;
     while (f.decayClock >= k.decayTime) {
       f.decayClock -= k.decayTime;
@@ -1355,11 +1413,29 @@ void Fences::setLife(const Edge &e, float life) {
     it->second.life = life;
 }
 
-void Fences::serviceFilter(int index) {
-  if (Filter *f = this->filter(index)) {
-    f->health = static_cast<float>(this->filterKind.startHealth);
-    f->decayClock = 0;
+Fences::FilterState Fences::filterState(const Filter &f) const {
+  const Exhibit *ex = this->exhibit(f.tank);
+  if (!ex || !ex->tank || ex->water <= 0.0f)
+    return FilterState::Off;
+  if (f.health <= 0)
+    return FilterState::Broken;
+  return f.health <= this->filterType(f.file).decayedHealth ? FilterState::Decayed : FilterState::Running;
+}
+
+std::pair<std::string, int> Fences::filterSound(const Filter &f) const {
+  const FilterType &k = this->filterType(f.file);
+  switch (this->filterState(f)) {
+  case FilterState::Running: return {k.healthySound, k.healthyAtten};
+  case FilterState::Decayed: return {k.decayedSound, k.decayedAtten};
+  default: return {"", 0};
   }
+}
+
+void Fences::serviceFilter(int index) {
+  // (zoo.exe 0x595c8e: health back to cStartingHealth; its decay countdown
+  // runs on, not restarted)
+  if (Filter *f = this->filter(index))
+    f->health = static_cast<float>(this->filterType(f->file).startHealth);
 }
 
 int Fences::takeUpkeep() {
@@ -1372,7 +1448,7 @@ int Fences::takeUpkeep() {
 // Tank filters
 // ----------------------------------------------------------------------------
 Fences::Fit Fences::filterFit(int x, int y, const WorldMap &map, int *tank) const {
-  const FilterType &k = this->filterKind;
+  const FilterType &k = this->filterType();
   if (k.file.empty())
     return Fit::Outside;
   auto inside = [&](int tx, int ty) {
@@ -1392,9 +1468,11 @@ Fences::Fit Fences::filterFit(int x, int y, const WorldMap &map, int *tank) cons
       if (inside(tx, ty + 1) && this->edges.count({true, tx, ty + 1}))
         worst = Fit::InTheWay;
       // No other filter on it
-      for (const Filter &o : this->filterList)
-        if (tx >= o.x && tx < o.x + k.footprintX && ty >= o.y && ty < o.y + k.footprintY)
+      for (const Filter &o : this->filterList) {
+        const FilterType &other = this->filterType(o.file);
+        if (tx >= o.x && tx < o.x + other.footprintX && ty >= o.y && ty < o.y + other.footprintY)
           worst = Fit::InTheWay;
+      }
     }
   // Beside a completed tank (across one of its walls) that has no filter
   int found = -1;
@@ -1433,14 +1511,16 @@ bool Fences::placeFilter(int x, int y, const WorldMap &map) {
   int tank = -1;
   if (this->filterFit(x, y, map, &tank) != Fit::Ok)
     return false;
-  const FilterType &k = this->filterKind;
+  const FilterType &k = this->filterType();
   Filter f;
+  f.file = k.file;
   f.x = x;
   f.y = y;
   f.tank = tank;
   f.health = static_cast<float>(k.startHealth);
   f.placedMonth = this->monthNow;
-  f.name = "Filter " + std::to_string(++this->filtersMade);
+  const CatalogItem *item = ItemCatalog::get().find(k.file);
+  f.name = (item ? item->name : "Filter") + " " + std::to_string(++this->filtersMade);
   // Toward the tank: from the footprint's middle to the tank's
   if (const Exhibit *ex = this->exhibit(tank)) {
     float cx = 0, cy = 0;
@@ -1461,9 +1541,10 @@ bool Fences::placeFilter(int x, int y, const WorldMap &map) {
 }
 
 float Fences::filterGround(const Filter &f, const WorldMap &map) const {
+  const FilterType &k = this->filterType(f.file);
   int h = 0;
-  for (int ty = f.y; ty < f.y + this->filterKind.footprintY; ty++)
-    for (int tx = f.x; tx < f.x + this->filterKind.footprintX; tx++)
+  for (int ty = f.y; ty < f.y + k.footprintY; ty++)
+    for (int tx = f.x; tx < f.x + k.footprintX; tx++)
       if (const MapTile *t = map.getTile(tx, ty))
         for (int c = 0; c < 4; c++)
           h = std::max(h, static_cast<int>(t->cornerHeight[c]));
@@ -1475,9 +1556,10 @@ int Fences::filterAt(float px, float py, const WorldRenderer &view, const WorldM
   int found = -1;
   for (size_t i = 0; i < this->filterList.size(); i++) {
     const Filter &f = this->filterList[i];
+    const FilterType &k = this->filterType(f.file);
     float sx, sy, d;
-    view.worldToScreenF(f.x + this->filterKind.footprintX * 0.5f,
-                        f.y + this->filterKind.footprintY * 0.5f, this->filterGround(f, map) + 1.0f,
+    view.worldToScreenF(f.x + k.footprintX * 0.5f,
+                        f.y + k.footprintY * 0.5f, this->filterGround(f, map) + 1.0f,
                         sx, sy, d);
     float dist = (sx - px) * (sx - px) + (sy - py) * (sy - py);
     if (dist < best) {
@@ -2421,8 +2503,8 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     add(kv.first, kv.second, kv.second.type, false, SDL_Color{255, 255, 255, 255});
   // Filters: running, decayed, or stopped; their hose toward the tank (the
   // art is named a quarter turn round, as the tank gate's)
-  const FilterType &fk = this->filterKind;
   auto addFilter = [&](const Filter &f, Animation *a, bool tinted, SDL_Color tint) {
+    const FilterType &fk = this->filterType(f.file);
     if (!a)
       return;
     CompassDirection d = static_cast<CompassDirection>(
@@ -2433,14 +2515,25 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     out.push_back({depth, sx, sy, a, d, tint, tinted});
   };
   for (const Filter &f : this->filterList) {
-    Animation *a = f.health <= 0                ? fk.off
-                   : f.health <= fk.decayedHealth ? fk.decayed
-                                                  : fk.idle;
+    const FilterType &fk = this->filterType(f.file);
+    FilterState st = this->filterState(f);
+    Animation *a = st == FilterState::Off       ? fk.off
+                   : st == FilterState::Broken  ? (fk.broken ? fk.broken : fk.off)
+                   : st == FilterState::Decayed ? fk.decayed
+                                                : fk.idle;
     bool red = this->highlightFilter == static_cast<int>(&f - this->filterList.data());
-    addFilter(f, a ? a : fk.idle, red, red ? SDL_Color{255, 60, 60, 255} : SDL_Color{255, 255, 255, 255});
+    a = a ? a : fk.idle;
+    addFilter(f, a, red, red ? SDL_Color{255, 60, 60, 255} : SDL_Color{255, 255, 255, 255});
+    // (running and decayed play their 26 frames on the game's clock; off is one)
+    if (a && !out.empty() && a->frameCount() > 1) {
+      uint32_t ms = a->frameTimeMs() ? a->frameTimeMs() : 83;
+      out.back().frame = static_cast<int>(static_cast<uint64_t>(this->rippleClock / ms) % a->frameCount());
+    }
   }
   if (this->previewFilterX >= 0) {
+    const FilterType &fk = this->filterType();
     Filter f;
+    f.file = fk.file;
     f.x = this->previewFilterX;
     f.y = this->previewFilterY;
     int tank = -1;

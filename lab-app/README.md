@@ -1,7 +1,20 @@
 # ZT1 Lab (the app)
 
+**Help:** the tab beside Mods contains searchable guides, illustrated tutorials
+and nine bundled videos. Start with **Start with the Lab**, or search for an
+animal, OBJ import, a tank, a map or publishing. Press **F1** from any Lab tab.
+The library works offline and includes the earlier overview, labelled as an
+earlier interface. Current lessons cover the redesigned Mods studio.
+
 The friendly face of the Lab, built with Electron to the design in
 `re/lab/design/`.
+
+**Item builder:** Mods → Make something → Build an item creates separate
+buildings, fences, staff, tank filters and scenery, or customizes a selected
+game item. Draw with Blank and external PNG/OBJ import, or Remake existing art.
+Guest appearances target the game's four existing guest kinds; staff inherit
+existing duties. Check service, damage and work poses as well as idle/walk.
+See [the modding guide](../docs/MODDING.md#build-buildings-fences-people-and-objects).
 
 **From a checkout:** double-click **`ZT1 Lab.cmd`**, or run:
 
@@ -191,7 +204,7 @@ fresh each time by `re/lab/fidelity.py`, and the answer is saved to
 
 The tabs are named for what you do in each: **Original Game** studies the
 original zoo.exe; **Write Code**, **Test Zoo** and **Play Game** are our
-engine; then Experiments.
+engine; then **Mods**.
 
 | Tab | Was | What it's for |
 |---|---|---|
@@ -199,7 +212,8 @@ engine; then Experiments.
 | **Write Code** | Engine code | Our engine's own source (and, on the left, the game's files): write the feature, **Build engine**. |
 | **Test Zoo** | Scene | Our engine running a test zoo, as a scene editor and debugger (below). |
 | **Play Game** | Play | **Play ZT1 Engine**: the whole game as our engine runs it now. **Play original**: the real zoo.exe, here in the same view, windowed and at the view's size by our hook (see *The original game in Play* below). |
-| **Experiments** | Mods | Small C++ scripts that run in the test zoo without changing the engine: checking one of the original's functions against ours, or making things such as the HD art mod (see *Making mods with experiments*). Edit, see what it will do in plain words, **Build & test in lab**. |
+| **Mods** | Experiments | Three sections, switched at the top of its left column. **Mods**: make, test and share mods (see *Mods* below). **Game files**: every file the game has. **Lab scripts**: small C++ scripts that run in the Test Zoo without changing the engine - checking one of the original's functions against ours, or making things such as the HD art mod (see *Making mods with Lab scripts*); edit, see what it will do in plain words, **Build & test**. |
+| **Help** | New | Search the bundled guides, follow the current studio tutorials and play the recordings. Article history, section links and enlarged pictures keep longer lessons easy to navigate. |
 
 **Laid out as you like:** Original Game (Find · Code · Name & details), Write
 Code (Files · Editor · Build) and Test Zoo are made of panels. Drag a panel's
@@ -344,6 +358,33 @@ using dockview-core).
   freeform maps, as it is or made flat (all grass, nothing in it). The game's
   files are what the engine reads, expansions included. The Lab is where
   unfinished things get tried.
+- **Save as a map** (beside the map name): the zoo as a freeform map of your
+  own, in a mod - its name, description, size, and which mod. The engine
+  writes the design (`SaveGame::saveMap`: its ground, paths, walkways,
+  fences, exhibits and objects over the map it was loaded from, and the view
+  it starts on) and re/lab/mapmaker.py packs it: `freeform/<id>.scn` (the map
+  it's over's .scn, with `[start] design=` and `[freeform] title=`),
+  `freeform/<id>.zt1map`, its description and a 367x276 picture of the view
+  you're looking at. Switched on, the mod's map is in the game's freeform map
+  list (the "custommaps" switch).
+- **A blank map** (the map list's first entries): flat grass with nothing on
+  it, Small 75 x 75, Medium 125 x 125 or Large 150 x 150 as the game's maps
+  are, or any size from 16 to 512 a side. It starts in **Edit the map**
+  (beside the map name; **✎ Editing the map** while on): walls, entrances
+  and scenery go anywhere, not only inside the zoo. Paint the ground and
+  paths, draw the zoo's boundary with the Zoo Fence, and put down an
+  entrance - the Zoo Entrance, Dinosaur Digs' or Marine Mania's (`aqgate`:
+  the game has no name for it), and their admission booths, all under
+  Buildings - where guests should come in: the wall opens across its
+  doorway. Switch editing off to see the zoo
+  as the game will (its inside is what the wall and entrance close in; the
+  Exhibits view and the Terrain view show the walls, the zoo wall in red).
+  Saved as a map, it's packed with `[start] blank = W H` and no map of the
+  game's under it; the game's map view draws what you made.
+- **Terrain** (the view): the whole map from above - each tile its ground's
+  colour, lit by its height, paths pale, objects as dots - to design a map
+  by. The tools work in the Scene view (the Lab's own place tool switches
+  back to it).
 - **Zoo outline** (left): every exhibit, animal, staff member, guest,
   building and kind of scenery. Click one to select it and centre on it. The
   **Mods** tab beside it holds the mods.
@@ -401,7 +442,11 @@ using dockview-core).
 - **Clock** (bottom left): run or pause (Space), 1–8×, or +1 s / +1 m of
   game time. A running mod shows its steps there instead.
 - **Overlays** (top right): the grid, exhibits' outlines and names, routes,
-  where staff are blocked, footprints. Under the cursor (bottom right) you see the tile, its
+  where staff are blocked, footprints. Footprints also marks each door (a
+  building's `entrpos`, turned with it): green on a path, yellow off one. The
+  console's `doors` lists them. The console's `filters` shows each filter's
+  state and sound, and `drain` / `fill` empty or refill a tank. A selected
+  tour guide shows its followers; a selected guest, the guide it follows. Under the cursor (bottom right) you see the tile, its
   height and ground.
 
 **Steps** (the dock under the view): the engine's code as it runs.
@@ -472,7 +517,9 @@ Run it again after naming or filling something, until it's all green. Then
 mod** starts a mod for it. It needs `pip install unicorn capstone`.
 
 **Log** and **Console** (the dock): the engine's log, and the game's own dev
-console (`help` lists its commands).
+console (`help` lists its commands). A command's answer always shows, even when the log was scrolled up. Ones for modders: `text <id> ...` (the game's words for ids - cNameID, cUsedThought), `doors` (each building's door tiles, on a path or not), `fences` (the map's fences by type, which are zoo wall, how many tiles are inside) and `fences map` (inside `#`, outside `.`, zoo wall `+`, drawn - when nothing will build, it shows where the wall leaks).
+
+The place tool says when the game put nothing down (an iceberg off a tank's water, say) instead of saying nothing. The Watch panel empties when a new map or engine starts. A scene load sent while the engine restarts is sent again to the new one; a map name it doesn't know says so and what loaded instead (a mod's map is listed once the mod is on and the engine has started again). **Save as a map** puts the map's description in a new mod's About too.
 
 ## How it works
 
@@ -640,21 +687,57 @@ compiled. Each time the Lab starts clangd it writes
 so clangd indexes the whole engine and **Who calls this** finds callers in
 files that aren't open.
 
-## Your mods (Experiments › Your mods)
+## Mods (the Mods tab's Mods section)
 
 Making mods properly, and sharing them. The guide for modders is `docs/MODDING.md`.
 
-- **Down the left** are the mods in the game's mods folder.
-  - **New mod** starts one from a template: game files (a .ztd), a shader, or empty.
-  - **Bring in a mod** takes an old Zoo Tycoon download (.ztd), a .zip, or a mod's folder, and makes it a proper mod. This uses the engine's own importer (`zt1-engine --import-mod <path>`, the same as the game's Mod Menu › Add a mod...).
-- **The picked mod:** edit its mod.json fields (name, id, author, version, about), switch it on or off, **Check it**, and **Upload to the mod repository**.
-  - **Check it** applies the same rules the repository's checks use: game data only, no paths outside the mod, at most 200,000 files, and a mod.json with an id and a name.
-  - **Upload** zips the mod and sends it in chunks to the mod repository (`https://mods.coderook.com/v1/modrepo/zt1`). There it's checked again, including a malware scan, and approved automatically. Then it's in every official game's Mod Menu › Mod repository. Uploading the same mod again updates it.
-- **Your uploads**, on the right, lists the mods you've uploaded and what their checks said. Each has **Take it down**. You sign in with your CodeRook account (`cbx sign-in`, or a pasted personal token, kept in the Lab's own state). Each mod belongs to whoever uploaded it.
+The section is a **studio** (renderer/studio.js): one workspace for the mod being made.
 
-## Making mods with experiments (the toolkit)
+- **The top bar**: the mod (click it for **the picker**: every mod in the game's mods folder, **Find a mod**, each one's on/off switch - switched on, it's in the Test Zoo and in Play when they next start - **New mod**, **Bring one in**, **Mods folder**), its switch, **All saved** / **Not saved**, **▶ Test in the zoo** (switched on, the Test Zoo's engine restarted with it), **Play with it**, **Publish** and **Folder**.
+- **The tree** (left): everything the mod holds, by kind, read by re/lab/studio.py from its .ztd files - its **Animals** (its own, *new*, and the game's it changes, *changed*), **Buildings**, **Scenery**, **Foliage**, **Fences**, **Paths**, **Staff** and **Maps** (its `freeform/*.scn`) - with **＋** on a kind to add one; **＋ Make something**, **About this mod**, and under **Tools** **Paint and recolour art**, **Its files** and **Publish**. (Whether a file changes one of the game's is read from a list of the game's file names kept in `%TEMP%\zt1-lab-names.txt`, made again when the archives change.)
+- **Make something**: cards, each starting from something that already works in the game - **New animal** (a name and an animal it behaves like), **New map** (a blank map of a size you pick, in the Test Zoo with editing on; **Save as a map** offers this mod), **Change a game item** (any of the game's animals, buildings, scenery, fences, paths or staff, copied in).
+- **The middle** is the editor for what's picked: an animal's animations and the animation editor, a building's or a scenery item's picture and file, a map's preview and **Edit it in the Test Zoo**, and the About, Files and Publish pages below.
+- **The Inspector** (right): the picked animal's, building's or item's values from its file as controls, grouped and named in plain words - an animal's price, food and rest, group and space, babies, what it can do (jumps, climbs, swims...), its habitat wishes, guests and health; a building's price and size, guests inside, what they pay and what it does for them - and **All its values** for the rest. A change is saved into the mod's file as you leave the box (its line changed in place, the file's line ends kept); the file open in Write Code is updated too. Nothing picked: the mod's own details.
+- **An animal's Needs** (its **Needs** tab, renderer/needs.js; re/lab/animalmaker.py `needs`, `setneeds`, `copyneeds`): everything the game weighs for it, from its species file. **Kind and care**: its kind (`[Member]`: a zoo animal, Marine Mania's `aqua`, Dinosaur Digs' `dinosaur`), who looks after it (`cKeeper`: a keeper, the Scientist 9551, the Marine Specialist 9552), what it eats and which food (`cKeeperFoodType`: herbivore chow, meat, fruit, bamboo, grass, fish chow, insects, dinosaur meat and greens, krill, fish, chum, sea grass, sea urchins - food.cfg's order, the expansions' after), needs a shelter. **Home**: biome, continent (or era), family. **Ground it likes** (`[cCompatibleTerrain]`, a slider each), **biomes, plants, rocks and shelters it likes** (`[cSuitableObjects]`, with their icons; + Add, ×) and **animals it lives with** (`[cCompatibleAnimals]`, families and species). Names come from the game's own text (the engine's `texts`) and the catalog (its items' `nameId`). Saved into the mod a moment after the last change. **Copy needs from…** another animal: its food, home, ground, likes and neighbours at once (its kind and keeper too, if asked) - a preset. A game animal a mod changes has the Needs tab too.
+- **New animal** asks its kind first - a zoo animal, a marine animal, a dinosaur - and then offers only animals of that kind to behave like (its behaviour, home, keeper and, for a dinosaur, its egg come with it). Problems says when a kind doesn't fit its behaviour: a dinosaur with no egg (`egg_idle`, `egg_hatch`, `egg_break`), a marine animal with no underwater behaviour.
+- **The dock** (bottom): **Problems** - what's missing or wrong, each one a link to where it's fixed (an animal's animations that play nothing, an animal still all linked to another's, no picture, no About, a map without a description, a .ztd the game can't read) - and the mod's **Log**.
+  - **New mod** starts one from a template: a starter kit, game files (a .ztd), a shader, or empty.
+    The **starter kit** (re/lab/modstarter.py) is a working example of everything a mod can
+    have, made from the player's own game so no game art ships with the Lab: a new rock (a
+    gold copy of the Large Rock, as a `.ucs` with its map art, icons and palettes) in the
+    Habitat panel's Rocks under the Mods filter, its HD art (`hd/`, 4x), an art shader (off
+    at first), a mod.json setting the shader reads, and a README.md walking through each file.
+  - **Bring one in** takes an old Zoo Tycoon download (.ztd), a .zip, or a mod's folder, and makes it a proper mod (dropping one on the page works too). This uses the engine's own importer (`zt1-engine --import-mod <path>`, the same as the game's Mod Menu › Add a mod...).
+- **The pages** the tree opens:
+  - **About this mod**: its mod.json details (name, id, author, version, about), and a short guide.
+  - **Its files**: what it adds or changes - each game thing in its .ztd files (every `.ai`, `.uca`, `.ucs`, `.ucb`, by kind), its .ztd files and what kinds of file they hold, its shaders, its HD art, what its mod.json says it replaces, and its settings. **Click a thing** to open its file in Write Code, to change: it opens as config text with the mod's name on its tab, and **Save** (Ctrl+S) puts it back inside the mod's .ztd (re/lab/ztdedit.py). Its bar has **Open the mod** and **Try in the Test Zoo** (saved, switched on, the Test Zoo restarted).
+  - **About this mod** › **Its picture**: the picture the game's Mod Menu shows beside the mod (367 x 276), set from an image you choose or the Test Zoo's view as it is (another shape is cut to fill it, from the middle). It's `picture.png` in the mod's folder, named by mod.json's `picture`; the mod list and the mod's header show it too.
+  - **An animal** - the animal maker (renderer/pixeled.js, re/lab/animalmaker.py): a **New animal** from scratch - a name and an animal it behaves like (its needs, biome, behaviour and sounds, all in its species file `animals/<type>.uca` to change; **Its species file** opens it) - with no art of its own. Its animations are listed one a row: **Linked** (its line in `[m/Animations]` is a whole path to an animation that exists, the way the game's own `box_idle = objects/box/idle/idle.ani` is - at first the one it behaves like, so it works in the game straight away), **Drawn** (its own) or **Missing**. **Link…** points any row at any animation, the game's or one drawn here; **Draw** opens the editor; **+ A new animation** draws one of a new name (its behaviour sets play it once you add it to one).
+    - **The editor**, as Piskel's: transparent layers (a layer marked **Shadow** is the ground shadow - the game's colour 1), frames on a strip with onion skin, one set of frames for each way it faces (N, NE, E, SE, S: the game mirrors the other three; **Copy from…** another direction to start), a faint **guide** - the linked animation, by its ground point - under the drawing, or start from a copy of it. Tools: pencil (1-4 px, mirror pen), eraser, fill, line, box, oval, picker, move, the ground point (where it stands) and the height band; keys B E G L R O I M A H, [ ], arrows, space, Ctrl+Z/Y. **Import PNG** (one picture, or a strip of frames) and **Export strip**.
+    - **The direction ring** (over the drawing): this frame in all eight ways it faces - N, NE, E, SE and S as drawn, and SW, W and NW as the game mirrors them from SE, E and NE (about the ground point, dashed). Click one to draw that way; a mirrored one draws its source.
+    - **Starting a drawing: Remake, Stencil or Blank.** A new drawing opens **the stencil browser**: anything in the game - **Animals**, **People** (staff, and the guests: man, woman, boy, girl), **Buildings**, **Trees and plants**, **Scenery**, **Fences** - with icons and a search across them all, its animations as chips, and the picked one playing in all its directions (the engine's own frames, so it's quick). It only sets what you see while drawing; it isn't the kind of thing you're making. **Remake** copies its art in, every frame and direction, to change and recolour. **Stencil** lays it over the canvas: its **outline** (cyan, over the drawing) and its **inside** as faint as the **Inside** slider says (0%: the outline alone, 100%: all of it), with as many blank frames as it has, each drawn over its own. **Blank** is an empty canvas. (animalmaker.py `stencils` lists any item's animations: an animal's by its `[x/Animations]`, anything else every animation in its art folder - `objects/<name>/`, `fences/<name>/`, `staff/<name>/`, `guests/<kind>/` - or the folders its file names.)
+    - **The Stencil card**: the one in use (click it to choose another, or **Remake** from it - Ctrl+Z goes back), show or hide it, its outline on or off, **paint only inside** the outline (the eraser and the shadow layer go anywhere; a fill stops at the outline), **fill the stencil** (the pen colour on this layer, in every frame and direction - a solid body to shade and detail), and the **Inside** slider. The stencil is kept with the drawing (`stencil` in its project) and comes back when it's opened again. The mod keeps only your drawing, never the game's art.
+    - **The panels**: on the right, cards of icon buttons (each says what it does on hover) - **Stencil**, **Layers** (new, up, down, rename, shadow, delete; the eye hides one), **Every direction**, **This direction** (copy from another, flip, import PNG, export strip) and **View** (onion skin, mirror pen). **Zoom**: the bar on the canvas (out, in, fit) or Ctrl + scroll, about the pixel under the mouse. **The frame strip**: play, the frame before and after, ms a frame, the frames (+ adds one), then duplicate, move earlier or later, delete.
+    - **Every direction** (each changes every frame of every direction): **Size** (a tenth bigger or smaller, about the ground point), **Body** (longer or shorter along the way it faces in each direction, from the middle of the body), **Band** (the height band picked with ⇕ - a neck, legs, a shell - taller or shorter; heights are the same in every direction, so one band works for all of them, and the ground stays put) and **Recolour a colour…** (one colour and the shades near it turned into another, each keeping how much lighter or darker it was). The canvas grows to fit; Ctrl+Z undoes each in one step.
+    - **Save**: what's drawn is kept as drawn (layers, full colour) in the mod's `.art/animals/<type>/<sub>/<anim>.json` (left out of uploads), and made into the game's art in content.ztd - every drawn animation of the animal on one 256-colour palette made from all of them (`animals/<type>/<type>.pal`: 0 clear, 1 the shadow, up to 254 colours; more are merged and it says so), each frame cut to what's drawn, its `.ani` box worked out - and its row linked to it. The `edStroke` action ("x,y;x,y") draws a stroke with the tool in hand, for an agent.
+    - (A frame header's first offset is its ground point's **y**, the second its **x** - src/Animation.cpp; the art maker read them the other way round, now fixed.)
+  - **Art** - the art maker (renderer/artmaker.js, re/lab/artmaker.py): the mod's animations, and for each thing it changes or adds, the game's own art for it (marked *game*: a change saved puts a copy in the mod). One plays in every direction, zoomable, on a checkered, grass or dark background. Its palette is down the right (one palette colours all of an animal's animations, so a change there recolours the whole animal):
+    - **Pick colours**: click the art or a swatch (Shift adds; the picked colours blink magenta on the art). **By shade** picks every colour used that's **Darker** or **Lighter** than a slider - a whole mane, a set of stripes or a coat's bright shades in one go (Shift adds). **Set** gives them a colour (several keep their own shades), **Hue/Light** and **Shift** move them; after a change the blink pauses a few seconds so you see the result. Mind colour 1: it's the ground shadow under an animal (pure black), and picking dark shades takes it too - Shift-click it to drop it.
+    - **Paint**: a pencil in the brush colour (Alt-click a colour), right button to clear, on the frame shown.
+    - **Pattern: fade along the body**: the picked colours turn into a **To** colour from the head back - starting part way, all of them further back - in every frame of every animation of the animal, worked out for each way it faces, with a fixed dither so it doesn't crawl. The shadow (the picked colours touching the bottom of the frame) is left as it is.
+    - **Pattern: stripes across the body**: bands of the picked colours, each made its own darker shade, across the back (From/To along the body, Stripes, Width, Darker, Down the body) in every frame of every animation, for each way it faces; a stripe never repeats in under 4 pixels, so it stays a band on a diagonal facing.
+    - The game's art index is kept between steps (`%TEMP%\zt1-lab-artindex.json`, made again when the game's archives change), so each step takes under a second.
+    - **Save into the mod**, **Undo**, **Frames out (PNG)** (to the mod's `.art` folder, left out of uploads, to paint in another program) and **Frames in** (each pixel the palette's nearest colour). A saved file with one of the game's paths is listed in mod.json's `replaces`.
+  - **Publish**: below.
+- **Write Code > Game files**, an animal's `.ai` open: **New species from this** (re/lab/newspecies.py) makes a new animal as a mod: the animal's whole art folder copied from your own game under the new name (animations pointed at the new folder, frames at the new palettes, palettes dyed a colour you give - white takes the colour, black stays black), its `.ai` as a `.uca` with its own type, number and `[1033]` name. Into a new mod, or one there is (a pack of animals; or this one made again - its species file kept). Any text file open there: **Change it in a mod** copies it into a mod's content.ztd at the same path (so it takes the game's place while the mod's on), adds it to the mod's `replaces` and opens the copy to change. Saving into a mod the Test Zoo has open stops its engine for the write and starts it again (Windows won't replace an open file).
+- **Opening files by name (MCP)**: `lab_game_file` and `lab_open_engine_file` take a game path (`animals/tiger.ai`, opened read only at a line) or a mod's own file, `mod:<folder>|<ztd>|<entry>` (opened in the editor to change; Save puts it back in the .ztd).
+- **Names in a mod**: a `[1033]` section with `cName` in any `.ai` names it in the game (as the original reads it, zoo.exe 0x597337); add `[defaultLCID]` `LCID = 1033` so players with another Windows language see it too.
+- **Game files' search**: `type:` takes an extension too (`type:uca`), and a mod's files have their own **Mods** chip.
+  - **Publish**: **Check it** applies the same rules the repository's checks use (game data only, no paths outside the mod, at most 200,000 files, a mod.json with an id and a name). **Upload it** zips the mod and sends it in chunks to the mod repository (`https://mods.coderook.com/v1/modrepo/zt1`); there it's checked again, including a malware scan, and approved automatically, then it's in every official game's Mod Menu › Mod repository. Uploading again updates it. Where it's up already, its status and **Take it down** show here too. **Your uploads** lists every mod you've uploaded and what their checks said. You sign in with your CodeRook account (`cbx sign-in`, or a pasted personal token, kept in the Lab's own state). Each mod belongs to whoever uploaded it.
 
-An experiment can make things as well as test them: mods, art packs, anything a program on your PC makes. Its `Lab *lab` has a small toolkit for this (`re/lab/lab_api.h`, "Making things"), so you can build your own without changing the Lab:
+## Making mods with Lab scripts (the toolkit)
+
+A Lab script can make things as well as test them: mods, art packs, anything a program on your PC makes. Its `Lab *lab` has a small toolkit for this (`re/lab/lab_api.h`, "Making things"), so you can build your own without changing the Lab:
 
 - `start(program, args, cwd)` runs a program in the background and returns a job number. Poll `running(job)` from `lab_step`, then read `exitCode(job)` when it's done; `stop(job)` ends it. Its output goes to the log, except lines that are only a percentage.
 - `engineExe()` is the engine itself, for its tools:
@@ -665,9 +748,9 @@ An experiment can make things as well as test them: mods, art packs, anything a 
 - `writeMod(folder, name, author, about)` writes a mod's `mod.json`, unless it already has one. A mod's own settings can go in that file too; see `mods/zt1-toon/README.md`.
 - `useModsFolder(folder)` points the game at a mods folder, so it finds what you made. `modsFolder()` says where it looks now.
 
-### The HD art experiment (`re/lab/scripts/hd_art.cpp`)
+### The HD art Lab script (`re/lab/scripts/hd_art.cpp`)
 
-This makes a mod of AI-upscaled map art: the animals, people, fences and objects drawn while the map is zoomed in. The game shows the original art until a player switches the mod on in the Mod Menu or Game Options › Mods & Updates, and the switch takes effect at once. It's an ordinary experiment, so copy it to make your own version with another upscaler, model or set of art.
+This makes a mod of AI-upscaled map art: the animals, people, fences and objects drawn while the map is zoomed in. The game shows the original art until a player switches the mod on in the Mod Menu or Game Options › Mods & Updates, and the switch takes effect at once. It's an ordinary Lab script, so copy it to make your own version with another upscaler, model or set of art.
 
 - Its settings are at the top of the file: the mod's name and folder, the mods folder, the art to upscale (folder prefixes such as `animals/lion staff/keeper fences/chainlnk`, or empty for all of it), and the upscaler and its model.
 - Running it does three steps:
@@ -685,6 +768,33 @@ This makes a mod of AI-upscaled map art: the animals, people, fences and objects
 control port (127.0.0.1:18492, this PC only). Every tool acts through the
 Lab's own UI, so you watch it happen and your mouse and keyboard stay free.
 It needs only Node, with no packages to install.
+
+How it answers (its design follows [rea](https://github.com/morluto/rea),
+MIT):
+- **Errors say what to do.** Each has a `code` (`lab_not_running`,
+  `timeout`, `invalid_args`, `lab_error`, ...), `retryable` and a `hint`. A
+  slow Lab is reported as a timeout, not as a Lab that isn't running.
+- **Inputs are checked first.** A missing required input, or a value that
+  isn't one of a field's choices, is refused before the Lab is asked.
+- **Long answers come a page at a time.** Lists take `offset`/`limit`, texts
+  (decompiled C, a game file) `from`/`to`; `paging` gives the totals and the
+  next page's arguments.
+- **Each tool is marked** read-only, destructive (a reload, a sync, removing
+  something) and whether it reaches the internet.
+- **Text from zoo.exe, the game's files and the shared knowledge base** is
+  marked as data (`_meta.untrusted_content`), never instructions.
+- **Deeper questions about zoo.exe** (Ghidra, through the bridge's newer
+  queries - `re/ghidra_scripts/ZT1_LabBridge.py`, ideas from rea's own
+  bridge): `lab_data_type` (a struct's layout as Ghidra has it, to check
+  against the knowledge base), `lab_function_blocks` (basic blocks and each
+  switch table's cases), `lab_call_targets` (every call's target; a class-table
+  call such as `call [eax+0x16c]` matched against the knowledge base's class
+  tables), `lab_value_flow` (where a value goes or comes from inside a
+  function), `lab_search_bytes` (a byte pattern with `??` wildcards) and
+  `lab_noreturn_functions`.
+- **Guided workflows** (MCP prompts): `reverse_a_function`,
+  `copy_behaviour_into_engine`, `test_in_the_test_zoo`, `fix_build_errors`,
+  `map_a_struct_field`.
 
 Setting it up:
 - **Claude Code:** it's registered for this repo in `.mcp.json` (`zt1-lab`),

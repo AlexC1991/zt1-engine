@@ -39,9 +39,15 @@ public:
 
   // NEW: ZT1 raw preview (N + pal)
   void setZt1Image(const std::string &raw_path, const std::string &pal_path);
+  // A picture file on disk, not in the game's files (a mod's own picture:
+  // a PNG or JPG in its folder)
+  void setFileImage(const std::string &file);
+  // A decoded PNG held in memory (repository covers from the signed catalogue).
+  void setPngImage(const std::string &bytes);
 
 private:
   std::string image_path = "";
+  std::string png_bytes;
   SDL_Texture *image = nullptr;
   Animation *animation = nullptr;
   bool is_dynamic = false;
@@ -54,6 +60,7 @@ private:
   void drawTiled(SDL_Renderer *renderer, const SDL_Rect &area);
 
   bool is_zt1_preview = false;
+  bool is_file = false;
   std::string zt1_raw_path = "";
   std::string zt1_pal_path = "";
 };

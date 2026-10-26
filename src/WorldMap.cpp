@@ -125,6 +125,27 @@ bool WorldMap::loadFromZooReader(const ZooReader &reader) {
   return true;
 }
 
+void WorldMap::makeBlank(int w, int h, int groundHeight) {
+  width = w;
+  height = h;
+  tiles.assign(h, std::vector<MapTile>(w));
+  for (std::vector<MapTile> &row : tiles)
+    for (MapTile &t : row) {
+      t.height = groundHeight;
+      for (int c = 0; c < 4; c++)
+        t.cornerHeight[c] = groundHeight;
+      t.terrainType = 0;
+      t.substrate = getSubstrateMaterial(0);
+    }
+  minHeight = maxHeight = groundHeight;
+  pathTypes.clear();
+  pathTile.assign(static_cast<size_t>(w) * h, -1);
+  zooName.clear();
+  placed.clear();
+  generation++;
+  SDL_Log("[WorldMap] A blank map, %dx%d, at height %d", w, h, groundHeight);
+}
+
 void WorldMap::setPath(int x, int y, const std::string &type) {
   if (x < 0 || y < 0 || x >= width || y >= height || pathTile.empty())
     return;

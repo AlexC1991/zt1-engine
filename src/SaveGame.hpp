@@ -1,7 +1,9 @@
 #ifndef SAVE_GAME_HPP
 #define SAVE_GAME_HPP
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 class World;
 class ZooSim;
@@ -36,9 +38,20 @@ public:
   // (its world alone - habitats, food and dung, animals, staff - for the
   // ZT1 Lab's test zoo, which keeps no books)
   static bool loadOriginalWorld(World &world);
+  // A map design (a freeform map made in the ZT1 Lab): the world as made -
+  // ground, paths, walkways, fences, exhibits, objects - and its view, over
+  // the map whose .zoo is "over"; put over that map once it's loaded
+  static bool saveMap(const std::string &path, World &world, const std::string &over);
+  static bool applyMap(const std::vector<char> &data, World &world);
   // The Windows "Save a zoo..." / "Load a zoo..." dialogs (empty: cancelled)
   static std::string askSavePath();
   static std::string askLoadPath();
+
+private:
+  // (the world as made - in a saved zoo and a map design alike: their own
+  // writer and reader, SaveGame.cpp's Out and In)
+  static void putWorld(void *out, World &world);
+  static bool getWorld(void *in, World &world, uint32_t version);
 };
 
 #endif // SAVE_GAME_HPP

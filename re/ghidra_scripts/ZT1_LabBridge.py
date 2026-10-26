@@ -393,7 +393,245 @@ def h_fncallers(q):
     return {"functions": out}
 
 
-ROUTES = {"/scalar": h_scalar, "/fncallers": h_fncallers, "/owners": h_owners, "/debugnames": h_debugnames, "/fnstrings": h_fnstrings, "/makefn": h_makefn, "/rename": h_rename, "/strings": h_strings,"/status": h_status, "/functions": h_functions, "/function": h_function, "/decompile": h_decompile,
+# ---------------------------------------------------------------------------
+# Deeper questions (after rea's Ghidra bridge, github.com/morluto/rea, MIT,
+# Copyright (c) 2026 morluto - its ideas, written again for this bridge):
+# a data type's layout, a function's blocks and switch tables, what each of
+# its calls goes to, a byte pattern with wildcards, where a value comes from
+# or goes to, and the functions marked as never returning.
+# ---------------------------------------------------------------------------
+
+def hexa(a):
+    return "0x%06x" % a.getOffset()
+
+
+def fn_name_at(a):
+    f = fm.getFunctionContaining(a)
+    return f.getName(True) if f else ""
+
+
+def h_datatype(q):
+    """A data type by name (a struct, union, enum or typedef): its size and
+    fields; a part of a name lists the types that match."""
+    from ghidra.program.model.data import Structure, Union, TypeDef
+    from ghidra.program.model.data import Enum as GEnum
+    want = q.get("name", "").strip().lower()
+    if not want:
+        return {"error": "name is needed"}
+    exact, near = [], []
+    it = program.getDataTypeManager().getAllDataTypes()
+    while it.hasNext():
+        dt = it.next()
+        n = dt.getName().lower()
+        if n == want:
+            exact.append(dt)
+        elif want in n and len(near) < 60:
+            near.append(dt)
+    if not exact:
+        return {"matches": [{"name": d.getName(), "path": d.getCategoryPath().getPath(), "size": d.getLength()} for d in near]}
+    dt = exact[0]
+    out = {"name": dt.getName(), "path": dt.getCategoryPath().getPath(), "size": dt.getLength(), "kind": dt.__class__.__name__}
+    if isinstance(dt, (Structure, Union)):
+        out["fields"] = [{"offset": "0x%x" % c.getOffset(), "size": c.getLength(), "name": c.getFieldName() or "",
+                          "type": c.getDataType().getDisplayName(), "comment": c.getComment() or ""}
+                         for c in dt.getDefinedComponents()]
+    elif isinstance(dt, GEnum):
+        out["values"] = [{"name": n, "value": dt.getValue(n)} for n in dt.getNames()]
+    elif isinstance(dt, TypeDef):
+        out["of"] = dt.getBaseDataType().getDisplayName()
+    if len(exact) > 1:
+        out["others"] = [d.getCategoryPath().getPath() for d in exact[1:]]
+    return out
+
+
+def h_blocks(q):
+    """A function's basic blocks (where each goes) and its switch tables: each
+    case's value and where it jumps (the decompiler's jump tables)."""
+    from ghidra.program.model.block import BasicBlockModel
+    f, a = fn_at(q["addr"])
+    if f is None:
+        return {"error": "no function at " + q["addr"]}
+    blocks = []
+    it = BasicBlockModel(program).getCodeBlocksContaining(f.getBody(), MON)
+    while it.hasNext() and len(blocks) < 2000:
+        b = it.next()
+        to = []
+        di = b.getDestinations(MON)
+        while di.hasNext():
+            d = di.next()
+            to.append({"to": hexa(d.getDestinationAddress()), "flow": str(d.getFlowType())})
+        blocks.append({"start": hexa(b.getMinAddress()), "end": hexa(b.getMaxAddress()), "flow": str(b.getFlowType()), "to": to})
+    switches = []
+    with lock:
+        r = decomp.decompileFunction(f, 60, MON)
+    hf = r.getHighFunction() if r is not None else None
+    if hf is not None:
+        for jt in hf.getJumpTables():
+            cases = jt.getCases()
+            labels = jt.getLabelValues()
+            switches.append({"at": hexa(jt.getSwitchAddress()),
+                             "cases": [{"value": (int(labels[i]) if labels is not None and i < len(labels) else None), "to": hexa(cases[i])}
+                                       for i in range(len(cases))]})
+    return {"address": hexa(f.getEntryPoint()), "name": f.getName(True), "blocks": blocks, "switches": switches}
+
+
+def h_calltargets(q):
+    """Every call a function makes and where it goes: direct calls their
+    function; an import its name; an indirect call through a class table
+    ([reg + 0x16c]) its register and slot, for the Lab to match against the
+    class tables it knows."""
+    import re
+    f, a = fn_at(q["addr"])
+    if f is None:
+        return {"error": "no function at " + q["addr"]}
+    out = []
+    for ins in listing.getInstructions(f.getBody(), True):
+        if not ins.getFlowType().isCall():
+            continue
+        row = {"at": hexa(ins.getAddress()), "text": str(ins)}
+        flows = ins.getFlows()
+        if flows is not None and len(flows) > 0 and not ins.getFlowType().isComputed():
+            row["kind"] = "direct"
+            row["to"] = [{"address": hexa(t), "name": fn_name_at(t)} for t in flows]
+        else:
+            row["kind"] = "indirect"
+            m = re.search(r"\[(\w+)(?:\s*\+\s*(0x[0-9a-fA-F]+))?\]", str(ins))
+            if m and not m.group(1).startswith("0x"):
+                row["base"] = m.group(1)
+                row["slot"] = m.group(2) or "0x0"
+            to = []
+            for ref in ins.getReferencesFrom():
+                t = ref.getToAddress()
+                sym = program.getSymbolTable().getPrimarySymbol(t)
+                tf = fm.getFunctionAt(t)
+                if tf is not None:
+                    to.append({"address": hexa(t), "name": tf.getName(True)})
+                elif sym is not None:
+                    to.append({"address": hexa(t), "name": sym.getName(True)})
+            if to:
+                row["to"] = to
+        out.append(row)
+    return {"address": hexa(f.getEntryPoint()), "name": f.getName(True), "calls": out}
+
+
+def h_bytes(q):
+    """A byte pattern anywhere in zoo.exe ("8b 0d ?? ?? 63 00": ?? any byte),
+    each hit with its instruction and function."""
+    from jarray import array
+    parts = q.get("pattern", "").replace(",", " ").split()
+    if not parts:
+        return {"error": "pattern is needed, e.g. 8b 0d ?? ?? 63 00"}
+    vals, mask = [], []
+    for p in parts:
+        if p in ("?", "??"):
+            vals.append(0)
+            mask.append(0)
+        else:
+            v = int(p, 16)
+            vals.append(v - 256 if v > 127 else v)
+            mask.append(-1)
+    limit = min(int(q.get("limit", "200")), 2000)
+    mem = program.getMemory()
+    b, m = array(vals, "b"), array(mask, "b")
+    hits = []
+    at = mem.findBytes(mem.getMinAddress(), b, m, True, MON)
+    while at is not None and len(hits) < limit:
+        ins = listing.getInstructionContaining(at)
+        hits.append({"at": hexa(at), "instruction": str(ins) if ins else "", "function": fn_name_at(at)})
+        try:
+            at = mem.findBytes(at.add(1), b, m, True, MON)
+        except:  # noqa: E722 (past the end)
+            break
+    return {"pattern": " ".join(parts), "hits": hits, "more": at is not None}
+
+
+def vn_text(v):
+    if v is None:
+        return ""
+    if v.isConstant():
+        return "0x%x" % v.getOffset()
+    hv = v.getHigh()
+    name = hv.getName() if hv is not None else None
+    if name and name != "UNNAMED":
+        return name
+    if v.isAddress():
+        s = program.getSymbolTable().getPrimarySymbol(v.getAddress())
+        return s.getName(True) if s else hexa(v.getAddress())
+    return str(v)
+
+
+def op_row(op, depth, vn=None):
+    row = {"at": hexa(op.getSeqnum().getTarget()), "op": op.getMnemonic(), "depth": depth,
+           "out": vn_text(op.getOutput()), "in": [vn_text(i) for i in op.getInputs()]}
+    if op.getMnemonic() in ("CALL", "CALLIND"):
+        t = op.getInput(0)
+        if op.getMnemonic() == "CALL" and t.isAddress():
+            row["calls"] = fn_name_at(t.getAddress()) or hexa(t.getAddress())
+        if vn is not None:
+            for i in range(1, op.getNumInputs()):
+                if op.getInput(i) == vn:
+                    row["argument"] = i
+    return row
+
+
+def h_flow(q):
+    """Where a value goes, or where it comes from, inside one function (the
+    decompiler's def-use chains): from the instruction at "at", forward - the
+    values it makes, through each use, to calls (which argument), stores and
+    the return - or back - each input to what made it."""
+    at = addr(q["at"])
+    f = fm.getFunctionContaining(at)
+    if f is None:
+        return {"error": "no function holds " + q["at"]}
+    back = q.get("dir", "forward") == "back"
+    with lock:
+        r = decomp.decompileFunction(f, 60, MON)
+    hf = r.getHighFunction() if r is not None else None
+    if hf is None:
+        return {"error": "the decompiler couldn't"}
+    start = list(hf.getPcodeOps(at))
+    if not start:
+        return {"error": "no p-code at " + q["at"] + " (an instruction's own address is needed)"}
+    rows, seen = [], set()
+    todo = []
+    for op in start:
+        rows.append(op_row(op, 0))
+        seen.add(op.getSeqnum())
+        if back:
+            todo += [(v, 1) for v in op.getInputs()]
+        elif op.getOutput() is not None:
+            todo.append((op.getOutput(), 1))
+    stop = ("CALL", "CALLIND", "STORE", "RETURN", "BRANCHIND", "CBRANCH")
+    while todo and len(rows) < 200:
+        vn, depth = todo.pop(0)
+        if depth > 12:
+            continue
+        nexts = [vn.getDef()] if back else list(vn.getDescendants())
+        for op in nexts:
+            if op is None or op.getSeqnum() in seen:
+                continue
+            seen.add(op.getSeqnum())
+            rows.append(op_row(op, depth, None if back else vn))
+            if back:
+                todo += [(v, depth + 1) for v in op.getInputs() if not v.isConstant()]
+            elif op.getMnemonic() not in stop and op.getOutput() is not None:
+                todo.append((op.getOutput(), depth + 1))
+    return {"function": f.getName(True), "address": hexa(f.getEntryPoint()), "dir": "back" if back else "forward", "steps": rows}
+
+
+def h_noreturn(q):
+    """The functions Ghidra has marked as never returning (a wrong one cuts
+    the decompiled C of every caller short), with how many call it."""
+    out = []
+    for f in fm.getFunctions(True):
+        if f.hasNoReturn():
+            out.append({"address": hexa(f.getEntryPoint()), "name": f.getName(True), "callers": len(f.getCallingFunctions(MON)),
+                        "thunk": f.isThunk()})
+    return {"functions": out}
+
+
+ROUTES = {"/datatype": h_datatype, "/blocks": h_blocks, "/calltargets": h_calltargets, "/bytes": h_bytes, "/flow": h_flow, "/noreturn": h_noreturn,
+          "/scalar": h_scalar, "/fncallers": h_fncallers, "/owners": h_owners, "/debugnames": h_debugnames, "/fnstrings": h_fnstrings, "/makefn": h_makefn, "/rename": h_rename, "/strings": h_strings,"/status": h_status, "/functions": h_functions, "/function": h_function, "/decompile": h_decompile,
           "/disasm": h_disasm, "/xrefs": h_xrefs, "/goto": h_goto, "/search": h_search}
 
 

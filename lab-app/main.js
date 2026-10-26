@@ -2205,6 +2205,15 @@ ipcMain.handle('src:read', (_e, rel, line, before = 3, after = 30) => {
 ipcMain.handle('open:url', (_e, url) => {
   if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(String(url || ''))) shell.openExternal(url);
 });
+// Help's web references open in the user's browser, never in the Lab renderer.
+ipcMain.handle('help:openExternal', async (_e, value) => {
+  try {
+    const url = new URL(String(value));
+    if (url.protocol !== 'https:' || url.username || url.password) return false;
+    await shell.openExternal(url.href);
+    return true;
+  } catch { return false; }
+});
 // (a file shown in its folder: a release's zip)
 ipcMain.handle('open:reveal', (_e, rel) => {
   const p = inside(REPO, rel);
@@ -2466,7 +2475,11 @@ ipcMain.handle('gamemods:list', () => {
       try {
         info = JSON.parse(fs.readFileSync(path.join(root, d.name, 'mod.json'), 'utf8'));
       } catch {}
-      out.push({ folder: d.name, path: path.join(root, d.name), ...info, enabled: cfg.enabled.includes(d.name) });
+      // (its picture, small, for the list)
+      const pic = modPicture(path.join(root, d.name), info);
+      const thumb = pic ? nativeImage.createFromPath(pic) : null;
+      const pictureThumb = thumb && !thumb.isEmpty() ? thumb.resize({ width: 92, quality: 'good' }).toDataURL() : '';
+      out.push({ ...info, folder: d.name, path: path.join(root, d.name), pictureThumb, enabled: cfg.enabled.includes(d.name) });
     }
   } catch {}
   return { folder: root, mods: out };
@@ -2492,7 +2505,7 @@ ipcMain.handle('gamemods:enable', (_e, folder, on) => {
 // repository (CodeRook: checked there, then offered in every official
 // game's Mod Menu), and the mods you've uploaded - updated or taken down.
 const MODREPO = process.env.ZT1_MODREPO_URL || 'https://mods.coderook.com/v1/modrepo/zt1';
-const MOD_FILE_OK = new Set(['.ztd', '.ai', '.ani', '.pal', '.tga', '.bmp', '.png', '.webp', '.jpg', '.jpeg', '.wav', '.ogg', '.mp3', '.json', '.ini', '.txt', '.md', '.frag', '.lyt', '.uca', '.ucs', '.ucb', '.scn', '.zoo', '.lng', '.cfg', '.tgs', '.rtf', '.htm', '.html']);
+const MOD_FILE_OK = new Set(['.ztd', '.ai', '.ani', '.pal', '.tga', '.bmp', '.png', '.webp', '.jpg', '.jpeg', '.wav', '.ogg', '.mp3', '.json', '.ini', '.txt', '.md', '.frag', '.lyt', '.uca', '.ucs', '.ucb', '.scn', '.zoo', '.zt1map', '.lng', '.cfg', '.tgs', '.rtf', '.htm', '.html']);
 const modFileOk = (name) => {
   const ext = path.extname(name).toLowerCase();
   return ext === '' || MOD_FILE_OK.has(ext);
@@ -2653,16 +2666,88 @@ async function checkMod(dir) {
   return { ok: errors.length === 0, id, errors, warnings, files, bytes };
 }
 
-ipcMain.handle('modkit:new', (_e, req = {}) => {
-  const name = String(req.name || '').trim() || 'My mod';
+// A Lab tool in Python (re/lab/<script>: one JSON request in, one answer
+// out), run in the background with the engine's folder - where the game's
+// files are - and the mods folder
+function labTool(script, req) {
+  return new Promise((resolve) => {
+    const tool = PY && path.join(PY, script);
+    if (!tool) return resolve({ ok: false, error: roots.looked(script) });
+    const engineDir = roots.engineDir || RELEASE;
+    const proc = cp.spawn(labPython(), ['-I', '-X', 'utf8', tool], { cwd: engineDir, windowsHide: true });
+    let out = '', err = '';
+    proc.stdout.on('data', (d) => (out += d));
+    proc.stderr.on('data', (d) => (err += d));
+    proc.on('error', () => resolve({ ok: false, error: 'Python isn’t on this PC’s PATH' }));
+    proc.on('exit', () => {
+      try {
+        resolve(JSON.parse(out.trim().split(/\r?\n/).pop()));
+      } catch {
+        resolve({ ok: false, error: (err || out || 'no answer').slice(0, 400) });
+      }
+    });
+    proc.stdin.end(JSON.stringify({ engineDir, modsFolder: modsFolder(), ...req }));
+  });
+}
+// The Test Zoo's engine stopped (resolves once it's gone)
+function stopHost() {
+  return new Promise((resolve) => {
+    const old = host.proc;
+    const sock = host.sock;
+    host.proc = null;
+    host.sock = null;
+    host.starting = false;
+    if (sock) sock.write('{"cmd":"quit"}\n', () => sock.end());
+    if (!old || old.exitCode !== null) return setTimeout(resolve, sock ? 1200 : 0);
+    let done = false;
+    const go = () => !done && ((done = true), resolve());
+    old.once('exit', go);
+    setTimeout(() => old.exitCode === null && old.kill(), 6000);
+    setTimeout(go, 8000);
+  });
+}
+// A write into a mod's .ztd. The engine keeps the .ztd files of the mods
+// switched on open (reading them is faster so), and Windows won't replace
+// an open file: then the Test Zoo's engine is stopped for the write and
+// started again - the game in Play is the player's to stop
+async function modWrite(run) {
+  let r = await run();
+  if (!r.ok && /WinError (5|32)|PermissionError|used by another process/i.test(r.error || '')) {
+    if (host.sock) await pageCall('keepRebuild', {}, 5000).catch(() => null);
+    await stopHost();
+    r = await run();
+    startHost();
+    if (!r.ok && play.proc) r.error = 'The game in Play has this mod open: stop it in Play, then try again.';
+  }
+  return r;
+}
+// A new mod's folder: its name made safe, numbered if it's taken
+function newModFolder(name) {
   const root = modsFolder();
   fs.mkdirSync(root, { recursive: true });
   const base = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '') || 'My mod';
   let folder = base;
   for (let n = 2; fs.existsSync(path.join(root, folder)); n++) folder = `${base} (${n})`;
-  const dir = path.join(root, folder);
+  return folder;
+}
+
+ipcMain.handle('modkit:new', async (_e, req = {}) => {
+  const name = String(req.name || '').trim() || 'My mod';
+  const folder = newModFolder(name);
+  const dir = path.join(modsFolder(), folder);
   fs.mkdirSync(dir, { recursive: true });
   const meta = { id: modId(name), name, author: String(req.author || ''), version: '1.0', about: '', replaces: [] };
+  if (req.template === 'starter') {
+    // (re/lab/modstarter.py: one of everything a mod can have, made from the
+    // player's own game - a new object, its art and icons, HD art, a shader
+    // and a setting)
+    const r = await labTool('modstarter.py', { mod: { folder, name, id: meta.id, author: meta.author } });
+    if (!r.ok) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return { ok: false, message: "The starter kit couldn't be made: " + r.error };
+    }
+    return { ok: true, folder, object: r.object };
+  }
   if (req.template === 'shader') {
     meta.about = 'A shader mod: Game Options > Shaders.';
     fs.mkdirSync(path.join(dir, 'shaders'), { recursive: true });
@@ -2674,6 +2759,143 @@ ipcMain.handle('modkit:new', (_e, req = {}) => {
   }
   fs.writeFileSync(path.join(dir, 'mod.json'), JSON.stringify(meta, null, 2) + '\n');
   return { ok: true, folder };
+});
+
+// A new animal from one of the game's (re/lab/newspecies.py), as a new mod
+ipcMain.handle('modkit:species', async (_e, req = {}) => {
+  const name = String(req.name || '').trim();
+  if (!name) return { ok: false, message: 'Give it a name.' };
+  // (into a mod there is - a pack of animals, or this one made again - or a new one)
+  const into = req.folder && modPath(req.folder) && fs.existsSync(modPath(req.folder));
+  const folder = into ? String(req.folder) : newModFolder(name);
+  const r = await modWrite(() => labTool('newspecies.py', { from: req.from, name, tint: req.tint, strength: req.strength, mod: { folder, author: String(req.author || ''), id: modId(name) } }));
+  if (!r.ok) {
+    if (!into) fs.rmSync(path.join(modsFolder(), folder), { recursive: true, force: true });
+    return { ok: false, message: r.error };
+  }
+  return { ...r, folder };
+});
+
+// A file inside one of a mod's .ztd files: read, saved back (re/lab/ztdedit.py)
+function modZtd(folder, ztd) {
+  const dir = modPath(folder);
+  if (!dir) return null;
+  const p = path.resolve(dir, String(ztd || 'content.ztd'));
+  return p.startsWith(dir + path.sep) && /\.(ztd|zip)$/i.test(p) ? p : null;
+}
+ipcMain.handle('modkit:entry', (_e, folder, ztd, entry) => {
+  const p = modZtd(folder, ztd);
+  return p ? labTool('ztdedit.py', { op: 'read', ztd: p, entry }) : { ok: false, error: 'No such mod.' };
+});
+ipcMain.handle('modkit:entrySave', (_e, folder, ztd, entry, text, crlf) => {
+  const p = modZtd(folder, ztd);
+  return p ? modWrite(() => labTool('ztdedit.py', { op: 'write', ztd: p, entry, text, crlf })) : { ok: false, error: 'No such mod.' };
+});
+// One of the game's files copied into a mod's content.ztd to be changed
+// there (the same path: it takes the game's place while the mod is on) -
+// and listed in its mod.json "replaces", as the Mod Menu shows
+ipcMain.handle('modkit:copyIn', async (_e, folder, file) => {
+  const dir = modPath(folder);
+  if (!dir) return { ok: false, error: 'No such mod.' };
+  const r = await modWrite(() => labTool('ztdedit.py', { op: 'copyIn', ztd: path.join(dir, 'content.ztd'), file }));
+  if (r.ok) {
+    const meta = readModJson(dir) || {};
+    const key = String(r.entry).toLowerCase();
+    meta.replaces = [...new Set([...(meta.replaces || []), key])].sort();
+    fs.writeFileSync(path.join(dir, 'mod.json'), JSON.stringify(meta, null, 2) + '\n');
+  }
+  return { ...r, ztd: 'content.ztd' };
+});
+
+// The art maker (Mods > a mod > Art; re/lab/artmaker.py): a mod's
+// animations read, and its palettes and frames saved back. PNGs go out to
+// (and come back from) the mod's .art folder - left out of uploads, as
+// every dot-folder is: they're your own game's art
+// The animal maker (Mods > a mod > Animals; re/lab/animalmaker.py): a new
+// animal from scratch, its animations linked or drawn. What's drawn is kept
+// as drawn in the mod's .art folder (left out of uploads) and made into the
+// game's art in its content.ztd
+ipcMain.handle('animal:do', async (_e, folder, req = {}) => {
+  const dir = modPath(folder);
+  if (!dir) return { ok: false, error: 'No such mod.' };
+  const op = String(req.op || '');
+  const full = { ...req, ztd: path.join(dir, 'content.ztd'), projects: path.join(dir, '.art') };
+  return ['new', 'link', 'save', 'setneeds', 'copyneeds', 'savepic'].includes(op) ? modWrite(() => labTool('animalmaker.py', full)) : labTool('animalmaker.py', full);
+});
+
+// The mod studio's tree: what the mod holds, by kind (re/lab/studio.py)
+ipcMain.handle('studio:tree', async (_e, folder) => {
+  const dir = modPath(folder);
+  if (!dir) return { ok: false, error: 'No such mod.' };
+  return labTool('studio.py', { op: 'tree', dir });
+});
+
+ipcMain.handle('art:do', async (_e, folder, req = {}) => {
+  const dir = modPath(folder);
+  if (!dir) return { ok: false, error: 'No such mod.' };
+  const op = String(req.op || '');
+  // (its animations from every .ztd it has - an old download's is named
+  // as its maker named it - each read and saved in its own)
+  if (op === 'anims') {
+    const ztds = fs.readdirSync(dir).filter((n) => /\.ztd$/i.test(n));
+    const anims = [];
+    for (const z of ztds) {
+      const r = await labTool('artmaker.py', { op, ztd: path.join(dir, z) });
+      if (!r.ok) return r;
+      for (const a of r.anims) anims.push({ ...a, ztd: z });
+    }
+    return { ok: true, anims };
+  }
+  const ztd = modZtd(folder, req.ztdName || 'content.ztd');
+  if (!ztd) return { ok: false, error: 'No such .ztd in the mod.' };
+  const pngs = req.ani ? path.join(dir, '.art', path.dirname(String(req.ani)).replace(/[\\/]+/g, path.sep)) : null;
+  const full = { ...req, ztd, out: pngs, src: pngs };
+  const r = ['save', 'fade', 'stripes', 'import'].includes(op) ? await modWrite(() => labTool('artmaker.py', full)) : await labTool('artmaker.py', full);
+  if (op === 'export' && r.ok) shell.openPath(pngs);
+  // (the game's files it now changes, listed in mod.json - the Mod Menu shows them)
+  if (r.ok && (r.replaced || []).length) {
+    const meta = readModJson(dir) || {};
+    meta.replaces = [...new Set([...(meta.replaces || []), ...r.replaced])].sort();
+    fs.writeFileSync(path.join(dir, 'mod.json'), JSON.stringify(meta, null, 2) + '\n');
+  }
+  return r;
+});
+
+// Test Zoo > Save as a map: where the engine writes the design (the mod's
+// .work folder - a dot-folder, left out of uploads), then it packed into the
+// mod's content.ztd with its .scn, description and preview (re/lab/mapmaker.py)
+ipcMain.handle('map:target', (_e, req = {}) => {
+  let folder = String(req.folder || '');
+  if (!folder) {
+    folder = newModFolder(String(req.title || 'My map'));
+    const dir = path.join(modsFolder(), folder);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'mod.json'), JSON.stringify({ id: modId(req.title || 'my-map'), name: String(req.title || 'My map'), author: String(req.author || ''), version: '1.0', about: String(req.about || '').trim() || 'A freeform map made in the ZT1 Lab.', replaces: [] }, null, 2) + '\n');
+  }
+  const dir = modPath(folder);
+  if (!dir) return { ok: false, error: 'No such mod.' };
+  const work = path.join(dir, '.work');
+  fs.mkdirSync(work, { recursive: true });
+  const id = String(req.title || 'mymap').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16) || 'mymap';
+  return { ok: true, folder, id, design: path.join(work, id + '.zt1map'), preview: path.join(work, id + '.png') };
+});
+ipcMain.handle('map:pack', async (_e, folder, req = {}) => {
+  const dir = modPath(folder);
+  if (!dir) return { ok: false, error: 'No such mod.' };
+  if (req.previewPng) {
+    try {
+      fs.writeFileSync(req.preview, Buffer.from(String(req.previewPng), 'base64'));
+    } catch {}
+  }
+  const r = await modWrite(() => labTool('mapmaker.py', { ...req, previewPng: undefined, ztd: path.join(dir, 'content.ztd') }));
+  // (a mod made for the map says what the map is, once it's said - not the
+  // stand-in line it was made with)
+  const meta = readModJson(dir);
+  if (r.ok && meta && meta.about === 'A freeform map made in the ZT1 Lab.' && String(req.about || '').trim()) {
+    meta.about = String(req.about).trim();
+    fs.writeFileSync(path.join(dir, 'mod.json'), JSON.stringify(meta, null, 2) + '\n');
+  }
+  return { ...r, folder };
 });
 
 ipcMain.handle('modkit:import', async (_e, file) => {
@@ -2702,6 +2924,73 @@ ipcMain.handle('modkit:check', async (_e, folder) => {
   return dir ? checkMod(dir) : { ok: false, errors: ['No such mod.'], warnings: [] };
 });
 
+// What's in a mod, for its Contents page: the game things its .ztd files add
+// or change (each .ai / .uca / .ucs / .ucb is one, under its game path), art
+// and sounds by kind, its shaders (shaders/*.json), its HD art (hd/), the
+// rest of its files, and its mod.json's replaces and settings
+const MOD_KINDS = { animals: 'Animals', objects: 'Art', scenery: 'Scenery & buildings', fences: 'Fences', paths: 'Paths', staff: 'Staff', guests: 'Guests', terrain: 'Terrain', items: 'Items', ui: 'Interface', sounds: 'Sounds', research: 'Research', scenario: 'Scenarios', freeform: 'Maps', maps: 'Maps', awards: 'Awards' };
+ipcMain.handle('modkit:contents', async (_e, folder) => {
+  const dir = modPath(folder);
+  if (!dir) return { ok: false, message: 'No such mod.' };
+  const meta = readModJson(dir) || {};
+  const out = { ok: true, files: 0, bytes: 0, ztds: [], things: [], kinds: {}, shaders: [], hd: { files: 0, bytes: 0 }, other: [], replaces: meta.replaces || [], settings: meta.settings || [] };
+  const thing = /\.(ai|uca|ucs|ucb)$/i;
+  const walk = async (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      // (.modrepo/ and the like: the repository's own bookkeeping, not the
+      // mod - uploading leaves them out too)
+      if (e.name.startsWith('.')) continue;
+      const p = path.join(d, e.name), rel = path.relative(dir, p).replace(/\\/g, '/');
+      if (e.isDirectory()) {
+        await walk(p);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      const size = fs.statSync(p).size;
+      out.files++;
+      out.bytes += size;
+      if (rel.startsWith('hd/')) {
+        out.hd.files++;
+        out.hd.bytes += size;
+      } else if (rel.startsWith('shaders/') && /\.json$/i.test(e.name)) {
+        try {
+          const s = JSON.parse(fs.readFileSync(p, 'utf8'));
+          out.shaders.push({ file: rel, name: s.name || e.name, about: s.about || '', stage: s.stage || '', settings: (s.settings || []).length });
+        } catch {
+          out.shaders.push({ file: rel, name: e.name, about: "Its JSON doesn't read", stage: '', settings: 0 });
+        }
+      } else if (/\.ztd$/i.test(e.name)) {
+        const z = { file: rel, bytes: size, entries: 0 };
+        try {
+          const unzipper = require('unzipper');
+          const zip = await unzipper.Open.file(p);
+          for (const f of zip.files) {
+            if (f.type !== 'File') continue;
+            z.entries++;
+            const gp = f.path.replace(/\\/g, '/');
+            const top = gp.split('/')[0].toLowerCase();
+            const kind = MOD_KINDS[top] || 'Other';
+            out.kinds[kind] = (out.kinds[kind] || 0) + 1;
+            if (thing.test(gp)) out.things.push({ path: gp.replace(thing, ''), file: gp, kind, ztd: rel });
+          }
+        } catch {
+          z.bad = true;
+        }
+        out.ztds.push(z);
+      } else if (rel !== 'mod.json') {
+        out.other.push({ path: rel, bytes: size });
+      }
+    }
+  };
+  try {
+    await walk(dir);
+  } catch (e) {
+    return { ok: false, message: String(e.message || e) };
+  }
+  out.things.sort((a, b) => a.kind.localeCompare(b.kind) || a.path.localeCompare(b.path));
+  return out;
+});
+
 ipcMain.handle('modkit:save', (_e, folder, fields = {}) => {
   const dir = modPath(folder);
   if (!dir) return { ok: false };
@@ -2710,6 +2999,60 @@ ipcMain.handle('modkit:save', (_e, folder, fields = {}) => {
   if (meta.id) meta.id = modId(meta.id);
   fs.writeFileSync(path.join(dir, 'mod.json'), JSON.stringify(meta, null, 2) + '\n');
   return { ok: true, meta };
+});
+
+// A mod's picture (mod.json "picture": an image in its folder): the Mod
+// Menu's picture box shows it at 367 x 276. Set from an image you pick or a
+// PNG (the Test Zoo's view), cut to fill that size, as picture.png
+const PICTURE_W = 367, PICTURE_H = 276;
+function modPicture(dir, meta) {
+  const p = meta && typeof meta.picture === 'string' && meta.picture ? path.resolve(dir, meta.picture) : '';
+  return p && p.startsWith(path.resolve(dir) + path.sep) && fs.existsSync(p) ? p : '';
+}
+function fillPicture(img) {
+  const { width: w, height: h } = img.getSize();
+  if (!w || !h) return null;
+  // (cut to the picture's shape, from the middle, then sized)
+  const want = PICTURE_W / PICTURE_H;
+  const cw = w / h > want ? Math.round(h * want) : w;
+  const ch = w / h > want ? h : Math.round(w / want);
+  return img.crop({ x: Math.floor((w - cw) / 2), y: Math.floor((h - ch) / 2), width: cw, height: ch }).resize({ width: PICTURE_W, height: PICTURE_H, quality: 'best' });
+}
+ipcMain.handle('modkit:picture', async (_e, folder, req = {}) => {
+  const dir = modPath(folder);
+  if (!dir) return { ok: false, error: 'No such mod.' };
+  const meta = readModJson(dir) || {};
+  const op = String(req.op || 'get');
+  if (op === 'get') {
+    const p = modPicture(dir, meta);
+    const img = p ? nativeImage.createFromPath(p) : null;
+    return { ok: true, url: img && !img.isEmpty() ? img.toDataURL() : '', file: p };
+  }
+  if (op === 'remove') {
+    const p = modPicture(dir, meta);
+    if (p) fs.rmSync(p, { force: true });
+    delete meta.picture;
+    fs.writeFileSync(path.join(dir, 'mod.json'), JSON.stringify(meta, null, 2) + '\n');
+    return { ok: true, url: '' };
+  }
+  let img = null;
+  if (op === 'file') {
+    const pick = await dialog.showOpenDialog(win, {
+      title: 'A picture for the mod (it is cut to fill 367 x 276)',
+      filters: [{ name: 'Pictures', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'webp'] }],
+      properties: ['openFile'],
+    });
+    if (pick.canceled || !pick.filePaths.length) return { ok: false, cancelled: true };
+    img = nativeImage.createFromPath(pick.filePaths[0]);
+  } else if (op === 'png') {
+    img = nativeImage.createFromBuffer(Buffer.from(String(req.png || ''), 'base64'));
+  } else return { ok: false, error: 'No op ' + op };
+  const out = img && !img.isEmpty() ? fillPicture(img) : null;
+  if (!out) return { ok: false, error: 'That picture couldn’t be read.' };
+  fs.writeFileSync(path.join(dir, 'picture.png'), out.toPNG());
+  meta.picture = 'picture.png';
+  fs.writeFileSync(path.join(dir, 'mod.json'), JSON.stringify(meta, null, 2) + '\n');
+  return { ok: true, url: out.toDataURL() };
 });
 
 ipcMain.handle('modkit:open', (_e, folder) => {
@@ -2767,11 +3110,26 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
   const zip = path.join(work, 'part.zip');
   try {
     modkitLog('Packing it...');
+    // A bounded cover for browsing before download. It travels inside the
+    // package so it passes the same repository checks and virus scan.
+    const previewFile = path.join(work, 'repository-preview.png');
+    if (meta.picture) {
+      const picture = path.resolve(dir, String(meta.picture));
+      if (picture.startsWith(path.resolve(dir) + path.sep)) {
+        const original = require('electron').nativeImage.createFromPath(picture);
+        if (!original.isEmpty()) {
+          let preview = original.resize({ width: 184, height: 138, quality: 'best' }).toPNG();
+          if (preview.length > 64 * 1024) preview = original.resize({ width: 92, height: 69, quality: 'best' }).toPNG();
+          if (preview.length <= 64 * 1024) fs.writeFileSync(previewFile, preview);
+        }
+      }
+    }
     const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
     // (its files by name, not ".": that makes "./mod.json", and the
     // repository wants mod.json at the top of the zip)
-    const top = fs.readdirSync(dir).filter((n) => !n.startsWith('.'));
-    const z = cp.spawnSync(tar, ['-a', '-c', '-f', zip, '-C', dir, ...top], { windowsHide: true });
+    const top = fs.readdirSync(dir).filter((n) => !n.startsWith('.') && n !== 'repository-preview.png');
+    const previewArgs = fs.existsSync(previewFile) ? ['-C', work, 'repository-preview.png'] : [];
+    const z = cp.spawnSync(tar, ['-a', '-c', '-f', zip, '-C', dir, ...top, ...previewArgs], { windowsHide: true });
     if (z.status !== 0 || !fs.existsSync(zip)) throw new Error("It couldn't be zipped.");
     const size = fs.statSync(zip).size;
     const sha256 = require('crypto').createHash('sha256').update(fs.readFileSync(zip)).digest('hex');

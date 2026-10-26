@@ -600,11 +600,13 @@ void Animation::loadSurfaces(std::string direction_string,
   if (data->has_background) {
     const int count = static_cast<int>(data->frame_count);
     int minX = 0, minY = 0, maxX = 0, maxY = 0;
-    // (here the frame header's offset_x is its x anchor, offset_y its y -
-    // the other way round from art without a background)
+    // (the frame header's offset_x is its y anchor, offset_y its x, as in
+    // art without a background: read the other way round, each building
+    // sat off its footprint by a different amount in each view - the
+    // restaurant's sign on the ground, the DRT gift shop 107 px out)
     for (int i = 0; i <= count; i++) {
       const AnimationFrameData &f = data->frames[i];
-      int l = -f.offset_x, t = -f.offset_y;
+      int l = -f.offset_y, t = -f.offset_x;
       if (i == 0 || l < minX) minX = l;
       if (i == 0 || t < minY) minY = t;
       if (i == 0 || l + f.width > maxX) maxX = l + f.width;
@@ -617,7 +619,7 @@ void Animation::loadSurfaces(std::string direction_string,
     auto paint = [&](SDL_Surface *s, const AnimationFrameData &f) {
       if (!f.lines)
         return;
-      const int left = anchor.x - f.offset_x, top = anchor.y - f.offset_y;
+      const int left = anchor.x - f.offset_y, top = anchor.y - f.offset_x;
       uint32_t *pixels = static_cast<uint32_t *>(s->pixels);
       const int pitch = s->pitch / 4;
       for (int y = 0; y < f.height; y++) {

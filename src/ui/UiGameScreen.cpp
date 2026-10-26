@@ -16,6 +16,7 @@
 #include "../Embed.hpp"
 #include "../Window.hpp"
 #include "UiScrollBar.hpp"
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include "../Utils.hpp"
@@ -27,6 +28,7 @@
 #include "UiListBox.hpp"
 #include "UiStatusImage.hpp"
 #include "UiText.hpp"
+#include "WindowLock.hpp"
 
 // addition: the Game Options' Extras tab. The original's gameopts.lyt has an
 // About tab button with its action left out (";action=3 ;target=903"): it's
@@ -42,7 +44,8 @@ static std::string extrasLabel(const std::string &name) {
       {"pathmodes", "Path modes"},       {"hotkeys", "Extra hotkeys"},
       {"mods", "Load mods"},             {"modmenu", "Mod menu"},
       {"updatechecks", "Update checks"}, {"misnamedart", "Misnamed art"},
-      {"optionswindow", "New Options"}};
+      {"optionswindow", "New Options"},   {"smartstack", "Windows aside"},
+      {"dragwindows", "Drag windows"},   {"infocloseslists", "Info closes lists"}};
   auto it = labels.find(name);
   return it == labels.end() ? name : it->second;
 }
@@ -169,6 +172,13 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
     this->tooltipDelayMs = delay;
     this->tooltipDurationMs = static_cast<Uint32>(std::max(500, durationMs));
   };
+  this->options->onResetWindows = [this] {
+    for (Entry &e : this->entries)
+      if (e.moved) {
+        e.moved = false;
+        Settings::set("Windows", "w" + std::to_string(e.id), "");
+      }
+  };
   resource_manager->provide("ui/zt1extras.lyt", [](ResourceManager *) { return extrasPage(); });
 
   IniReader *mainReader = resource_manager->getIniReader(mainLayout);
@@ -244,6 +254,28 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   // Drawn by layer; the screen file's order breaks ties
   std::stable_sort(this->entries.begin(), this->entries.end(),
                    [](const Entry &a, const Entry &b) { return a.layer < b.layer; });
+  // Each window's drag handle (the original's alias=-1 element), and where
+  // the player left it last time (the dragwindows extra: zoo.ini [Windows])
+  for (Entry &e : this->entries) {
+    if (!e.panel)
+      continue;
+    if (IniReader *ini = e.layout->getIniReader())
+      for (const std::string &s : ini->getSections()) {
+        if (!e.handle && ini->get(s, "alias") == "-1")
+          e.handle = ini->getInt(s, "id", 0);
+        if (!e.closeId && Utils::string_to_lower(ini->get(s, "animation")).find("ui/sharedui/close/close") == 0)
+          e.closeId = ini->getInt(s, "id", 0);
+      }
+    // (locked unless the player opened it: zoo.ini [Windows] l<id>=0)
+    e.locked = Settings::get("Windows", "l" + std::to_string(e.id)) != "0";
+    std::string at = Settings::get("Windows", "w" + std::to_string(e.id));
+    int x = 0, y = 0;
+    if (Features::dragWindows && std::sscanf(at.c_str(), "%d,%d", &x, &y) == 2) {
+      e.moved = true;
+      e.moveX = x;
+      e.moveY = y;
+    }
+  }
 
   this->setupBuyPanels();
   this->setupTerraform();
@@ -1427,8 +1459,10 @@ UiGameScreen::~UiGameScreen() {
   for (Entry &e : this->entries)
     delete e.layout;
   delete this->filter.packs;
+  // (withModsIni goes with withMods: a UiLayout deletes the reader it was
+  // made from - deleted here too, it was freed twice, and the heap broke on
+  // the next load or trip to the main menu)
   delete this->filter.withMods;
-  delete this->filter.withModsIni;
   delete this->dialog.layout;
 }
 
@@ -1613,12 +1647,23 @@ void UiGameScreen::setPanelOpen(int id, bool open) {
   // The Game Options (5): the Options window in its place (the optionswindow
   // extra), the disk button left off
   if (id == 5 && open && Features::optionsWindow && this->options) {
-    this->options->open(true);
+    // (the disk button again closes it, as it closes the original's panel)
+    if (this->options->isOpen())
+      this->options->close();
+    else
+      this->options->open(true);
     for (UiButton *b : this->panelButtons)
       if (b->getActionTarget() == 5)
         b->setToggledOn(false);
     open = false;
   }
+  // (ours, infocloseslists: a bottom list opened over an information window
+  // closes the window, and a carer's Recommendations with it - they never
+  // overlap)
+  if (open && Features::infoClosesLists && (id == 30 || id == 31 || id == 16 || id == 12))
+    for (Entry &e : this->entries)
+      if (e.panel && e.open && (e.id == 6 || e.id == 9 || e.id == 17 || e.id == 20 || e.id == 21 || e.id == 28))
+        e.open = false;
   for (Entry &e : this->entries)
     if (e.panel && e.id == id) {
       if (open && !e.open)
@@ -1630,11 +1675,29 @@ void UiGameScreen::setPanelOpen(int id, bool open) {
 // An information window opens: the toolbar's panels close but an open
 // list at the bottom right stays (the window goes above it), and only one
 // information window shows at a time
+// (ours, the infocloseslists switch: the list closes too, so it can't
+// cover the window)
 void UiGameScreen::openInfo(int id) {
+  // (ours, smartstack: nothing else closes - the windows stand side by
+  // side - only another information window, which this one replaces)
+  if (Features::smartStack && !Features::infoClosesLists) {
+    for (int p : {6, 9, 17, 20, 21})
+      this->setPanelOpen(p, p == id);
+    return;
+  }
   std::vector<int> lists;
   for (int l : {30, 31, 16, 12})
-    if (this->isPanelOpen(l))
+    if (this->isPanelOpen(l) && !Features::infoClosesLists)
       lists.push_back(l);
+  // (closed so, each list is built afresh when it next opens: its last pick
+  // kept, it showed that one again - which closed the list again)
+  if (Features::infoClosesLists) {
+    this->staffListCount = -1;
+    this->listedStaff.clear();
+    this->listedAnimals.clear();
+    this->listedGuests.clear();
+    this->listedExhibits.clear();
+  }
   this->showPanel(0, "");
   for (int l : lists) {
     this->setPanelOpen(l, true);
@@ -1644,6 +1707,9 @@ void UiGameScreen::openInfo(int id) {
   }
   for (int p : {6, 9, 17, 20, 21})
     this->setPanelOpen(p, p == id);
+  // (and the last animal's Recommendations: ours, with the switch)
+  if (Features::infoClosesLists)
+    this->setPanelOpen(28, false);
 }
 
 bool UiGameScreen::closeTopmost() {
@@ -1696,7 +1762,8 @@ SDL_Rect UiGameScreen::panelRect(SDL_Renderer *renderer, const Entry &e,
   if (e.id == 302 || e.id == 37)
     for (const Entry &o : this->entries)
       if (o.panel && o.open && (o.id == 21 || o.id == 20)) {
-        SDL_Rect pr = this->panelRect(renderer, o, screen);
+        // (where it is this frame: dragged or moved aside, it goes with it)
+        SDL_Rect pr = o.rect.w > 0 ? o.rect : this->panelRect(renderer, o, screen);
         return e.layout->computeRect(renderer, &pr);
       }
   SDL_Rect r = e.layout->computeRect(renderer, &parent);
@@ -1728,6 +1795,128 @@ SDL_Rect UiGameScreen::panelRect(SDL_Renderer *renderer, const Entry &e,
   return r;
 }
 
+// A press on a window's handle: the original's alias=-1 element (Zoo
+// Status, Recommendations, a plaque...), or - the dragwindows extra - any
+// window's title strip (its top 20 pixels); never on a control in it
+bool UiGameScreen::lockable(const Entry &e) const {
+  return Features::dragWindows && e.panel && e.closeId && e.id != 302 && e.id != 37;
+}
+
+bool UiGameScreen::beginDrag(int x, int y) {
+  SDL_Point p = {x, y};
+  Entry *top = nullptr;
+  for (Entry &e : this->entries)
+    if (e.panel && e.open && e.rect.w > 0 && SDL_PointInRect(&p, &e.rect) && (!top || e.openedAt > top->openedAt))
+      top = &e;
+  if (!top || top->id == 302 || top->id == 37)
+    return false;
+  // (its lock: held down here, opened or shut when let go on it)
+  if (this->lockable(*top) && top->lockRect.w > 0 && SDL_PointInRect(&p, &top->lockRect)) {
+    this->lockDownId = top->id;
+    return true;
+  }
+  if (this->lockable(*top) && top->locked)
+    return false;
+  std::function<bool(UiElement *)> onControl = [&](UiElement *el) {
+    if (el->isHidden())
+      return false;
+    if (!dynamic_cast<UiLayout *>(el) && !dynamic_cast<UiImage *>(el) && !dynamic_cast<UiStatusImage *>(el) &&
+        !(dynamic_cast<UiText *>(el) && !static_cast<UiText *>(el)->isEditable())) {
+      SDL_Rect r = el->getLastRect();
+      if (r.w > 0 && SDL_PointInRect(&p, &r))
+        return true;
+    }
+    for (UiElement *c : el->getChildren())
+      if (onControl(c))
+        return true;
+    return false;
+  };
+  if (onControl(top->layout))
+    return false;
+  bool on = false;
+  if (top->handle)
+    if (UiElement *h = top->layout->getElementById(top->handle)) {
+      SDL_Rect hr = h->getLastRect();
+      on = SDL_PointInRect(&p, &hr);
+    }
+  if (!on && Features::dragWindows)
+    on = y < top->rect.y + 20;
+  if (!on)
+    return false;
+  this->dragId = top->id;
+  this->dragGrabX = x - top->rect.x;
+  this->dragGrabY = y - top->rect.y;
+  this->dragFromX = x;
+  this->dragFromY = y;
+  this->dragMoving = false;
+  top->openedAt = ++this->openCount;
+  return true;
+}
+
+// Where each open window goes this frame, in the order they opened: where
+// the player dragged it; else where the original puts it - and, with the
+// smartstack extra, beside an earlier window it would cover (above it, to
+// its left, below or right: the nearest spot on the screen clear of them)
+void UiGameScreen::placePanels(SDL_Renderer *renderer, SDL_Rect *screen) {
+  std::vector<Entry *> order;
+  for (Entry &e : this->entries)
+    if (e.panel && e.open)
+      order.push_back(&e);
+  std::stable_sort(order.begin(), order.end(), [](const Entry *a, const Entry *b) { return a->openedAt < b->openedAt; });
+  // (the paint tab and colour picker sit on Building Information: part of it)
+  auto partOf = [](int id) { return id == 302 || id == 37; };
+  std::vector<SDL_Rect> placed, bars;
+  // (a window moved aside keeps off the toolbar and the bottom bar too:
+  // main.lyt's root images)
+  for (int id = 1032; id <= 1039; id++)
+    if (UiElement *b = this->hud ? this->hud->getElementById(id) : nullptr) {
+      SDL_Rect br = b->getLastRect();
+      if (br.w > 0 && br.h > 0)
+        bars.push_back(br);
+    }
+  for (Entry *e : order) {
+    SDL_Rect r = this->panelRect(renderer, *e, screen);
+    if (e->moved) {
+      // (its title kept on the screen)
+      r.x = std::clamp(e->moveX, screen->x - r.w + 60, screen->x + screen->w - 60);
+      r.y = std::clamp(e->moveY, screen->y, screen->y + screen->h - 24);
+    } else if (Features::smartStack && !partOf(e->id) && r.w > 0 && r.h > 0) {
+      auto clear = [&](const SDL_Rect &c, bool ofBars) {
+        if (c.x < screen->x || c.y < screen->y || c.x + c.w > screen->x + screen->w || c.y + c.h > screen->y + screen->h)
+          return false;
+        for (const SDL_Rect &q : placed)
+          if (SDL_HasIntersection(&c, &q))
+            return false;
+        if (ofBars)
+          for (const SDL_Rect &q : bars)
+            if (SDL_HasIntersection(&c, &q))
+              return false;
+        return true;
+      };
+      if (!clear(r, false)) {
+        SDL_Rect best = r;
+        long bestD = -1;
+        for (const SDL_Rect &q : placed)
+          for (SDL_Rect c : {SDL_Rect{r.x, q.y - r.h, r.w, r.h}, SDL_Rect{q.x - r.w, r.y, r.w, r.h},
+                             SDL_Rect{r.x, q.y + q.h, r.w, r.h}, SDL_Rect{q.x + q.w, r.y, r.w, r.h},
+                             SDL_Rect{q.x - r.w, q.y + q.h - r.h, r.w, r.h}, SDL_Rect{q.x + q.w - r.w, q.y - r.h, r.w, r.h}}) {
+            if (!clear(c, true))
+              continue;
+            long d = static_cast<long>(c.x - r.x) * (c.x - r.x) + static_cast<long>(c.y - r.y) * (c.y - r.y);
+            if (bestD < 0 || d < bestD) {
+              bestD = d;
+              best = c;
+            }
+          }
+        r = best;
+      }
+    }
+    e->rect = r;
+    if (!partOf(e->id))
+      placed.push_back(r);
+  }
+}
+
 void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   // The gate button, live: enabled the moment there's an exhibit (the first
   // one finished with the panel open left it greyed until it was opened
@@ -1740,6 +1929,7 @@ void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
           gate->setDisabled(!this->exhibitsExist || !this->exhibitsExist());
         }
   this->dragUiScale(renderer);
+  this->placePanels(renderer, layout_rect);
   for (Entry &e : this->entries) {
     if (!e.open)
       continue;
@@ -1747,10 +1937,21 @@ void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       e.layout->draw(renderer, layout_rect);
       continue;
     }
-    SDL_Rect r = this->panelRect(renderer, e, layout_rect);
-    e.rect = r;
+    SDL_Rect r = e.rect;
     e.layout->setAnchorRect(this->anchorRect(e, layout_rect));
     e.layout->draw(renderer, &r);
+    // (its lock, beside its close button)
+    e.lockRect = {0, 0, 0, 0};
+    if (this->lockable(e))
+      if (UiElement *c = e.layout->getElementById(e.closeId)) {
+        SDL_Rect cr = c->getLastRect();
+        if (cr.w > 0 && !c->isHidden()) {
+          e.lockRect = WindowLock::beside(cr);
+          SDL_Point m = {this->mouseX, this->mouseY};
+          bool over = SDL_PointInRect(&m, &e.lockRect);
+          WindowLock::draw(renderer, this->resource_manager, e.lockRect, e.locked, over, over && this->lockDownId == e.id);
+        }
+      }
   }
   this->drawStaffPortrait(renderer);
   this->drawAnimalPortrait(renderer);
@@ -1785,6 +1986,10 @@ std::string UiGameScreen::tooltipText() const {
   if (this->dialog.layout || this->mouseX < 0)
     return "";
   SDL_Point p = {this->mouseX, this->mouseY};
+  for (const Entry &e : this->entries)
+    if (e.open && e.lockRect.w > 0 && SDL_PointInRect(&p, &e.lockRect))
+      return e.locked ? "Locked: this window stays where it is. Click to let it be dragged again."
+                      : "Lock this window where it is, so it can't be dragged by accident.";
   const UiElement *found = nullptr;
   // (buttons, and the images and status bars with help of their own: the
   // animal panel's icons, "Animal hunger. Assign zookeepers ..." and bars,
@@ -2020,14 +2225,14 @@ void UiGameScreen::drawPopup(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
 }
 
 UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
-  // Where the cursor rests (for tooltips): a move or a click starts again
+  // Where the cursor rests (for tooltips): a move or a click starts the wait
+  // again (the original shows a button's help while the cursor rests on it
+  // after a click: seen side by side in the Lab's Play, the same clicks)
   for (const Input &in : inputs)
     if (in.type == InputType::POSITIONED) {
-      if (in.event == InputEvent::CURSOR_MOVE &&
-          (in.position.x != this->mouseX || in.position.y != this->mouseY))
+      if (in.event != InputEvent::CURSOR_MOVE ||
+          in.position.x != this->mouseX || in.position.y != this->mouseY)
         this->mouseStill = SDL_GetTicks();
-      else if (in.event != InputEvent::CURSOR_MOVE)
-        this->mouseStill = SDL_GetTicks() + 100000; // none until it moves
       this->mouseX = in.position.x;
       this->mouseY = in.position.y;
     }
@@ -2038,8 +2243,23 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
   }
   // So does the Options window (its Game page's Load, Save, Main Menu and
   // Exit come back as the original panel's do)
-  if (this->optionsOpen())
+  // - but its own button on the sidebar (the disk) closes it again, as it
+  // closes the original's panel
+  if (this->optionsOpen()) {
+    for (const Input &in : inputs) {
+      if (in.event != InputEvent::LEFT_CLICK)
+        continue;
+      SDL_Point p = {in.position.x, in.position.y};
+      for (UiButton *b : this->panelButtons) {
+        SDL_Rect r = b->getLastRect();
+        if (b->getActionTarget() == 5 && r.w > 0 && SDL_PointInRect(&p, &r)) {
+          this->options->close();
+          return UiAction::NONE;
+        }
+      }
+    }
     return this->options->handleInputs(inputs);
+  }
   // The filter list, while it is down, takes the mouse: a click picks a
   // choice, or (outside it) just closes it
   if (this->filter.open && this->filter.list) {
@@ -2056,6 +2276,47 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
     }
     return UiAction::NONE;
   }
+
+  // A window dragged by its title (or the original's handle): it follows
+  // the mouse once it has moved a few pixels; let go, it stays (with the
+  // dragwindows extra, next time too: zoo.ini [Windows])
+  for (const Input &in : inputs) {
+    int x = in.position.x, y = in.position.y;
+    if (in.event == InputEvent::LEFT_CLICK && this->dragId < 0) {
+      this->beginDrag(x, y);
+    } else if (in.event == InputEvent::CURSOR_MOVE && this->dragId >= 0) {
+      if (!this->dragMoving && (std::abs(x - this->dragFromX) > 3 || std::abs(y - this->dragFromY) > 3))
+        this->dragMoving = true;
+      if (this->dragMoving)
+        for (Entry &e : this->entries)
+          if (e.panel && e.id == this->dragId) {
+            e.moved = true;
+            e.moveX = x - this->dragGrabX;
+            e.moveY = y - this->dragGrabY;
+          }
+    } else if (in.event == InputEvent::LEFT_RELEASE && this->lockDownId >= 0) {
+      // (a lock let go on: opened or shut)
+      for (Entry &e : this->entries)
+        if (e.panel && e.id == this->lockDownId && e.lockRect.w > 0 && SDL_PointInRect(&in.position, &e.lockRect)) {
+          e.locked = !e.locked;
+          Settings::set("Windows", "l" + std::to_string(e.id), e.locked ? "1" : "0");
+        }
+      this->lockDownId = -1;
+      return UiAction::NONE;
+    } else if (in.event == InputEvent::LEFT_RELEASE && this->dragId >= 0) {
+      if (this->dragMoving && Features::dragWindows)
+        for (const Entry &e : this->entries)
+          if (e.panel && e.id == this->dragId)
+            Settings::set("Windows", "w" + std::to_string(e.id), std::to_string(e.rect.x) + "," + std::to_string(e.rect.y));
+      bool wasMoving = this->dragMoving;
+      this->dragId = -1;
+      this->dragMoving = false;
+      if (wasMoving)
+        return UiAction::NONE;
+    }
+  }
+  if (this->dragMoving)
+    return UiAction::NONE;
 
   UiAction action = UiAction::NONE;
   if (this->pendingAction != UiAction::NONE) {
@@ -2095,9 +2356,26 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
 
   if (isPanelToggle(action)) {
     // The panel buttons are toggles in one radio set: each open panel is
-    // the one whose button is on
-    for (UiButton *b : this->panelButtons)
-      this->setPanelOpen(b->getActionTarget(), b->isToggledOn());
+    // the one whose button is on. Ours, with smartstack: only the sidebar's
+    // panels (the buy panels, research, Game Options...: one spot, on the
+    // left) replace one another; any other window opened stays, moved aside
+    // if it would cover the new one
+    const int clicked = panelOf(action);
+    // (Game Options too - as the original's side panel; as the Options
+    // window it's a window of its own and closes nothing)
+    auto leftSide = [](int id) {
+      return id == 3 || id == 4 || id == 8 || id == 10 || id == 15 || (id == 5 && !Features::optionsWindow) ||
+             id == 803 || id == 34;
+    };
+    for (UiButton *b : this->panelButtons) {
+      int t = b->getActionTarget();
+      if (Features::smartStack && t != clicked && !b->isToggledOn() && this->isPanelOpen(t) &&
+          !(leftSide(t) && leftSide(clicked))) {
+        b->setToggledOn(true);
+        continue;
+      }
+      this->setPanelOpen(t, b->isToggledOn());
+    }
   } else if (isPanelClose(action)) {
     int id = panelOf(action);
     this->setPanelOpen(id, false);
@@ -2505,7 +2783,7 @@ void UiGameScreen::setupFilterPanel() {
     sell->onClick = [this] {
       if (!this->fences || !this->fences->filter(this->shownFilter))
         return;
-      int refund = this->fences->filterType().cost / 2;
+      int refund = this->fences->filterType(this->fences->filter(this->shownFilter)->file).cost / 2;
       this->fences->removeFilter(this->shownFilter);
       if (this->sim && refund > 0)
         this->sim->earn(ZooSim::Construction, refund);
@@ -2535,7 +2813,7 @@ void UiGameScreen::refreshFilterPanel() {
     this->setPanelOpen(46, false);
     return;
   }
-  const Fences::FilterType &k = this->fences->filterType();
+  const Fences::FilterType &k = this->fences->filterType(f->file);
   auto text = [&](int eid, const std::string &s) {
     if (UiText *t = dynamic_cast<UiText *>(z->getElementById(eid)))
       if (!t->isBeingEdited())
@@ -2684,10 +2962,10 @@ void UiGameScreen::showStaff(int id) {
   show(3578, keeperLike);
   show(3564, keeperLike);
   show(3565, maint);
-  // Keepers with no exhibits open on Job Assignment (as the original);
-  // the rest on Status
-  UiButton *tab = dynamic_cast<UiButton *>(
-      z->getElementById(keeperLike && m->exhibits.empty() ? 3564 : 3562));
+  // Every one opens on Status (seen side by side in the Lab's Play: the
+  // original's keeper with no exhibits, picked from the Staff List or on
+  // the map, shows its salary, duty and training)
+  UiButton *tab = dynamic_cast<UiButton *>(z->getElementById(3562));
   if (tab)
     tab->choose();
   z->syncTabs();
@@ -2783,7 +3061,13 @@ void UiGameScreen::refreshStaff() {
       for (int id : shown) {
         const Staff::Member *m = this->staff->member(id);
         const Staff::Type &t = this->staff->types()[m->type];
-        list->addItem(m->name, "", t.listImage[m->female ? 1 : 0]);
+        // (its cListImageName as art, as the Animal List's: the raw frame
+        // reader drew the zookeeper's 17 x 32 at half its size)
+        const std::string &path = t.listImage[m->female ? 1 : 0];
+        if (!path.empty() && this->resource_manager->hasResource(path + ".ani"))
+          list->addItem(m->name, this->resource_manager->getAnimation(path));
+        else
+          list->addItem(m->name, "", path);
       }
       this->listedStaff = shown;
       this->staffListCount = (int)shown.size();

@@ -75,7 +75,8 @@ const TABS = [
   ['engine', 'Write Code', 'ZT1 Engine', "Our engine's own source, and the game's files: write the feature here, then Build engine"],
   ['scene', 'Test Zoo', 'ZT1 Engine', 'Our engine running a test zoo: build in it, watch its code step by step, follow animals'],
   ['play', 'Play Game', 'ZT1 Engine', 'The whole game: our engine, or the original to compare'],
-  ['mods', 'Experiments', '', "Small test scripts run in the test zoo, without changing the engine - e.g. checking one of the original's functions against ours"],
+  ['mods', 'Mods', '', 'Make, test and share mods; the game’s files; and Lab scripts - small test scripts run in the Test Zoo'],
+  ['help', 'Help', '', 'Guides, recorded tutorials and help using the Lab (F1)'],
 ];
 // An animal's stat -> the zoo.exe function behind it
 const STAT_FN = { happiness: '0x4378df', hunger: '0x438a79', health: '0x4389aa', energy: '0x4384ba' };
@@ -230,6 +231,7 @@ function setTab(t) {
   const find = t === 'functions';
   if (find) t = 'code';
   if (S.tab === 'play' && t !== 'play' && S.play.running) lab.playArea(null);
+  if (S.tab === 'help' && t !== 'help') helpPauseMedia();
   S.tab = t;
   store.set('tab', t);
   for (const [id] of TABS) $('v-' + id).classList.toggle('on', id === t);
@@ -244,6 +246,7 @@ function setTab(t) {
     if (find && $('fsearch')) $('fsearch').focus();
   }
   else if (t === 'mods') renderMods();
+  else if (t === 'help') renderHelp();
   else if (t === 'files') renderFiles();
   else if (t === 'engine') {
     renderEngine();
@@ -260,9 +263,10 @@ function renderTop() {
   // (the one big action of the tab: build ours, build and test an experiment,
   // run the picked experiment in the Test Zoo; none where there's nothing to run)
   // (Write Code's is Build engine - its only one: the Build panel has none)
-  const runLabel = { engine: S.eng.build.state === 'building' ? 'Building…' : 'Build engine', mods: 'Build & test', scene: 'Run experiment' }[S.tab];
+  // (on Mods, only for a Lab script)
+  const runLabel = { engine: S.eng.build.state === 'building' ? 'Building…' : 'Build engine', mods: S.modsLeft === 'mods' ? 'Build & test' : '', scene: 'Run Lab script' }[S.tab];
   $('run-btn').textContent = runLabel || '';
-  $('run-btn').title = { engine: 'Save every file and build the engine (the Test Zoo restarts on it)', mods: 'Build this experiment and run it in the Test Zoo', scene: 'Run the picked experiment in the Test Zoo' }[S.tab] || '';
+  $('run-btn').title = { engine: 'Save every file and build the engine (the Test Zoo restarts on it)', mods: 'Build this Lab script and run it in the Test Zoo', scene: 'Run the picked Lab script in the Test Zoo' }[S.tab] || '';
   $('run-btn').classList.toggle('hidden', !runLabel);
   const ep = $('engine-pill');
   const st = S.engine.status;
@@ -375,9 +379,9 @@ function renderCode() {
   dock.els.code.innerHTML = `<div class="page">
     <div class="pagehead"><span class="h">${esc(isRaw && !f.kb && isDefaultName(f.name) ? 'Code at ' + f.addr : displayName(f))}</span>${
       S.expert ? `<span class="mono muted" style="font-size:12px">${esc(f.cls ? f.cls + ' · ' : '')}${f.addr}</span>` : ''
-    }${badges.join('')}<div class="spacer"></div><div class="btn" data-act="tryFn" data-arg="${f.addr}" title="Run zoo.exe's own code on what's picked in the Test Zoo, and see everything it read and wrote">Run the original</div><div class="btn" data-act="seeLive" data-arg="${f.addr}" title="Run the experiment that checks this function, in the Test Zoo">Watch in Test Zoo</div><div class="btn primary" data-act="modFor" data-arg="${f.addr}" title="${
-      mods.length ? 'Open the experiment that checks this function' : 'A new experiment: a small script that checks this function against our engine in the Test Zoo'
-    }">${mods.length ? 'Open its experiment' : 'New experiment'}</div></div>
+    }${badges.join('')}<div class="spacer"></div><div class="btn" data-act="tryFn" data-arg="${f.addr}" title="Run zoo.exe's own code on what's picked in the Test Zoo, and see everything it read and wrote">Run the original</div><div class="btn" data-act="seeLive" data-arg="${f.addr}" title="Run the Lab script that checks this function, in the Test Zoo">Watch in Test Zoo</div><div class="btn primary" data-act="modFor" data-arg="${f.addr}" title="${
+      mods.length ? 'Open the Lab script that checks this function' : 'A new Lab script: a small script that checks this function against our engine in the Test Zoo'
+    }">${mods.length ? 'Open its Lab script' : 'New Lab script'}</div></div>
     <div class="english"><div class="t">IN PLAIN ENGLISH</div><div class="d">${
       plain ? esc(plain) : '<span class="muted">Not described yet. Read the code, then give it a name and a note on the right.</span>'
     }</div></div>
@@ -640,20 +644,20 @@ function renderFinder() {
   ensureOriginal();
   const all = allFunctions();
   const named = all.filter((f) => !f.unnamed).length;
-  const counts = { All: all.length, Unnamed: all.filter((f) => f.unnamed).length, 'Has an experiment': all.filter((f) => f.hasMod).length, 'In our engine': all.filter((f) => f.inEngine).length };
+  const counts = { All: all.length, Unnamed: all.filter((f) => f.unnamed).length, 'Has a Lab script': all.filter((f) => f.hasMod).length, 'In our engine': all.filter((f) => f.inEngine).length };
   for (const [n] of SYSTEMS) counts[n] = all.filter((f) => f.system === n).length;
-  const chips = ['All', ...SYSTEMS.map(([n]) => n), 'Unnamed', 'Has an experiment', 'In our engine'].filter((n) => counts[n] || n === 'All');
+  const chips = ['All', ...SYSTEMS.map(([n]) => n), 'Unnamed', 'Has a Lab script', 'In our engine'].filter((n) => counts[n] || n === 'All');
   const q = S.fview.q.toLowerCase();
   const rows = all.filter((f) => {
     const flt = S.fview.filter;
     if (flt === 'Unnamed' && !f.unnamed) return false;
-    if (flt === 'Has an experiment' && !f.hasMod) return false;
+    if (flt === 'Has a Lab script' && !f.hasMod) return false;
     if (flt === 'In our engine' && !f.inEngine) return false;
     if (SYSTEMS.some(([n]) => n === flt) && f.system !== flt) return false;
     if (q && !`${f.name} ${f.cls} ${f.addr} ${f.kb ? f.kb.summary || '' : ''}`.toLowerCase().includes(q)) return false;
     return true;
   });
-  const statusText = { mod: '● has an experiment', engine: 'in our engine', named: 'named', unnamed: 'unnamed' };
+  const statusText = { mod: '● has a Lab script', engine: 'in our engine', named: 'named', unnamed: 'unnamed' };
   const statusCls = { mod: 'green', engine: 'blue', named: '', unnamed: 'amber' };
   const shown = rows.slice(0, S.fview.limit);
   const box = $('fsearch');
@@ -671,7 +675,7 @@ function renderFinder() {
     chips
       .map(
         (n) =>
-          `<div class="chip${S.fview.filter === n ? ' on' : ''}${n === 'Unnamed' ? ' amber' : n === 'Has an experiment' ? ' green' : ''}" data-act="ffilter" data-arg="${esc(n)}">${esc(n)} ${counts[n].toLocaleString()}</div>`,
+          `<div class="chip${S.fview.filter === n ? ' on' : ''}${n === 'Unnamed' ? ' amber' : n === 'Has a Lab script' ? ' green' : ''}" data-act="ffilter" data-arg="${esc(n)}">${esc(n)} ${counts[n].toLocaleString()}</div>`,
       )
       .join(''),
   );
@@ -808,7 +812,7 @@ async function newMod(addr, fromFile) {
   );
   if (!a || !a.title) return;
   const stem = a.title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'mod';
-  if (await lab.modsExists(stem + '.cpp')) return toast(`There’s already an experiment called ${esc(stem)}.`);
+  if (await lab.modsExists(stem + '.cpp')) return toast(`There’s already a Lab script called ${esc(stem)}.`);
   const fi = a.addr && /^0x[0-9a-f]+$/i.test(a.addr) ? fnInfo(a.addr) : { addr: '0x000000', name: 'unknown', kb: null };
   let code = TEMPLATE({ addr: fi.addr, name: fi.name, summary: fi.kb ? fi.kb.summary : '', title: a.title });
   // (made from one of the game's files: it says which, and for a species'
@@ -914,10 +918,12 @@ function renderMods() {
     return;
   }
   const will = e.stem ? modWill(e.file === 'cpp' ? e.text : '', kbFns()) : [];
-  if (!S.modsLeft) S.modsLeft = store.get('modsLeft', 'mods');
-  // (the HD art panel became an experiment of its own: re/lab/scripts/hd_art.cpp;
-  // Your mods - making mods and sharing them - is modkit.js)
-  if (S.modsLeft === 'gamemods') return renderModKit();
+  // (the tab's three sections: Mods - making mods and sharing them, modkit.js -
+  // Game files, and Lab scripts; the HD art maker is a Lab script of its own,
+  // re/lab/scripts/hd_art.cpp)
+  if (!S.modsLeft) S.modsLeft = store.get('modsSection', 'library');
+  if (S.modsLeft === 'gamemods') S.modsLeft = 'library';
+  if (S.modsLeft === 'library') return renderModKit();
   if (S.modsLeft !== 'game') S.modsLeft = 'mods';
   const g = S.modsLeft === 'game' && S.modsGame;
   $('v-mods').innerHTML = `<div class="modlist" style="width:${S.modsLeft === 'game' ? 360 : 240}px">${modkitTabs()}${
@@ -930,13 +936,15 @@ function renderMods() {
               (m.meta && m.meta.name) || prettyStem(m.stem),
             )}<span class="dim clickable modcopy" data-act="copyMod" data-arg="${esc(m.stem)}" title="A new mod, starting as a copy of this one">⧉</span></div><div class="sub ${cls}">● ${esc(st)}</div></div>`;
           })
-          .join('')}<div class="item muted" data-act="newMod">+ New experiment</div>`
+          .join('')}<div class="item muted" data-act="newMod">+ New Lab script</div>`
   }</div>
-    <div style="flex:1;display:flex;flex-direction:column;min-width:0">${
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0;position:relative">${
       g
         ? `<div class="filetabs"><div class="on mono">${esc(g.name)} <span class="dim">(the game's, read only)</span></div><div class="spacer"></div><span class="muted" id="mods-refs"></span><div class="btn small primary" data-act="newModFromFile" data-arg="${esc(
             g.name,
-          )}" title="A new experiment about this file">New experiment from this file</div><div class="btn ghost small" data-act="modsGameClose">Back to ${esc(e.stem || 'the experiment')}</div></div><div class="code gftext">${gfTextHtml(g.text)}</div>`
+          )}" title="A new Lab script about this file">New Lab script from this file</div><div class="btn ghost small" data-act="modsGameClose">Back to ${esc(e.stem || 'the Lab script')}</div></div><div class="code gftext">${gfTextHtml(g.text)}</div>`
+        : S.modsLeft === 'game'
+        ? `<div class="stagemsg"><b>The game's files</b><span>Every file Zoo Tycoon has, as the game reads it (the patches' and the expansions' copies on top).<br>Pick one on the left to read it. A mod's .ztd uses these same paths; an animal's or object's art opens in the animation maker, which makes a recoloured copy as a mod.</span></div>`
         : e.stem
         ? `<div class="filetabs"><div class="${e.file === 'cpp' ? 'on' : ''}" data-act="edFile" data-arg="cpp">${esc(e.stem)}.cpp${
             e.file === 'cpp' && e.text !== e.saved ? ' •' : ''
@@ -945,13 +953,13 @@ function renderMods() {
           }</div><div class="spacer"></div><div class="btn ghost small" data-act="openModFile">Open in your editor</div></div>
       <div class="editor" id="editor"><div class="inner"><div class="gutter" id="ed-gutter"></div><div id="ed-marks"></div><pre id="ed-pre"></pre><textarea id="ed-text" spellcheck="false"></textarea></div></div>
       <div class="buildout"><div class="tabsrow"><div id="bt-out" data-act="bottomTab" data-arg="out">Build output</div><div id="bt-probs" data-act="bottomTab" data-arg="probs">Problems 0</div></div><div class="body" id="build-body"></div></div>`
-        : `<div class="stagemsg"><b>No experiments yet</b><span>An experiment is a small C++ script that sets up the Test Zoo and checks one rule of the original game against our engine, step by step - without changing the engine.</span><div class="btn primary" data-act="newMod">New experiment</div></div>`
+        : `<div class="stagemsg"><b>No Lab scripts yet</b><span>A Lab script is a small C++ script that sets up the Test Zoo and checks one rule of the original game against our engine, step by step - without changing the engine.</span><div class="btn primary" data-act="newMod">New Lab script</div></div>`
     }</div>
-    <div class="rightcol"><div class="section"><div class="label">This experiment will</div>${
+    ${S.modsLeft === 'game' ? '' : '<div class="rightcol">'}${S.modsLeft === 'game' ? '' : `<div class="section"><div class="label">This script will</div>${
       will.length ? will.map((w) => `<div class="willbox">${w}</div>`).join('') : '<div class="muted">…</div>'
     }</div><div class="section"><div class="label">Lab API</div><div class="muted" style="font-size:12px">Click one to put it in at the cursor.</div>${S.api
       .map((a) => `<div class="apibox" data-act="insertApi" data-arg="${esc(a.sig)}">${esc(a.sig)}<div class="d">${esc(a.about)}</div></div>`)
-      .join('')}</div></div>`;
+      .join('')}</div></div>`}`;
   // (the game's files on the left; a game file open in the middle)
   if (S.modsLeft === 'game') gfMount($('mods-gf'), 'mods');
   if (g) gfRefsInto($('mods-refs'), g.name);
@@ -1011,6 +1019,19 @@ async function openEngineFile(rel, line, col) {
 async function saveEngineFile(rel) {
   rel = rel || S.eng.file;
   if (!rel || !CodeEditor.isDirty(rel) || CodeEditor.readOnlyOf(rel)) return true;
+  // (a file inside a mod's .ztd: saved back into it)
+  const mod = modKeyParts(rel);
+  if (mod) {
+    const r = await lab.modkitEntrySave(mod.folder, mod.ztd, mod.entry, CodeEditor.textOf(rel), CodeEditor.crlfOf(rel));
+    if (!r.ok) {
+      toast('Couldn’t save it into the mod: ' + esc(r.error || ''), 5000);
+      return false;
+    }
+    CodeEditor.markSaved(rel, CodeEditor.textOf(rel));
+    toast(`Saved into <b>${esc(mod.folder)}</b>. Try in the Test Zoo reads it afresh.`, 3500);
+    refreshEngineChrome();
+    return true;
+  }
   // (changed on disk since it was opened here: asked before it's replaced)
   const disk = await lab.srcReadAll(rel);
   if (disk && CodeEditor.diskOf(rel) !== null && disk.text !== CodeEditor.diskOf(rel)) {
@@ -1051,16 +1072,42 @@ function engineTabs() {
     .map((f) => {
       const name = f.replace(/^game:/, '').split(/[\\/]/).pop();
       const dirty = CodeEditor.isDirty(f);
-      return `<div class="${f === E.file ? 'on' : ''} mono" data-act="engTab" data-arg="${esc(f)}" title="${esc(f)}">${esc(name)}${dirty ? ' •' : ''}${
-        CodeEditor.readOnlyOf(f) ? ' <span class="dim">(read only)</span>' : ''
-      }<span class="dim clickable" data-act="engClose" data-arg="${esc(f)}" style="margin-left:8px">✕</span></div>`;
+      // (one line each: a long name ends in …, the whole path in its tooltip)
+      const ro = CodeEditor.readOnlyOf(f);
+      // (a file inside a mod's .ztd: which mod, on its tab)
+      const mod = modKeyParts(f);
+      return `<div class="ftab${f === E.file ? ' on' : ''} mono" data-act="engTab" data-arg="${esc(f)}" title="${esc(mod ? `${mod.entry} in ${mod.folder}/${mod.ztd}` : f)}${
+        ro ? ' (read only)' : ''
+      }"><span class="ftname">${esc(name)}</span>${dirty ? '<span class="ftdirty">•</span>' : ''}${
+        ro ? '<span class="ftro" title="Read only">read only</span>' : mod ? `<span class="ftro ftmod" title="In the mod ${esc(mod.folder)}">${esc(mod.folder)}</span>` : ''
+      }<span class="ftclose clickable" data-act="engClose" data-arg="${esc(f)}" title="Close">✕</span></div>`;
     })
     .join('');
 }
 
 function refreshEngineChrome() {
   const t = $('ee-tabs');
-  if (t) t.innerHTML = engineTabs();
+  if (t) {
+    t.innerHTML = engineTabs();
+    // (the open file's tab kept in view when they run past the strip)
+    // (after it's laid out: before, a tab at the end came out half hidden)
+    requestAnimationFrame(() => t.querySelector('.ftab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+    if (!t.dataset.wheel) {
+      // (the mouse wheel scrolls the strip sideways)
+      t.dataset.wheel = '1';
+      t.addEventListener('wheel', (ev) => {
+        if (Math.abs(ev.deltaY) > Math.abs(ev.deltaX)) {
+          t.scrollLeft += ev.deltaY;
+          ev.preventDefault();
+        }
+      }, { passive: false });
+      // (a middle click closes a tab)
+      t.addEventListener('auxclick', (ev) => {
+        const tab = ev.button === 1 && ev.target.closest('.ftab');
+        if (tab) tab.querySelector('.ftclose')?.click();
+      });
+    }
+  }
   const st = $('ee-lsp');
   if (st) {
     const s = CodeEditor.lsp.status;
@@ -1480,7 +1527,7 @@ function renderEngine() {
   }`;
   dock.els.editor.innerHTML = `${
       E.file
-        ? `<div class="filetabs"><div id="ee-tabs" style="display:flex;overflow-x:auto;padding:0;background:none;box-shadow:none">${engineTabs()}</div><div class="spacer"></div><span id="ee-lsp" style="padding:9px 8px;font-size:12px"></span><span class="muted" id="ee-cursor" style="padding:9px 8px;font-size:12px"></span><div class="btn ghost small" data-act="engFind" title="Ctrl+F (Ctrl+H: replace)">Find</div><div class="btn ghost small" data-act="engOpenOutside">Open in your editor</div></div>
+        ? `<div class="filetabs"><div id="ee-tabs" class="ftabs">${engineTabs()}</div><span id="ee-lsp" class="ftinfo"></span><span class="muted ftinfo" id="ee-cursor"></span><div class="btn ghost small" data-act="engFind" title="Ctrl+F (Ctrl+H: replace)">Find</div><div class="btn ghost small" data-act="engOpenOutside">Open in your editor</div></div>
       ${engBarHtml(E.file)}<div style="flex:1;position:relative;min-height:0" id="ee-slot"></div>`
         : `<div style="flex:1;position:relative"><div class="stagemsg"><b>Our engine's code</b><span>Search it in Files, or open it from a function’s <b>In our engine</b> in Original Game.<br>Change it here, then <b>Build engine</b> and Play.</span></div></div>`
     }`;
@@ -1687,7 +1734,7 @@ function pickMod(stem) {
 }
 
 async function runMod(stem) {
-  if (!stem) return toast('Pick an experiment first (left side), or make one in Experiments.');
+  if (!stem) return toast('Pick a Lab script first (left side), or make one in Mods › Lab scripts.');
   if (S.editor.stem === stem) await saveEditor();
   S.builds[stem] = { state: 'building', problems: [] };
   lab.engineSend({ cmd: 'build', script: stem });
@@ -2117,7 +2164,7 @@ const ACTIONS = {
       await runMod(m.stem);
     }
     setTab('scene');
-    if (!m) toast('No experiment checks this one yet: <b>New experiment</b> makes one.', 4000);
+    if (!m) toast('No Lab script checks this one yet: <b>New Lab script</b> makes one.', 4000);
   },
   modFor: async (addr) => {
     const m = modsFor(addr)[0];
@@ -2326,6 +2373,12 @@ async function pollGhidra() {
 
 // ------------------------------------------------------------- engine
 lab.onEngineStatus((s) => {
+  // (each time an engine comes up: what was sent to the one before is lost)
+  if (s.status === 'connected' && S.engine.status !== 'connected') {
+    S.engine.ups = (S.engine.ups || 0) + 1;
+    // (the Watch panel's rows were the last engine's: it follows nobody yet)
+    if (typeof WT !== 'undefined') Object.assign(WT, { rows: [], watching: [] });
+  }
   S.engine.status = s.status;
   S.engine.detail = s.detail;
   renderTop();
@@ -2356,8 +2409,10 @@ lab.onEngineStatus((s) => {
     S.files.want = null;
     renderFiles();
   }
-  // (Game files asked before the engine was up: asked again now it is)
-  if (s.status === 'connected' && typeof GF !== 'undefined' && !GF.index) {
+  // (Game files asked again from each new engine: before it was up, or one
+  // started with other mods on - a mod's files take the game's place)
+  if (s.status === 'connected' && typeof GF !== 'undefined') {
+    GF.index = null;
     GF.asked = 0;
     gfAskIndex();
     for (const h of Object.keys(GF.els)) gfRender(h);

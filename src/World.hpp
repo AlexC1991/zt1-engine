@@ -46,6 +46,14 @@ public:
     // Return false (and keep the previous map) if the file fails to load
     bool loadScenario(const std::string& path);
     bool loadFreeform(const std::string& path);
+    // A blank map, w x h tiles of flat grass with nothing on it (the Lab's
+    // map editor; a map made there names its size in [start] blank =)
+    bool loadBlank(int w, int h);
+    // The inside of the zoo worked out again from its zoo walls and the
+    // entrance's pieces as they stand (a map made in the Lab)
+    void refindInside();
+    // An entrance piece put on the zoo wall: the wall opens where it stands
+    void openEntrance(const PlacedObjects::Object &o);
 
     // Update world state (simulation)
     void update(const Uint8* state, float deltaTime);
@@ -131,6 +139,9 @@ public:
     // up/down cursor (res0.dll cursor 13, zoo.exe cursor slot 4)
     bool overTankWallTop() const { return hoverWallTop; }
     void mouseMove(int x, int y);
+    // Where the mouse last was over the map (the held object shown again
+    // there at once when it's turned with Q / E)
+    int lastMouseX = -1, lastMouseY = -1;
     ToolResult mouseDown(int x, int y);
     ToolResult mouseUp(int x, int y);
     void cancelTool();
@@ -282,6 +293,8 @@ public:
     // Options' scroll speed set it - zoo.exe 0x51a33c, 0x606800)
     static inline float kEdgeScrollPixels = 32.0f;
     static inline bool kEdgeScrollOn = true;
+    // (loadBlank's size, for loadFreeform: a blank map instead of a .zoo)
+    int blankW = 0, blankH = 0;
 
     // Camera control
     void setCameraPosition(int x, int y);
@@ -336,6 +349,7 @@ private:
     // Buildings' [AmbientSound] loops (fountains ...): heard near the view
     // (attenuation and distance under 2200), one started a second at most
     std::map<int, int> buildingLoops; // object index -> channel
+    std::map<int, std::pair<int, std::string>> filterLoops; // filter index -> channel, its sound
     std::map<std::string, std::pair<std::string, int>> ambientOf; // file -> sound, attenuation
     float buildingSoundClock = 0;
     void updateBuildingSounds(float seconds);

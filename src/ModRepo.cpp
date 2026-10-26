@@ -73,6 +73,40 @@ std::string lastError() {
   return e && *e ? e : "the repository couldn't be reached";
 }
 
+// Preview bytes come only from the catalogue already verified by modrepo.dll.
+// Bound the encoded data and PNG dimensions before the image decoder sees it.
+std::string picturePng(const std::string &encoded) {
+  if (encoded.empty() || encoded.size() > 87384 || encoded.size() % 4) return {};
+  const std::string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string bytes;
+  bytes.reserve(encoded.size() / 4 * 3);
+  for (size_t i = 0; i < encoded.size(); i += 4) {
+    unsigned v[4] = {};
+    const bool pad2 = encoded[i + 2] == '=', pad3 = encoded[i + 3] == '=';
+    if ((pad2 && !pad3) || ((pad2 || pad3) && i + 4 != encoded.size())) return {};
+    for (int n = 0; n < 4; n++) {
+      if (n >= 2 && encoded[i + n] == '=') continue;
+      const auto digit = alphabet.find(encoded[i + n]);
+      if (digit == std::string::npos) return {};
+      v[n] = static_cast<unsigned>(digit);
+    }
+    bytes.push_back(static_cast<char>((v[0] << 2) | (v[1] >> 4)));
+    if (!pad2) bytes.push_back(static_cast<char>((v[1] << 4) | (v[2] >> 2)));
+    if (!pad3) bytes.push_back(static_cast<char>((v[2] << 6) | v[3]));
+  }
+  const unsigned char signature[] = {137, 80, 78, 71, 13, 10, 26, 10};
+  if (bytes.size() < 45 || bytes.size() > 65536 ||
+      bytes.compare(0, 8, reinterpret_cast<const char *>(signature), 8) ||
+      bytes.compare(12, 4, "IHDR") || bytes.compare(bytes.size() - 8, 4, "IEND")) return {};
+  const auto be = [&](size_t at) {
+    unsigned value = 0;
+    for (size_t n = 0; n < 4; n++) value = (value << 8) | static_cast<unsigned char>(bytes[at + n]);
+    return value;
+  };
+  const unsigned w = be(16), h = be(20);
+  return be(8) == 13 && w && h && w <= 184 && h <= 138 ? bytes : std::string();
+}
+
 std::vector<Mod> parse(const std::string &text) {
   std::vector<Mod> out;
   Json j = Json::parse(text);
@@ -86,6 +120,7 @@ std::vector<Mod> parse(const std::string &text) {
     mod.notice = m["notice"].str();
     mod.version = m["version"].str();
     mod.folder = m["folder"].str(mod.id);
+    mod.picture = picturePng(m["picture"].str());
     for (size_t k = 0; k < m["parts"].size(); k++) {
       const Json &p = m["parts"][k];
       Part part;

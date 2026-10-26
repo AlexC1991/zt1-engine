@@ -33,3 +33,4 @@ LAB_EXPORT bool lab_step(Lab *lab, int step) {
   }
   return true;
 }
+lab->log(fmt, ...);lab->plot(series, value);lab->view(mode, what);lab->view(mode, what);lab->focusTile(x, y);

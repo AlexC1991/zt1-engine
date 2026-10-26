@@ -160,6 +160,10 @@ std::vector<Mod> list() {
       m.preview = j["preview"].str();
       m.palette = j["palette"].str();
       m.originalPalette = j["originalPalette"].str();
+      // (a picture named outside its folder isn't its own: left out)
+      std::string pic = j["picture"].str();
+      if (!pic.empty() && pic.find("..") == std::string::npos && std::filesystem::is_regular_file(d.path() / pic))
+        m.picture = (d.path() / pic).string();
       for (size_t i = 0; i < j["replaces"].size(); i++)
         m.replaces.push_back(j["replaces"][i].str());
       m.settings = settingsOf(m.folder, j["settings"]);

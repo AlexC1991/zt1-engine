@@ -82,9 +82,10 @@ void WorldIndex::rebuild(const WorldMap &map, const PlacedObjects &objects, cons
       }
   }
   // Tank filters
-  const Fences::FilterType &k = fences.filterType();
-  for (const Fences::Filter &f : fences.filters())
+  for (const Fences::Filter &f : fences.filters()) {
+    const Fences::FilterType &k = fences.filterType(f.file);
     this->addBlock(f.x, f.y, k.footprintX, k.footprintY, What::Filter);
+  }
 }
 
 void WorldIndex::addBlock(int x0, int y0, int bw, int bh, What what) {

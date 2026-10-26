@@ -1,4 +1,5 @@
 #include "Staff.hpp"
+#include "ItemCatalog.hpp"
 #include "LabTrace.hpp"
 #include "OriginalConstants.hpp"
 #include "Guests.hpp"
@@ -55,18 +56,18 @@ void Staff::loadTypes(ResourceManager *rm) {
     return;
   if (rm->hasResource("ui/select/selsmall/selsmall.ani"))
     this->selectArrow = rm->getAnimation("ui/select/selsmall/selsmall");
-  for (const std::string &cfgName : {"staff.cfg", "staff1.cfg", "staff2.cfg"}) {
-    IniReader *cfg = rm->getIniReader(cfgName);
-    if (!cfg)
-      continue;
-    for (const auto &kv : cfg->getSection("staff")) {
-      IniReader *ai = rm->getIniReader(kv.second);
+  ItemCatalog &catalog = ItemCatalog::get();
+  catalog.load(rm);
+  for (const CatalogItem &item : catalog.all()) {
+      if (item.registrySection != "staff") continue;
+      IniReader *ai = rm->getIniReader(item.file);
       if (!ai)
         continue;
       Type t;
-      t.file = Utils::string_to_lower(kv.second);
-      t.key = kv.first;
-      std::string type = Utils::string_to_lower(ai->get("global", "type", kv.first));
+      t.file = Utils::string_to_lower(item.file);
+      size_t slash = t.file.find_last_of('/'), dot = t.file.find_last_of('.');
+      t.key = t.file.substr(slash + 1, dot - slash - 1);
+      std::string type = Utils::string_to_lower(ai->get("global", "type", t.key));
       t.kind = type == "maint"        ? Kind::Maint
                : type == "tour"       ? Kind::Guide
                : type == "scient"     ? Kind::Scientist
@@ -88,12 +89,6 @@ void Staff::loadTypes(ResourceManager *rm) {
         t.crowdRadius = ai->getInt(ints, "ccrowdradius", 1);
         t.informTime = ai->getInt(ints, "cinformguesttime", 5);
       }
-      // The subtypes it comes in
-      std::vector<std::string> subs;
-      for (const auto &s : cfg->getSection(kv.first + "/subtypes"))
-        subs.push_back(Utils::string_to_lower(s.first));
-      t.sexes[0] = subs.empty() || std::find(subs.begin(), subs.end(), "m") != subs.end();
-      t.sexes[1] = std::find(subs.begin(), subs.end(), "f") != subs.end();
       // Its animations: "walk = walk" (staff/<type>/<sub>/walk/walk) or a
       // whole path
       for (int sex = 0; sex < 2; sex++) {
@@ -148,8 +143,6 @@ void Staff::loadTypes(ResourceManager *rm) {
           t.base = rm->getAnimation("objects/helibase/idle/idle");
       }
       this->typeList.push_back(t);
-    }
-    delete cfg;
   }
   SDL_Log("[Staff] %zu staff types", this->typeList.size());
 }
@@ -308,10 +301,11 @@ bool Staff::walkable(int x, int y, const WorldMap &map, const Fences &fences, in
   }
   if (fences.tileFit(x, y, map) != Fences::Fit::Ok)
     return false;
-  const Fences::FilterType &k = fences.filterType();
-  for (const Fences::Filter &f : fences.filters())
+  for (const Fences::Filter &f : fences.filters()) {
+    const Fences::FilterType &k = fences.filterType(f.file);
     if (x >= f.x && x < f.x + k.footprintX && y >= f.y && y < f.y + k.footprintY)
       return false;
+  }
   // DRT bases
   for (const Member &m : this->list) {
     const Type &t = this->typeList[m.type];
@@ -802,9 +796,9 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
     }
   // Tank filters: a tile beside its footprint
   if (m.duties[3]) {
-    const Fences::FilterType &k = fences.filterType();
     for (size_t i = 0; i < fences.filters().size(); i++) {
       const Fences::Filter &f = fences.filters()[i];
+      const Fences::FilterType &k = fences.filterType(f.file);
       if (f.health > k.decayedHealth)
         continue;
       bool taken = false;
@@ -829,7 +823,7 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
     float bestScore = 1e30f;
     for (size_t i = 0; i < objs.size(); i++) {
       const PlacedObjects::Object &o = objs[i];
-      if (o.typeName != "trshcan" || o.fill <= 12)
+      if (!o.trashCan || o.fill <= 12)
         continue;
       bool taken = false;
       for (const Member &w : this->list)
@@ -954,6 +948,8 @@ std::string Staff::foodFor(int exhibit, const Fences &fences, bool &carnivore) c
                                         "fish",     "chum",     "seagrass", "urchin"};
         int k = std::clamp(this->animals->types()[a.type].keeperFood, 0, 13);
         carnivore = k == 1 || k == 7 || k == 11;
+        if (!this->animals->types()[a.type].customFood.empty())
+          return this->animals->types()[a.type].customFood;
         return chows[k];
       }
   return ex->tank ? "fish" : ex->testDino ? (ex->testCarnivore ? "dinocarn" : "dinogras")
@@ -1714,7 +1710,8 @@ int Staff::hire(int type, float x, float y, const WorldMap &map, const Fences &f
   if (!t.skin.empty())
     m.skin = std::uniform_int_distribution<int>(0, static_cast<int>(t.skin.size()) - 1)(this->rng);
   int n = ++this->counts[type];
-  m.name = (this->rm ? this->rm->getString(t.nameId) : t.key) + " " + std::to_string(n);
+  const CatalogItem *item = ItemCatalog::get().find(t.file);
+  m.name = (item ? item->name : this->rm ? this->rm->getString(t.nameId) : t.key) + " " + std::to_string(n);
   m.x = x;
   m.y = y;
   m.fx = 0;
@@ -1853,7 +1850,7 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
             if (PlacedObjects::Object *can = this->objects->byId(m.jobItem)) {
               int cx = static_cast<int>(std::floor(can->x)), cy = static_cast<int>(std::floor(can->y));
               for (PlacedObjects::Object &o : this->objects->all())
-                if (o.typeName == "trshcan" && static_cast<int>(std::floor(o.x)) == cx &&
+                if (o.trashCan && static_cast<int>(std::floor(o.x)) == cx &&
                     static_cast<int>(std::floor(o.y)) == cy)
                   o.fill = 0;
             }
@@ -2010,8 +2007,8 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
             wy = m.jobEdge.alongX ? static_cast<float>(m.jobEdge.y) : m.jobEdge.y + 0.5f;
           } else {
             const Fences::Filter *f = fences.filter(m.jobFilter);
-            wx = f ? f->x + fences.filterType().footprintX * 0.5f : m.x;
-            wy = f ? f->y + fences.filterType().footprintY * 0.5f : m.y;
+            wx = f ? f->x + fences.filterType(f->file).footprintX * 0.5f : m.x;
+            wy = f ? f->y + fences.filterType(f->file).footprintY * 0.5f : m.y;
           }
           float d = std::hypot(wx - m.x, wy - m.y);
           if (d > 0.001f) {

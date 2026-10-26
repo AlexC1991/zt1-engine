@@ -26,6 +26,7 @@
 #include "UiLayout.hpp"
 #include "UiScrollBar.hpp"
 #include "UiText.hpp"
+#include "WindowLock.hpp"
 
 extern bool g_showDiagnostics; // (Window.cpp: F3's FPS counter)
 extern float g_ZoomLevel;      // (World.cpp: the map's zoom)
@@ -231,6 +232,7 @@ enum : int { kVolumeLabel = 1, kVolumeBar, kMusicLabel, kMusicBar }; // Sound
 enum : int {
   kScrollLabel = 1, kScrollBar, kEdge, kEdgeText, kTipsLabel, kTipsShort, kTipsLong = 8, kTipsSet = 10,
   kDelayLabel, kDelayBar, kDurationLabel, kDurationBar, kStyleLabel, kStyleNew, kStyleOld = 18, kStyleSet = 20,
+  kWinLabel, kWinReset,
 }; // Controls
 enum : int {
   kFilterLabel = 1, kFilterOff, kFilterP = 4, kFilterD = 6, kFilterT = 8, kFilterSet = 10,
@@ -261,7 +263,7 @@ bool g_makingInGame = true;
 int extraPage(const std::string &name) {
   if (name == "optionswindow")
     return -1;
-  if (name == "hotkeys")
+  if (name == "hotkeys" || name == "smartstack" || name == "dragwindows")
     return kControls;
   if (name == "mods" || name == "modmenu" || name == "updatechecks")
     return kMods;
@@ -275,7 +277,8 @@ std::string extraName(const std::string &name) {
       {"pathmodes", "Path drag modes"},      {"hotkeys", "Extra hotkeys"},
       {"mods", "Load mods"},                 {"modmenu", "Mod Menu button"},
       {"updatechecks", "Check for updates"}, {"misnamedart", "Misnamed art"},
-      {"optionswindow", "This Options window"}};
+      {"optionswindow", "This Options window"}, {"smartstack", "Windows move aside"},
+      {"dragwindows", "Drag any window"},       {"infocloseslists", "Windows close lists"}};
   auto it = names.find(name);
   return it == names.end() ? name : it->second;
 }
@@ -425,9 +428,14 @@ std::string optionsLayout() {
   };
 
   // Game: the original panel's four buttons (their own strings), in the
-  // middle of the page
-  for (int i = 0; i < 4; i++)
-    t += goldButton(pageId(kGame, kLoad + i), 182 + (kW - 194 - 116) / 2, kRowsY + 8 + i * 38, 1501 + i);
+  // middle of the page - across, and down between its title and the words
+  // at its foot (kAbout)
+  {
+    const int blockH = 3 * 38 + 24, top = kRowsY, bottom = kH - 96;
+    const int y0 = top + (bottom - top - blockH) / 2;
+    for (int i = 0; i < 4; i++)
+      t += goldButton(pageId(kGame, kLoad + i), 182 + (kW - 194 - 116) / 2, y0 + i * 38, 1501 + i);
+  }
 
   // Display
   int y = kRowsY;
@@ -509,6 +517,10 @@ std::string optionsLayout() {
   choice(pageId(kControls, kStyleNew), kControlX, y, 86);
   choice(pageId(kControls, kStyleOld), kControlX + 116, y, 110);
   t += radioSet(pageId(kControls, kStyleSet), {pageId(kControls, kStyleNew), pageId(kControls, kStyleOld)});
+  y += kRow;
+  // Where the windows go: the ones dragged put back
+  label(pageId(kControls, kWinLabel), y);
+  t += goldButton(pageId(kControls, kWinReset), kControlX, y - 2);
 
   // Accessibility
   y = kRowsY;
@@ -574,7 +586,7 @@ std::string optionsLayout() {
 
   // The extras, each on its page, below that page's other rows (24 apart)
   int next[kPages] = {};
-  next[kControls] = kRowsY + 6 * kRow + 6;
+  next[kControls] = kRowsY + 7 * kRow + 6;
   next[kGameplay] = kRowsY;
   next[kMods] = kRowsY + 40;
   int count[kPages] = {};
@@ -1268,6 +1280,17 @@ void UiOptions::wire() {
   describe({pageId(kControls, kStyleLabel), pageId(kControls, kStyleNew), pageId(kControls, kStyleNew + 1),
             pageId(kControls, kStyleOld), pageId(kControls, kStyleOld + 1)},
            "What the disk button and Esc open in a zoo: this window, or the original game's Game Options panel.");
+  text(pageId(kControls, kWinLabel), "Window Positions");
+  if (UiButton *b = button(pageId(kControls, kWinReset))) {
+    b->setLabel("Reset");
+    b->onClick = [this] {
+      this->resetPosition();
+      if (this->onResetWindows)
+        this->onResetWindows();
+    };
+  }
+  describe({pageId(kControls, kWinLabel), pageId(kControls, kWinReset)},
+           "Every window you have dragged goes back where the game puts it, this one too. Windows start locked: open a window's gold lock to drag it.");
   text(pageId(kControls, kDelayLabel), "Tool Tip Delay");
   text(pageId(kControls, kDurationLabel), "Tool Tip Duration");
   {
@@ -1380,6 +1403,54 @@ UiAction UiOptions::handleInputs(std::vector<Input> &inputs) {
       this->mouseY = in.position.y;
     }
   }
+  // (ours, dragwindows: dragged by its title strip unless locked; its lock
+  // opened or shut with a click)
+  if (Features::dragWindows) {
+    for (const Input &in : inputs) {
+      SDL_Point p = {in.position.x, in.position.y};
+      if (in.event == InputEvent::LEFT_CLICK && !this->dragging) {
+        if (this->lockRect.w > 0 && SDL_PointInRect(&p, &this->lockRect)) {
+          this->lockDown = true; // (opened or shut when let go on it)
+          return UiAction::NONE;
+        }
+        SDL_Rect closeR = {0, 0, 0, 0};
+        if (UiElement *c = this->layout->getElementById(kClose))
+          closeR = c->getLastRect();
+        if (!this->locked && SDL_PointInRect(&p, &this->lastRect) && p.y < this->lastRect.y + 20 &&
+            !SDL_PointInRect(&p, &closeR)) {
+          this->dragging = true;
+          this->dragMoved = false;
+          this->dragFromX = p.x;
+          this->dragFromY = p.y;
+          this->dragOffX = this->offsetX;
+          this->dragOffY = this->offsetY;
+        }
+      } else if (in.event == InputEvent::CURSOR_MOVE && this->dragging) {
+        if (std::abs(p.x - this->dragFromX) > 3 || std::abs(p.y - this->dragFromY) > 3)
+          this->dragMoved = true;
+        if (this->dragMoved) {
+          this->offsetX = this->dragOffX + p.x - this->dragFromX;
+          this->offsetY = this->dragOffY + p.y - this->dragFromY;
+        }
+      } else if (in.event == InputEvent::LEFT_RELEASE && this->lockDown) {
+        this->lockDown = false;
+        if (SDL_PointInRect(&p, &this->lockRect)) {
+          this->locked = !this->locked;
+          Settings::set("Windows", "lOptions", this->locked ? "1" : "0");
+        }
+        return UiAction::NONE;
+      } else if (in.event == InputEvent::LEFT_RELEASE && this->dragging) {
+        if (this->dragMoved)
+          Settings::set("Windows", "wOptions", std::to_string(this->offsetX) + "," + std::to_string(this->offsetY));
+        bool moved = this->dragMoved;
+        this->dragging = this->dragMoved = false;
+        if (moved)
+          return UiAction::NONE;
+      }
+    }
+    if (this->dragMoved)
+      return UiAction::NONE;
+  }
   this->layout->handleInputs(inputs);
   // What the setting under the mouse does (else the page's own words)
   if (UiText *a = dynamic_cast<UiText *>(this->layout->getElementById(kAbout))) {
@@ -1412,6 +1483,21 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
   this->scale.update(renderer, originX, originY);
   this->tick(renderer);
   SDL_Rect r = this->layout->computeRect(renderer, screen);
+  // (ours, dragwindows: where it was dragged to, its title kept on the screen)
+  if (!this->settled) {
+    this->settled = true;
+    std::sscanf(Settings::get("Windows", "wOptions").c_str(), "%d,%d", &this->offsetX, &this->offsetY);
+    this->locked = Settings::get("Windows", "lOptions") != "0"; // (locked unless opened)
+  }
+  if (Features::dragWindows) {
+    int x = std::clamp(r.x + this->offsetX, screen->x - r.w + 60, screen->x + screen->w - 60);
+    int y = std::clamp(r.y + this->offsetY, screen->y, screen->y + screen->h - 24);
+    this->offsetX = x - r.x;
+    this->offsetY = y - r.y;
+    r.x = x;
+    r.y = y;
+  }
+  this->lastRect = r;
   if (RenderSettings::drawsUiArt()) {
     // The Help window's frame (500 x 331) stretched to kW x kH from its
     // edges - its corners as they are, its sides and middle drawn longer
@@ -1469,4 +1555,21 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
     SDL_SetRenderDrawBlendMode(renderer, was);
   }
   this->layout->draw(renderer, &r);
+  // Its lock, beside the close button
+  this->lockRect = {0, 0, 0, 0};
+  if (Features::dragWindows)
+    if (UiElement *c = this->layout->getElementById(kClose)) {
+      SDL_Rect cr = c->getLastRect();
+      if (cr.w > 0) {
+        this->lockRect = WindowLock::beside(cr);
+        SDL_Point m = {this->mouseX, this->mouseY};
+        bool over = SDL_PointInRect(&m, &this->lockRect);
+        WindowLock::draw(renderer, this->rm, this->lockRect, this->locked, over, over && this->lockDown);
+      }
+    }
+}
+
+void UiOptions::resetPosition() {
+  this->offsetX = this->offsetY = 0;
+  Settings::set("Windows", "wOptions", "");
 }

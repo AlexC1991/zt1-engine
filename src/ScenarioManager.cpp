@@ -1,6 +1,8 @@
 #include "ScenarioManager.hpp"
 #include "ResourceManager.hpp"
 #include "Utils.hpp"
+#include "Features.hpp"
+#include "IniReader.hpp"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <fstream>
@@ -230,6 +232,43 @@ void ScenarioManager::loadFreeformMaps() {
   if (reader) {
     parseFreeformConfig(reader);
     delete reader;
+  }
+
+  // Maps made in the ZT1 Lab, from mods switched on (the "custommaps" switch):
+  // each freeform/*.scn of a mod that isn't one of the game's lists already,
+  // with its name in [freeform] title= (there's no string table entry for
+  // it), its description in the .txt beside it as the game's
+  if (Features::customMaps) {
+    std::set<std::string> listed;
+    for (const FreeformMap &m : freeform_maps)
+      listed.insert(Utils::string_to_lower(m.path));
+    for (const std::string &file : resource_manager->listResources("freeform", ".scn")) {
+      if (!resource_manager->fromMod(file) || listed.count(Utils::string_to_lower(file)))
+        continue;
+      IniReader *scn = resource_manager->getIniReader(file);
+      if (!scn)
+        continue;
+      FreeformMap map;
+      map.path = file;
+      map.name = cp1252_to_utf8(scn->get("freeform", "title"));
+      map.iconPath = scn->get("freeform", "icon");
+      map.size = scn->get("freeform", "size");
+      const bool design = !scn->get("start", "design").empty();
+      delete scn;
+      if (!design || map.name.empty())
+        continue;
+      if (map.size.empty())
+        map.size = "Medium";
+      std::string txt = file.substr(0, file.size() - 4) + ".txt";
+      int size = 0;
+      if (void *data = resource_manager->getFileContent(txt, &size)) {
+        map.description = cp1252_to_utf8(std::string(static_cast<char *>(data), size));
+        free(data);
+        map.description.erase(std::remove(map.description.begin(), map.description.end(), ''), map.description.end());
+      }
+      SDL_Log("A map from a mod: %s (%s)", map.name.c_str(), file.c_str());
+      freeform_maps.push_back(map);
+    }
   }
 
   SDL_Log("Loaded %zu freeform maps", freeform_maps.size());

@@ -26,9 +26,12 @@ jobs:
         if: env.CODEROOK_TOKEN != ''
         shell: bash
         run: |
-          npm install -g @coderook/cli >/dev/null
+          npm install -g @coderook/cli@0.39.0 >/dev/null
           cbx sign-in --token "$CODEROOK_TOKEN"
           cbx link zt1-engine .
+          # This checkout never had CodeRook's private release tooling. Preserve
+          # it, while --sync still removes public files deliberately deleted in Git.
+          NODE_PATH="$(npm root -g)" node .github/scripts/coderook-retain-private.cjs
           # (--sync: a file that's left the repository leaves the mirror too,
           # rather than staying from the last save; --allow-private: cbx
           # mistakes FreeType's src/cache, its font cache code, for a browser

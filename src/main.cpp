@@ -107,13 +107,16 @@ World *g_world = nullptr;
 // [PATCH] Starting Cash UI
 UiText *g_startingCashText = nullptr;
 UiText *g_difficultyText = nullptr;
-// Starting cash spinner, same rules as the original (its zoo.ini [UI]
-// MSStartingCash / MSCashIncrement / MSMinCash / MSMaxCash)
-const int CASH_START = 75000;
-const int CASH_STEP = 5000;
-const int CASH_MIN = 10000;
-const int CASH_MAX = 500000;
+// Starting cash spinner, as the original's (zoo.exe mapselec_Panel_show
+// 0x4cb4b1): zoo.ini [UI] MSStartingCash (50000 if not there) kept between
+// MSMinCash and MSMaxCash, stepped by MSCashIncrement (5000), and each
+// change written back to zoo.ini (0x4cb384), so the last choice comes back
+const int CASH_START = 75000; // (a scenario's own start, not the spinner's)
+int CASH_STEP = 5000;
+int CASH_MIN = 10000;
+int CASH_MAX = 500000;
 int g_currentStartingCash = CASH_START;
+static ResourceManager *g_cashStrings = nullptr;
 
 static void showStartingCash() {
   if (!g_startingCashText)
@@ -123,6 +126,25 @@ static void showStartingCash() {
   for (int i = static_cast<int>(digits.size()) - 3; i > 0; i -= 3)
     digits.insert(i, ",");
   g_startingCashText->setText("$" + digits);
+  // Its difficulty: under $25,000 hard, over $100,000 easy, else
+  // intermediate (0x4cb384: strings 11538 / 11536 / 11537)
+  if (g_difficultyText && g_cashStrings) {
+    int id = g_currentStartingCash < 25000 ? 11538 : g_currentStartingCash > 100000 ? 11536 : 11537;
+    g_difficultyText->setText(g_cashStrings->getString(id));
+  }
+}
+
+static void loadStartingCash() {
+  CASH_MIN = Settings::getInt("UI", "MSMinCash", 10000);
+  CASH_MAX = std::max(CASH_MIN, Settings::getInt("UI", "MSMaxCash", 500000));
+  CASH_STEP = std::max(1, Settings::getInt("UI", "MSCashIncrement", 5000));
+  g_currentStartingCash = std::clamp(Settings::getInt("UI", "MSStartingCash", 50000), CASH_MIN, CASH_MAX);
+}
+
+static void setStartingCash(int cash) {
+  g_currentStartingCash = std::clamp(cash, CASH_MIN, CASH_MAX);
+  Settings::setInt("UI", "MSStartingCash", g_currentStartingCash);
+  showStartingCash();
 }
 
 // These IDs trigger the TARGET_WIDTH/HEIGHT resize in UiImage.cpp
@@ -1285,7 +1307,7 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
   g_world->getFences().selectedTank = g_hud->shownExhibitId();
   // The tank filter, in the fence list, is placed like an object
   g_world->setFilterTool(!g_hud->bulldozerOn() && !file.empty() &&
-                         file == g_world->getFences().filterType().file);
+                         g_world->getFences().selectFilter(file));
   g_world->setBulldozer(g_hud->bulldozerOn());
   g_world->setDate(g_sim.dayOfMonth(), g_sim.month(), g_sim.year());
 
@@ -1370,8 +1392,12 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
            "litter [n]                       scatter litter round the view\n"
            "wear <ex|all> [life] | break <ex|all>   wear fences down / break them\n"
            "filters [health]                 list tank filters / set every one's health (0-10)\n"
-           "zoofiles                         read every .zoo (maps, the original's saves) as the original does\n"
+           "doors                            every building: where it stands, its door tiles, each on a path or not\n"
+           "text <id> [id ...]               the game's text for ids (cNameID, cUsedThought...)\n"
+           "fences [map]                     the map's fences by type, which are zoo wall, the tiles inside (map: drawn)\n"
+           "zoofiles                        read every .zoo (maps, the original's saves) as the original does\n"
            "dirty <ex> [purity]              a tank's water purity (default 30)\n"
+           "drain <ex> | fill <ex> [salt|fresh]   empty a tank / fill it again\n"
            "tankwalls <ex> <height>          a tank's walls to that height over its floor\n"
            "staff | assign <staff#> <ex>     list staff / put one on an exhibit\n"
            "money <n> | day [n] | month [n] | speed <x>\n"
@@ -1389,10 +1415,23 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
   // off, a setting set
   if (c == "shader") {
     auto &list = Shaders::all();
-    if (w.size() >= 3 && (w[2] == "on" || w[2] == "off"))
-      Shaders::setOn(w[1], w[2] == "on");
-    else if (w.size() >= 4)
-      Shaders::setValue(w[1], w[2], static_cast<float>(std::atof(w[3].c_str())));
+    // (a mod's folder can have spaces in its name - "Starter Kit/shine": the
+    // shader is the most words that name one, the rest its arguments)
+    std::string key = w.size() > 1 ? w[1] : "";
+    size_t next = 2;
+    std::string joined;
+    for (size_t n = 1; n < w.size(); n++) {
+      joined += (n > 1 ? " " : "") + w[n];
+      for (const Shaders::Shader &s : list)
+        if (Utils::string_to_lower(s.key) == Utils::string_to_lower(joined)) {
+          key = s.key;
+          next = n + 1;
+        }
+    }
+    if (w.size() > next && (w[next] == "on" || w[next] == "off"))
+      Shaders::setOn(key, w[next] == "on");
+    else if (w.size() > next + 1)
+      Shaders::setValue(key, w[next], static_cast<float>(std::atof(w[next + 1].c_str())));
     if (list.empty())
       return "No shader mods switched on (" + Mods::folder() + ")";
     for (const Shaders::Shader &s : list) {
@@ -1674,21 +1713,104 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
            std::to_string(decodedRecords) + " of " + std::to_string(records) + " records decoded to exactly their size (and " +
            std::to_string(transient) + " passing effects saved with no body)\n" + misses;
   }
+  // The game's own text for ids (names, thoughts - cNameID, cUsedThought), as
+  // the language files have them
+  if (c == "text") {
+    if (w.size() < 2)
+      return "text <id> [id ...]";
+    for (size_t i = 1; i < w.size(); i++) {
+      uint32_t id = static_cast<uint32_t>(std::strtoul(w[i].c_str(), nullptr, 10));
+      std::string t = rm->getString(id);
+      out += w[i] + ": " + (t.empty() ? "(none)" : t) + "\n";
+    }
+    return out;
+  }
+  // The fences on the map by type: how many pieces, which are zoo wall (the
+  // wall the inside of the zoo is found from), and how many tiles that makes
+  // inside
+  if (c == "fences" && w.size() >= 2 && w[1] == "map") {
+    // (inside the wall #, outside ., a zoo-wall piece's tile +)
+    const WorldMap &m = g_world->getMap();
+    std::vector<std::string> rows(static_cast<size_t>(m.getHeight()), std::string(static_cast<size_t>(m.getWidth()), '.'));
+    for (int y = 0; y < m.getHeight(); y++)
+      for (int x = 0; x < m.getWidth(); x++)
+        if (fences.insideZoo(x, y))
+          rows[static_cast<size_t>(y)][static_cast<size_t>(x)] = '#';
+    for (const auto &[e, p] : fences.pieces())
+      if (fences.types()[static_cast<size_t>(p.type)].zooWall && p.ownerY >= 0 && p.ownerY < m.getHeight() && p.ownerX >= 0 &&
+          p.ownerX < m.getWidth())
+        rows[static_cast<size_t>(p.ownerY)][static_cast<size_t>(p.ownerX)] = '+';
+    for (size_t y = 0; y < rows.size(); y++)
+      out += (y < 10 ? " " : "") + std::to_string(y) + " " + rows[y] + "\n";
+    return out;
+  }
+  if (c == "fences" && w.size() < 2) {
+    std::map<int, int> count;
+    for (const auto &[e, p] : fences.pieces())
+      count[p.type]++;
+    for (const auto &[t, n] : count) {
+      const FenceType &ft = fences.types()[static_cast<size_t>(t)];
+      out += ft.key + " (" + ft.name + "): " + std::to_string(n) + (ft.zooWall ? "  zoo wall" : "") + (ft.tank ? "  tank" : "") + "\n";
+    }
+    int in = 0, x0 = 1 << 20, y0 = 1 << 20, x1 = -1, y1 = -1;
+    const WorldMap &m = g_world->getMap();
+    for (int y = 0; y < m.getHeight(); y++)
+      for (int x = 0; x < m.getWidth(); x++)
+        if (fences.insideZoo(x, y)) {
+          in++;
+          x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x), y1 = std::max(y1, y);
+        }
+    out += std::to_string(in) + " of " + std::to_string(m.getWidth()) + "x" + std::to_string(m.getHeight()) +
+           " tiles inside the zoo wall";
+    if (in)
+      out += ", from " + std::to_string(x0) + "," + std::to_string(y0) + " to " + std::to_string(x1) + "," + std::to_string(y1);
+    return out;
+  }
+  if (c == "doors") {
+    char line[160];
+    for (const PlacedObjects::Object &o : g_world->getObjects().objects()) {
+      if (o.fence || o.className != "building")
+        continue;
+      snprintf(line, sizeof line, "%s at %.2f,%.2f facing %d:", o.typeName.c_str(), o.x, o.y, o.facing);
+      out += line;
+      std::vector<std::pair<int, int>> doors = g_world->getGuests().doorTiles(o);
+      if (doors.empty())
+        out += " no entrpos";
+      for (const auto &[x, y] : doors) {
+        snprintf(line, sizeof line, " %d,%d%s", x, y, g_world->getGuests().canWalk(x, y) ? " (path)" : "");
+        out += line;
+      }
+      out += "\n";
+    }
+    return out.empty() ? "No buildings." : out;
+  }
   if (c == "filters" && w.size() < 2) {
     std::string out;
+    static const char *const states[] = {"running", "decayed", "broken", "off"};
     for (const Fences::Filter &f : fences.filters())
       out += f.name + "  at " + std::to_string(f.x) + "," + std::to_string(f.y) + "  tank " + std::to_string(f.tank) +
-             "  health " + std::to_string(static_cast<int>(f.health)) + "\n";
+             "  health " + std::to_string(static_cast<int>(f.health)) + "  " +
+             states[static_cast<int>(fences.filterState(f))] + "  sound " + fences.filterSound(f).first + "\n";
     return out.empty() ? "No filters." : out;
   }
   if (c == "filters") {
     int n = 0;
     for (size_t i = 0; i < fences.filters().size(); i++)
       if (Fences::Filter *f = fences.filter(static_cast<int>(i))) {
-        f->health = num(1, static_cast<float>(fences.filterType().decayedHealth));
+        f->health = num(1, static_cast<float>(fences.filterType(f->file).decayedHealth));
         n++;
       }
     return std::to_string(n) + " filters set";
+  }
+  if (c == "drain" || c == "fill") {
+    Fences::Exhibit *e = exhibitArg(1);
+    if (!e || !e->tank)
+      return "Which tank?";
+    if (c == "drain")
+      fences.drainExhibit(e->id);
+    else
+      fences.fillExhibit(e->id, w.size() > 2 ? w[2] != "fresh" : e->salt);
+    return e->name + (c == "drain" ? ": drained" : ": filled");
   }
   if (c == "dirty") {
     Fences::Exhibit *e = exhibitArg(1);
@@ -2052,7 +2174,18 @@ static std::string mainMenuWithOptions(ResourceManager *rm) {
   setKey("ZooItems", "target", "0");
   return t;
 }
-static void hookMainMenu(UiLayout *layout) {
+static void hookMainMenu(UiLayout *layout, ResourceManager *rm) {
+  // Its Version_Label: string 1526 ("Version Number: %s") with the build's
+  // version (zoo.exe startup_Panel_show 0x50f1c8: its own ProductVersion)
+  if (UiText *v = dynamic_cast<UiText *>(layout->getElementById(7119))) {
+    std::string label = rm->getString(1526);
+    if (size_t p = label.find("%s"); p != std::string::npos)
+      label.replace(p, 2, Updater::version());
+    v->setText(label);
+    SDL_Log("[Menu] version label: \"%s\"", label.c_str());
+  } else {
+    SDL_Log("[Menu] no version label (7119) in the layout");
+  }
   if (UiButton *b = dynamic_cast<UiButton *>(layout->getElementById(kMainMenuOptions))) {
     // (string 1540 ends in spaces, so it sat off the centre)
     b->setLabel("Game Options");
@@ -2250,21 +2383,11 @@ static void populateFreeformList(UiLayout *layout,
     }
   }
 
-  // Initialize Starting Cash text (ID 11510)
-  element = layout->getElementById(11510);
-  if (element) {
-    g_startingCashText = dynamic_cast<UiText *>(element);
-    showStartingCash();
-  }
-
-  // Initialize Difficulty text (ID 11531)
-  element = layout->getElementById(11531);
-  if (element) {
-    g_difficultyText = dynamic_cast<UiText *>(element);
-    if (g_difficultyText) {
-      g_difficultyText->setText("Intermediate");
-    }
-  }
+  // Starting Cash (11510) and its Difficulty (11531), from zoo.ini
+  g_startingCashText = dynamic_cast<UiText *>(layout->getElementById(11510));
+  g_difficultyText = dynamic_cast<UiText *>(layout->getElementById(11531));
+  loadStartingCash();
+  showStartingCash();
 }
 
 // ============================================================================
@@ -3335,8 +3458,16 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             for (const PlacedObjects::Object &o : world->getObjects().objects())
               if (o.x > x0 - 3 && o.x < x0 + n + 3 && o.y > y0 - 3 && o.y < y0 + n + 3)
                 ok = false;
-            if (ok)
+            if (ok) {
+              // (a path through it lifted first, as a player would: a
+              // fence can't cross one - the nofenceonpath switch - and the
+              // loop wouldn't close)
+              for (int y = y0; y < y0 + n; y++)
+                for (int x = x0; x < x0 + n; x++)
+                  if (map.isPath(x, y))
+                    map.setPath(x, y, "");
               return std::make_pair(x0, y0);
+            }
           }
       return std::make_pair(-1, -1);
     };
@@ -4091,7 +4222,12 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       const MapTile *out = world->getMap().getTile(tx - 1, ty);
       check(("deleting a tank wall takes the whole tank (" + std::to_string(left) + " left)").c_str(),
             left == 0);
-      check("the hole stays", in && out && in->height < out->height);
+      // (the original: the hole stays; the tankgroundback switch: the ground
+      // back as it was, level with round it here)
+      if (Features::tankGroundBack)
+        check("the ground back as it was (tankgroundback)", in && out && in->height == out->height);
+      else
+        check("the hole stays", in && out && in->height < out->height);
     }
     check(("exhibits made (" + std::to_string(fences.exhibitCount()) + ")").c_str(), fences.exhibitCount() == 3); // (with the glass tank)
     check("on a fence: in the way (orange)",
@@ -6010,31 +6146,45 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     // there (its $2.00 x cPriceFactor 3 = $6 a sale, Concessions)
     {
       WorldMap &map = world->getMap();
+      // (guests go in by a building's door, which has to be on a path - a
+      // building just touching one isn't used: placed, turned each way, and
+      // kept the way its door lands on one)
+      auto doorOnPath = [&](const PlacedObjects::Object &o) {
+        for (auto [dx, dy] : world->getGuests().doorTiles(o))
+          if (map.isPath(dx, dy))
+            return true;
+        return false;
+      };
+      auto addFacingPath = [&](const std::string &file, float x, float y) {
+        for (int facing : {4, 0, 2, 6}) {
+          if (world->objectFit(file, x, y, facing) != Fences::Fit::Ok ||
+              !world->objectsMutable().add(file, x, y, facing))
+            continue;
+          if (doorOnPath(world->getObjects().objects().back())) {
+            world->reindex();
+            return true;
+          }
+          world->objectsMutable().remove(static_cast<int>(world->getObjects().objects().size()) - 1);
+        }
+        return false;
+      };
       std::string stand = "scenery/building/hdogstnd.ai";
       int sx = -1, sy = -1;
+      world->setObjectTool(stand, 175, 0);
       for (int r = 1; r < 25 && sx < 0; r++)
         for (int dy = -r; dy <= r && sx < 0; dy++)
           for (int dx = -r; dx <= r && sx < 0; dx++) {
-            float x = gs.guests().empty() ? 0 : 0;
-            (void)x;
             int tx = 11 + dx, ty = 42 + dy;
-            // beside a path tile, its 1 x 1 tile footprint on open ground
-            bool byPath = map.isPath(tx + 1, ty) || map.isPath(tx - 1, ty) || map.isPath(tx, ty + 1) || map.isPath(tx, ty - 1);
-            if (byPath && world->objectFit(stand, tx + 0.5f, ty + 0.5f, 4) == Fences::Fit::Ok) {
-              // (a 2 x 2 stand: needs the tile right and below too)
-              if (world->objectFit(stand, tx + 1.0f, ty + 1.0f, 4) == Fences::Fit::Ok) {
+            // its door on a path (a tile's middle, or a corner)
+            for (float off : {0.5f, 1.0f})
+              if (sx < 0 && addFacingPath(stand, tx + off, ty + off)) {
                 sx = tx;
                 sy = ty;
               }
-            }
           }
-      check("a spot for a hot dog stand by the path", sx >= 0);
+      world->setObjectTool("", 0, 0);
+      check("a spot for a hot dog stand by the path, its door on it", sx >= 0);
       if (sx >= 0) {
-        world->setObjectTool(stand, 175, 0);
-        world->getObjects();
-        const_cast<PlacedObjects &>(world->getObjects()).add(stand, sx + 1.0f, sy + 1.0f, 4);
-        world->setObjectTool("", 0, 0);
-        world->reindex();
         for (const Guests::Guest &g : gs.guests())
           const_cast<Guests::Guest &>(g).hunger = 80;
         double sold = 0;
@@ -6149,15 +6299,13 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                 int tx = 11 + dx, ty = 42 + dy;
                 bool byPath = map.isPath(tx + 1, ty) || map.isPath(tx - 1, ty) || map.isPath(tx, ty + 1) || map.isPath(tx, ty - 1);
                 for (float off : {0.5f, 1.0f})
-                  if (lx < 0 && byPath && world->objectFit(loo, tx + off, ty + off, 4) == Fences::Fit::Ok) {
+                  if (lx < 0 && byPath && addFacingPath(loo, tx + off, ty + off)) {
                     lx = tx + off;
                     ly = ty + off;
                   }
               }
-          check("a spot for a restroom by the path", lx >= 0);
+          check("a spot for a restroom by the path, its door on it", lx >= 0);
           if (lx >= 0) {
-            world->objectsMutable().add(loo, lx, ly, 4);
-            world->reindex();
             int looId = world->getObjects().objects().back().id;
             for (const Guests::Guest &g : gs.guests())
               const_cast<Guests::Guest &>(g).bathroom = 95;
@@ -6215,11 +6363,8 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                     for (int py = y0; py <= y1 && !byPath; py++)
                       for (int px = x0; px <= x1 && !byPath; px++)
                         byPath = (py == y0 || py == y1 || px == x0 || px == x1) && reach.count({px, py});
-                    if (!byPath)
+                    if (!byPath || !addFacingPath(file, x, y))
                       continue;
-                    if (!world->objectsMutable().add(file, x, y, 4))
-                      return -1;
-                    world->reindex();
                     shops.push_back(world->getObjects().objects().back().id);
                     return world->getObjects().objects().back().id;
                   }
@@ -6261,19 +6406,40 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                       }
                   if (!ok || !world->objectsMutable().add(file, x, y, 4))
                     continue;
+                  // (and its door: a big building's can stand past the ring)
+                  // (with the tiles back to the ring, so it's reached)
+                  const size_t ringSize = ring.size();
+                  for (auto door : world->getGuests().doorTiles(world->getObjects().objects().back())) {
+                    auto [px, py] = door;
+                    for (int step = 0; step < 6; step++) {
+                      if (std::find(ring.begin(), ring.begin() + ringSize, std::make_pair(px, py)) != ring.begin() + ringSize)
+                        break;
+                      ring.push_back({px, py});
+                      float ddx = x - (px + 0.5f), ddy = y - (py + 0.5f);
+                      if (std::fabs(ddx) > std::fabs(ddy))
+                        px += ddx > 0 ? 1 : -1;
+                      else
+                        py += ddy > 0 ? 1 : -1;
+                    }
+                  }
                   for (auto [px, py] : ring)
                     if (!map.isPath(px, py)) {
                       map.setPath(px, py, pathType);
                       laid.push_back({px, py});
                     }
                   world->reindex();
+                  // (some guests set down at its door: on hilly ground the
+                  // ring's sides can be different heights, not walked round)
+                  std::vector<std::pair<int, int>> at = world->getGuests().doorTiles(world->getObjects().objects().back());
+                  if (at.empty())
+                    at = ring;
                   int k = 0;
                   for (const Guests::Guest &g : gs.guests()) {
                     if (g.x < -999 || k >= 4)
                       continue;
                     Guests::Guest &gg = const_cast<Guests::Guest &>(g);
-                    gg.x = ring[(k * 3) % ring.size()].first + 0.5f;
-                    gg.y = ring[(k * 3) % ring.size()].second + 0.5f;
+                    gg.x = at[(k * 3) % at.size()].first + 0.5f;
+                    gg.y = at[(k * 3) % at.size()].second + 0.5f;
                     gg.path.clear();
                     gg.pathAt = 0;
                     gg.building = -1;
@@ -6955,7 +7121,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       world->mouseUp(px, py - static_cast<int>(std::lround(18 * scale)));
       world->hoverOff();
       capture("terrain_cliff");
-      check("a cliff: the brush up a unit, the ground beside it not",
+      check("a cliff: the brush up a unit, the ground beside it left where it was",
             map.getTile(cx, cy)->cornerHeight[0] == flat + 1 && map.getTile(cx - 1, cy)->cornerHeight[CORNER_X1Y0] == flat);
       tt.undo();
       world->setTerrainTool(false, true, 0, 2, 0);
@@ -8122,10 +8288,11 @@ int main(int argc, char *argv[]) {
   // The Options window on the main menu (the optionswindow extra)
   resource_manager.provide("ui/startup.lyt", mainMenuWithOptions);
   g_menuOptions = new UiOptions(&resource_manager);
+  g_cashStrings = &resource_manager;
   IniReader *lyt_reader = resource_manager.getIniReader(
       getLayoutPath(&resource_manager, "startup.lyt"));
   UiLayout *layout = new UiLayout(lyt_reader, &resource_manager);
-  hookMainMenu(layout);
+  hookMainMenu(layout, &resource_manager);
   g_currentState = LayoutState::MAIN_MENU;
 
   // ZT1 Lab: the live view for what's found in zoo.exe (--lab [map]); for
@@ -8467,7 +8634,7 @@ int main(int argc, char *argv[]) {
       lyt_reader = resource_manager.getIniReader(
           getLayoutPath(&resource_manager, "startup.lyt"));
       layout = new UiLayout(lyt_reader, &resource_manager);
-      hookMainMenu(layout);
+      hookMainMenu(layout, &resource_manager);
       g_currentState = LayoutState::MAIN_MENU;
       if (backToOptions && g_menuOptions)
         g_menuOptions->open(false, UiOptions::kModsPage);
@@ -8490,15 +8657,11 @@ int main(int argc, char *argv[]) {
       break;
 
     case UiAction::CASH_SPINNER_UP:
-      g_currentStartingCash =
-          std::min(CASH_MAX, g_currentStartingCash + CASH_STEP);
-      showStartingCash();
+      setStartingCash(g_currentStartingCash + CASH_STEP);
       break;
 
     case UiAction::CASH_SPINNER_DOWN:
-      g_currentStartingCash =
-          std::max(CASH_MIN, g_currentStartingCash - CASH_STEP);
-      showStartingCash();
+      setStartingCash(g_currentStartingCash - CASH_STEP);
       break;
 
     case UiAction::PLAY_SCENARIO_START:
@@ -8515,7 +8678,14 @@ int main(int argc, char *argv[]) {
           g_world->loadScenario(info->scenarioPath);
           // (a save names it: "scenario:" and its .scn)
           g_currentMapPath = "scenario:" + info->scenarioPath;
-          createHud(&resource_manager, g_world, g_currentStartingCash);
+          // (its own money: the .scn's [start] setcash - not the freeform
+          // spinner's)
+          int scenarioCash = CASH_START;
+          if (IniReader *scn = resource_manager.getIniReader(info->scenarioPath)) {
+            scenarioCash = scn->getInt("start", "setcash", CASH_START);
+            delete scn;
+          }
+          createHud(&resource_manager, g_world, scenarioCash);
 
           delete layout;
           layout = nullptr; // the in-game HUD replaces the menus

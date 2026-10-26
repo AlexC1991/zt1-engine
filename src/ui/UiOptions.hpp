@@ -87,6 +87,10 @@ public:
 
   // The tooltip timing changed (the game screen keeps its own copy)
   std::function<void(int delay, int durationMs)> onTooltips;
+  // Reset window positions (Controls): the dragged windows put back
+  std::function<void()> onResetWindows;
+  // Back in the middle (Reset window positions)
+  void resetPosition();
 
 private:
   ResourceManager *rm;
@@ -99,6 +103,13 @@ private:
   // What each element does, shown under the page when the mouse is on it
   std::map<int, std::string> about;
   int mouseX = -1, mouseY = -1;
+  // Ours, the dragwindows extra: moved from the middle by its title (zoo.ini
+  // [Windows] wOptions), and its lock beside the close button (lOptions)
+  int offsetX = 0, offsetY = 0;
+  bool locked = false, lockDown = false, dragging = false, dragMoved = false;
+  int dragFromX = 0, dragFromY = 0, dragOffX = 0, dragOffY = 0;
+  SDL_Rect lastRect = {0, 0, 0, 0}, lockRect = {0, 0, 0, 0};
+  bool settled = false; // (its place read from zoo.ini)
   // Rows left out while they don't apply (Art Sharpness without FSR, the
   // filter's strength with it off, empty mod rows)
   std::set<int> hiddenIds;
