@@ -3,6 +3,7 @@
 #include <thread>
 
 #include <cstring>
+#include <memory>
 
 #include "Utils.hpp"
 #include "ZtdFile.hpp"
@@ -21,7 +22,7 @@ Animation *AniFile::getAnimation(PalletManager *pallet_manager,
   ZT_TRACE("AniFile::getAnimation: ztd='%s' file='%s'", ztd_file.c_str(),
           file_name.c_str());
 
-  IniReader *ini_reader = ZtdFile::getIniReader(ztd_file, file_name);
+  std::unique_ptr<IniReader> ini_reader(ZtdFile::getIniReader(ztd_file, file_name));
   if (ini_reader == nullptr) {
     ZT_TRACE("Warning: Could not read ini for animation: %s", file_name.c_str());
     return nullptr;
@@ -34,7 +35,10 @@ Animation *AniFile::getAnimation(PalletManager *pallet_manager,
 
   std::unordered_map<std::string, AnimationData *> *animations =
       new std::unordered_map<std::string, AnimationData *>;
-  std::string directory = AniFile::getAnimationDirectory(ini_reader);
+  // Animation::loadSurfaces consumes and frees each direction's source data.
+  // Keep only the container here; freeing its pointers again corrupts the heap.
+  std::unique_ptr<std::unordered_map<std::string, AnimationData *>> decoded(animations);
+  std::string directory = AniFile::getAnimationDirectory(ini_reader.get());
 
   // [CLEANUP] Blacklist removed. All assets allowed.
 
@@ -54,14 +58,8 @@ Animation *AniFile::getAnimation(PalletManager *pallet_manager,
   }
 
   // If no animations loaded successfully, clean up and return nullptr
-  if (!has_valid_animation) {
-    delete animations;
-    return nullptr;
-  }
-
-  Animation *anim = new Animation(animations);
-  delete animations;
-  return anim;
+  if (!has_valid_animation) return nullptr;
+  return new Animation(animations);
 }
 
 std::string AniFile::getAnimationDirectory(IniReader *ini_reader) {

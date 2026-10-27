@@ -308,11 +308,13 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     // UI animations use "directions" as states: N normal, H highlighted,
     // S selected (a toggle that is on), G greyed out
     CompassDirection state = CompassDirection::N;
-    if (this->isDisabled() && this->animation->hasFrames(CompassDirection::G))
-      state = CompassDirection::G; // greyed out
-    else if (this->isToggle() && this->toggled_on &&
-             this->animation->hasFrames(CompassDirection::S))
+    // A locked checkbox must still show that it is on. G is an empty box
+    // in the original art, so use S for checked toggles even while disabled.
+    if (this->isToggle() && this->toggled_on &&
+        this->animation->hasFrames(CompassDirection::S))
       state = CompassDirection::S;
+    else if (this->isDisabled() && this->animation->hasFrames(CompassDirection::G))
+      state = CompassDirection::G;
     else if (this->selected && this->animation->hasFrames(CompassDirection::H))
       state = CompassDirection::H;
 

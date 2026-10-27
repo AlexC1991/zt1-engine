@@ -49,6 +49,7 @@ struct FenceType {
   int cost = 0, gateCost = 0;
   int height = 0;
   bool tank = false;    // [TankFence]
+  bool showFence = false; // cIsShowFence (Marine Mania show-tank walls).
   bool seeThrough = false; // cSeeThrough: a glass wall (the tank seen through it)
   bool zooWall = false; // the zoo's own walls (not an exhibit's)
   // [f|g][flat, rising, falling]
@@ -59,6 +60,9 @@ struct FenceType {
   Animation *tankLow[4] = {};
   // A tank's gate: the platform keepers stand on, its ladder into the water
   Animation *platform = nullptr, *ladder = nullptr;
+  Animation *portal = nullptr;
+  std::string portalOpenSound, portalCloseSound;
+  int portalOpenAtten = 0, portalCloseAtten = 0;
   Animation *ladderOut = nullptr; // (its ladrout beside ladrin: the .ai names only ladrin)
   // Wear (f/Characteristics: cLife, cDecayedLife, cDecayDelta; tank walls
   // cIndestructible): worn down to cDecayedLife it shows its "det" art, at
@@ -113,6 +117,7 @@ public:
     std::string name;
     std::set<std::pair<int, int>> tiles;
     bool tank = false;
+    bool show = false; // Derived from its show-wall boundary, not its name.
     bool named = false;
     bool pocket = false; // shut off when the map was made: not an exhibit
     int constructedDay = 1, constructedMonth = 0, constructedYear = 1;
@@ -235,6 +240,8 @@ public:
   // The water's level over the floor in whole height units (the original's
   // tank +0x188: animals' cDepth, trick and scenery depths)
   int waterLevel(const Exhibit &ex) const { return this->waterSubtiles(ex) / 2; }
+  bool showPortal(const Edge &edge, int &show, int &home) const;
+  const FenceType *portalType(const Edge &edge) const;
   // Its tile inside the gate (the ladder's and platform's); within r tiles
   // of its wall (0: one of the tile's own sides is the wall)
   bool byTankLadder(const Exhibit &ex, int x, int y) const;
@@ -269,8 +276,8 @@ public:
   // kind (cIsElectrified), not a gate, its wear still above cDecayedLife
   bool liveElectric(const Edge &e) const;
   bool broken(const Edge &e) const;
-  // Gates swing open as someone comes to them (their art's frames, about
-  // 20 a second) and shut after
+  // Gates open for approaching staff and close afterwards, using the
+  // frame count and timing of their own artwork.
   void updateGates(float seconds, const std::function<bool(const Edge &)> &someoneNear);
   // (tests) a piece made another type, as new
   void setPieceType(const Edge &e, int type) {
@@ -328,6 +335,10 @@ public:
   // The (named) exhibit a tile is in, or a piece walls (-1: none)
   int exhibitAt(int x, int y) const;
   int exhibitOf(const Edge &e) const;
+  // A low tank shore inside a fenced land exhibit, at the water's level.
+  bool shoreAccess(const Edge &e, const WorldMap &map, int &tank, int &land) const;
+  int habitatRoot(int exhibit, const WorldMap &map) const;
+  std::set<int> habitatGroup(int exhibit, const WorldMap &map) const;
 
   // Tanks fill over time, their water gets dirty, filters clean it; fences
   // wear

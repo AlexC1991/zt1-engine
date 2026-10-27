@@ -29,6 +29,7 @@ ResourceManager::ResourceManager(Config *config) : config(config) {
 }
 
 ResourceManager::~ResourceManager() {
+  clearAnimations();
   Mix_HaltMusic();
   if (this->intro_music != nullptr) {
     Mix_FreeMusic(this->intro_music);
@@ -210,8 +211,12 @@ void ResourceManager::load_resource_map(std::atomic<float> *progress,
     std::vector<std::string> mods = Mods::enabledPaths();
     resource_paths.insert(resource_paths.begin(), mods.begin(), mods.end());
     modPaths = static_cast<int>(mods.size());
-    for (const std::string &m : mods)
+    loadedModRoots.clear();
+    for (const std::string &m : mods) {
+      loadedModRoots.push_back({Utils::string_to_lower(std::filesystem::path(m).lexically_normal().generic_string()) + "/",
+                                std::filesystem::path(m).filename().string()});
       SDL_Log("Mod loaded: %s", m.c_str());
+    }
   }
 
   // [PATCH] Auto-include expansion directories (check both cases)
@@ -249,6 +254,11 @@ void ResourceManager::load_resource_map(std::atomic<float> *progress,
         archive_priority.emplace(archivePath, pathIndex);
         resource_map.reserve(resource_map.size() + listed.size());
         for (const std::string &file_raw : listed) {
+          const std::string resourceKey = normalizePath(file_raw);
+          // Keep alternatives only for names supplied by a mod; the stock
+          // catalogue has hundreds of thousands of unrelated files.
+          if (pathIndex < modPaths || resourceSources.count(resourceKey))
+            resourceSources[resourceKey].push_back(archivePath);
           auto [it, added] = resource_map.try_emplace(normalizePath(file_raw), archivePath);
           if (!added && archive_priority[it->second] == pathIndex)
             it->second = archivePath; // the same folder: the later archive
@@ -375,6 +385,52 @@ void ResourceManager::load_all(std::atomic<float> *progress,
   }
 
   *is_done = true;
+}
+
+std::string ResourceManager::modOf(const std::string &file) const {
+  auto found = resource_map.find(normalizePath(file));
+  if (found == resource_map.end()) return "";
+  const std::string archive = Utils::string_to_lower(std::filesystem::path(found->second).lexically_normal().generic_string());
+  for (const auto &[root, folder] : loadedModRoots) if (archive.rfind(root, 0) == 0) return folder;
+  return "";
+}
+bool ResourceManager::availableWithout(const std::string &file, const std::string &mod) const {
+  auto sources = resourceSources.find(normalizePath(file));
+  if (sources == resourceSources.end()) return false;
+  const auto mods = Mods::list();
+  for (const std::string &source : sources->second) {
+    const std::string archive = Utils::string_to_lower(std::filesystem::path(source).lexically_normal().generic_string());
+    std::string owner;
+    for (const auto &[root, folder] : loadedModRoots) if (archive.rfind(root, 0) == 0) { owner = folder; break; }
+    if (owner.empty()) return true;
+    if (owner == mod) continue;
+    for (const auto &m : mods) if (m.folder == owner && m.enabled) return true;
+  }
+  return false;
+}
+void ResourceManager::clearAnimations() {
+  while (!ownedAnimations.empty()) {
+    Animation *animation = *ownedAnimations.begin();
+    ownedAnimations.erase(animation);
+    animation->onRelease = {};
+    delete animation;
+  }
+  animation_map.clear();
+}
+void ResourceManager::reloadMods() {
+  clearAnimations();
+  for (const auto &[name, texture] : zt1_preview_texture_cache) if (texture) SDL_DestroyTexture(texture);
+  zt1_preview_texture_cache.clear();
+  resource_map.clear();
+  resourceSources.clear();
+  archive_priority.clear();
+  string_map.clear();
+  pallet_manager.reset();
+  { std::lock_guard<std::mutex> lock(g_looseMutex); g_looseFiles.clear(); }
+  resource_map_loaded = false;
+  std::atomic<float> progress{0};
+  std::atomic<bool> done{false};
+  load_all(&progress, &done);
 }
 
 void *ResourceManager::getFileContent(const std::string &name_raw, int *size) {
@@ -819,8 +875,10 @@ Pallet *ResourceManager::getPallet(const std::string &name_raw) {
 // UI animations are drawn magnified: they get art upscaling. Everything
 // else is map art, upscaled only for the zoomed-in map. Either way frames
 // can come from an HD pack in hd/<folder of the .ani>/
-static Animation *withArtOptions(Animation *a, const std::string &name,
+Animation *ResourceManager::withArtOptions(Animation *a, const std::string &name,
                                  const std::string &ani_key) {
+  ownedAnimations.insert(a);
+  a->onRelease = [this, a] { ownedAnimations.erase(a); };
   std::string lower = name;
   std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
   size_t slash = ani_key.find_last_of('/');

@@ -38,6 +38,8 @@ class PlacedObjects;
 
 class Staff {
   friend class SaveGame; // (saving and loading a game)
+  friend std::string runParityChecks(class World &, ResourceManager *);
+  friend class Shows; // Shared marine-show tasks use the normal routes and animation queues.
 public:
   enum class Kind { Keeper, Maint, Guide, Scientist, Trainer, Helicopter };
   struct Type {
@@ -55,8 +57,12 @@ public:
     // The DRT: hired as its base (scenery/building/helibase.ai, a 10 x 8
     // half-tile building), the helicopter in its slot on top
     std::string baseFile;
-    Animation *base = nullptr;
+    Animation *base = nullptr, *baseUsed = nullptr;
     int footX = 1, footY = 1; // tiles
+    float padX = -1, padY = 0, padZ = 5, approachZ = 10;
+    float flightHeight = 8, flightSpeed = 2.5f, weaponRange = 5;
+    int padFacing = 7;
+    std::string rotorSound, fireSound;
     // Tour guides (tour.ai): cTourGuideBonus (guests' happiness at a talk,
     // and the viewing area's donation bonus), cFollowChance, cMaxGroupSize,
     // cCrowdCheck (ticks between looks for followers), cCrowdRadius (tiles),
@@ -68,8 +74,15 @@ public:
     int slowRate = 33, cleanTrashRadius = 0, fixFenceModifier = 0;
   };
   enum class Job { None, Fence, Filter, Litter, Visit, Catch, Tour, Trash, Dung };
+  enum class HeliStage { Parked, SpinUp, Ascend, Chase, Fire, Return, Descend, SpinDown };
   struct Member {
     int id = 0, type = 0;
+    // x/y stay the base's anchor even while its aircraft is away. Old saves
+    // already store those coordinates; flight jobs restart safely on load.
+    HeliStage heliStage = HeliStage::Parked;
+    float heliX = 0, heliY = 0, heliZ = 0;
+    int rotorChannel = -1;
+    double baseAnimTime = 0;
     bool female = false;
     int hair = 0, skin = 0;
     std::string name;
@@ -104,6 +117,7 @@ public:
     // climbing, 2 at the water's surface, 3 under it; the tank; its height
     // over the ground under it (the tank's floor)
     int water = 0, tank = -1;
+    int showTank = -1; // A reserved specialist follows the show controller.
     float z = 0;
     // A climb (bClimbUp fFly(climb), bClimbDown fFlyReverse(climb)): from
     // one place to another over one play of the climb animation, backwards
@@ -134,6 +148,7 @@ public:
   Fences::Fit canPlace(float x, float y, const WorldMap &map, const Fences &fences) const;
   // For a type: a DRT base needs its whole footprint clear; staff a free
   // spot on zoo ground
+  std::pair<float, float> placementPoint(int type, float x, float y) const;
   Fences::Fit canPlaceType(int type, float x, float y, const WorldMap &map,
                            const Fences &fences) const;
   Fences::Fit canPlaceMember(float x, float y, const WorldMap &map, const Fences &fences) const;
@@ -218,6 +233,7 @@ public:
   // The art an animation of a member draws with (its colours)
   Animation *art(const Member &m, const std::string &name) const;
   Animation *preview(int type) const;
+  Animation *baseArt(const Member &m) const;
 
   int selected = -1, hovered = -1, carried = -1;
   // (debug) every route planned goes to the log
@@ -238,6 +254,8 @@ private:
   bool tourWork(Member &m, const WorldMap &map, Fences &fences);
   void gatherFollowers(Member &m);
   bool catchWork(Member &m, const WorldMap &map, const Fences &fences);
+  void helicopterStep(Member &m, float seconds, const WorldMap &map);
+  void releaseCatch(Member &m);
   // What an exhibit's animals eat: the chow its keeper puts down, and
   // whether they're carnivores (feedc, else feedh)
   std::string foodFor(int exhibit, const Fences &fences, bool &carnivore) const;

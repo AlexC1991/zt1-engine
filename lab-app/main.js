@@ -12,6 +12,8 @@ const net = require('net');
 const http = require('http');
 const cp = require('child_process');
 const labUpdates = require('./update.js');
+const modProfiles = require('./mod-profiles.js');
+const { watchEngineOutput } = require('./play-output.js');
 
 // Where everything is: the checkout (if there is one), and what the app
 // carries itself. This file is the only one for that (runtime.js says how).
@@ -133,7 +135,18 @@ function send(channel, data) {
 }
 
 // ------------------------------------------------------------- Lab engine
-const host = { proc: null, sock: null, buf: Buffer.alloc(0), pieces: [], have: 0, frame: null, status: 'starting', starting: false };
+const host = { proc: null, sock: null, buf: Buffer.alloc(0), pieces: [], have: 0, frame: null, status: 'starting', starting: false, testMod: null };
+const modReasonWaits = new Map();
+let modReasonId = 0;
+function hostModReason(folder) {
+  if (!host.sock || host.testMod) return Promise.resolve('');
+  return new Promise((resolve, reject) => {
+    const id = ++modReasonId;
+    const timer = setTimeout(() => { modReasonWaits.delete(id); reject(new Error('The Test Zoo did not answer. No switch was changed.')); }, 8000);
+    modReasonWaits.set(id, reason => { clearTimeout(timer); resolve(reason); });
+    host.sock.write(JSON.stringify({ cmd: 'modReason', id, folder }) + '\n');
+  });
+}
 
 function hostStatus(status, detail) {
   host.status = status;
@@ -152,7 +165,14 @@ function startHost() {
       return hostStatus('missing', `No zt1-engine.exe: ${roots.looked('the engine')}`);
     }
     hostStatus('starting', 'Starting the engine...');
-    const proc = cp.spawn(exe, ['--lab-host', String(HOST_PORT)], { cwd: where, stdio: ['pipe', 'pipe', 'pipe'] });
+    let profile;
+    try { profile = testProfile(host.testMod); }
+    catch (error) { host.starting = false; return hostStatus('failed', error.message); }
+    const proc = cp.spawn(exe, ['--lab-host', String(HOST_PORT)], { cwd: where, stdio: ['pipe', 'pipe', 'pipe'], env: modProfiles.engineEnvironment(profile) });
+    if (profile) {
+      proc.once('exit', () => profile.dispose());
+      proc.once('error', () => profile.dispose());
+    }
     host.proc = proc;
     let out = '';
     proc.stdout.on('data', (d) => {
@@ -239,7 +259,12 @@ function onHostData(d) {
     } catch {
       continue;
     }
-    if (msg.t === 'frame') host.frame = msg;
+    if (msg.t === 'modReason') {
+      const done = modReasonWaits.get(msg.id);
+      modReasonWaits.delete(msg.id);
+      if (done) done(msg.reason || '');
+    }
+    else if (msg.t === 'frame') host.frame = msg;
     else send('engine:msg', msg);
   }
 }
@@ -298,16 +323,63 @@ function restartHost() {
 
 // ------------------------------------------------------------------ Play
 const play = { proc: null };
+let labFileDialogs = 0, restorePlayInputPending = false;
 
-ipcMain.handle('play:start', () => {
-  if (play.proc) return play.kind === 'engine' ? { ok: true } : { error: 'The original is running in Play: stop it first.' };
+// Windows disables the top-level owner of a game's native modal dialog.
+// With an embedded game that owner is the Lab. Killing Play while Load/Save
+// is open leaves the Lab disabled, including its title-bar buttons, although
+// MCP's DOM clicks still work. Restore it after the game has actually gone.
+function restorePlayInput() {
+  if (!restorePlayInputPending || labFileDialogs || !win || win.isDestroyed()) return;
+  if (!win.isEnabled()) {
+    // The game changed the HWND without changing Electron's requested state.
+    // setEnabled(true) alone is skipped as unchanged: toggle that state so
+    // Electron actually calls EnableWindow on the native window again.
+    win.setEnabled(false);
+    win.setEnabled(true);
+  }
+  restorePlayInputPending = false;
+}
+function finishPlay(proc, kind, result) {
+  if (play.proc !== proc) return;
+  play.proc = null;
+  if (play.switchDone) play.switchDone({ ok: true });
+  play.testMod = null;
+  restorePlayInputPending = true;
+  restorePlayInput();
+  send('play:exit', { kind, ...result });
+}
+// A Lab file picker may also be open when Play exits (for example via MCP).
+// Keep its normal modality until it closes, then release the game's lock.
+async function labOpenFileDialog(options) {
+  labFileDialogs++;
+  try {
+    return await dialog.showOpenDialog(win, options);
+  } finally {
+    labFileDialogs--;
+    restorePlayInput();
+  }
+}
+
+ipcMain.handle('play:start', (_e, testFolder) => {
+  if (play.proc) return { error: 'Stop the running game before starting another Play session.' };
+  let testMod = null, profile = null;
+  try {
+    testMod = testFolder ? modForTest(testFolder) : null;
+    profile = testProfile(testMod);
+  } catch (error) { return { error: error.message }; }
   const exe = engineExe('play');
-  if (!exe) return { error: roots.looked('the engine') };
+  if (!exe) { if (profile) profile.dispose(); return { error: roots.looked('the engine') }; }
   const handle = win.getNativeWindowHandle();
   const hwnd = handle.length >= 8 ? handle.readBigUInt64LE(0) : BigInt(handle.readUInt32LE(0));
-  const proc = cp.spawn(exe, ['--embed', hwnd.toString()], { cwd: roots.engineDir || RELEASE, stdio: ['pipe', 'pipe', 'pipe'] });
+  const proc = cp.spawn(exe, ['--embed', hwnd.toString()], { cwd: roots.engineDir || RELEASE, stdio: ['pipe', 'pipe', 'pipe'], env: modProfiles.engineEnvironment(profile) });
+  if (profile) {
+    proc.once('exit', () => profile.dispose());
+    proc.once('error', () => profile.dispose());
+  }
   play.proc = proc;
   play.kind = 'engine';
+  play.testMod = testMod;
   proc.stdin.on('error', () => {}); // (gone mid-write: EPIPE - its exit's noticed on its own)
   // (what the game says: re/private/play.log)
   fs.mkdirSync(PRIVATE, { recursive: true });
@@ -316,15 +388,19 @@ ipcMain.handle('play:start', () => {
   proc.stderr.pipe(log);
   // (its window made: put it over the Play view now - the page's timers
   // after starting could all pass before a slow start made it)
-  proc.stdout.on('data', (d) => {
-    if (play.proc === proc && d.toString('utf8').includes('[Embed] ready')) placeGame();
+  watchEngineOutput(proc, {
+    isCurrent: () => play.proc === proc,
+    onReady: () => {
+      // A pre-start placement may have been sent before the child existed.
+      // The same rectangle must be sent again after the readiness handshake.
+      play.placed = null;
+      placeGame();
+    },
+    onSwitch: result => { if (play.switchDone) play.switchDone(result); },
   });
-  proc.on('exit', (code) => {
-    if (play.proc !== proc) return;
-    play.proc = null;
-    send('play:exit', { code, kind: 'engine' });
-  });
-  return { ok: true };
+  proc.on('exit', (code) => finishPlay(proc, 'engine', { code }));
+  proc.on('error', (error) => finishPlay(proc, 'engine', { error: error.message }));
+  return { ok: true, testMod };
 });
 // The original game (Play Game > Play original): zoo.exe with our hook
 // loaded into it (zt1-original.exe and zt1-hook.dll, src/original/), so it
@@ -414,12 +490,11 @@ ipcMain.handle('play:original', () => {
   });
   proc.stderr.pipe(log);
   proc.on('exit', (code) => {
-    rec.active = rec.learning = false;
     if (play.proc !== proc) return;
-    play.proc = null;
-    send('play:exit', { code, kind: 'original' });
+    rec.active = rec.learning = false;
+    finishPlay(proc, 'original', { code });
   });
-  proc.on('error', () => play.proc === proc && (play.proc = null));
+  proc.on('error', (error) => finishPlay(proc, 'original', { error: error.message }));
   return { ok: true };
 });
 function playWrite(line) {
@@ -477,7 +552,28 @@ ipcMain.on('play:area', (_e, area) => {
 ipcMain.on('play:cmd', (_e, line) => playWrite(line));
 // (what's running in Play: the page asks when it's loaded - a reload while
 // a game runs keeps it)
-ipcMain.handle('play:state', () => ({ running: !!play.proc, kind: play.proc ? play.kind : null }));
+ipcMain.handle('play:state', () => ({ running: !!play.proc, kind: play.proc ? play.kind : null, testMod: play.testMod || null }));
+// An opt-in Lab check of the real parent window. Always restore the user's
+// bounds and maximized state, including when a resize or capture fails.
+ipcMain.handle('play:windowCheck', async () => {
+  if (!win || !play.proc) return { error: 'Start a game in Play first.' };
+  const bounds = win.getNormalBounds(), maximized = win.isMaximized();
+  const results = [];
+  const settle = () => new Promise(resolve => setTimeout(resolve, 600));
+  try {
+    win.minimize(); await settle();
+    results.push({ action: 'minimize', minimized: win.isMinimized(), placement: play.placed });
+    win.restore(); if (win.isMaximized()) win.unmaximize(); await settle();
+    win.setBounds({ ...bounds, width: 1100, height: 760 }); await settle();
+    results.push({ action: 'resize', bounds: win.getBounds(), placement: play.placed, area: playClientRect() });
+  } finally {
+    win.restore(); if (win.isMaximized()) win.unmaximize();
+    win.setBounds(bounds); if (maximized) win.maximize();
+    placeGame(); await settle();
+  }
+  results.push({ action: 'restore', maximized: win.isMaximized(), bounds: win.getNormalBounds(), placement: play.placed, area: playClientRect() });
+  return { results, restored: win.isMaximized() === maximized && JSON.stringify(win.getNormalBounds()) === JSON.stringify(bounds) };
+});
 // A picture of the original game in Play (its hook's "shot": what it draws,
 // as a .bmp) saved as a .png at file
 // The original's own pause button, pressed (the Steps panel's Pause): it's at
@@ -2446,24 +2542,36 @@ let engineRelease = null;
 // 64-bit build's when there is one)
 function modsCfgPath() {
   const exe = engineExe();
-  return path.join(exe ? path.dirname(exe) : RELEASE, 'mods.cfg');
+  return modProfiles.gameConfigPath(exe || path.join(RELEASE, 'zt1-engine.exe'), roots.engineDir || RELEASE,
+    path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'zt1-engine'));
 }
 function modsCfg() {
-  const cfg = { folder: '', enabled: [] };
-  try {
-    for (const line of fs.readFileSync(modsCfgPath(), 'utf8').split(/\r?\n/)) {
-      const at = line.indexOf('=');
-      if (at < 0) continue;
-      const k = line.slice(0, at), v = line.slice(at + 1);
-      if (k === 'folder') cfg.folder = v;
-      else if (k === 'enabled' && v) cfg.enabled.push(v);
-    }
-  } catch {}
-  return cfg;
+  return modProfiles.readConfig(modsCfgPath());
 }
 function modsFolder() {
-  return modsCfg().folder || path.join(RELEASE, 'mods');
+  const folder = modsCfg().folder;
+  return folder ? path.resolve(roots.engineDir || RELEASE, folder) : path.join(path.dirname(modsCfgPath()), 'mods');
 }
+function modForTest(folder) {
+  if (typeof folder !== 'string' || !folder || /[\\/\r\n]/.test(folder) || folder.startsWith('.')) throw new Error('Choose a mod from the list.');
+  const dir = modPath(folder);
+  if (!dir || !fs.statSync(dir).isDirectory()) throw new Error('That mod is no longer in your mods folder.');
+  return { folder, name: (readModJson(dir) || {}).name || folder };
+}
+function testProfile(mod) {
+  const exe = engineExe();
+  const gameSettingsFile = modProfiles.gameSettingsPath(exe || path.join(RELEASE, 'zt1-engine.exe'), roots.engineDir || RELEASE,
+    path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'zt1-engine'));
+  return mod ? modProfiles.createTestProfile({ configFile: modsCfgPath(), modRoot: modsFolder(), mod, stateDir: PRIVATE, gameSettingsFile }) : null;
+}
+ipcMain.handle('gamemods:testState', () => host.testMod);
+ipcMain.handle('gamemods:testZoo', (_e, folder) => {
+  try { host.testMod = folder ? modForTest(folder) : null; }
+  catch (error) { return { error: error.message }; }
+  restartHost();
+  send('gamemods:test', host.testMod);
+  return { ok: true, testMod: host.testMod };
+});
 ipcMain.handle('gamemods:list', () => {
   const cfg = modsCfg();
   const root = modsFolder();
@@ -2479,21 +2587,44 @@ ipcMain.handle('gamemods:list', () => {
       const pic = modPicture(path.join(root, d.name), info);
       const thumb = pic ? nativeImage.createFromPath(pic) : null;
       const pictureThumb = thumb && !thumb.isEmpty() ? thumb.resize({ width: 92, quality: 'good' }).toDataURL() : '';
-      out.push({ ...info, folder: d.name, path: path.join(root, d.name), pictureThumb, enabled: cfg.enabled.includes(d.name) });
+      out.push({ ...info, folder: d.name, path: path.join(root, d.name), pictureThumb, enabled: cfg.loadMods !== false && cfg.enabled.includes(d.name) });
     }
   } catch {}
-  return { folder: root, mods: out };
+  return { folder: root, mods: out, loadMods: cfg.loadMods !== false };
 });
+let modSwitchQueue = Promise.resolve();
 ipcMain.handle('gamemods:enable', (_e, folder, on) => {
-  const cfg = modsCfg();
-  const set = new Set(cfg.enabled);
-  if (on) set.add(folder);
-  else set.delete(folder);
-  const lines = [];
-  if (cfg.folder) lines.push('folder=' + cfg.folder);
-  for (const e of set) lines.push('enabled=' + e);
-  fs.writeFileSync(modsCfgPath(), lines.join('\n') + '\n');
-  return { ok: true, enabled: [...set] };
+  const change = modSwitchQueue.then(async () => {
+    try { modForTest(folder); } catch (error) { return { error: error.message }; }
+    if (!on) {
+      const dependency = modProfiles.dependencyReason(modsCfgPath(), modsFolder(), folder);
+      if (dependency) return { error: dependency };
+      try { const reason = await hostModReason(folder); if (reason) return { error: reason }; }
+      catch (error) { return { error: error.message }; }
+    }
+    const cfg = modsCfg();
+    const set = new Set(on && cfg.loadMods === false ? [] : cfg.enabled);
+    if (on) {
+      let profile;
+      try { profile = testProfile(modForTest(folder)); }
+      catch (error) { return { error: error.message }; }
+      try { for (const name of modProfiles.readConfig(profile.file).enabled) set.add(name); }
+      finally { profile.dispose(); }
+    } else set.delete(folder);
+    const loadMods = on ? true : cfg.loadMods !== false;
+    if (loadMods === cfg.loadMods && set.size === cfg.enabled.length && cfg.enabled.every(name => set.has(name))) return { ok: true, enabled: [...set] };
+    let applied = null;
+    if (play.proc && play.kind === 'engine' && !play.testMod) applied = new Promise(resolve => {
+      const timer = setTimeout(() => { play.switchDone = null; resolve({ error: 'The game is still applying the mod change.' }); }, 15000);
+      play.switchDone = result => { clearTimeout(timer); play.switchDone = null; resolve(result); };
+    });
+    try { modProfiles.writeConfig(modsCfgPath(), { folder: cfg.folder, loadMods, enabled: [...set] }); }
+    catch (error) { if (play.switchDone) play.switchDone({ error: error.message }); return { error: error.message }; }
+    const result = applied ? await applied : { ok: true };
+    return { ...result, enabled: modsCfg().enabled };
+  });
+  modSwitchQueue = change.catch(() => {});
+  return change;
 });
 // ------------------------------------------------------------ Your mods
 // Experiments > Your mods: making mods properly, and sharing them. A mod is
@@ -2900,7 +3031,7 @@ ipcMain.handle('map:pack', async (_e, folder, req = {}) => {
 
 ipcMain.handle('modkit:import', async (_e, file) => {
   if (!file) {
-    const pick = await dialog.showOpenDialog(win, {
+    const pick = await labOpenFileDialog({
       title: "Bring in a mod: an old Zoo Tycoon download (.ztd), a .zip, or a mod's mod.json",
       filters: [{ name: 'Mods', extensions: ['ztd', 'zip', 'json'] }, { name: 'All files', extensions: ['*'] }],
       properties: ['openFile'],
@@ -3037,7 +3168,7 @@ ipcMain.handle('modkit:picture', async (_e, folder, req = {}) => {
   }
   let img = null;
   if (op === 'file') {
-    const pick = await dialog.showOpenDialog(win, {
+    const pick = await labOpenFileDialog({
       title: 'A picture for the mod (it is cut to fill 367 x 276)',
       filters: [{ name: 'Pictures', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'webp'] }],
       properties: ['openFile'],
@@ -3210,6 +3341,12 @@ ipcMain.handle('engine:release', (_e, opts = {}) => {
   const script = path.join(REPO, 'engine-build-resources', 'make_release.py');
   if (!fs.existsSync(script)) return { error: "Releases are made on the release machine: its tooling isn't part of the open-source engine." };
   const args = ['-X', 'utf8', '-u', script];
+  if (opts.version) {
+    if (!/^\d+\.\d+\.\d+$/.test(opts.version)) return { error: 'Use a year.month.day version.' };
+    args.push('--version', opts.version);
+  }
+  if (opts.official) args.push('--official');
+  if (opts.lab) args.push('--lab');
   if (opts.noBuild) args.push('--no-build');
   const t0 = Date.now();
   const r = { zip: '', sha: '', error: '', leftOut: [] };

@@ -1,4 +1,5 @@
 #include "Guests.hpp"
+#include "ZooSim.hpp"
 #include "LabTrace.hpp"
 #include "OriginalConstants.hpp"
 #include "Research.hpp"
@@ -401,10 +402,10 @@ void Guests::think(Guest &g, int stringId, const std::string &arg, int animal, i
 }
 
 int Guests::timeInParkText(const Guest &g) const {
-  // (a game day is 12 s: under a day just arrived, under a week a short
-  // time, else a while; thresholds UNCONFIRMED)
-  double t = this->clock - g.arrived;
-  return t < 12 ? 3420 : t < 84 ? 3421 : 3422;
+  // guestInfoRefresh -> 0x46a791 compares zoo-calendar hours since
+  // arrival against 1440, 5760 and 8640 (60, 240 and 360 days).
+  const double days = std::max(0.0, this->clock - g.arrived) / ZooSim::kSecondsPerDay;
+  return 3420 + (days < 60 ? 0 : days < 240 ? 1 : days < 360 ? 2 : 3);
 }
 
 // ----------------------------------------------------------------------------
@@ -575,6 +576,7 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
   }
   if (!walkTo(g, bx, by, this->typeList[g.type].speed))
     return false;
+  g.guide = -1; g.tourHeard = false;
   g.building = best;
   g.need = need;
   g.state = State::Walking;
@@ -763,7 +765,7 @@ bool Guests::joinTour(int guest, int guide, int exhibit, int tx, int ty) {
   for (Guest &g : this->list) {
     if (g.id != guest)
       continue;
-    if (g.guide >= 0 || g.leaving || g.state != State::Walking || g.building >= 0 || g.hidden)
+    if (g.guide >= 0 || g.leaving || g.state != State::Walking || g.building >= 0 || g.hidden || g.showTank >= 0)
       return false;
     if (g.hunger > 50 || g.thirst > 50 || g.tired > 50 || g.bathroom > 50)
       return false;
@@ -824,6 +826,7 @@ void Guests::caught(int guest, const std::string &animalKey, bool female, const 
     if (g.id != guest)
       continue;
     g.attacked = true;
+    g.guide = -1; g.tourHeard = false;
     g.state = State::Caught;
     g.caughtStage = 0;
     g.path.clear();
@@ -875,6 +878,7 @@ void Guests::decide(Guest &g) {
   ZT_FN("", "Decides where to go next");
   const Type &t = this->typeList[g.type];
   if (g.leaving) {
+    g.guide = -1; g.tourHeard = false;
     ZT_STEP("", "Leaving: off to the gate", {"happiness", g.happiness});
     g.state = State::Leaving;
     if (!walkTo(g, this->entranceX, this->entranceY, t.speed))
@@ -1277,6 +1281,8 @@ void Guests::update(float seconds, int zooRating, double admission) {
       g.tickMs -= kTickMs;
       tick(g);
     }
+    if (g.showTank >= 0)
+      continue; // Show routes, seating and exit behavior retain the guest.
     // Walking
     if (g.pathAt < g.path.size()) {
       auto [tx, ty] = g.path[g.pathAt];
@@ -1568,7 +1574,7 @@ void Guests::collect(const WorldRenderer &view, const WorldMap &map, std::vector
       continue;
     float ms = a->frameTimeMs() ? static_cast<float>(a->frameTimeMs()) : 100.0f;
     float sx, sy, depth;
-    view.worldToScreenF(g.x, g.y, groundAt(g.x, g.y), sx, sy, depth);
+    view.worldToScreenF(g.x, g.y, groundAt(g.x, g.y) + g.showZ, sx, sy, depth);
     Fences::Drawable d{depth, sx, sy, a, facing(view, g), SDL_Color{255, 255, 110, 255}, g.id == this->hovered};
     d.frame = static_cast<int>(g.animTime * 1000.0f / ms);
     out.push_back(d);
@@ -1586,7 +1592,7 @@ int Guests::pick(float px, float py, const WorldRenderer &view, const WorldMap &
   float best = 1e9f;
   for (const Guest &g : this->list) {
     float sx, sy, depth;
-    view.worldToScreenF(g.x, g.y, groundAt(g.x, g.y), sx, sy, depth);
+    view.worldToScreenF(g.x, g.y, groundAt(g.x, g.y) + g.showZ, sx, sy, depth);
     if (px < sx - 7 || px > sx + 7 || py < sy - 26 || py > sy + 3)
       continue;
     float d = std::fabs(px - sx) + std::fabs(py - (sy - 12));

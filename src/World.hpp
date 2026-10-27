@@ -17,6 +17,7 @@
 #include "WorldIndex.hpp"
 #include "Walkways.hpp"
 #include "ZooReader.hpp"
+#include "Shows.hpp"
 #include <SDL2/SDL.h>
 #include <map>
 #include <string>
@@ -36,6 +37,7 @@
 
 class World {
   friend class SaveGame; // (saving and loading a game)
+  friend class Shows; // Shared marine-show tasks use the normal routes and animation queues.
 public:
     // The fence piece drawn at a window point
     bool pickFence(int x, int y, Fences::Edge &e);
@@ -46,6 +48,7 @@ public:
     // Return false (and keep the previous map) if the file fails to load
     bool loadScenario(const std::string& path);
     bool loadFreeform(const std::string& path);
+    std::string modRequiredReason(const std::string &mod) const;
     // A blank map, w x h tiles of flat grass with nothing on it (the Lab's
     // map editor; a map made there names its size in [start] blank =)
     bool loadBlank(int w, int h);
@@ -173,6 +176,7 @@ public:
     void setStaffTool(int type);
     int getStaffTool() const { return staffTool; }
     Staff &getStaff() { return staff; }
+    Shows &getShows() { return shows; }
     // The terraform tabs' tool (picked while a tab of the page is up)
     TerrainTool &getTerrainTool() { return terrain; }
     // Its settings from the page, each frame
@@ -330,6 +334,7 @@ private:
     Ambient ambient;                // Birds flying over
     Staff staff;                    // Keepers, maintenance workers, ...
     Animals animals;                // The zoo's animals
+    Shows shows;                    // Marine Mania performances
     bool gateTool = false;
     Guests guests;                  // The zoo's visitors
     int zooRating = 50;
@@ -354,6 +359,7 @@ private:
     float buildingSoundClock = 0;
     void updateBuildingSounds(float seconds);
     void exhibitsNear(int x0, int y0, int x1, int y1, std::vector<int> &out) const;
+    std::vector<std::string> loadedMapResources;
     TerrainTool terrain;            // Terraforming
     void drawBrush(SDL_Renderer *renderer);
     std::string objectTool;

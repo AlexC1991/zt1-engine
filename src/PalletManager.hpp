@@ -26,6 +26,7 @@ public:
 
   void addPalletFileToMap(const std::string &pallet_file, std::string ztd_file);
   void loadPalletMap(std::atomic<float> * progress, float progress_goal);
+  void reset() { pallet_files_map.clear(); pallet_map.clear(); loaded = false; clearOverrides(); }
 
 private:
   std::unordered_map<std::string, std::string> pallet_files_map;

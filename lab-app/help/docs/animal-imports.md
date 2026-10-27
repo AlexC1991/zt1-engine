@@ -34,7 +34,7 @@ In Pictures → Use an animation frame, choose the animal's own walk animation, 
 
 ## Test and use it
 
-Test in the zoo enables the mod and restarts the Test Zoo; it does not yet build a home automatically. Build an enclosed habitat with the palette. Start with bare grass to check missing-needs warnings, then add the requested ground, companions, shelter, trees, rocks and keeper access. The finished tests used separate enclosures and paired animals.
+Test in the zoo loads the mod temporarily and restarts the Test Zoo. Your normal mod switches stay unchanged. The temporary-test label has an **End test** control to return to them. Testing does not yet build a home automatically. Build an enclosed habitat with the palette. Start with bare grass to check missing-needs warnings, then add the requested ground, companions, shelter, trees, rocks and keeper access. The finished tests used separate enclosures and paired animals.
 
 In Play, start a freeform zoo. Adopt Animals → filter Mods → select an icon → click male or female → place the animal in a closed land exhibit. Selecting the icon alone does not start adoption. The small ordinary-game pen in the final screenshot is a purchase/rendering check; the separate Lab habitats are the welfare test.
 

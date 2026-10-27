@@ -72,7 +72,7 @@ public:
   static ItemCatalog &get();
 
   // Reads the registry and the entity files once (later calls do nothing)
-  void load(ResourceManager *resource_manager);
+  void load(ResourceManager *resource_manager, bool force = false);
 
   // The items listed under a category, in the original's order.
   // availableOnly: only what a new freeform zoo can buy.

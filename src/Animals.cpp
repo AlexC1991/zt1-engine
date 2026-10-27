@@ -178,6 +178,9 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.medium = num("cmediumrate", 45) / 60.0f;
     t.fast = num("cfastrate", 66) / 60.0f;
     t.initialHappiness = num("cinitialhappiness", 50);
+    t.showAnimal = !ai->getList("m/tricks", "trick").empty() || !ai->getList(defSub + "/tricks", "trick").empty();
+    t.skipTrickHappiness = num("cskiptrickhappiness", 50);
+    t.skipTrickChance = num("cskiptrickchance", 10);
     t.hungerThreshold = num("chungerthreshold", 50);
     t.hungerIncrement = num("chungerincrement", 10);
     t.neededFood = std::max(1, num("cneededfood", 100));
@@ -223,6 +226,8 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.landNeeded = num("clandneeded", 0);
     t.enterWaterChance = num("centerwaterchance", 0);
     t.enterLandChance = num("centerlandchance", 0);
+    t.underwaterNeeded = num("cunderwaterneeded", 0);
+    t.enterTankChance = num("centertankchance", 0);
     t.drinkWaterChance = num("cdrinkwaterchance", 0);
     t.chaseAnimalChance = num("cchaseanimalchance", 0);
     t.preattack = num("cpreattack", 0) != 0;
@@ -328,6 +333,7 @@ void Animals::loadTypes(ResourceManager *rm) {
       std::map<std::string, std::string> names = ai->getSection(section);
       if (names.empty())
         names = ai->getSection("m/animations");
+      if (names.empty())names = ai->getSection(defSub+"/animations");
       for (const auto &kv : names) {
         std::string v = lower(trim(kv.second));
         size_t semi = v.find(';');
@@ -358,6 +364,8 @@ void Animals::loadTypes(ResourceManager *rm) {
         t.sets[s][section.substr(prefix.size())] = steps;
       }
     }
+    // Female-only species (such as the mermaid) use their declared default.
+    if(t.sets[0].empty())t.sets[0]=t.sets[defSub=="f"?1:0];
     // [AmbientAnims]: a = low, a = high, b = set; in turn
     std::vector<std::string> a = ai->getList("ambientanims", "a"), b = ai->getList("ambientanims", "b");
     for (size_t i = 0; i < b.size() && 2 * i + 1 < a.size(); i++)
@@ -419,8 +427,11 @@ void Animals::rehome(const WorldMap &map, const Fences &fences) {
     int ex = fences.exhibitAt(static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y)));
     const Fences::Exhibit *e = ex >= 0 ? fences.exhibit(ex) : nullptr;
     // (a tank is no home to a land animal; a sea animal's it is)
-    if (e && e->tank && !this->typeList[m.type].underwater)
+    const Type &type=this->typeList[m.type];
+    if (e && e->tank && !type.underwater)
       ex = -1;
+    if(type.underwater && !type.onlyUnderwater)
+      ex=fences.habitatRoot(ex,map);
     // A crate put down in an exhibit lets its animal out (every
     // cBoxedCheck, 2 ticks: about two seconds)
     if (m.boxed && ex >= 0) {
@@ -580,7 +591,7 @@ void Animals::moveOf(const Member &m, const std::string &setName, std::string &a
 // being seen to by a keeper - not hunted, not hunting
 bool Animals::busy(const Member &m) const {
   return m.boxed || m.tranquilised || m.dying || m.id == this->carried || m.caughtBy >= 0 || m.victim >= 0 ||
-         m.building >= 0 || m.inside || m.claimedBy >= 0 || m.escaped || m.exhibit < 0;
+         m.building >= 0 || m.inside || m.claimedBy >= 0 || m.escaped || m.exhibit < 0 || m.showTank >= 0;
 }
 
 // The nearest adult in its exhibit that hunts it within the radius (zoo.exe
@@ -649,6 +660,14 @@ void Animals::chase(Member &m, const WorldMap &map, const Fences &fences) {
       gx = nx;
       gy = ny;
     }
+  }
+  {
+    // Approach the body's edge; the catch starts at contact, not inside it.
+    float dx=m.x-p->x,dy=m.y-p->y,d=std::hypot(dx,dy);
+    float spacing=bodyRadius(m)+bodyRadius(*p)+0.12f;
+    if(d<0.001f){dx=1;dy=0;d=1;}
+    gx=p->x+dx/d*spacing;gy=p->y+dy/d*spacing;
+    if(tankAt && tankAt(m.x,m.y)>=0)m.swimTo=p->swimZ;
   }
   std::string anim;
   float speed;
@@ -790,13 +809,14 @@ Animation *Animals::art(const Member &m, const std::string &nameIn) const {
   // (a swimmer on a water tile: walking and running are its swim, standing
   // its water idle - zoo.exe 0x41338a, 0x413491)
   std::string name = nameIn;
-  // (in a tank at the surface: its surface swim and idle)
-  if (t.underwater && this->tankAt && this->tankAt(m.x, m.y) >= 0 && this->tankDepth &&
-      m.swimZ >= this->tankDepth(m.exhibit) - 0.35f) {
-    if (name == "walk" || name == "run" || name == "trot")
-      name = "surfswim";
-    else if (name == "stand" || name == "idle")
-      name = "surfidle";
+  // A tank has separate surface and submerged locomotion. Amphibious
+  // species retain land walk art, so their submerged move needs an alias too.
+  if (t.underwater && this->tankAt && this->tankAt(m.x, m.y) >= 0 && this->tankDepth) {
+    bool top=m.swimZ >= this->tankDepth(this->tankAt(m.x,m.y))-0.35f;
+    std::string alias;
+    if(name=="walk" || name=="run" || name=="trot")alias=top?"surfswim":"subswim";
+    else if(name=="stand" || name=="idle")alias=top?"surfidle":"subidle";
+    if(!alias.empty() && (t.anims[s].count(alias) || t.anims[0].count(alias)))name=alias;
   }
   if (t.swims && onWater(m)) {
     if (name == "walk" || name == "run" || name == "trot")
@@ -874,7 +894,9 @@ float Animals::groundAt(const WorldMap &map, float x, float y) const {
 bool Animals::standable(int x, int y, const Type &t, int exhibit, const WorldMap &map,
                         const Fences &fences) const {
   // Loose (no exhibit): the zoo's open ground; else its exhibit's
-  if (fences.exhibitAt(x, y) != exhibit)
+  int physical=fences.exhibitAt(x,y);
+  if (physical != exhibit && !(t.underwater && !t.onlyUnderwater &&
+      fences.habitatRoot(physical,map)==fences.habitatRoot(exhibit,map)))
     return false;
   if (exhibit < 0 && !fences.insideZoo(x, y))
     return false;
@@ -927,6 +949,10 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
   // doesn't swim in tanks..."), with water ("...a tank with water in it.")
   // deep enough for it (cDepth: "...a deeper tank.")
   if (e && e->tank) {
+    if (e->show && !t.showAnimal) {
+      this->placeMessage = 10561;
+      return Fences::Fit::Outside;
+    }
     if (!t.underwater) {
       this->placeMessage = 10553;
       return Fences::Fit::Outside;
@@ -964,7 +990,8 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
 // target; a cSurface type (slot 0xc0) keeps to the surface
 float Animals::tankTargetHeight(Member &m, const std::string &target) {
   const Type &t = this->typeList[m.type];
-  const int top = this->tankLevel && m.exhibit >= 0 ? this->tankLevel(m.exhibit) : 0;
+  int physicalTank=this->tankAt?this->tankAt(m.x,m.y):m.exhibit;
+  const int top = this->tankLevel && physicalTank>=0 ? this->tankLevel(physicalTank) : 0;
   const int low = t.needDepth;
   // (where it is, in whole units over the floor - FUN_0041426f's z / 16 -
   // kept between the two)
@@ -1006,6 +1033,9 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   m.x = x;
   m.y = y;
   m.exhibit = fences.exhibitAt(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
+  if(t.underwater && !t.onlyUnderwater)m.exhibit=fences.habitatRoot(m.exhibit,map);
+  m.waterMode=t.swims && (isWater(map,static_cast<int>(x),static_cast<int>(y)) ||
+                         (this->tankAt && this->tankAt(x,y)>=0));
   if (this->tankAt && this->tankAt(x, y) >= 0)
     m.swimZ = m.swimTo = this->tankTargetHeight(m, "");
   m.name = (!t.displayName.empty() ? t.displayName : this->rm ? this->rm->getString(t.nameId) : t.key) + " " +
@@ -1150,8 +1180,10 @@ const std::vector<Animals::Step> *Animals::set(const Member &m, const std::strin
 }
 
 void Animals::pushSet(Member &m, const std::string &name) {
-  if (m.stack.size() < 8 && this->set(m, name))
+  if (m.stack.size() < 8 && this->set(m, name)) {
+    if(name=="beat")m.mealTaken=false;
     m.stack.push_back({name, 0});
+  }
 }
 
 void Animals::play(Member &m, const std::string &anim, Member::Mode mode, float seconds) {
@@ -1246,7 +1278,7 @@ void Animals::chooseBehaviour(Member &m) {
   int h = static_cast<int>(std::lround(m.happiness));
   // (in a tank: its surface or underwater list, by where it swims)
   if (t.underwater && this->tankAt && this->tankAt(m.x, m.y) >= 0) {
-    bool top = this->tankDepth && m.swimZ >= this->tankDepth(m.exhibit) - 0.35f;
+    bool top = this->tankDepth && m.swimZ >= this->tankDepth(this->tankAt(m.x,m.y)) - 0.35f;
     for (const Ambient &a : top ? t.ambientSurface : t.ambientUnder)
       if (h >= a.lo && h <= a.hi && this->set(m, a.set)) {
         pushSet(m, a.set);
@@ -1276,8 +1308,50 @@ void Animals::chooseBehaviour(Member &m) {
   ZT_STEP("", "Chooses: nothing fits, idles", {"behaviour", "bidle1"}, {"happiness", h});
 }
 
+Animals::Command Animals::behaviorCommand(const std::string &name) {
+  static const std::map<std::string, Command> commands = {
+      {"fendtrick", Command::EndTrick},
+      {"fplay", Command::Play},
+      {"fplaywithsound", Command::PlayWithSound},
+      {"fplaytime", Command::PlayTime},
+      {"fplaypingpong", Command::PlayPingPong},
+      {"fplayreverse", Command::PlayReverse},
+      {"fhalt", Command::Halt},
+      {"fsetbase", Command::SetBase},
+      {"fkeepcontrol", Command::KeepControl},
+      {"fdie", Command::Die},
+      {"fplayset", Command::PlaySet},
+      {"fplaysettank", Command::PlaySetTank},
+      {"fplaysetprob", Command::PlaySetProb},
+      {"fplaysetterrain", Command::PlaySetTerrain},
+      {"fwalk", Command::Walk},
+      {"fmove", Command::Move},
+      {"frun", Command::Run},
+      {"ftrot", Command::Trot},
+      {"fmovewithsound", Command::MoveWithSound},
+      {"fmovereverse", Command::MoveReverse},
+      {"ffacetowardfood", Command::FaceTowardFood},
+      {"fhatch", Command::Hatch},
+      {"fdustball", Command::Dustball},
+      {"fenterbuilding", Command::EnterBuilding},
+      {"fexitbuilding", Command::ExitBuilding},
+      {"fcaughtprey", Command::CaughtPrey},
+      {"ffacetowardtarget", Command::FaceTowardTarget},
+      {"fplaystopatend", Command::PlayStopAtEnd},
+      {"ftargetbuilding", Command::TargetBuilding},
+      {"fplayspecial", Command::PlaySpecial},
+      {"fplaysp", Command::PlaySpecial}
+  };
+  auto it = commands.find(name);
+  return it == commands.end() ? Command::Unknown : it->second;
+}
+
 void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
   const Type &t = this->typeList[m.type];
+  auto objectById = [&](int id) -> const PlacedObjects::Object * {
+    if (objects) for (const auto &o : objects->objects()) if (o.id == id) return &o;
+    return nullptr;
+  };
   // (dying: its bDie, then nothing more)
   if (m.stack.empty() && m.dying) {
     m.dieAfter = 0;
@@ -1289,6 +1363,11 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
     play(m, "egg_idle", Member::Mode::Loop, 3600.0f);
     return;
   }
+  if (m.stack.empty() && m.showTank >= 0) {
+    if (m.showTrick) { m.showDone = true; m.showTrick = false; }
+    play(m, "surfidle", Member::Mode::Loop, 1.0f);
+    return;
+  }
   if (m.stack.empty()) {
     m.drinkX = m.drinkY = -1;
     chooseBehaviour(m);
@@ -1296,33 +1375,54 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
   for (int guard = 0; guard < 32 && !m.stack.empty(); guard++) {
     const std::vector<Step> *steps = this->set(m, m.stack.back().first);
     if (!steps || m.stack.back().second >= steps->size()) {
+      // Primates' bEat uses mouth/arm animations, not an animation named
+      // "eat". Completing the feeding behaviour must still consume food.
+      if(m.stack.back().first=="beat" && !m.mealTaken)consumeFood(m);
       m.stack.pop_back();
       continue;
     }
     Step s = (*steps)[m.stack.back().second++];
+    const Command command = behaviorCommand(s.fn);
     auto arg = [&](size_t i) { return i < s.args.size() ? s.args[i] : std::string(); };
-    if (s.fn == "fplay" || s.fn == "fplaywithsound") {
+    if (command == Command::EndTrick) {
+      m.showDone = true; m.showTrick = false; m.stack.clear();
+      play(m, "surfidle", Member::Mode::Loop, 1.0f);
+      return;
+    } else if (command == Command::Play || command == Command::PlayWithSound || command == Command::PlayStopAtEnd) {
       play(m, arg(0), Member::Mode::Once);
-      if (s.fn == "fplaywithsound")
+      if (command == Command::PlayWithSound)
         playSound(m, arg(1));
-    } else if (s.fn == "fplaytime") {
+    } else if (command == Command::PlaySpecial) {
+      // fPlaySpecial / fPlaySp (0x58a333): animation, sound, duration,
+      // repeat count, normal/reverse/pingpong/wait. Stock crocodile and
+      // Deinosuchus sets use it to play an animation with a splash sound.
+      const std::string mode = arg(4);
+      const float duration = std::max(0.0f, static_cast<float>(std::atof(arg(2).c_str())));
+      const int repeats = std::max(0, std::atoi(arg(3).c_str()));
+      const auto playback = mode == "reverse" ? Member::Mode::Reverse
+                          : mode == "pingpong" ? Member::Mode::PingPong
+                          : duration > 0 || repeats > 1 ? Member::Mode::Loop : Member::Mode::Once;
+      play(m, arg(0), playback, duration);
+      if (duration <= 0 && repeats > 1) m.playFor = repeats * animSeconds(m, arg(0));
+      if (!arg(1).empty() && arg(1) != "0") playSound(m, arg(1));
+    } else if (command == Command::PlayTime) {
       play(m, arg(0), Member::Mode::Loop, std::max(0.5f, static_cast<float>(std::atof(arg(1).c_str()))));
-    } else if (s.fn == "fplaypingpong") {
+    } else if (command == Command::PlayPingPong) {
       play(m, arg(0), Member::Mode::PingPong);
-    } else if (s.fn == "fplayreverse") {
+    } else if (command == Command::PlayReverse) {
       play(m, arg(0), Member::Mode::Reverse);
-    } else if (s.fn == "fhalt") {
+    } else if (command == Command::Halt) {
       // Stops where it is (zoo.exe 0x601da3: stopMoving)
       m.path.clear();
       m.pathAt = 0;
       m.swimTo = m.swimZ;
       continue;
-    } else if (s.fn == "fsetbase") {
+    } else if (command == Command::SetBase) {
       // Its animation from now on, held (0x59639b: the named animation set
       // on frame 0 as its base - a sick fish lying in the water)
       play(m, arg(0), Member::Mode::Loop, 1.0f);
       continue;
-    } else if (s.fn == "fkeepcontrol") {
+    } else if (command == Command::KeepControl) {
       // Keeps this set going on its base while it's sick (behaviourRunFnMoves
       // 0x4a751e: the step isn't done while its condition holds) - healed,
       // or dying, something else takes control
@@ -1333,18 +1433,18 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
         return;
       }
       continue;
-    } else if (s.fn == "fdie") {
+    } else if (command == Command::Die) {
       // (its death is the set ending: dieAfter, as bDie's end on land)
       continue;
-    } else if (s.fn == "fplayset") {
+    } else if (command == Command::PlaySet) {
       pushSet(m, arg(0));
       continue;
-    } else if (s.fn == "fplaysettank") {
+    } else if (command == Command::PlaySetTank) {
       // (the first at the surface, else the second)
-      bool top = this->tankDepth && m.swimZ >= this->tankDepth(m.exhibit) - 0.35f;
+      bool top = this->tankDepth && m.swimZ >= this->tankDepth(this->tankAt(m.x,m.y)) - 0.35f;
       pushSet(m, top ? arg(0) : arg(1));
       continue;
-    } else if (s.fn == "fplaysetprob") {
+    } else if (command == Command::PlaySetProb) {
       // Weighted: set, chance, set, chance ...
       int total = 0;
       for (size_t i = 0; i + 1 < s.args.size(); i += 2)
@@ -1363,35 +1463,35 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
         }
       }
       continue;
-    } else if (s.fn == "fplaysetterrain") {
+    } else if (command == Command::PlaySetTerrain) {
       // One of four sets by where it is: on land, in water, in a tank at the
       // surface, in a tank below it (sleep, sick, die, after a catch: every
       // species' .ai, Marine Mania's update)
       bool inTank = this->tankAt && this->tankAt(m.x, m.y) >= 0;
-      bool top = inTank && this->tankDepth && m.swimZ >= this->tankDepth(m.exhibit) - 0.35f;
+      bool top = inTank && this->tankDepth && m.swimZ >= this->tankDepth(this->tankAt(m.x,m.y)) - 0.35f;
       std::string pick = inTank ? (top ? arg(2) : arg(3)) : onWater(m) ? arg(1) : arg(0);
       ZT_STEP("", "A set by where it is (fPlaySetTerrain)", {"where", inTank ? (top ? "tank surface" : "tank, under") : onWater(m) ? "water" : "land"},
               {"set", pick});
       if (!pick.empty())
         pushSet(m, pick);
       continue;
-    } else if (s.fn == "fwalk" || s.fn == "fmove" || s.fn == "frun" || s.fn == "ftrot" || s.fn == "fmovewithsound" ||
-               s.fn == "fmovereverse") {
+    } else if (command == Command::Walk || command == Command::Move || command == Command::Run || command == Command::Trot || command == Command::MoveWithSound ||
+               command == Command::MoveReverse) {
       std::string target = arg(0);
       // fMove(where, n, animation, speed); fMoveWithSound the same and a
       // sound (a dolphin's jumps, a shark's frenzy); fMoveReverse (not yet
       // played backwards); fTrot at its medium rate, trotting
-      bool asMove = s.fn == "fmove" || s.fn == "fmovewithsound" || s.fn == "fmovereverse";
+      bool asMove = command == Command::Move || command == Command::MoveWithSound || command == Command::MoveReverse;
       bool hasTrot = t.anims[sub(m)].count("trot") || t.anims[0].count("trot");
-      m.moveAnim = s.fn == "frun" ? "run"
-                   : s.fn == "ftrot" ? (hasTrot ? "trot" : "run")
+      m.moveAnim = command == Command::Run ? "run"
+                   : command == Command::Trot ? (hasTrot ? "trot" : "run")
                    : asMove && !arg(2).empty() ? arg(2)
                                                : "walk";
-      m.speed = s.fn == "frun" ? t.fast
-                : s.fn == "ftrot" ? t.medium
+      m.speed = command == Command::Run ? t.fast
+                : command == Command::Trot ? t.medium
                 : asMove && !arg(3).empty() ? std::atoi(arg(3).c_str()) / 60.0f
                                             : t.slow;
-      if (s.fn == "fmovewithsound" && !arg(4).empty())
+      if (command == Command::MoveWithSound && !arg(4).empty())
         playSound(m, arg(4));
       bool walking = false;
       if (target == "keeperfood" || target == "otherfood") {
@@ -1405,14 +1505,13 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
         // (in a tank: a height as any move's there - 0x43dc11)
         if (this->tankAt && this->tankAt(m.x, m.y) >= 0)
           m.swimTo = this->tankTargetHeight(m, target);
-        // To beside it
-        float dx = m.x - food->x, dy = m.y - food->y, d = std::hypot(dx, dy);
-        float gx = food->x, gy = food->y;
-        if (d > 0.7f) {
-          gx += dx / d * 0.6f;
-          gy += dy / d * 0.6f;
+        walking = feedingPlace(m, food->x, food->y, map, fences);
+        if (!walking) {
+          // Retry this approach; never advance to eating remotely.
+          --m.stack.back().second;
+          play(m, m.anim, Member::Mode::Loop, 0.75f);
+          return;
         }
-        walking = walkTo(m, gx, gy, map, fences);
       } else if (target == "0" || target.empty()) {
         if (this->tankAt && this->tankAt(m.x, m.y) >= 0)
           m.swimTo = this->tankTargetHeight(m, target);
@@ -1422,9 +1521,10 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
         // (at the food: its eating move there, down by it)
         const ZooItems::Item *food = this->items->item(m.foodItem);
         m.swimTo = this->tankTargetHeight(m, target);
-        walking = walkTo(m, food->x, food->y, map, fences);
-        if (!walking && art(m, m.moveAnim)) {
-          play(m, m.moveAnim, Member::Mode::Loop, std::max(1.5f, animSeconds(m, m.moveAnim)));
+        walking = feedingPlace(m, food->x, food->y, map, fences);
+        if (!walking) {
+          --m.stack.back().second;
+          play(m, m.anim, Member::Mode::Loop, 0.75f);
           return;
         }
       } else if (target == "surface" || target == "floor" || target == "dive" || target == "rise" ||
@@ -1436,23 +1536,90 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       }
       if (!walking)
         continue;
-    } else if (s.fn == "ffacetowardfood") {
+    } else if (command == Command::FaceTowardFood) {
       if (const ZooItems::Item *food = m.foodItem >= 0 && this->items ? this->items->item(m.foodItem) : nullptr)
         faceToward(m, food->x, food->y);
       else if (m.drinkX >= 0)
         faceToward(m, m.drinkX, m.drinkY);
       continue;
-    } else if (s.fn == "fhatch") {
+    } else if (command == Command::FaceTowardTarget) {
+      // 0x42fa2c faces the current target unit, not an arbitrary direction.
+      if (const Member *target = member(m.huntAnimal >= 0 ? m.huntAnimal : m.victim))
+        faceToward(m, target->x, target->y);
+      else if (m.prey >= 0 && preyAt) {
+        float x, y; if (preyAt(m.prey, x, y)) faceToward(m, x, y);
+      } else if (objects) {
+        if (const auto *target = objectById(m.rampageBuilding >= 0 ? m.rampageBuilding : m.building))
+          faceToward(m, target->x, target->y);
+      }
+      continue;
+    } else if (command == Command::CaughtPrey) {
+      // 0x588c2d removes the victim once. Our dust-ball completion already
+      // queues that removal before starting bCaughtPrey; never kill twice.
+      if (m.victim >= 0) {
+        if (std::find(kills.begin(), kills.end(), m.victim) == kills.end()) kills.push_back(m.victim);
+        m.victim = -1; m.killIn = 0;
+      }
+      continue;
+    } else if (command == Command::TargetBuilding) {
+      if (!m.rampaging || !objects) { m.rampageBuilding = -1; continue; }
+      // 0x5a5a90 selects a nearby reachable building. Approach its footprint
+      // before using the same rubble operation as stepping onto its tile.
+      std::vector<std::pair<float, int>> targets;
+      for (const auto &o : objects->objects())
+        if (o.className == "building" && infoOf(PlacedObjects::fileOf(o)).rubbleable)
+          targets.push_back({std::hypot(o.x - m.x, o.y - m.y), o.id});
+      std::sort(targets.begin(), targets.end());
+      bool routed = false;
+      for (auto [distance, id] : targets) {
+        const auto *o = objectById(id); if (!o) continue;
+        auto info = infoOf(PlacedObjects::fileOf(*o));
+        if ((o->facing & 6) == 2 || (o->facing & 6) == 6) std::swap(info.fx, info.fy);
+        const float hx = std::max(1, info.fx) / 4.0f, hy = std::max(1, info.fy) / 4.0f;
+        const float ox = o->x, oy = o->y;
+        std::vector<std::pair<float, float>> spots = {
+          {ox-hx-0.51f, std::clamp(m.y, oy-hy, oy+hy)},
+          {ox+hx+0.51f, std::clamp(m.y, oy-hy, oy+hy)},
+          {std::clamp(m.x, ox-hx, ox+hx), oy-hy-0.51f},
+          {std::clamp(m.x, ox-hx, ox+hx), oy+hy+0.51f}};
+        std::sort(spots.begin(), spots.end(), [&](auto a, auto b) {
+          return std::hypot(a.first-m.x,a.second-m.y)<std::hypot(b.first-m.x,b.second-m.y);
+        });
+        for (auto [x, y] : spots) {
+          m.rampageBuilding = id;
+          if (std::hypot(x-m.x, y-m.y) < 0.2f) {
+            faceToward(m, ox, oy);
+            if (rubbleAt) rubbleAt(static_cast<int>(std::floor(std::clamp(m.x, ox-hx+0.01f, ox+hx-0.01f))),
+                                   static_cast<int>(std::floor(std::clamp(m.y, oy-hy+0.01f, oy+hy-0.01f))), m);
+            m.rampageBuilding = -1;
+            routed = true;
+            break;
+          }
+          moveOf(m, m.escaped ? "bescapedrampage" : "bhabitatrampage", m.moveAnim, m.speed);
+          if (walkTo(m, x, y, map, fences)) {
+            --m.stack.back().second; // finish the command only after arrival
+            return;
+          }
+        }
+        if (routed) break;
+      }
+      m.rampageBuilding = -1;
+      continue;
+    } else if (command == Command::Hatch) {
       // Out of the egg: a baby (zoo.exe bHatch's last step)
       m.egg = false;
       this->markDirty(m.exhibit);
       ZT_STEP("0x437860", "Hatched: a baby", {"name", m.name});
       continue;
-    } else if (s.fn == "fdustball") {
+    } else if (command == Command::Dustball) {
       // (bCaughtPrey's: the catch already showed it - the ball by where the
       // hunter is, zoo.exe 0x588d47 - and its set runs on after it)
       continue;
-    } else if (s.fn == "fenterbuilding" || s.fn == "fexitbuilding") {
+    } else if (command == Command::EnterBuilding || command == Command::ExitBuilding) {
+      if(m.showTank>=0 && m.building>=0 && this->objects) {
+        if(auto *o=const_cast<PlacedObjects*>(this->objects)->byId(m.building))
+          o->showHidden=s.fn=="fenterbuilding" && infoOf(PlacedObjects::fileOf(*o)).hideBuilding;
+      }
       // (an object's animalrest set - an ice floe's, driftwood's: zoo.exe's
       // fEnterBuilding 0x5ad3a6 finds the building on its tile and sends it
       // message 0x2722, then stops. Ours: in it from arriving at it, out
@@ -1470,20 +1637,42 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
 
 bool Animals::walkTo(Member &m, float gx, float gy, const WorldMap &map, const Fences &fences) {
   const Type &t = this->typeList[m.type];
+  if (!destinationFree(m,gx,gy,m.swimTo,true) || tankClearance(m,gx,gy,fences,true)<-0.001f) return false;
   int sx = static_cast<int>(std::floor(m.x)), sy = static_cast<int>(std::floor(m.y));
   int tx = static_cast<int>(std::floor(gx)), ty = static_cast<int>(std::floor(gy));
   // (its own tile always: something just put down on it, it walks out)
-  auto pass = [&](int x, int y) { return (x == sx && y == sy) || standable(x, y, t, m.exhibit, map, fences); };
-  auto step = [&](int x, int y, int nx, int ny) { return canStep(x, y, nx, ny, map, fences); };
+  auto pass = [&](int x, int y) {
+    int ex=fences.exhibitAt(x,y);
+    if(m.showTank>=0 && (ex==m.showTank || ex==m.showHome))return standable(x,y,t,ex,map,fences);
+    return (x==sx && y==sy) || standable(x,y,t,m.exhibit,map,fences);
+  };
+  auto step = [&](int x, int y, int nx, int ny) {
+    return awareStep(m,x,y,nx,ny,map,fences);
+  };
+  const float beforeWall=tankClearance(m,m.x,m.y,fences,true);
+  auto clear = [&](int x,int y) {
+    if(!pass(x,y))return false;
+    if(x==sx && y==sy)return true;
+    float gx=x+0.5f,gy=y+0.5f;
+    float wall=tankClearance(m,gx,gy,fences,true);
+    if(wall<-0.001f && !(beforeWall<0 && wall>beforeWall))return false;
+    for(const auto &other:list)if(awareOf(m,other)) {
+      float oz=bodyHeight(other,other.x,other.y,other.swimZ);
+      float before=bodyDistance(m,m.x,m.y,bodyHeight(m,m.x,m.y,m.swimZ),other,other.x,other.y,oz);
+      float after=bodyDistance(m,gx,gy,bodyHeight(m,gx,gy,m.swimTo),other,other.x,other.y,oz);
+      if(after<1.0f && !(before<1.0f && after>before))return false;
+    }
+    return true;
+  };
   std::vector<std::pair<int, int>> tiles;
-  if (!Pathfinder::find(map.getWidth(), map.getHeight(), sx, sy, tx, ty, pass, step, tiles, 4000))
+  if (!Pathfinder::find(map.getWidth(), map.getHeight(), sx, sy, tx, ty, clear, step, tiles, 4000))
     return false;
   std::vector<std::pair<float, float>> points;
   points.push_back({m.x, m.y});
   for (size_t i = 1; i + 1 < tiles.size(); i++)
     points.push_back({tiles[i].first + 0.5f, tiles[i].second + 0.5f});
   points.push_back({gx, gy});
-  Pathfinder::smooth(points, pass, step);
+  Pathfinder::smooth(points, clear, step);
   m.path.assign(points.begin() + 1, points.end());
   m.pathAt = 0;
   if (m.path.empty())
@@ -1503,7 +1692,7 @@ bool Animals::testRoute(int id, int gx, int gy, const WorldMap &map, const Fence
   const Type &t = this->typeList[m->type];
   int sx = static_cast<int>(std::floor(m->x)), sy = static_cast<int>(std::floor(m->y));
   auto pass = [&](int x, int y) { return (x == sx && y == sy) || standable(x, y, t, m->exhibit, map, fences); };
-  auto step = [&](int x, int y, int nx, int ny) { return canStep(x, y, nx, ny, map, fences); };
+  auto step = [&](int x, int y, int nx, int ny) { return awareStep(*m,x,y,nx,ny,map,fences); };
   return Pathfinder::find(map.getWidth(), map.getHeight(), sx, sy, gx, gy, pass, step, out, 4000);
 }
 
@@ -1570,7 +1759,11 @@ bool Animals::walkSomewhere(Member &m, const WorldMap &map, const Fences &fences
   const Fences::Exhibit *ex = fences.exhibit(m.exhibit);
   if (!ex || ex->tiles.empty())
     return false;
-  std::vector<std::pair<int, int>> tiles(ex->tiles.begin(), ex->tiles.end());
+  std::set<std::pair<int,int>> area=ex->tiles;
+  if(t.underwater && !t.onlyUnderwater)
+    for(int id:fences.habitatGroup(m.exhibit,map))if(const auto *part=fences.exhibit(id))
+      area.insert(part->tiles.begin(),part->tiles.end());
+  std::vector<std::pair<int, int>> tiles(area.begin(),area.end());
   std::uniform_real_distribution<float> in(0.15f, 0.85f);
   for (int tries = 0; tries < 8; tries++) {
     auto [x, y] = tiles[std::uniform_int_distribution<size_t>(0, tiles.size() - 1)(this->rng)];
@@ -1578,7 +1771,8 @@ bool Animals::walkSomewhere(Member &m, const WorldMap &map, const Fences &fences
       continue;
     // (a swimmer wanders where it is: the water in the water, else land -
     // zoo.exe 0x4273ec)
-    if (t.swims && isWater(map, x, y) != m.waterMode)
+    bool wet=isWater(map,x,y) || (tankAt && tankAt(x+0.5f,y+0.5f)>=0);
+    if (t.swims && wet != m.waterMode)
       continue;
     if (walkTo(m, x + in(this->rng), y + in(this->rng), map, fences))
       return true;
@@ -1599,7 +1793,7 @@ bool Animals::onWater(const Member &m) const {
 void Animals::waterTick(Member &m, const WorldMap &map, const Fences &fences) {
   const Type &t = this->typeList[m.type];
   const Fences::Exhibit *ex = m.exhibit >= 0 ? fences.exhibit(m.exhibit) : nullptr;
-  if (!ex || m.escaped || m.boxed || m.dying || m.sleeping || m.building >= 0)
+  if (!ex || m.escaped || m.boxed || m.dying || m.sleeping || m.building >= 0 || m.showTank >= 0)
     return;
   std::uniform_int_distribution<int> pct(0, 99);
   // (global_animals.ai: cWaterCheck 40, cBoredCheck 30)
@@ -1609,31 +1803,30 @@ void Animals::waterTick(Member &m, const WorldMap &map, const Fences &fences) {
     m.boredCheck = std::uniform_int_distribution<int>(0, 29)(this->rng);
   if (--m.waterCheck <= 0) {
     m.waterCheck = 39;
-    std::vector<std::pair<int, int>> water, land;
-    for (auto [x, y] : ex->tiles)
-      (isWater(map, x, y) ? water : land).push_back({x, y});
-    bool go = false;
-    std::vector<std::pair<int, int>> *to = nullptr;
-    if (!m.waterMode && t.swims && pct(this->rng) < t.enterWaterChance &&
-        static_cast<int>(water.size()) > t.waterNeeded) {
-      go = true;
-      to = &water;
-    } else if (m.waterMode && pct(this->rng) < t.enterLandChance && static_cast<int>(land.size()) > t.landNeeded) {
-      go = true;
-      to = &land;
-    }
-    if (go) {
-      bool wantWater = to == &water;
-      m.waterMode = wantWater;
-      // (already there: just that)
-      if (onWater(m) != wantWater) {
-        auto [x, y] = (*to)[std::uniform_int_distribution<size_t>(0, to->size() - 1)(this->rng)];
-        m.stack.clear();
-        m.moveAnim = "walk";
-        m.speed = t.slow;
-        walkTo(m, x + 0.5f, y + 0.5f, map, fences);
-      }
-    }
+    std::vector<std::pair<int,int>> water,land,tanks;
+    auto group=t.underwater && !t.onlyUnderwater ? fences.habitatGroup(m.exhibit,map) : std::set<int>{m.exhibit};
+    for(int id:group)if(const auto *part=fences.exhibit(id))
+      for(auto [x,y]:part->tiles)
+        (part->tank?tanks:isWater(map,x,y)?water:land).push_back({x,y});
+    int currentTank=tankAt?tankAt(m.x,m.y):-1;
+    bool wet=currentTank>=0 || onWater(m);
+    std::vector<std::pair<int,int>> *to=nullptr;
+    if(wet && !t.onlyUnderwater && pct(this->rng)<t.enterLandChance &&
+       static_cast<int>(land.size())>t.landNeeded)to=&land;
+    else if(!wet && t.underwater && pct(this->rng)<t.enterTankChance &&
+            static_cast<int>(tanks.size())>t.underwaterNeeded)to=&tanks;
+    else if(!wet && t.swims && pct(this->rng)<t.enterWaterChance &&
+            static_cast<int>(water.size())>t.waterNeeded)to=&water;
+    if(to && !to->empty()) {
+      auto [x,y]=(*to)[std::uniform_int_distribution<size_t>(0,to->size()-1)(this->rng)];
+      bool previous=m.waterMode;
+      m.waterMode=to!=&land;
+      m.stack.clear();m.moveAnim="walk";m.speed=t.slow;
+      int targetTank=tankAt?tankAt(x+0.5f,y+0.5f):-1;
+      const auto *pool=fences.exhibit(currentTank>=0?currentTank:targetTank);
+      if(pool)m.swimTo=static_cast<float>(fences.waterLevel(*pool));
+      if(!walkTo(m,x+0.5f,y+0.5f,map,fences))m.waterMode=previous;
+    } else if(m.pathAt>=m.path.size())m.waterMode=wet;
   }
   if (--m.boredCheck <= 0) {
     m.boredCheck = 29;
@@ -1717,6 +1910,7 @@ void Animals::waterTick(Member &m, const WorldMap &map, const Fences &fences) {
 void Animals::update(float seconds, double simSeconds, const WorldMap &map, const Fences &fences) {
   this->now = simSeconds;
   this->mapRef = &map;
+  this->fencesRef = &fences;
   // Prey caught last time: gone
   {
     std::vector<int> kills;
@@ -1743,6 +1937,16 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
     ZT_WHO("animal", m.id);
     const Type &t = this->typeList[m.type];
     m.animTime += seconds;
+    // Lowering a tank also lowers its swimmers; an old target must not leave
+    // one floating above the new surface. Trick animations control their own rise.
+    if(t.underwater && !m.showTrick && !m.boxed) {
+      const auto *pool=fences.exhibit(fences.exhibitAt(static_cast<int>(std::floor(m.x)),static_cast<int>(std::floor(m.y))));
+      if(pool && pool->tank && pool->water>0) {
+        float surface=static_cast<float>(fences.waterLevel(*pool));
+        m.swimZ=std::clamp(m.swimZ,0.0f,surface);
+        m.swimTo=std::clamp(m.swimTo,0.0f,surface);
+      }
+    }
     // Its faces float up and go after 1.25 s
     for (auto &f : m.faces)
       f.second += seconds * 1000.0f;
@@ -1804,11 +2008,11 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
     }
     // Caught up with the animal it's after (on its tile): prey under a dust
     // ball (zoo.exe 0x4a6043); at play, it's over
-    if (m.huntAnimal >= 0 && !busy(m)) {
+    if (m.huntAnimal >= 0 && !busy(m) && !standingOff(m)) {
       Member *p = this->member(m.huntAnimal);
-      if (p && static_cast<int>(std::floor(p->x)) == static_cast<int>(std::floor(m.x)) &&
-          static_cast<int>(std::floor(p->y)) == static_cast<int>(std::floor(m.y)) &&
-          std::hypot(p->x - m.x, p->y - m.y) < 0.6f) {
+      bool contact=p && bodyDistance(m,m.x,m.y,bodyHeight(m,m.x,m.y,m.swimZ),*p,p->x,p->y,
+                       bodyHeight(*p,p->x,p->y,p->swimZ)) <= 1.08f;
+      if (contact) {
         if (m.tag) {
           m.huntAnimal = -1;
           m.tag = false;
@@ -1836,7 +2040,7 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
           // the dust ball if it hasn't the one asked for)
           std::string ball = "dustball";
           if (this->tankAt && this->tankAt(m.x, m.y) >= 0) {
-            bool top = this->tankDepth && m.swimZ >= this->tankDepth(m.exhibit) - 0.35f;
+            bool top = this->tankDepth && m.swimZ >= this->tankDepth(this->tankAt(m.x,m.y)) - 0.35f;
             ball = top ? "surfaceball" : "submergedball";
           } else if (onWater(m)) {
             ball = "waterball";
@@ -1892,6 +2096,7 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
         m.breaks = false;
       }
     }
+    separateIdle(m,seconds,map,fences);
     // Walking
     if (m.pathAt < m.path.size()) {
       auto [tx, ty] = m.path[m.pathAt];
@@ -1909,19 +2114,7 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
         m.speed = std::max(0.2f, dist / secs);
         m.crossAnim.clear();
       }
-      float step = m.speed * seconds;
-      if (dist > 0.0001f) {
-        m.fx = dx / dist;
-        m.fy = dy / dist;
-      }
-      // (swimming up or down as it goes: there by the end of the leg)
-      if (m.swimZ != m.swimTo) {
-        float frac = dist > step ? step / dist : 1.0f;
-        m.swimZ += (m.swimTo - m.swimZ) * frac;
-      }
-      if (dist <= step) {
-        m.x = tx;
-        m.y = ty;
+      if (moveAware(m,tx,ty,seconds,map,fences)) {
         if (static_cast<int>(m.pathAt) == m.crossAt) {
           // (landed: on at its run)
           m.crossAt = -1;
@@ -1929,9 +2122,6 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
           m.speed = t.fast;
         }
         m.pathAt++;
-      } else {
-        m.x += dx / dist * step;
-        m.y += dy / dist * step;
       }
       // Onto another tile (zoo.exe 0x437572): rampaging - and not going
       // over a fence, that's its own - it turns to rubble whatever stands
@@ -1988,23 +2178,10 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
     // Playing
     if (m.stepping && m.animTime < m.playFor)
       continue;
-    if (m.stepping && (m.anim == "eat" || m.anim.rfind("eat_", 0) == 0 || m.anim.find("_eat") != std::string::npos) && m.foodItem >= 0 &&
-        this->items) {
-      // A mouthful (cKeeperFoodUnitsEaten) of the food it's at
-      float got = this->items->eat(m.foodItem, static_cast<float>(t.foodEaten));
-      if (got > 0) {
-        m.noFoodSeen = false;
-        float was = m.hunger;
-        m.hunger = std::max(0.0f, m.hunger - got * t.foodUnitValue); // (cFoodUnitValue)
-        m.food = std::clamp(100.0f - m.hunger, 0.0f, 100.0f);
-        m.lastAte = this->now;
-        ZT_STEP("", "Eats a mouthful", {"hunger", was, m.hunger}, {"food eaten", got},
-                {"cKeeperFoodUnitsEaten", t.foodEaten}, {"cFoodUnitValue", t.foodUnitValue});
-      } else {
-        m.foodItem = -1;
-        ZT_STEP("", "Its food's all gone", {"food item", "none"});
-      }
-    }
+    if (m.stepping && (m.anim == "eat" || m.anim.rfind("eat_",0)==0 ||
+        m.anim.find("_eat")!=std::string::npos || m.anim.find("_feed")!=std::string::npos ||
+        m.anim=="feed" || m.anim.rfind("feed_",0)==0))
+      consumeFood(m);
     m.stepping = false;
     nextStep(m, map, fences);
   }
@@ -2266,6 +2443,7 @@ const Animals::ObjectInfo &Animals::infoOf(const std::string &file) const {
     if (IniReader *ai = this->rm->getIniReader(file)) {
       const std::string ints = "characteristics/integers";
       o.nameId = ai->getInt(ints, "cnameid", 0);
+      o.rubbleable = ai->getInt(ints, "crubbleable", 1) != 0;
       o.habitat = ai->getInt(ints, "chabitat", 0);
       o.fx = std::max(1, ai->getInt(ints, "cfootprintx", 1));
       o.fy = std::max(1, ai->getInt(ints, "cfootprinty", 1));
@@ -2282,6 +2460,7 @@ const Animals::ObjectInfo &Animals::infoOf(const std::string &file) const {
       o.energyChange = static_cast<float>(ai->getInt(ints, "cenergychange", 0));
       o.timeInside = ai->getInt(ints, "ctimeinside", 10);
       o.hideUser = ai->getInt(ints, "chideuser", 0) != 0;
+      o.hideBuilding = ai->getInt(ints, "chidebuilding", 0) != 0;
       delete ai;
     }
   // [Satisfies] animalrest (shelters, toys): read from the file's text
@@ -2302,8 +2481,11 @@ const Animals::ObjectInfo &Animals::infoOf(const std::string &file) const {
 }
 
 void Animals::markDirty(int exhibit) {
+  int root=exhibit;
+  if(exhibit>=0 && mapRef && fencesRef)root=fencesRef->habitatRoot(exhibit,*mapRef);
   for (auto &[id, e] : this->evaluations)
-    if (exhibit < 0 || id == exhibit)
+    if (exhibit < 0 || id == exhibit || id==root ||
+        (mapRef && fencesRef && fencesRef->habitatRoot(id,*mapRef)==root))
       e.dirty = true;
 }
 
@@ -2317,8 +2499,14 @@ void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
   const Fences::Exhibit *ex = fences.exhibit(exhibit);
   if (!ex || ex->tiles.empty())
     return;
+  Fences::Exhibit joined=*ex;
+  if(!ex->tank) {
+    for(int id:fences.habitatGroup(exhibit,map))if(const auto *part=fences.exhibit(id))
+      joined.tiles.insert(part->tiles.begin(),part->tiles.end());
+    ex=&joined;
+  }
   const int N = static_cast<int>(ex->tiles.size());
-  ev.tiles = N;
+  ev.tiles = static_cast<int>(fences.exhibit(exhibit)->tiles.size());
   // What stands in it, quarter tile by quarter tile
   struct Placed {
     const ObjectInfo *info;
@@ -2422,8 +2610,11 @@ void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
       const MapTile *tile = map.getTile(tx, ty);
       if (!tile)
         continue;
-      if (!map.isPath(tx, ty) && tile->terrainType < 18)
-        r.count[tile->terrainType]++;
+      int terrain=tile->terrainType;
+      if(const auto *part=fences.exhibit(fences.exhibitAt(tx,ty));part && part->tank)
+        terrain=part->salt?10:9;
+      if (!map.isPath(tx, ty) && terrain < 18)
+        r.count[terrain]++;
       bool foliage = false, poo = false;
       auto slots = slotsOfTile.find({tx, ty});
       if (slots != slotsOfTile.end())
@@ -2550,7 +2741,7 @@ void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
       const bool salty = t.compatTerrain[10] >= t.compatTerrain[9];
       r.saltWrong = ex->salt ? !salty : salty;
       r.salinity = r.saltWrong ? -400.0f : 100.0f;
-      r.noLand = t.underwater && !t.onlyUnderwater;
+      r.noLand = t.underwater && !t.onlyUnderwater && fences.habitatRoot(exhibit,map)==exhibit;
       if (r.noLand)
         r.elevation = 100.0f;
       r.score = 0.15f * r.depth + 0.15f * r.clean + 0.1f * r.salinity +
@@ -3340,11 +3531,11 @@ std::vector<std::pair<std::string, bool>> Animals::advice(int id, const WorldMap
 void Animals::snapshot(int exhibit, const WorldMap &map, const Fences &fences) {
   if (exhibit < 0)
     return;
-  this->evaluate(exhibit, map, fences);
-  std::map<int, float> &snap = this->snaps[exhibit];
-  snap.clear();
-  for (const auto &[kind, r] : this->evaluations[exhibit].kinds)
-    snap[kind] = total(r);
+  for(int id:fences.habitatGroup(exhibit,map)) {
+    this->evaluate(id,map,fences);
+    auto &snap=this->snaps[id];snap.clear();
+    for(const auto &[kind,r]:this->evaluations[id].kinds)snap[kind]=total(r);
+  }
 }
 
 void Animals::face(int exhibit, int kind, bool smile) {
@@ -3354,6 +3545,12 @@ void Animals::face(int exhibit, int kind, bool smile) {
 }
 
 void Animals::react(int exhibit, Change change, const std::string &file, int animalType, bool removed,
+                    const WorldMap &map, const Fences &fences) {
+  if(exhibit<0)return;
+  for(int id:fences.habitatGroup(exhibit,map))reactOne(id,change,file,animalType,removed,map,fences);
+}
+
+void Animals::reactOne(int exhibit, Change change, const std::string &file, int animalType, bool removed,
                     const WorldMap &map, const Fences &fences) {
   if (exhibit < 0 || this->paused)
     return;

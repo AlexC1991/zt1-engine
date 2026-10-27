@@ -18,7 +18,11 @@ Pause, select a map and place a small set of animals or objects. Use the Inspect
 
 ## Play Game: check what a player experiences
 
-**Play ZT1 Engine** runs the current engine. **Play original** runs the installed original game for comparison. Stop and start Play after changing loaded mods. Embedded Play is a separate game session from the Test Zoo: placing an animal in one does not place it in the other.
+**Play ZT1 Engine** runs the current engine with your normal mod switches. **Play original** runs the installed original game for comparison. Mods can be switched on and off in the engine's Settings without manually restarting Play. Optional replacements return to the original assets when switched off. A pack required by the current map, another enabled mod, or unique content placed in the zoo stays on and explains why. Leave that map or remove the dependent content before switching its pack off. Embedded Play is a separate game session from the Test Zoo: placing an animal in one does not place it in the other.
+
+The Mods studio's **Test** and **Play** shortcuts start temporary mod tests. A label identifies the test; your normal switches are unchanged. **End test** returns the Test Zoo to your normal selection. Stopping a Play test ends its temporary selection; the ordinary Play button then uses your normal switches. The installed-mod list keeps downloaded mods visible whether they are on or off. Use the left and right arrow buttons in Settings to reach every installed mod; the counter shows your current page and the total number of pages.
+
+Downloading installs a mod switched off. **Enable** in the main-menu Mod Menu uses the same smart switch as Settings. After **Load mods** was off, enabling one mod activates that mod and its requirements; old selections are not silently brought back. **Load mods → Off** switches the selection off together, unless the current map or zoo requires one of its packs. Temporary tests have their own Load mods state and load only the selected mod and its requirements.
 
 ## Mods: use the right workspace
 

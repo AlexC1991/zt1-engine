@@ -52,6 +52,7 @@ int ZooSim::weekday() const {
 }
 
 void ZooSim::start(double cash, double rating) {
+  importedAnnual.clear(); importedTotals.clear();
   this->months.clear();
   this->months.push_back(Month{});
   this->money = cash;

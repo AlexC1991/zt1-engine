@@ -1682,8 +1682,10 @@ function renderFiles() {
 // --------------------------------------------------------------- Play
 function renderPlay() {
   const p = S.play;
+  const description = p.testMod ? `Temporary mod test: ${p.testMod.name}. Normal switches are unchanged.` :
+    (p.running ? (p.kind === 'original' ? 'The original game, zoo.exe.' : 'Our engine, as it runs now.') : 'The whole game: our engine, or the original to compare.');
   // (one Start: in the middle while it's not running; its controls up here once it is)
-  $('playbar').innerHTML = `<b>Play Game</b><span class="muted">${p.running ? (p.kind === 'original' ? 'The original game, zoo.exe.' : 'Our engine, as it runs now.') : 'The whole game: our engine, or the original to compare.'}</span><div class="spacer"></div>${
+  $('playbar').innerHTML = `<b>Play Game</b><span class="muted">${esc(description)}</span><div class="spacer"></div>${
     p.running
       ? `<span id="rec-bar" style="display:flex;align-items:center;gap:8px">${typeof recBar === 'function' ? recBar() : ''}</span><label class="muted" style="display:flex;align-items:center;gap:6px" title="The game's own volume (Windows' mixer has it on its own): nothing else's">${ic('volume')}<input type="range" id="play-vol" min="0" max="100" step="1" value="${playVolume()}" style="width:110px"><span id="play-vol-n" class="mono" style="min-width:3ch">${playVolume()}</span></label><div class="btn" data-act="playFocus" title="Send the keyboard to the game (it has the mouse when you click in it)">Keyboard to game</div><div class="btn" data-act="playStop">Stop the game</div>`
       : ''
@@ -1963,13 +1965,17 @@ const ACTIONS = {
     }
     if (S.tab === 'engine') renderEngine();
   },
-  engRelease: async () => {
+  engRelease: async (opts = {}) => {
     if (S.eng.build.state === 'building') return;
+    if (typeof opts === 'string') {
+      try { opts = opts.trim().startsWith('{') ? JSON.parse(opts) : {}; }
+      catch { return { error: 'Release options must be valid JSON.' }; }
+    }
     await saveAllEngineFiles();
     S.eng.build = { state: 'building', kind: 'release', log: [], problems: [], secs: 0, release: {} };
     S.eng.tab = 'out';
     if (S.tab === 'engine') renderEngine();
-    const r = await lab.engineRelease();
+    const r = await lab.engineRelease(opts && typeof opts === 'object' ? opts : {});
     if (r.error) {
       S.eng.build.state = 'failed';
       S.eng.build.release = { error: r.error };
@@ -2001,8 +2007,9 @@ const ACTIONS = {
   },
 
   playRestart: async () => {
+    const testFolder = S.play.testMod && S.play.testMod.folder;
     await lab.playStop();
-    const wait = () => (S.play.running ? setTimeout(wait, 300) : ACTIONS.playStart());
+    const wait = () => (S.play.running ? setTimeout(wait, 300) : ACTIONS.playStart(testFolder));
     setTimeout(wait, 300);
     setTab('play');
   },
@@ -2230,10 +2237,10 @@ const ACTIONS = {
     );
     d.querySelector('[data-x="no"]').classList.add('hidden');
   },
-  playStart: async () => {
+  playStart: async (testFolder) => {
     S.play.starting = true;
     renderPlay();
-    const r = await lab.playStart();
+    const r = await lab.playStart(testFolder || undefined);
     S.play.starting = false;
     if (r.error) {
       toast(esc(r.error), 5000);
@@ -2242,6 +2249,7 @@ const ACTIONS = {
     }
     S.play.running = true;
     S.play.kind = 'engine';
+    S.play.testMod = r.testMod || null;
     renderPlay();
     // (its window comes once the engine's up: placed a few times as it does)
     for (const t of [300, 1000, 2500, 5000]) setTimeout(sendPlayRect, t);
@@ -2397,7 +2405,8 @@ lab.onEngineStatus((s) => {
     if (S.rebuild) {
       const rb = S.rebuild;
       S.rebuild = null;
-      setTimeout(() => {
+      S.rebuildTimer = setTimeout(() => {
+        S.rebuildTimer = null;
         lab.engineSend({ cmd: 'rebuildRun', cmds: rb.cmds, clock: rb.clock });
         toast(`Making the lab zoo again after the build (${rb.cmds.length} steps, back to ${Math.round(rb.clock)} s)…`, 3500);
       }, 1500);
@@ -2467,6 +2476,7 @@ window.addEventListener('load', async () => {
   if (!st || !st.running) return;
   S.play.running = true;
   S.play.kind = st.kind;
+  S.play.testMod = st.testMod || null;
   if (S.tab === 'play') renderPlay();
   if (st.kind === 'original') {
     recPoll();
@@ -2475,6 +2485,7 @@ window.addEventListener('load', async () => {
 });
 lab.onPlayExit(() => {
   S.play.running = false;
+  S.play.testMod = null;
   if (S.tab === 'play') renderPlay();
 });
 

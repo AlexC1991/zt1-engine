@@ -2,6 +2,7 @@
 #define MODS_HPP
 
 #include <string>
+#include <functional>
 #include <vector>
 
 // Mods: folders of the game's own kind of files that take the place of the
@@ -29,6 +30,8 @@ struct Setting {
   std::vector<std::string> choices;
 };
 struct Mod {
+  std::string id;
+  std::vector<std::string> dependencies;
   std::string folder;   // its folder's name (the key)
   std::string path;     // the folder itself
   std::string name, author, version, about;
@@ -51,7 +54,16 @@ std::string folder();
 void setFolder(const std::string &path);
 // Every mod found there, with whether it's on
 std::vector<Mod> list();
-void setEnabled(const std::string &folder, bool on);
+bool setEnabled(const std::string &folder, bool on);
+bool setMasterEnabled(bool on);
+void loadSelectionSettings();
+void setDisableCheck(std::function<std::string(const std::string &)> check);
+std::string offReason(const std::string &folder);
+const std::string &lastError();
+std::string selectionKey();
+void markApplied();
+void restoreApplied();
+std::vector<std::string> appliedFolders();
 // The folders of the mods switched on, for the resource search path (the
 // first wins): none with the mods switch off
 std::vector<std::string> enabledPaths();

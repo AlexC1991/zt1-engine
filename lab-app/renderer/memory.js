@@ -490,6 +490,7 @@ Object.assign(ACTIONS, {
     }
     return { done: true };
   },
+  playWindowCheck: () => lab.playWindowCheck(),
   // Windows' own dialogs the original opens (Save a zoo..., Open a zoo...):
   // not drawn on its surface, and it waits on them. "" names the one open,
   // "text <name>" fills its file name, "ok" / "cancel" presses its button

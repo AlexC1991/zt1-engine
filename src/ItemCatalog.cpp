@@ -80,13 +80,14 @@ struct AiFile {
 
 } // namespace
 
-void ItemCatalog::load(ResourceManager *rm) {
+void ItemCatalog::load(ResourceManager *rm, bool force) {
   // Loaded in the background while the menus show (see main); a game
   // started before it is done waits here
   static std::mutex loading;
   std::lock_guard<std::mutex> lock(loading);
-  if (this->loaded || !rm)
-    return;
+  if (!rm) return;
+  if (force) { this->items.clear(); this->loaded = false; }
+  if (this->loaded) return;
   this->loaded = true;
   Uint32 start = SDL_GetTicks();
 

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "Features.hpp"
+#include "Mods.hpp"
 #include "IniReader.hpp"
 #include "Paths.hpp"
 #include "Sound.hpp"
@@ -111,9 +112,13 @@ void loadExtras() {
     else if (v == "0" || v == "off" || v == "false")
       *f.value = false;
   }
+  Mods::loadSelectionSettings();
 }
 
-void saveExtra(const std::string &name, bool on) { set("Extras", name, on ? "1" : "0"); }
+void saveExtra(const std::string &name, bool on) {
+  if (name == "mods") { Mods::setMasterEnabled(on); return; }
+  set("Extras", name, on ? "1" : "0");
+}
 
 // The Game Options' settings at work, as the original sets them up
 // (zoo.exe 0x518375, the panel's refresh, reads them all with these

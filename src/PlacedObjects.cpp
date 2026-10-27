@@ -21,6 +21,8 @@ PlacedObjects::~PlacedObjects() { this->clear(); }
 
 void PlacedObjects::clear() {
   this->list.clear();
+  this->nextId = 1;
+  this->counts.clear();
   for (auto &kv : this->art)
     delete kv.second;
   this->art.clear();
@@ -169,6 +171,20 @@ void PlacedObjects::loadLayers(Object &o) {
                                   !ai->get("animations", "half").empty() && !ai->get("animations", "full").empty());
       delete ai;
     }
+  if (this->rm)
+    if (IniReader *ai = this->rm->getIniReader(fileOf(o))) {
+      const std::string ints = "characteristics/integers";
+      o.randomUse = ai->getInt(ints, "crandomuse", 0) != 0;
+      if (o.randomUse) {
+        o.minUsePeriod = std::max(1, ai->getInt(ints, "cminuseperiod", 20));
+        o.maxUsePeriod = std::max(o.minUsePeriod, static_cast<float>(ai->getInt(ints, "cmaxuseperiod", 60)));
+        o.useAnimCount = std::max(1, ai->getInt(ints, "cuseanimcount", 1));
+        if (!o.randomActive && o.randomWait <= 0)
+          o.randomWait = std::uniform_real_distribution<float>(o.minUsePeriod, o.maxUsePeriod)(randomUseRng);
+        o.used = this->paintedArtOf(o, "used");
+      }
+      delete ai;
+    }
   if (o.trashCan) o.half = this->paintedArtOf(o, "half");
   if (o.subClass != "building")
     return;
@@ -267,13 +283,47 @@ void PlacedObjects::explode(Object &o) {
     o.exploding = 0;
 }
 
+int PlacedObjects::animationFrame(const Object &o, const Animation *art) {
+  if (!art || art->frameCount() <= 1) return 0;
+  // Idle and used can point to the same cached animation (aviary, boat
+  // shack, changing room). The active state, not pointer equality alone,
+  // chooses the clock; otherwise those buildings freeze when unoccupied.
+  const double time = art == o.used && o.randomActive ? o.randomTime
+                    : art == o.used && o.inUse ? o.useTime : o.animTime;
+  return static_cast<int>(std::fmod(time * 1000.0 / std::max(1u, art->frameTimeMs()), art->frameCount()));
+}
+
 void PlacedObjects::tick(float seconds) {
-  for (Object &o : this->list)
+  if (seconds <= 0) return;
+  for (Object &o : this->list) {
+    o.animTime += seconds;
+    o.useTime = o.inUse ? (o.wasInUse ? o.useTime + seconds : 0) : 0;
+    o.wasInUse = o.inUse;
+    o.randomStarted = false;
+    if (o.randomUse && o.used) {
+      double remaining = seconds;
+      const double length = std::max(0.001, o.used->frameCount() * std::max(1u, o.used->frameTimeMs()) * 0.001 * o.useAnimCount);
+      while (remaining > 0) {
+        if (o.randomActive) {
+          const double step = std::min(remaining, std::max(0.0, length - o.randomTime));
+          o.randomTime += step; remaining -= step;
+          if (o.randomTime >= length) {
+            o.randomActive = false; o.randomTime = 0;
+            o.randomWait = std::uniform_real_distribution<float>(o.minUsePeriod, o.maxUsePeriod)(randomUseRng);
+          }
+        } else {
+          const double step = std::min(remaining, std::max(0.0, o.randomWait));
+          o.randomWait -= step; remaining -= step;
+          if (o.randomWait <= 0) { o.randomActive = true; o.randomTime = 0; o.randomStarted = true; }
+        }
+      }
+    }
     if (o.exploding >= 0 && o.explodeArt) {
       o.exploding += seconds;
       if (o.exploding * 1000.0f >= o.explodeArt->frameCount() * o.explodeArt->frameTimeMs())
         o.exploding = -1;
     }
+  }
 }
 
 void PlacedObjects::remove(int index) {
@@ -320,6 +370,11 @@ int PlacedObjects::pick(float px, float py, const WorldRenderer &view, const Wor
 void PlacedObjects::load(const ZooReader &reader, ResourceManager *rm) {
   this->clear();
   this->rm = rm;
+  // Keep original object identities: guests, shows and jobs refer to them.
+  for (const auto &obj : reader.getObjects())
+    if (obj.id > 0 && obj.id < static_cast<uint32_t>(INT32_MAX))
+      this->nextId = std::max(this->nextId, static_cast<int>(obj.id) + 1);
+  std::set<int> usedIds;
   for (const ZooReader::ZooObject &obj : reader.getObjects()) {
     // Paths are drawn with the terrain, fences by Fences, ambient animals
     // not yet
@@ -328,7 +383,7 @@ void PlacedObjects::load(const ZooReader &reader, ResourceManager *rm) {
       continue;
     // (a saved zoo's tank walls are Fences', its food and dung ZooItems', its
     // animals, guests and staff live: SaveGame::loadOriginal)
-    static const std::set<std::string> live = {"tankwall", "food", "animals", "guests", "staff",
+    static const std::set<std::string> live = {"tankwall", "filter", "food", "animals", "guests", "staff",
                                                "keeper",   "maint", "tour", "helicopter"};
     if (live.count(obj.className))
       continue;
@@ -338,6 +393,9 @@ void PlacedObjects::load(const ZooReader &reader, ResourceManager *rm) {
     o.typeName = obj.typeName;
     resolveExt(o);
     o.name = obj.name;
+    o.label = obj.name;
+    o.id = obj.id > 0 && obj.id < static_cast<uint32_t>(INT32_MAX) ? static_cast<int>(obj.id) : this->nextId++;
+    if (!usedIds.insert(o.id).second) { o.id = this->nextId++; usedIds.insert(o.id); }
     o.x = obj.x / 64.0f;
     o.y = obj.y / 64.0f;
     o.z = obj.z / 16.0f;
@@ -358,6 +416,8 @@ void PlacedObjects::load(const ZooReader &reader, ResourceManager *rm) {
       o.slopeDown = this->artFor(base + "idle30n/idle30n");
     } else {
       o.art = this->artOfFile(fileOf(o));
+      o.colours.assign(obj.colours.begin(), obj.colours.end());
+      this->loadLayers(o);
     }
     if (o.art)
       this->list.push_back(o);
@@ -401,10 +461,10 @@ void PlacedObjects::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view
     // (the bulldozer over it: red, as everywhere)
     const SDL_Color *tint = static_cast<int>(d.o - this->list.data()) == this->highlight ? &red : nullptr;
     if (d.o->bg)
-      d.o->bg->drawAnchored(renderer, d.sx, d.sy, d.side, tint, -1);
-    Animation *art = d.o->inUse && d.o->used ? d.o->used : d.o->art;
+      d.o->bg->drawAnchored(renderer, d.sx, d.sy, d.side, tint, animationFrame(*d.o, d.o->bg));
+    Animation *art = displayArt(*d.o);
     if (art)
-      art->drawAnchored(renderer, d.sx, d.sy, d.side, tint, -1);
+      art->drawAnchored(renderer, d.sx, d.sy, d.side, tint, animationFrame(*d.o, art));
   }
 }
 
@@ -507,7 +567,7 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
       depth -= 1.0f;
     static const SDL_Color red{255, 60, 50, 255};
     bool lit = static_cast<int>(&o - this->list.data()) == this->highlight;
-    if (o.inUse && o.used)
+    if ((o.inUse || o.randomActive) && o.used)
       art = o.used;
     if (o.half && o.fill > 12)
       art = o.half;
@@ -552,7 +612,7 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
         float d = front((xa + xb) * 0.5f) - 0.02f;
         if (under && under(x, y))
           d -= 1.0f;
-        Drawn strip{d, sx, sy, &o, art, side, lit ? &red : nullptr};
+        Drawn strip{d, sx, sy, &o, art, side, lit ? &red : nullptr, animationFrame(o, art)};
         strip.clip = true;
         // (the first and last reach out to the art's edges: eaves)
         strip.clipX0 = k == 0 ? -1e9f : xa;
@@ -560,6 +620,7 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
         if (o.bg) {
           Drawn back = strip;
           back.art = o.bg;
+          back.frame = animationFrame(o, o.bg);
           back.depth -= 0.001f;
           drawn.push_back(back);
         }
@@ -568,7 +629,7 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
       continue;
     }
     if (o.bg)
-      drawn.push_back({depth - 0.01f, sx, sy, &o, o.bg, side, lit ? &red : nullptr});
+      drawn.push_back({depth - 0.01f, sx, sy, &o, o.bg, side, lit ? &red : nullptr, animationFrame(o, o.bg)});
     // (rubble just made: its explode, frame by frame from the first)
     if (o.exploding >= 0 && o.explodeArt && o.explodeArt->frameTimeMs() > 0) {
       int f = static_cast<int>(o.exploding * 1000.0f / o.explodeArt->frameTimeMs());
@@ -576,7 +637,7 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
                        std::min(f, std::max(0, o.explodeArt->frameCount() - 1))});
       continue;
     }
-    drawn.push_back({depth, sx, sy, &o, art, side, lit ? &red : nullptr});
+    drawn.push_back({depth, sx, sy, &o, art, side, lit ? &red : nullptr, animationFrame(o, art)});
   }
   for (const Fences::Drawable &f : fences)
     drawn.push_back({f.depth, f.sx, f.sy, nullptr, f.art, f.side,

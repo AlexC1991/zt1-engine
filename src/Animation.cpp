@@ -89,6 +89,7 @@ Animation &Animation::operator=(Animation &&other) noexcept {
 }
 
 Animation::~Animation() {
+  if (onRelease) onRelease();
   for (auto surface_list : this->surfaces) {
     for (SDL_Surface *surface : surface_list.second) {
       if (surface)

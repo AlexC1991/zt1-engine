@@ -529,7 +529,7 @@ function gvMakerHtml() {
       k.made.flicker < [k.c1, k.c2, k.c3].filter(Boolean).length
         ? `<div class="amber">${k.made.flicker > 1 ? `Room for ${k.made.flicker} of the colours` : 'No room for a flicker'}: ${k.made.changed} shades and only so many free colours in the palette. Pick one shade (untick “every colour like it”) to flicker through them all.</div>`
         : ''
-    }<div class="gvmkrow"><span class="dbg on" data-gv="mk|on">Switch it on and restart the engine</span><span class="dbg" data-gv="mk|close">Close</span></div></div>`;
+    }<div class="gvmkrow"><span class="dbg on" data-gv="mk|on">Test temporarily in the Lab</span><span class="dbg" data-gv="mk|close">Close</span></div></div>`;
   const pick = k.colours.find((c) => c.index === k.index);
   return `<div class="gvmaker"><div class="label">Make a mod from ${esc(k.anim)}</div>
     <div class="dim">1. The colour to change (its art's colours, most used first; ${esc(k.palette || '')})</div>
@@ -572,11 +572,10 @@ async function gvMaker(what, v) {
       toast(`Mod <b>${esc(k.name)}</b> made.`, 3000);
     }
   } else if (what === 'on') {
-    await lab.gameModsEnable(k.folder, true);
+    if (!(await testModInZoo(k.folder))) return;
     const name = GV.name;
     k.busy = 'Restarting the engine with the mod on…';
     gvDraw();
-    lab.engineRestart();
     const t0 = Date.now();
     const wait = setInterval(async () => {
       if (Date.now() - t0 > 3000 && S.engine.status === 'connected') {
@@ -587,7 +586,7 @@ async function gvMaker(what, v) {
         GV.playing = true;
         gvDraw();
         gvPlay();
-        toast('The engine has the mod on: this is the new animation.', 3500);
+        toast('This is a temporary test of the new animation. Normal mod switches are unchanged.', 4000);
       } else if (Date.now() - t0 > 60000) clearInterval(wait);
     }, 400);
     return;

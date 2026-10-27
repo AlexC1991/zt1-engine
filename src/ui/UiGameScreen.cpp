@@ -205,6 +205,7 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   collect(this->hud);
   // Panels opened by clicking things on the map, not by a HUD button: a
   // tank filter's
+  targets.insert(41); // Marine Mania show scripts and admission.
   targets.insert(46);
   targets.insert(17); // a staff member's, clicked on the map or the list
   targets.insert(6);  // an animal's, clicked on the map
@@ -287,6 +288,7 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   this->setupLists();
   this->setupColours();
   this->setupAnimalPanel();
+  this->setupShows();
   this->setupGameOptions();
 
   // The bulldozer (Clear Objects) is a toggle that starts off: only the
@@ -2329,6 +2331,7 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
     if (!it->open)
       continue;
     UiAction a = it->layout->handleInputs(inputs);
+    if (this->showSelection(a)) a = UiAction::NONE;
     if (static_cast<int>(a) == 152 && this->filter.list) {
       this->openFilter(it->id);
       a = UiAction::NONE;
@@ -2347,6 +2350,7 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
   this->refreshResearch();
   this->refreshZooStatus();
   this->refreshExhibits();
+  this->refreshShow();
   this->refreshFilterPanel();
   this->refreshStaff();
   this->refreshAnimal();
@@ -4070,6 +4074,7 @@ void UiGameScreen::drawRound(SDL_Renderer *renderer, const SDL_Rect &box,
 }
 
 void UiGameScreen::showExhibit(int id) {
+  if (this->fences) if (const auto *e=this->fences->exhibit(id)) if (e->show) { this->showShow(id); return; }
   this->showPanel(30, "");
   this->refreshExhibits();
   UiListBox *list = this->exhibitPanel

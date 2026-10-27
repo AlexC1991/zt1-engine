@@ -18,6 +18,38 @@ const MK = {
   picture: null, // the shown mod's picture: {folder, url}
 };
 
+async function testModInZoo(folder) {
+  const r = await lab.gameModsTestZoo(folder);
+  if (r.error) { toast(esc(r.error), 5000); return false; }
+  S.testMod = r.testMod;
+  S.engine.status = 'starting';
+  SC.catalog = null;
+  SC.catalogAsked = false;
+  toast(r.testMod ? `Testing ${esc(r.testMod.name)} temporarily. Your normal switches are unchanged.` : 'Returning to your normal mod switches.', 4500);
+  return true;
+}
+async function changeModSwitch(folder, on) {
+  const r = await lab.gameModsEnable(folder, on);
+  if (r.error) return toast(esc(r.error), 5000);
+  if (!S.testMod) {
+    await keepRebuild();
+    S.engine.status = 'starting';
+    lab.engineRestart();
+  }
+  await renderModKit();
+}
+lab.onModTest(mod => {
+  S.testMod = mod;
+  if (S.tab === 'scene') renderStageUi();
+});
+window.addEventListener('load', async () => {
+  S.testMod = await lab.gameModsTestState();
+  if (S.tab === 'scene') renderStageUi();
+});
+lab.onEngineStatus(status => {
+  if (status.status === 'connected' && S.tab === 'mods' && !MK.dirty && !MK.busy) renderModKit();
+});
+
 // The section switch at the top of the left column
 function modkitTabs() {
   const tab = (k, label, what) =>
@@ -283,10 +315,7 @@ Object.assign(ACTIONS, {
   mkTryMod: async (folder) => {
     if (S.eng.file && !(await saveEngineFile(S.eng.file))) return;
     if (!MK.mods) await modkitLoad();
-    const m = MK.mods.find((x) => x.folder === folder);
-    if (m && !m.enabled) await lab.gameModsEnable(folder, true);
-    lab.engineRestart();
-    toast(`<b>${esc(folder)}</b> is on: the Test Zoo restarts with it.`, 3500);
+    if (!(await testModInZoo(folder))) return;
     setTab('scene');
   },
   // A new animal from one of the game's (Write Code > Game files: an
@@ -425,30 +454,26 @@ Object.assign(ACTIONS, {
   },
   mkToggle: async () => {
     const m = MK.mods.find((x) => x.folder === MK.sel);
-    if (m) await lab.gameModsEnable(m.folder, !m.enabled);
-    renderModKit();
+    if (m) await changeModSwitch(m.folder, !m.enabled);
   },
   // (the switch in the list: on or off without opening it)
   mkQuickToggle: async (folder) => {
     const m = MK.mods.find((x) => x.folder === folder);
-    if (m) await lab.gameModsEnable(m.folder, !m.enabled);
-    renderModKit();
+    if (m) await changeModSwitch(m.folder, !m.enabled);
   },
   mkTryZoo: async () => {
     const m = MK.mods.find((x) => x.folder === MK.sel);
     if (!m) return;
-    if (!m.enabled) await lab.gameModsEnable(m.folder, true);
-    lab.engineRestart();
-    toast(`${esc(m.name || m.folder)} is on: the Test Zoo restarts with it.`, 3500);
+    if (!(await testModInZoo(m.folder))) return;
     setTab('scene');
   },
+  mkEndTest: async () => { await testModInZoo(null); },
   mkPlay: async () => {
     const m = MK.mods.find((x) => x.folder === MK.sel);
     if (!m) return;
-    if (!m.enabled) await lab.gameModsEnable(m.folder, true);
+    if (S.play.running) return toast('Stop the running game before starting a temporary mod test.', 4500);
     setTab('play');
-    if (S.play.running) toast('It is on. The game in Play has it once it restarts.', 3500);
-    else ACTIONS.playStart();
+    await ACTIONS.playStart(m.folder);
   },
   mkCheck: async () => {
     if (MK.dirty) await ACTIONS.mkSave();

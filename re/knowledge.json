@@ -30750,6 +30750,21 @@
    "by": "batty251",
    "on": "2026-10-24",
    "what": "Named 0x595cad serviceAndDate"
+  },
+  {
+   "by": "Lab recorder",
+   "on": "2026-10-26",
+   "what": "Seen 108 functions running: Marine show running with paired orcas and assigned specialist"
+  },
+  {
+   "by": "Lab recorder",
+   "on": "2026-10-26",
+   "what": "Seen 6 functions running: Orca show cycle with show tank and paired orcas - close observation"
+  },
+  {
+   "by": "Lab recorder",
+   "on": "2026-10-26",
+   "what": "Seen 165 functions running: Controlled show test: orca happiness held at 100 to isolate show execution"
   }
  ],
  "notes": {
@@ -45542,6 +45557,36 @@
     "shared": true,
     "unverified": true,
     "when": "Placing a show object in a shallow tank (refused: This object must be placed in a deeper tank)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x0007d0",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x0007d0",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   },
+   {
+    "by": "Lab recorder (shared)",
+    "from": "0x7d0",
+    "on": "2026-10-26",
+    "runs": 1,
+    "shared": true,
+    "unverified": true,
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   },
+   {
+    "by": "Lab recorder (shared)",
+    "from": "0x7d0",
+    "on": "2026-10-26",
+    "runs": 1,
+    "shared": true,
+    "unverified": true,
+    "when": "Marine show running with paired orcas and assigned specialist"
    }
   ],
   "0x416692": [
@@ -47951,6 +47996,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x418790",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x418790",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x418788": [
@@ -48100,6 +48157,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f99c2",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f99c2",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4187a6": [
@@ -48249,6 +48318,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x41871c",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x41871c",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4188de": [
@@ -49693,6 +49774,24 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x418fd8",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x418fd8",
+    "on": "2026-10-26",
+    "when": "Orca show cycle with show tank and paired orcas - close observation"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x418fd8",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x418f97": [
@@ -50202,6 +50301,24 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x441944",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x441944",
+    "on": "2026-10-26",
+    "when": "Orca show cycle with show tank and paired orcas - close observation"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x441944",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x418fdf": [
@@ -50711,6 +50828,24 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4ff9b5",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4ff9b5",
+    "on": "2026-10-26",
+    "when": "Orca show cycle with show tank and paired orcas - close observation"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x419038",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4190ff": [
@@ -55260,6 +55395,32 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367b1",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367b1",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x4233e4": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4367ee",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367ee",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4233ea": [
@@ -55331,6 +55492,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367d9",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367d9",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x423a7e": [
@@ -55491,6 +55664,20 @@
     "when": "Placing a zebra outside an exhibit (refused: Animals can only be placed in exhibits)"
    }
   ],
+  "0x423f75": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4367b1",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367b1",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x423fe0": [
    {
     "by": "Lab recorder",
@@ -55642,6 +55829,18 @@
     "from": "0x438276",
     "on": "2026-10-12",
     "when": "Guests buying from vending machines (a snack and a drink machine just placed by the path, two minutes running)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x438276",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x438276",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x425a15": [
@@ -56275,6 +56474,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x426658",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x42662c": [
@@ -56322,6 +56527,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x426677",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x426665": [
@@ -56369,6 +56580,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4166eb",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4266a6": [
@@ -56702,6 +56919,12 @@
     "shared": true,
     "unverified": true,
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x42662b",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x426d4d": [
@@ -56808,6 +57031,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x426e4b",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x426e50": [
@@ -57142,6 +57371,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43eb43",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x427749": [
@@ -57189,6 +57424,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x427747",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x427756": [
@@ -57236,6 +57477,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x1c7be39c",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4277aa": [
@@ -57357,6 +57604,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa641",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa641",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x427950": [
@@ -57440,6 +57699,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa2ca",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa2ca",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x427996": [
@@ -57962,6 +58233,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fd84d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4301b7": [
@@ -58083,6 +58360,14 @@
     "from": "0x4304f6",
     "on": "2026-10-12",
     "when": "Loading a saved game (Load Saved Game, the open dialog, the zoo file read in)"
+   }
+  ],
+  "0x43103b": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4219b6",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x431834": [
@@ -59469,6 +59754,20 @@
     "when": "Placing a zebra outside an exhibit (refused: Animals can only be placed in exhibits)"
    }
   ],
+  "0x436800": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4367ee",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367ee",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x436815": [
    {
     "by": "Lab recorder",
@@ -59677,6 +59976,28 @@
     "shared": true,
     "unverified": true,
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367b1",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x438496": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4367ee",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x43849c": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4367d9",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x439c73": [
@@ -60935,6 +61256,20 @@
     "when": "Closing a land exhibit beside a tank (one fence side: the combined land and tank exhibit forms)"
    }
   ],
+  "0x4406b9": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5b2478",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5b2478",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x44084b": [
    {
     "by": "Lab recorder",
@@ -61625,6 +61960,24 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x441913",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x441913",
+    "on": "2026-10-26",
+    "when": "Orca show cycle with show tank and paired orcas - close observation"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x441913",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x441e13": [
@@ -62134,6 +62487,24 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4418eb",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4418eb",
+    "on": "2026-10-26",
+    "when": "Orca show cycle with show tank and paired orcas - close observation"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4418eb",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x44201f": [
@@ -62643,6 +63014,24 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x44213e",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x44213e",
+    "on": "2026-10-26",
+    "when": "Orca show cycle with show tank and paired orcas - close observation"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x44213e",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4420b2": [
@@ -63152,6 +63541,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x44231d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4422fd": [
@@ -63661,6 +64056,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4422ee",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x44232b": [
@@ -64170,6 +64571,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x44244b",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x442493": [
@@ -64667,6 +65074,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x442865",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x442562": [
@@ -65041,6 +65454,18 @@
     "shared": true,
     "unverified": true,
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4ff85b",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x419133",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4425ac": [
@@ -65406,6 +65831,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x419141",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4426c7": [
@@ -65765,6 +66196,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x44267a",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4426ea": [
@@ -66095,6 +66532,21 @@
     "shared": true,
     "unverified": true,
     "when": "Tutorial popup OK (the scenario's first message closes and the next step shows)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x000000",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   },
+   {
+    "by": "Lab recorder (shared)",
+    "from": "",
+    "on": "2026-10-26",
+    "runs": 1,
+    "shared": true,
+    "unverified": true,
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x44284b": [
@@ -66421,6 +66873,12 @@
     "from": "0x442187",
     "on": "2026-10-12",
     "when": "Building a show tank on its own (show tank walls all round: named Show Tank)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x442187",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x442883": [
@@ -66681,6 +67139,12 @@
     "from": "0x1c6c0500",
     "on": "2026-10-12",
     "when": "Building a show tank on its own (show tank walls all round: named Show Tank)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x1b040270",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4429ce": [
@@ -67299,6 +67763,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x442c51",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x442e0b": [
@@ -67592,6 +68062,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x442f22",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x44310d": [
@@ -68272,6 +68748,12 @@
     "from": "0x4663d8",
     "on": "2026-10-12",
     "when": "Building a show tank on its own (show tank walls all round: named Show Tank)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4431d1",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x443365": [
@@ -68616,6 +69098,28 @@
     "from": "0x4662dc",
     "on": "2026-10-12",
     "when": "Building a show tank on its own (show tank walls all round: named Show Tank)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x443557",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x4433d8": [
+   {
+    "by": "Lab recorder",
+    "from": "0x443517",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x443414": [
+   {
+    "by": "Lab recorder",
+    "from": "0x443804",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x443560": [
@@ -69113,6 +69617,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x443615",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4435a8": [
@@ -69610,6 +70120,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4435cd",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4435b9": [
@@ -70107,6 +70623,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4434f4",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x44360a": [
@@ -70604,6 +71126,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x443633",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x44361a": [
@@ -71101,6 +71629,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x443828",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x44369a": [
@@ -71559,6 +72093,12 @@
     "from": "0x4e1eb0",
     "on": "2026-10-12",
     "when": "Adopting an orca into an exhibit tank joined to a show tank (freeform)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4437c7",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4436f6": [
@@ -71999,6 +72539,12 @@
     "from": "0x4d8f22",
     "on": "2026-10-12",
     "when": "Building a show tank on its own (show tank walls all round: named Show Tank)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4437de",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4437cf": [
@@ -72337,6 +72883,12 @@
     "from": "0x443665",
     "on": "2026-10-12",
     "when": "Building a show tank on its own (show tank walls all round: named Show Tank)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x443665",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4438fb": [
@@ -73463,6 +74015,12 @@
     "from": "0x443b19",
     "on": "2026-10-12",
     "when": "Adopting an orca into an exhibit tank joined to a show tank (freeform)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4ff9e9",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x443b9e": [
@@ -76530,6 +77088,18 @@
     "from": "0x448ff4",
     "on": "2026-10-12",
     "when": "Going on to the next tutorial (Yes at the end of Marine Mania Tutorial 2: Tutorial 3 loads)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x448ff4",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x448ff4",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4491ea": [
@@ -97289,6 +97859,12 @@
     "shared": true,
     "unverified": true,
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43d810",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x498958": [
@@ -99105,6 +99681,62 @@
     "when": "Loading a saved game (Load Saved Game, the open dialog, the zoo file read in)"
    }
   ],
+  "0x49b282": [
+   {
+    "by": "Lab recorder",
+    "from": "0x43ec3b",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43ec3b",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x49b2a9": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4367b1",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367b1",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x49b2fc": [
+   {
+    "by": "Lab recorder",
+    "from": "0x438442",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x438442",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x49b302": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4367d9",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367d9",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x49b31a": [
    {
     "by": "Lab recorder",
@@ -99137,6 +99769,20 @@
     "when": "The zoo running for a minute (unpaused, January: guests arriving and walking, staff working, animals' needs)"
    }
   ],
+  "0x49b3f7": [
+   {
+    "by": "Lab recorder",
+    "from": "0x43eaa4",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43eaa4",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x49b575": [
    {
     "by": "Lab recorder",
@@ -99166,6 +99812,46 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367b1",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367b1",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x49b62f": [
+   {
+    "by": "Lab recorder",
+    "from": "0x438442",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x438442",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x49b635": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4367d9",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367d9",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49b64f": [
@@ -99189,6 +99875,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43ec48",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43ec48",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49b659": [
@@ -99212,6 +99910,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49b657",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49b657",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49b66c": [
@@ -99235,6 +99945,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x1c7c1a9c",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x1c7c1a9c",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49b6ec": [
@@ -99258,6 +99980,32 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x49b700": [
+   {
+    "by": "Lab recorder",
+    "from": "0x43eaa4",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43eaa4",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49b88c": [
@@ -99281,6 +100029,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49b8f3",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49b8f3",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49bbe7": [
@@ -99553,6 +100313,12 @@
     "from": "0x4588d7",
     "on": "2026-10-12",
     "when": "Replacing the wall between an exhibit tank and a new tank with show tank wall (the shared side redrawn)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x59c682",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49cd46": [
@@ -99603,6 +100369,12 @@
     "from": "0x49cd0d",
     "on": "2026-10-12",
     "when": "Replacing the wall between an exhibit tank and a new tank with show tank wall (the shared side redrawn)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49cd0d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49cec0": [
@@ -99669,6 +100441,18 @@
     "from": "0x4fadff",
     "on": "2026-10-12",
     "when": "Replacing the wall between an exhibit tank and a new tank with show tank wall (the shared side redrawn)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fadff",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fadff",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49cfeb": [
@@ -99817,6 +100601,18 @@
     "shared": true,
     "unverified": true,
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49e19c",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49e19c",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49e173": [
@@ -99879,6 +100675,18 @@
     "shared": true,
     "unverified": true,
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49e1a7",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49e1a7",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49e3e2": [
@@ -100485,6 +101293,20 @@
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
    }
   ],
+  "0x49f644": [
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x49f6b7": [
    {
     "by": "Lab recorder",
@@ -100547,6 +101369,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49fc3b",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49f888": [
@@ -100588,6 +101416,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49f9c6",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49f91c": [
@@ -100629,6 +101463,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49f77a",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49fa0a": [
@@ -100684,6 +101524,20 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49fac0",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x49fade": [
+   {
+    "by": "Lab recorder",
+    "from": "0x43eb09",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49fb37": [
@@ -100725,6 +101579,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49fcb2",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x49fe15": [
@@ -100745,6 +101605,12 @@
     "from": "0x49fc0e",
     "on": "2026-10-12",
     "when": "Placing a show grandstand facing a show tank (tutorial)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49fc0e",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4a0025": [
@@ -101384,12 +102250,68 @@
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
    }
   ],
+  "0x4a4bb0": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4a4f71",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4a4f71",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x4a4c06": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4367ee",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367ee",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x4a4d6c": [
    {
     "by": "Lab recorder",
     "from": "0x4367d9",
     "on": "2026-10-12",
     "when": "Guests buying from vending machines (a snack and a drink machine just placed by the path, two minutes running)"
+   }
+  ],
+  "0x4a4dd2": [
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x4a4ef2": [
+   {
+    "by": "Lab recorder",
+    "from": "0x43eb09",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43eb09",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4a5105": [
@@ -101521,6 +102443,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4a67df",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4a67df",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4a67eb": [
@@ -101556,6 +102490,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43eb09",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43eb09",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4a6889": [
@@ -101591,6 +102537,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4a6a07",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4a6a07",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4a6acc": [
@@ -101617,6 +102575,18 @@
     "from": "0x5ae13c",
     "on": "2026-10-12",
     "when": "Adding a show-object trick to a show's script (Play with Ball, unlocked by the orca ball)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5ae13c",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5ae13c",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4a7972": [
@@ -101913,6 +102883,12 @@
     "shared": true,
     "unverified": true,
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49d43e",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4a86ba": [
@@ -102075,6 +103051,18 @@
     "shared": true,
     "unverified": true,
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4a89f2",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4a89f2",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4a8a23": [
@@ -102271,6 +103259,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4a8eb8",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4a8f89": [
@@ -102487,6 +103481,34 @@
     "when": "Loading a saved game (Load Saved Game, the open dialog, the zoo file read in)"
    }
   ],
+  "0x4aa240": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4f6ef2",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f6ef2",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x4aa361": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x4aa3ff": [
    {
     "by": "Lab recorder",
@@ -102583,6 +103605,20 @@
     "from": "0x4aa38f",
     "on": "2026-10-12",
     "when": "Loading a saved game (Load Saved Game, the open dialog, the zoo file read in)"
+   }
+  ],
+  "0x4aa43a": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4aa47b": [
@@ -102683,6 +103719,20 @@
     "when": "Loading a saved game (Load Saved Game, the open dialog, the zoo file read in)"
    }
   ],
+  "0x4aa4bc": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x4aa570": [
    {
     "by": "Lab recorder",
@@ -102739,6 +103789,34 @@
     "from": "0x4aa6e2",
     "on": "2026-10-12",
     "when": "Opening the Adopt Animal panel"
+   }
+  ],
+  "0x4aa6a8": [
+   {
+    "by": "Lab recorder",
+    "from": "0x402315",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x402315",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x4aa6ae": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa50a",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa50a",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4aa6b4": [
@@ -102827,6 +103905,20 @@
     "from": "0x4aa29d",
     "on": "2026-10-12",
     "when": "Loading a saved game (Load Saved Game, the open dialog, the zoo file read in)"
+   }
+  ],
+  "0x4aa730": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4aa774": [
@@ -102927,6 +104019,20 @@
     "when": "Loading a saved game (Load Saved Game, the open dialog, the zoo file read in)"
    }
   ],
+  "0x4aa7e4": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x4aa825": [
    {
     "by": "Lab recorder",
@@ -102981,6 +104087,34 @@
     "from": "0x4aa29d",
     "on": "2026-10-12",
     "when": "Loading a saved game (Load Saved Game, the open dialog, the zoo file read in)"
+   }
+  ],
+  "0x4aa866": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x4aa8a4": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4aa29d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4aa8eb": [
@@ -110074,6 +111208,12 @@
     "shared": true,
     "unverified": true,
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4b1ead",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4b1e62": [
@@ -110223,6 +111363,12 @@
     "shared": true,
     "unverified": true,
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x49ce9b",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4b1f89": [
@@ -133393,6 +134539,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f99b5",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f99b5",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4f9908": [
@@ -133470,6 +134628,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa404",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x59c6b3",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4f9b0b": [
@@ -133535,6 +134705,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f9abd",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f9abd",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4f9be0": [
@@ -133660,6 +134842,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f9c99",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f9c99",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4f9c33": [
@@ -133785,6 +134979,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa506",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa506",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4f9cf0": [
@@ -133910,6 +135116,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa506",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa506",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4f9d09": [
@@ -134251,6 +135469,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f98b5",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa123": [
@@ -134318,6 +135542,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa66b",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa66b",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa2e4": [
@@ -134371,6 +135607,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f9bf6",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4f9bf6",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa2ee": [
@@ -134424,6 +135672,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa2ec",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa2ec",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa2fb": [
@@ -134477,6 +135737,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x1c80a89c",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x1c830dbc",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa377": [
@@ -134530,6 +135802,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4278ec",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4278ec",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa3a1": [
@@ -134583,6 +135867,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4278bc",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4278bc",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa44c": [
@@ -134636,6 +135932,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa512",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa512",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa50a": [
@@ -134689,6 +135997,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x41ea68",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x41ea68",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa670": [
@@ -134742,6 +136062,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa6a5",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa6a5",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa68c": [
@@ -134795,6 +136127,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa7a9",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa7a9",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa78e": [
@@ -134848,6 +136192,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa8d5",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fa8d5",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fa85d": [
@@ -134895,6 +136251,18 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4faa82": [
@@ -135895,6 +137263,20 @@
     "when": "Placing a show object in a shallow tank (refused: This object must be placed in a deeper tank)"
    }
   ],
+  "0x4fbe4f": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4fbe70",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fbe70",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x4fbeee": [
    {
     "by": "Lab recorder",
@@ -136180,6 +137562,12 @@
     "shared": true,
     "unverified": true,
     "when": "The zoo running 2.5 minutes after idle was learnt while running (early January: guests buying, keepers feeding, staff wo"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fc65d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fc70f": [
@@ -136514,6 +137902,14 @@
     "when": "A month ending (January into February: wages, upkeep, the month's books)"
    }
   ],
+  "0x4fd66a": [
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x4fd86e": [
    {
     "by": "Lab recorder",
@@ -136553,6 +137949,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fd6de",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fd951": [
@@ -136600,6 +138002,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fd802",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fdb3a": [
@@ -136647,6 +138055,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fd95f",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fdbc9": [
@@ -136694,6 +138108,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fda65",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fdc63": [
@@ -136741,6 +138161,12 @@
     "shared": true,
     "unverified": true,
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4fdc46",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x4fdf04": [
@@ -139306,6 +140732,20 @@
     "when": "Adopting a zebra into an exhibit (placing it inside)"
    }
   ],
+  "0x58c3ae": [
+   {
+    "by": "Lab recorder",
+    "from": "0x58c42c",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x58c42c",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x58c7de": [
    {
     "by": "Lab recorder",
@@ -139320,6 +140760,20 @@
     "from": "0x58cc27",
     "on": "2026-10-12",
     "when": "The zoo running for a minute (unpaused, January: guests arriving and walking, staff working, animals' needs)"
+   }
+  ],
+  "0x58d068": [
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x58db3f": [
@@ -142226,6 +143680,20 @@
     "from": "0x4432cc",
     "on": "2026-10-12",
     "when": "Pausing the game (the pause button)"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4432cc",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x59c7a9": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4432cc",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x59cfe5": [
@@ -144722,6 +146190,20 @@
     "when": "Adopting an orca into an exhibit tank joined to a show tank (freeform)"
    }
   ],
+  "0x59fc91": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a31c0",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a31c0",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x5a033a": [
    {
     "by": "Lab recorder",
@@ -144920,6 +146402,90 @@
     "when": "A trainer at a show platform waiting for an unhappy lone orca (show frequency Continuous, trainer assigned; the orca nev"
    }
   ],
+  "0x5a2f1f": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4367ee",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367ee",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a2f25": [
+   {
+    "by": "Lab recorder",
+    "from": "0x4367d9",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x4367d9",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a36d1": [
+   {
+    "by": "Lab recorder",
+    "from": "0x43eb43",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43eb43",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a36db": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a36d9",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a36d9",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a36e8": [
+   {
+    "by": "Lab recorder",
+    "from": "0x1c7be39c",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x1c7be39c",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a370b": [
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x43e999",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x5a4556": [
    {
     "by": "Lab recorder",
@@ -145038,6 +146604,253 @@
     "from": "0x43161f",
     "on": "2026-10-12",
     "when": "An escaped dinosaur loose in the zoo (the allosaurus out of its paddock: guests flee, staff respond)"
+   }
+  ],
+  "0x5a6894": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a67ea",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a67ea",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a698a": [
+   {
+    "by": "Lab recorder",
+    "from": "0x006457",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder (shared)",
+    "from": "0x6457",
+    "on": "2026-10-26",
+    "runs": 1,
+    "shared": true,
+    "unverified": true,
+    "when": "Marine show running with paired orcas and assigned specialist"
+   }
+  ],
+  "0x5a69a1": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a6a15",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a6a15",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a69e6": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a6a34",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a6a34",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a6a22": [
+   {
+    "by": "Lab recorder",
+    "from": "0x424e6c",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x424e6c",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a6e46": [
+   {
+    "by": "Lab recorder",
+    "from": "0x612d72",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   }
+  ],
+  "0x5a6f37": [
+   {
+    "by": "Lab recorder",
+    "from": "0x612d65",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   }
+  ],
+  "0x5a8457": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a84de",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a84de",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a8706": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a8701",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a8701",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a876a": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a86c5",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a86c5",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a8809": [
+   {
+    "by": "Lab recorder",
+    "from": "0x000043",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x000045",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   },
+   {
+    "by": "Lab recorder (shared)",
+    "from": "0x43",
+    "on": "2026-10-26",
+    "runs": 1,
+    "shared": true,
+    "unverified": true,
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder (shared)",
+    "from": "0x45",
+    "on": "2026-10-26",
+    "runs": 1,
+    "shared": true,
+    "unverified": true,
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a898f": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a8a83",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a8a83",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a89d9": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a8a06",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a8a06",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a89f4": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a86a7",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a86a7",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a8a1d": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a89fd",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a89fd",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a8a93": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a8b2d",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a8b2d",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5a8b25": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5a86ae",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5a86ae",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
    }
   ],
   "0x5a996f": [
@@ -148023,6 +149836,62 @@
     "when": "Opening Zoo Status (zoo information, finances, ratings)"
    }
   ],
+  "0x5b241e": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5b24c2",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5b24c2",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5b248a": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5b2488",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5b2488",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5b2492": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5b2478",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5b2478",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
+  "0x5b24b3": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5b24cf",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
+   },
+   {
+    "by": "Lab recorder",
+    "from": "0x5b24cf",
+    "on": "2026-10-26",
+    "when": "Controlled show test: orca happiness held at 100 to isolate show execution"
+   }
+  ],
   "0x5b2667": [
    {
     "by": "Lab recorder",
@@ -149976,6 +151845,14 @@
     "from": "0x61761d",
     "on": "2026-10-12",
     "when": "Raising a building's price (Building Information up arrow: the snack machine)"
+   }
+  ],
+  "0x612d38": [
+   {
+    "by": "Lab recorder",
+    "from": "0x5d91eb",
+    "on": "2026-10-26",
+    "when": "Marine show running with paired orcas and assigned specialist"
    }
   ],
   "0x6137fe": [

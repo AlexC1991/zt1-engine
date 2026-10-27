@@ -30,6 +30,8 @@
 #include "Utils.hpp"
 #include "Window.hpp"
 #include "World.hpp"
+#include "SpriteDatabase.hpp"
+#include "SpriteManager.hpp"
 #include "DevConsole.hpp"
 #include "Features.hpp"
 #include "ModMenu.hpp"
@@ -681,6 +683,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
     return world->getAnimals().suitability(id, world->getMap(), world->getFences());
   };
   // Animal Information's buttons
+  g_hud->setShows(&world->getShows());
   g_hud->setAnimals(&world->getAnimals(), [world, rm](UiGameScreen::AnimalRequest r, int id) {
     switch (r) {
     case UiGameScreen::AnimalRequest::PickUp: world->pickUpAnimal(id); break;
@@ -919,6 +922,11 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
       g_sim.earn(ZooSim::Donations, given);
       updateHudClock(rm);
     }
+    if (double paid = g_world->getShows().takeIncome(); paid > 0) {
+      g_sim.earn(ZooSim::ShowIncome, paid);
+      updateHudClock(rm);
+    }
+    for (const auto &message : g_world->getShows().takeMessages()) g_hud->postMessage(message);
     if (double sold = gs.takeConcessions(); sold > 0) {
       g_sim.earn(ZooSim::Concessions, sold);
       updateHudClock(rm);
@@ -1348,6 +1356,46 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
 static std::string devCommand(const std::vector<std::string> &w, ResourceManager *rm) {
   if (!g_world)
     return "No game running.";
+  if (!w.empty() && w[0] == "mods") {
+    std::string target;
+    for (size_t n = 2; n < w.size(); n++) { if (!target.empty()) target += ' '; target += w[n]; }
+    if (target.size() >= 2 && target.front() == '"' && target.back() == '"') target = target.substr(1, target.size() - 2);
+    if (!target.empty() && w[1] == "source") return rm->archiveOf(target);
+    if (!target.empty() && (w[1] == "why" || w[1] == "on" || w[1] == "off")) {
+      std::string folder;
+      for (const auto &mod : Mods::list()) if (mod.folder == target || mod.id == target) { folder = mod.folder; break; }
+      if (folder.empty()) return "No installed mod '" + target + "'.";
+      if (w[1] == "why") { const auto reason = Mods::offReason(folder); return reason.empty() ? "Optional: can be switched off." : reason; }
+      return Mods::setEnabled(folder, w[1] == "on") ? "Switch changed." : Mods::lastError();
+    }
+    std::string out;
+    for (const auto &mod : Mods::list()) {
+      out += (mod.enabled ? "[On] " : "[Off] ") + mod.folder;
+      const auto why = mod.enabled ? Mods::offReason(mod.folder) : "";
+      if (!why.empty()) out += " | " + why;
+      out += "\n";
+    }
+    return out;
+  }
+  if (!w.empty() && (w[0] == "polishcheck" || w[0] == "polishdemo")) {
+    if (g_hud) return "Run this fixture in the Lab Test Zoo, not a player zoo.";
+    extern std::string runBuildingPolishChecks(World &, bool);
+    return runBuildingPolishChecks(*g_world, w[0] == "polishdemo");
+  }
+  if (!w.empty() && (w[0] == "activitycheck" || w[0] == "activitydemo")) {
+    if (g_hud) return "Run this fixture in the Lab Test Zoo, not a player zoo.";
+    extern std::string runActivityPolishChecks(World &, ResourceManager *, bool);
+    return runActivityPolishChecks(*g_world, rm, w[0] == "activitydemo");
+  }
+  if (!w.empty() && w[0] == "paritycheck") {
+    if (g_hud) return "Run this fixture in the Lab Test Zoo, not a player zoo.";
+    extern std::string runParityChecks(World &, ResourceManager *);
+    return runParityChecks(*g_world, rm);
+  }
+  if (!w.empty() && w[0] == "shows")
+    return g_world->getShows().command(w);
+  if (!w.empty() && w[0] == "awareness")
+    return g_world->getAnimals().awarenessReport();
   Fences &fences = g_world->getFences();
   Staff &staff = g_world->getStaff();
   ZooItems &items = g_world->getItems();
@@ -1395,10 +1443,13 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
            "doors                            every building: where it stands, its door tiles, each on a path or not\n"
            "text <id> [id ...]               the game's text for ids (cNameID, cUsedThought...)\n"
            "fences [map]                     the map's fences by type, which are zoo wall, the tiles inside (map: drawn)\n"
-           "zoofiles                        read every .zoo (maps, the original's saves) as the original does\n"
+           "saveimportcheck                 verify original guests and animal age before advancing Test Zoo time\n"
+        "zoofiles                        read every .zoo (maps, the original's saves) as the original does\n"
            "dirty <ex> [purity]              a tank's water purity (default 30)\n"
            "drain <ex> | fill <ex> [salt|fresh]   empty a tank / fill it again\n"
            "tankwalls <ex> <height>          a tank's walls to that height over its floor\n"
+           "shows [tank] [species|tricks|add|script|run|cancel]  marine shows\n"
+           "awareness                       animal body clearance, destinations and feeding\n"
            "staff | assign <staff#> <ex>     list staff / put one on an exhibit\n"
            "money <n> | day [n] | month [n] | speed <x>\n"
            "paths [on|off]                   path debug overlay (and routes to the log)\n"
@@ -1586,6 +1637,10 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
     }
     return std::to_string(n) + " fence pieces " + (c == "break" ? "broken" : "worn");
   }
+  if (c == "saveimportcheck") {
+    if (g_hud) return "Use the Lab Test Zoo, not a player's zoo.";
+    return SaveGame::checkOriginalImport(*g_world);
+  }
   if (c == "zoofiles") {
     // Every .zoo the game has (its maps, in the archives) and the original's
     // own saved games, read in the original's order (ZooReader::readExact):
@@ -1672,6 +1727,13 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
             snprintf(line, sizeof line, "  animal %s \"%s\" %s at %.1f,%.1f happy %d hunger %d health %d energy %d move %d\n",
                      o.typeName.c_str(), o.name.c_str(), o.animal.female ? "F" : "M", o.x / 64.0, o.y / 64.0, o.animal.happiness,
                      o.animal.hunger, o.animal.health, o.animal.energy, o.movementMode);
+            out += line;
+          }
+        for (const ZooReader::ZooObject &o : z.getObjects())
+          if (o.decoded && o.hasGuest) {
+            snprintf(line, sizeof line, "  guest %s/%s id %u \"%s\" at %.2f,%.2f happy %d hunger %d thirst %d tired %d bathroom %d\n",
+                     o.subClass.c_str(), o.typeName.c_str(), o.id, o.name.c_str(), o.x / 64.0, o.y / 64.0,
+                     o.guest.happiness, o.guest.hunger, o.guest.thirst, o.guest.energy, o.guest.bathroom);
             out += line;
           }
         return out;
@@ -1884,7 +1946,12 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
       return "set <name> on|off";
     for (Features::Switch &f : Features::all())
       if (w[1] == f.name) {
-        *f.value = w[2] == "on" || w[2] == "1" || w[2] == "true";
+        const bool on = w[2] == "on" || w[2] == "1" || w[2] == "true";
+        if (std::string(f.name) == "mods") {
+          if (!Mods::setMasterEnabled(on)) return Mods::lastError();
+        } else {
+          *f.value = on;
+        }
         if (std::string(f.name) == "fencemodes")
           g_world->cancelTool();
         if (std::string(f.name) == "allunlocked") {
@@ -2406,6 +2473,7 @@ static int g_renderCheckTileWidth = 0;
 // Optional comma-separated map stems to render (empty = all)
 static std::string g_renderCheckOnly;
 static std::string g_currentMapPath; // the map the game was started on (saves name it)
+static bool g_labModContext = false;
 static Goals g_goals;                 // its scenario goals (freeform: awards, donations)
 
 // zoo.exe 0x532c75: screenshots/Zoo%03d.jpg (one past the highest there,
@@ -2452,7 +2520,7 @@ static void takeSnapshot(SDL_Renderer *renderer, ResourceManager *rm) {
   }
 }
 static bool g_popupPaused = false;    // a goal's popup paused the game
-static bool g_dialogPaused = false;   // a dialog (a name, a question) paused it
+static bool g_dialogPaused = false;   // a modal (Game Options, name or question) paused it
 
 // The game paused or going: the clock, "The game is paused." and the Pause /
 // Play button (they share a spot: the one that undoes the state shows)
@@ -2468,8 +2536,12 @@ static void setGamePaused(bool pause) {
 }
 
 // A goal's popup read: the game goes on (if the popup paused it)
+static bool gameModalOpen() {
+  return g_hud && (g_hud->dialogOpen() || g_hud->optionsOpen() || g_hud->isPanelOpen(5));
+}
+
 static void resumeAfterPopup() {
-  if (g_popupPaused && g_hud && !g_hud->dialogOpen()) {
+  if (g_popupPaused && g_hud && !gameModalOpen()) {
     g_popupPaused = false;
     setGamePaused(false);
   }
@@ -2803,6 +2875,156 @@ static bool gameLoad(ResourceManager *rm, const std::string &given = "") {
                      ok ? SDL_Color{255, 255, 255, 255} : SDL_Color{255, 40, 40, 255});
   return ok;
 }
+// Apply switches between frames. The checkpoint is private runtime state,
+// never the player's save. Required content is checked before rebuilding.
+static bool applyModSelection(ResourceManager *rm, UiLayout *&layout, IniReader *&lytReader) {
+  Mods::loadSelectionSettings();
+  const auto previous = Mods::appliedFolders();
+  const auto selected = Mods::list();
+  std::string blocked;
+  for (const auto &folder : previous) {
+    bool enabled = false;
+    for (const auto &mod : selected) if (mod.folder == folder) enabled = mod.enabled && Features::mods;
+    if (!enabled) {
+      const std::string why = Mods::offReason(folder);
+      if (!why.empty()) { blocked = why; break; }
+    }
+  }
+  if (!blocked.empty()) {
+    Mods::restoreApplied();
+    HdArt::refresh(); Shaders::refresh();
+    UiOptions *options = g_hud ? g_hud->options : g_menuOptions;
+    if (options) options->refreshModSwitches();
+    if (g_hud) g_hud->showMessage(blocked, SDL_Color{255, 210, 90, 255});
+    SDL_Log("[Mods] switch blocked: %s", blocked.c_str());
+    return false;
+  }
+
+  ItemCatalog::get().load(rm); Research::get().load(rm); // wait for preloading
+  const bool inGame = g_currentState == LayoutState::GAME_LOOP && g_hud;
+  const bool paused = g_world && g_world->isPaused();
+  UiOptions *options = inGame ? g_hud->options : g_menuOptions;
+  const bool optionsOpen = options && options->isOpen();
+  const int optionsPage = optionsOpen ? options->shownPage() : UiOptions::kModsPage;
+  const int modStart = options ? options->modListStart() : 0;
+  const LayoutState menuState = g_currentState;
+  int menuSelection = 0;
+  if (layout) if (auto *list = dynamic_cast<UiListBox *>(layout->getElementById(50002))) menuSelection = list->getSelectedIndex();
+  const auto oldResearch = Research::get().branches();
+  std::map<int, std::pair<std::string, std::string>> guestTypes;
+  std::vector<size_t> counts;
+  double cash = g_sim.cash();
+  auto zooCounts = [] {
+    return std::vector<size_t>{g_world->getAnimals().members().size(), g_world->getStaff().members().size(),
+      g_world->getGuests().guests().size(), g_world->getObjects().objects().size(),
+      g_world->getFences().pieces().size(), g_world->getFences().exhibits().size()};
+  };
+  std::filesystem::path checkpoint;
+  if (inGame) {
+    counts = zooCounts();
+    for (const auto &guest : g_world->getGuests().guests()) {
+      std::string type, favourite;
+      if (guest.type >= 0 && guest.type < static_cast<int>(g_world->getGuests().types().size())) type = g_world->getGuests().types()[guest.type].key;
+      if (guest.favourite >= 0 && guest.favourite < static_cast<int>(g_world->getAnimals().types().size())) favourite = g_world->getAnimals().types()[guest.favourite].file;
+      guestTypes[guest.id] = {type, favourite};
+    }
+    std::error_code ec;
+    auto dir = std::filesystem::path(Paths::dataDir()) / "mod-sessions";
+    std::filesystem::create_directories(dir, ec);
+    checkpoint = dir / ("runtime-" + std::to_string(SDL_GetPerformanceCounter()) + ".zt1save");
+    if (ec || std::filesystem::exists(checkpoint) || !SaveGame::save(checkpoint.string(), *g_world, g_sim, *g_hud, g_currentMapPath)) {
+      Mods::restoreApplied();
+      g_hud->showMessage("The mod change could not preserve this zoo; your switches were restored.", SDL_Color{255, 100, 80, 255});
+      SDL_Log("[Mods] live switch rolled back: checkpoint failed");
+      return false;
+    }
+  }
+
+  auto discard = [&] {
+    destroyHud();
+    delete g_nextHud; g_nextHud = nullptr;
+    delete g_menuOptions; g_menuOptions = nullptr;
+    delete layout; layout = nullptr;
+    delete g_world; g_world = nullptr;
+    Sound::get().reload();
+    SpriteManager::get().clear();
+    SpriteDatabase::get().clear();
+    g_scenarioListBox = g_freeformListBox = nullptr;
+    g_scenarioDescText = g_freeformDescText = nullptr;
+    g_scenarioMap = g_freeformMap = nullptr;
+  };
+  auto rebuild = [&]() -> bool {
+    rm->reloadMods();
+    HdArt::refresh(); Shaders::refresh();
+    ItemCatalog::get().load(rm, true);
+    Research::get().load(rm, true);
+    delete g_scenarioManager;
+    g_scenarioManager = new ScenarioManager(rm);
+    g_scenarioManager->loadScenarios(); g_scenarioManager->loadFreeformMaps();
+    g_scenarioManager->getDatabase()->loadState(Paths::scenarioProgressFile());
+    g_scenarioManager->syncWithDatabase(); g_scenarioManager->sortByDifficulty();
+    g_world = new World(rm);
+    g_menuOptions = new UiOptions(rm);
+    if (inGame) {
+      if (!gameLoad(rm, checkpoint.string())) return false;
+      // Match research and visitor identities by file/key, not registry indices.
+      for (auto &branch : Research::get().branches()) for (const auto &old : oldResearch) if (branch.file == old.file) {
+        branch.fundingLevel = old.fundingLevel;
+        for (auto &category : branch.categories) for (const auto &oldCategory : old.categories) if (category.file == oldCategory.file)
+          for (auto &program : category.programs) for (const auto &oldProgram : oldCategory.programs) if (program.file == oldProgram.file) {
+            program.progress = oldProgram.progress; program.done = oldProgram.done;
+          }
+      }
+      resetResearchEffects();
+      for (const auto &[id, identity] : guestTypes) if (auto *guest = const_cast<Guests::Guest *>(g_world->getGuests().guest(id))) {
+        const auto &types = g_world->getGuests().types();
+        for (size_t n = 0; n < types.size(); n++) if (types[n].key == identity.first) guest->type = static_cast<int>(n);
+        guest->favourite = identity.second.empty() ? -1 : g_world->getAnimals().typeOfFile(identity.second);
+      }
+      setGamePaused(paused);
+      if (zooCounts() != counts || std::abs(g_sim.cash() - cash) > 0.01) return false;
+      Mods::markApplied();
+      if (optionsOpen && g_hud->options) {
+        g_hud->options->open(true, optionsPage); g_hud->options->setModListStart(modStart);
+      }
+    } else {
+      Mods::markApplied();
+      if (menuState == LayoutState::MOD_MENU) {
+        layout = ModMenu::open(rm, getLayoutPath(rm, "scenario.lyt"));
+        if (auto *list = dynamic_cast<UiListBox *>(layout->getElementById(50002))) list->setSelectedIndex(menuSelection);
+        ModMenu::selectionChanged(layout, rm);
+        g_currentState = LayoutState::MOD_MENU;
+      } else {
+        lytReader = rm->getIniReader(getLayoutPath(rm, "startup.lyt"));
+        layout = new UiLayout(lytReader, rm); hookMainMenu(layout, rm);
+        g_currentState = LayoutState::MAIN_MENU;
+        if (optionsOpen) { g_menuOptions->open(false, optionsPage); g_menuOptions->setModListStart(modStart); }
+      }
+    }
+    return true;
+  };
+  discard();
+  bool ok = rebuild();
+  if (!ok) {
+    SDL_Log("[Mods] could not restore zoo: rolling back selection");
+    discard(); Mods::restoreApplied();
+    if (!rebuild()) {
+      SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Mod change failed", ("The zoo checkpoint is kept at " + checkpoint.string()).c_str(), nullptr);
+      destroyHud();
+      lytReader = rm->getIniReader(getLayoutPath(rm, "startup.lyt"));
+      layout = new UiLayout(lytReader, rm); hookMainMenu(layout, rm);
+      g_currentState = LayoutState::MAIN_MENU;
+      return false;
+    }
+  }
+  Mods::markApplied();
+  if (g_hud) g_hud->showMessage(ok ? "Mod switches applied." : "Mod change cancelled; previous switches and zoo restored.",
+                              ok ? SDL_Color{255, 255, 255, 255} : SDL_Color{255, 210, 90, 255});
+  if (!checkpoint.empty()) { std::error_code ec; std::filesystem::remove(checkpoint, ec); }
+  SDL_Log("[Mods] live switch %s; zoo preserved, no process restart", ok ? "applied" : "rolled back");
+  return ok;
+}
+
 // Extra view rotation on top of each map's start rotation
 static int g_renderCheckExtraRotation = 0;
 
@@ -2924,6 +3146,8 @@ static int runMapRenderCheck(SDL_Renderer *renderer, ResourceManager *rm,
   SDL_Log("[RenderCheck] Rendered %d maps to %s", count, outDir.c_str());
   return count > 0 ? 0 : 1;
 }
+
+int runShowChecks(World &,UiGameScreen &,ZooSim &,const std::string &,const std::string &,const std::function<void(const char*)> &);
 
 // --panel-shots <outDir> [mapStem]: start a freeform game (default Death
 // Mountain), open every toolbar panel and buy tab in turn and save each
@@ -3061,6 +3285,10 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     SDL_RenderPresent(renderer);
     note(name);
   };
+  if (std::getenv("ZT_SHOW_CHECKS")) {
+    int result=runShowChecks(*world,*g_hud,g_sim,outDir,g_currentMapPath,capture);
+    if(timings)std::fclose(timings);return result;
+  }
   for (const Shot &shot : shots) {
     // "!open": the panel's content filter list dropped down; "!<n>": a
     // filter choice, on the animals tab
@@ -8224,6 +8452,7 @@ int main(int argc, char *argv[]) {
   Display::onCursorSize = loadCursors;
 
   LoadScreen::run(&window, &config, &resource_manager);
+  Mods::markApplied();
   // The Lab's HD art mod (HdArt.hpp): the map art's frames written out
   // (--hd-export <folder> [prefix...]), or upscaled ones tidied into the mod
   // (--hd-finish <frames> <upscaled> <mod's hd folder>)
@@ -8260,6 +8489,10 @@ int main(int argc, char *argv[]) {
   g_scenarioManager->loadFreeformMaps();
 
   g_world = new World(&resource_manager);
+  for (int n = 1; n < argc; n++) if (std::string(argv[n]) == "--lab" || std::string(argv[n]) == "--lab-host") g_labModContext = true;
+  Mods::setDisableCheck([](const std::string &folder) {
+    return g_world && (g_hud || g_labModContext) ? g_world->modRequiredReason(folder) : "";
+  });
   // ZT_CHECK_PREVIEWS=1: log each animal whose adopting likeness (either
   // sex) has no art, and quit
   if (std::getenv("ZT_CHECK_PREVIEWS")) {
@@ -8338,7 +8571,19 @@ int main(int argc, char *argv[]) {
   float deltaTime = 0.0f;
 
   LayoutState lastState = g_currentState;
+  std::string modSelection = Mods::selectionKey();
+  Uint32 modPoll = 0;
   while (running > 0) {
+    const Uint32 modNow = SDL_GetTicks();
+    if (modNow - modPoll >= 250) {
+      modPoll = modNow;
+      if (Mods::selectionKey() != modSelection) {
+        applyModSelection(&resource_manager, layout, lyt_reader);
+        modSelection = Mods::selectionKey();
+        lastFrameTime = SDL_GetTicks();
+        continue;
+      }
+    }
     // The menus have music, a game has none (the world's ambience instead)
     if (g_currentState != lastState) {
       if (g_currentState == LayoutState::GAME_LOOP)
@@ -8574,8 +8819,7 @@ int main(int argc, char *argv[]) {
         ModMenu::chooseFolder(layout, &resource_manager);
       break;
     case UiAction::MOD_RESTART:
-      if (g_currentState == LayoutState::MOD_MENU && ModMenu::restart(layout))
-        running = 0;
+      // Switches apply automatically between frames, including embedded Play.
       break;
 
     case UiAction::STARTUP_PLAY_SCENARIO:
@@ -8747,9 +8991,10 @@ int main(int argc, char *argv[]) {
       // SDL_Log("MainLoop: Pre-Update");
       const Uint8 *state = SDL_GetKeyboardState(nullptr);
       static const Uint8 noKeys[SDL_NUM_SCANCODES] = {};
-      // A question or a name to give (a dialog up): the zoo waits, as the
-      // original's, and the camera keys are the box's
-      bool dialogUp = g_hud && g_hud->dialogOpen();
+      // Game Options (window or original panel), questions and naming boxes
+      // stop the whole simulation. Only resume a game that the modal paused;
+      // a zoo the player had already paused must stay paused on dismissal.
+      bool dialogUp = gameModalOpen();
       if (dialogUp && !g_world->isPaused()) {
         setGamePaused(true);
         g_dialogPaused = true;

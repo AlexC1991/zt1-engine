@@ -56,7 +56,8 @@ const CONTROL = {
         intelligence: CodeEditor.lsp.status,
         build: { state: E.build.state, secs: E.build.secs, problems: E.build.problems, kind: E.build.kind, release: E.build.release, log: E.build.kind === 'release' ? E.build.log.slice(-25) : undefined },
       },
-      play: { running: S.play.running },
+      play: { running: S.play.running, testMod: S.play.testMod || null },
+      modTest: S.testMod || null,
       // (the page's own errors, newest last: why a view might be empty)
       pageErrors: PAGE_ERRORS.length ? PAGE_ERRORS.slice(-10) : undefined,
       // (the last species check, in short: lab_species_check has it all)
@@ -491,9 +492,13 @@ const CONTROL = {
   },
   async sceneLoad({ map, flat }) {
     if (!(await showScene())) return { error: 'the engine isn’t running' };
-    let was = (sc() || {}).loads;
+    // A delayed replay after Build must not override an explicit map choice.
+    if (S.rebuildTimer) { clearTimeout(S.rebuildTimer); S.rebuildTimer = null; }
+    const request = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    SC.mapLoaded = null;
     let ups = S.engine.ups;
-    lab.engineSend({ cmd: 'load', map, flat: !!flat });
+    const send = () => lab.engineSend({ cmd: 'load', map, flat: !!flat, request });
+    send();
     for (let i = 0; i < 100; i++) {
       await settle(200);
       // (the engine restarted meanwhile - a mod tried, a build: sent again,
@@ -501,24 +506,21 @@ const CONTROL = {
       if (S.engine.ups !== ups) {
         if (!(await engineUp())) break;
         ups = S.engine.ups;
-        was = (sc() || {}).loads;
-        lab.engineSend({ cmd: 'load', map, flat: !!flat });
+        if (S.rebuildTimer) { clearTimeout(S.rebuildTimer); S.rebuildTimer = null; }
+        send();
         continue;
       }
-      const s = sc();
-      if (s && s.loads !== was && s.map === map && s.flat === !!flat) {
-        await settle(300);
-        return { ok: true, map: s.mapName, flat: s.flat, counts: sc().counts };
+      const answer = SC.mapLoaded;
+      const s = answer && answer.request === request ? answer.scene : null;
+      if (s) {
+        if (!answer.ok) return { error: `The map ${map} could not be loaded (see lab_engine_log).` };
+        if (s.map !== map) return { error: `There is no map called ${map}: ${s.mapName} loaded instead.` };
+        return { ok: true, map: s.mapName, flat: s.flat, counts: s.counts };
       }
-      // (a map it doesn't know: the engine put its first one down instead -
-      // said, not asked for again)
-      if (s && s.loads !== was && s.map !== map && !String(map).startsWith('blank:') && !String(map).startsWith('save:'))
-        return { error: `there’s no map called ${map} (lab_scene_maps lists them): ${s.mapName} loaded instead` };
       // (nothing yet: the engine was busy with something else - the lab zoo
       // made again on an engine just started overtakes it - so asked again)
       if (i % 20 === 19 && (await engineUp())) {
-        was = (sc() || {}).loads;
-        lab.engineSend({ cmd: 'load', map, flat: !!flat });
+        send();
       }
     }
     return { error: 'the map didn’t load (see lab_engine_log)' };
@@ -852,12 +854,13 @@ const CONTROL = {
   // The game's dev console (help lists its commands)
   async sceneConsole({ command }) {
     await showScene();
-    const n = S.engine.log.length;
-    lab.engineSend({ cmd: 'console', line: command });
-    for (let i = 0; i < 30; i++) {
+    const request = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    SC.consoleReply = null;
+    lab.engineSend({ cmd: 'console', line: command, request });
+    for (let i = 0; i < 300; i++) {
       await settle(100);
-      const at = S.engine.log.indexOf('› ' + command, n);
-      if (at >= 0) return { text: S.engine.log.slice(at + 1).join('\n') };
+      if (SC.consoleReply && SC.consoleReply.request === request)
+        return { text: SC.consoleReply.text || '' };
     }
     return { error: 'no answer' };
   },
@@ -865,6 +868,8 @@ const CONTROL = {
   // ---- Play
   async play({ start, game, shot }) {
     setTab('play');
+    if (start !== false && !$('modal').classList.contains('hidden'))
+      return { error: 'A Lab dialog is open over Play. Close that dialog before showing or capturing the game.' };
     // (shot: a picture of the game in Play, ours or the original, as it's
     // drawn, saved at that .png)
     if (shot) return lab.playShot(shot);

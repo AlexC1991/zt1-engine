@@ -1,0 +1,179 @@
+ZT1 Lab activity polish verification - 27 October 2026
+
+Original-map layers, idle/customer clocks, timed decoration cycles,
+26 land gate definitions, marine show portal, DRT beacons, and both
+marine specialists on all four tank sides.
+
+BUILDING AUDIT 116 drawable definitions; 48 animated idle; 64 animated used
+BUILDING aviary idle=21 used=21 bg=0
+BUILDING bathroom idle=1 used=1 bg=0
+BUILDING bgrstnd idle=11 used=21 bg=0
+BUILDING brnchtoy idle=1 used=1 bg=0
+BUILDING burrow1 idle=1 used=1 bg=0
+BUILDING burrow2 idle=1 used=1 bg=0
+BUILDING burrow3 idle=1 used=1 bg=0
+BUILDING carousal idle=1 used=50 bg=0
+BUILDING compost idle=41 used=0 bg=0
+BUILDING conhous1 idle=1 used=1 bg=0
+BUILDING conhous2 idle=1 used=1 bg=0
+BUILDING conhous3 idle=1 used=1 bg=0
+BUILDING drkstnd idle=11 used=21 bg=1
+BUILDING elehous1 idle=1 used=1 bg=0
+BUILDING elehous2 idle=1 used=1 bg=0
+BUILDING eleride idle=1 used=91 bg=0
+BUILDING fbatroom idle=1 used=1 bg=0
+BUILDING giftcart idle=34 used=59 bg=0
+BUILDING giftshp idle=1 used=34 bg=0
+BUILDING girhous1 idle=1 used=1 bg=0
+BUILDING girhous2 idle=1 used=1 bg=0
+BUILDING hdogstnd idle=11 used=21 bg=1
+BUILDING icecstnd idle=11 used=21 bg=1
+BUILDING insect idle=1 used=16 bg=0
+BUILDING jgarden idle=21 used=21 bg=0
+BUILDING leanto2 idle=1 used=1 bg=0
+BUILDING leanto3 idle=1 used=1 bg=0
+BUILDING lionrck1 idle=1 used=1 bg=0
+BUILDING lionrck3 idle=1 used=1 bg=0
+BUILDING monkbar1 idle=1 used=1 bg=0
+BUILDING monkbar2 idle=1 used=1 bg=0
+BUILDING monkbar3 idle=1 used=1 bg=0
+BUILDING pancave idle=1 used=1 bg=0
+BUILDING petzoo idle=1 used=90 bg=0
+BUILDING pizzstnd idle=11 used=21 bg=0
+BUILDING primhous idle=27 used=41 bg=0
+BUILDING repthous idle=21 used=31 bg=0
+BUILDING restrant idle=1 used=11 bg=0
+BUILDING stable2 idle=1 used=1 bg=0
+BUILDING stable3 idle=1 used=1 bg=0
+BUILDING swnglog idle=1 used=60 bg=0
+BUILDING theatre idle=1 used=45 bg=0
+BUILDING vendfood idle=1 used=1 bg=0
+BUILDING vendsoda idle=1 used=1 bg=0
+BUILDING wodhous1 idle=1 used=1 bg=0
+BUILDING wodhous2 idle=1 used=1 bg=0
+BUILDING wodhous3 idle=1 used=1 bg=0
+BUILDING dbrgstnd idle=26 used=61 bg=0
+BUILDING ddnkstnd idle=26 used=61 bg=0
+BUILDING ddogstnd idle=26 used=61 bg=0
+BUILDING dfbthrom idle=1 used=1 bg=0
+BUILDING dicecstd idle=26 used=61 bg=0
+BUILDING dpzzastd idle=26 used=61 bg=0
+BUILDING duckpond idle=21 used=0 bg=0
+BUILDING fount2 idle=9 used=0 bg=0
+BUILDING fount3 idle=5 used=0 bg=0
+BUILDING fountain idle=5 used=0 bg=0
+BUILDING watfall1 idle=6 used=0 bg=0
+BUILDING bounce idle=1 used=1 bg=0
+BUILDING brontbrg idle=21 used=73 bg=0
+BUILDING cinema idle=1 used=27 bg=0
+BUILDING dfnt1 idle=24 used=0 bg=0
+BUILDING dfnt2 idle=12 used=0 bg=0
+BUILDING dinocave idle=1 used=1 bg=0
+BUILDING dinogift idle=1 used=34 bg=0
+BUILDING dinoputt idle=1 used=1 bg=0
+BUILDING dnest1 idle=1 used=1 bg=0
+BUILDING dslide idle=1 used=1 bg=0
+BUILDING froghous idle=1 used=27 bg=0
+BUILDING geyser1 idle=1 used=51 bg=0
+BUILDING geyser2 idle=1 used=41 bg=0
+BUILDING giftstnd idle=34 used=26 bg=0
+BUILDING helibase idle=1 used=9 bg=0
+BUILDING icecave idle=1 used=1 bg=0
+BUILDING icecream idle=21 used=73 bg=0
+BUILDING lavapit idle=25 used=0 bg=0
+BUILDING pterhous idle=1 used=27 bg=0
+BUILDING swing idle=1 used=1 bg=0
+BUILDING tarpit idle=25 used=0 bg=0
+BUILDING volcano idle=26 used=26 bg=0
+BUILDING volcano2 idle=25 used=25 bg=0
+BUILDING aqbath idle=1 used=1 bg=0
+BUILDING aqbounce idle=1 used=1 bg=0
+BUILDING aqcave idle=10 used=10 bg=0
+BUILDING aqgcart idle=27 used=14 bg=0
+BUILDING aqgftshp idle=1 used=1 bg=0
+BUILDING aqrestra idle=1 used=11 bg=0
+BUILDING boatshak idle=11 used=11 bg=0
+BUILDING chroom idle=11 used=11 bg=0
+BUILDING crabhous idle=1 used=17 bg=0
+BUILDING dolshack idle=11 used=11 bg=0
+BUILDING fishhous idle=1 used=51 bg=0
+BUILDING fystand idle=21 used=21 bg=0
+BUILDING gstand idle=1 used=1 bg=0
+BUILDING gstand2 idle=1 used=1 bg=0
+BUILDING hdogcart idle=34 used=14 bg=0
+BUILDING icecart idle=34 used=14 bg=0
+BUILDING photobth idle=10 used=10 bg=0
+BUILDING popcart idle=34 used=14 bg=0
+BUILDING ringtoss idle=27 used=27 bg=0
+BUILDING shrkhous idle=1 used=51 bg=0
+BUILDING subshop idle=21 used=21 bg=0
+BUILDING sunkship idle=11 used=11 bg=0
+BUILDING atlshop idle=1 used=8 bg=0
+BUILDING afhut idle=9 used=20 bg=0
+BUILDING arcshop idle=1 used=11 bg=0
+BUILDING asinochs idle=1 used=11 bg=0
+BUILDING asitheat idle=1 used=41 bg=0
+BUILDING campfire idle=12 used=0 bg=0
+BUILDING japagoda idle=12 used=14 bg=0
+BUILDING junrest idle=1 used=9 bg=0
+BUILDING mexcafe idle=1 used=17 bg=0
+BUILDING mexnacho idle=11 used=21 bg=0
+BUILDING dkarcade idle=1 used=20 bg=0
+BUILDING dkgifts idle=1 used=34 bg=0
+BUILDING dksnacks idle=8 used=14 bg=0
+
+PASS every declared catalogue building animation loads
+PASS every building layer advances or stays static as its original art specifies, and pauses
+PASS original-map buildings retain used and background layers
+AUDIT 116 drawable buildings; 48 animated idle; 64 animated used; 3 backgrounds; 41 static-only
+PASS scenery/building/geyser1.ai automatically plays and finishes its use cycle
+PASS scenery/building/geyser2.ai automatically plays and finishes its use cycle
+PASS scenery/building/volcano.ai automatically plays and finishes its use cycle
+PASS scenery/building/volcano2.ai automatically plays and finishes its use cycle
+PASS scenery/other/vent1.ai automatically plays and finishes its use cycle
+PASS land gates use their own animation timing in both directions
+PASS land gates hold their closed and open endpoints
+PASS land gates freeze while paused
+PASS land gates hold the open frame through all four camera rotations
+GATE AUDIT 26 gate definitions
+PASS occupied DRT base uses its original animated beacon artwork
+PASS DRT beacon frames advance through all four map rotations
+PASS marine specialist and tank definitions available
+PASS ladder fixture tank built
+PASS male side 0 completes entry, submerged work and exit
+PASS male side 0 faces the ladder on ascent and descent
+PASS male side 0 plays ascent forward and descent backward
+PASS male side 0 pauses during climbing
+PASS male side 1 completes entry, submerged work and exit
+PASS male side 1 faces the ladder on ascent and descent
+PASS male side 1 plays ascent forward and descent backward
+PASS male side 1 pauses during climbing
+PASS male side 2 completes entry, submerged work and exit
+PASS male side 2 faces the ladder on ascent and descent
+PASS male side 2 plays ascent forward and descent backward
+PASS male side 2 pauses during climbing
+PASS male side 3 completes entry, submerged work and exit
+PASS male side 3 faces the ladder on ascent and descent
+PASS male side 3 plays ascent forward and descent backward
+PASS male side 3 pauses during climbing
+PASS female side 0 completes entry, submerged work and exit
+PASS female side 0 faces the ladder on ascent and descent
+PASS female side 0 plays ascent forward and descent backward
+PASS female side 0 pauses during climbing
+PASS female side 1 completes entry, submerged work and exit
+PASS female side 1 faces the ladder on ascent and descent
+PASS female side 1 plays ascent forward and descent backward
+PASS female side 1 pauses during climbing
+PASS female side 2 completes entry, submerged work and exit
+PASS female side 2 faces the ladder on ascent and descent
+PASS female side 2 plays ascent forward and descent backward
+PASS female side 2 pauses during climbing
+PASS female side 3 completes entry, submerged work and exit
+PASS female side 3 faces the ladder on ascent and descent
+PASS female side 3 plays ascent forward and descent backward
+PASS female side 3 pauses during climbing
+PASS adjacent home and show tanks form a marine portal
+PASS marine portal opens and closes at its original frame timing
+PASS marine portal holds its fully open and closed frames
+51/51 checks passed
+

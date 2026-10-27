@@ -38,6 +38,9 @@ public:
   // (its world alone - habitats, food and dung, animals, staff - for the
   // ZT1 Lab's test zoo, which keeps no books)
   static bool loadOriginalWorld(World &world);
+  // Native Lab regression: compare a just-loaded original zoo with its
+  // decoded records (run before advancing time; never in a player's zoo).
+  static std::string checkOriginalImport(World &world);
   // A map design (a freeform map made in the ZT1 Lab): the world as made -
   // ground, paths, walkways, fences, exhibits, objects - and its view, over
   // the map whose .zoo is "over"; put over that map once it's loaded
@@ -52,6 +55,8 @@ private:
   // writer and reader, SaveGame.cpp's Out and In)
   static void putWorld(void *out, World &world);
   static bool getWorld(void *in, World &world, uint32_t version);
+  static void restoreOriginalManagers(World &world, UiGameScreen &hud);
+  static void restoreOriginalBooks(World &world, ZooSim &sim);
 };
 
 #endif // SAVE_GAME_HPP

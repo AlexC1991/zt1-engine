@@ -363,6 +363,7 @@ function ensureStage() {
     <div class="float seg" id="st-view" style="right:12px;top:12px"></div>
     <div class="float playctl" id="st-time" style="left:12px;bottom:12px"></div>
     <div class="float hoverbox" id="st-hover" style="right:12px;bottom:12px"></div>
+    <div class="float seg tools hidden" id="st-modtest" style="left:12px;bottom:58px;max-width:calc(100% - 24px)"></div>
     <div class="palette hidden" id="st-palette"></div>
     <div class="float stopbar hidden" id="st-break"></div>
     <div id="st-msg"></div>`;
@@ -373,6 +374,9 @@ function renderStageUi() {
   const st = S.engine.state;
   const s = sc();
   const up = S.engine.status === 'connected' && st && s;
+  const test = $('st-modtest');
+  test.classList.toggle('hidden', !S.testMod);
+  setHtml(test, S.testMod ? `<span class="amber" style="padding:7px 10px">Temporary test: ${esc(S.testMod.name)}</span><div data-act="mkEndTest" title="Reload the Test Zoo using your normal mod switches">End test</div>` : '');
   setHtml(
     $('st-msg'),
     up
@@ -1998,6 +2002,7 @@ function showCheck(m) {
 }
 
 const SCENE_MSG = {
+  mapLoaded: (m) => { SC.mapLoaded = m; },
   outline: (m) => {
     SC.outline = m;
     if (S.tab === 'scene') renderTree();
@@ -2030,6 +2035,7 @@ const SCENE_MSG = {
     lab.engineSend({ cmd: 'confirm', yes: !!r });
   },
   console: (m) => {
+    SC.consoleReply = m;
     SC.conOut.push('› ' + m.line);
     if (m.text) for (const l of m.text.split('\n')) SC.conOut.push(l);
     if (SC.conOut.length > 2000) SC.conOut.splice(0, 500);

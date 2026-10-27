@@ -170,6 +170,7 @@ void Fences::loadTypes(ResourceManager *rm) {
     t.height = item.height;
     t.gateCost = ai->getInt("g/characteristics/integers", "cpurchasecost", t.cost);
     t.tank = item.registrySection == "tankwall";
+    t.showFence = item.showFence;
     t.zooWall = item.members.count("zoowall") > 0;
     // An animation value is a path (fences/tank1/g/gate/gate.ani) or a
     // name under fences/<key>/<sub>/
@@ -207,6 +208,12 @@ void Fences::loadTypes(ResourceManager *rm) {
       t.tankLow[1] = artOf("f", "tbmidle");
       t.tankLow[2] = artOf("f", "tbridle");
       t.tankLow[3] = t.tankLow[1];
+      t.portal = artOf("f", "portal");
+      if (!t.portal) t.portal = artOf("g", "portal");
+      t.portalOpenSound = ai->get("portalsounds", "cPortalOpenSound");
+      t.portalCloseSound = ai->get("portalsounds", "cPortalCloseSound");
+      t.portalOpenAtten = ai->getInt("portalsounds", "cPortalOpenSoundAtten", 0);
+      t.portalCloseAtten = ai->getInt("portalsounds", "cPortalCloseSoundAtten", 0);
       t.platform = artOf("g", "platform");
       t.ladder = artOf("g", "ladder");
       {
@@ -281,6 +288,50 @@ void Fences::loadTypes(ResourceManager *rm) {
   SDL_Log("[Fences] %zu fence types", this->typeList.size());
 }
 
+bool Fences::showPortal(const Edge &e, int &show, int &home) const {
+  if(!this->at(e))return false;
+  int ax=e.x-(e.alongX?0:1),ay=e.y-(e.alongX?1:0);
+  const Exhibit *a=this->exhibit(this->exhibitAt(ax,ay));
+  const Exhibit *b=this->exhibit(this->exhibitAt(e.x,e.y));
+  if(!a || !b || a->id==b->id || !a->tank || !b->tank || a->show==b->show ||
+     !a->filling || !b->filling || waterLevel(*a)<=0 || waterLevel(*b)<=0 ||
+     std::abs(a->wallTop()-b->wallTop())>0.01f)return false;
+  show=a->show?a->id:b->id;home=a->show?b->id:a->id;
+  std::vector<Edge> shared;
+  for(const auto &[edge,piece]:this->edges) {
+    int ax=edge.x-(edge.alongX?0:1),ay=edge.y-(edge.alongX?1:0);
+    int left=this->exhibitAt(ax,ay),right=this->exhibitAt(edge.x,edge.y);
+    if((left==show && right==home)||(left==home && right==show))shared.push_back(edge);
+  }
+  // The original's ui/help/portal.txt requires three adjacent segments.
+  // Keep the portal off the corners and use one straight shared run.
+  std::vector<Edge> longest;
+  for (const Edge &start : shared) {
+    Edge previous=start;
+    if(start.alongX)--previous.x;else --previous.y;
+    if(std::find(shared.begin(),shared.end(),previous)!=shared.end())continue;
+    std::vector<Edge> run;
+    Edge at=start;
+    while(std::find(shared.begin(),shared.end(),at)!=shared.end()) {
+      run.push_back(at);
+      if(at.alongX)++at.x;else ++at.y;
+    }
+    if(run.size()>longest.size())longest=std::move(run);
+  }
+  return longest.size()>=3 && e==longest[longest.size()/2];
+}
+
+const FenceType *Fences::portalType(const Edge &edge) const {
+  int show=-1,home=-1;
+  if(!showPortal(edge,show,home))return nullptr;
+  if(const auto *p=at(edge))
+    if(p->type>=0 && typeList[p->type].portal)return &typeList[p->type];
+  for(const auto &[boundary,p]:this->edges)
+    if((p.tank==show || p.tank2==show) && p.type>=0 &&
+       typeList[p.type].showFence && typeList[p.type].portal)return &typeList[p.type];
+  return nullptr;
+}
+
 int Fences::typeIndex(const std::string &key) const {
   for (size_t i = 0; i < this->typeList.size(); i++)
     if (this->typeList[i].key == key)
@@ -322,6 +373,8 @@ void Fences::load(const ZooReader &reader, WorldMap &map) {
     Edge e;
     Piece p;
     p.type = type;
+    if (obj.decoded && obj.hasCondition)
+      p.life = static_cast<float>(obj.life);
     p.gate = obj.typeName == "g";
     p.facing = facing;
     p.ownerX = obj.x >= 0 ? obj.x / 64 : (obj.x - 63) / 64;
@@ -615,12 +668,24 @@ int Fences::exhibitOf(const Edge &e) const {
 }
 
 void Fences::updateGates(float seconds, const std::function<bool(const Edge &)> &someoneNear) {
+  if (seconds <= 0) return;
   for (auto &[e, p] : this->edges) {
-    if (!p.gate || p.tank >= 0)
+    const FenceType *portal=portalType(e);
+    if (!portal && (!p.gate || p.tank >= 0)) {
+      if(p.tank>=0)p.open=0;
       continue;
+    }
     bool near = someoneNear(e);
-    const float frames = 12.0f;
-    p.open = near ? std::min(frames, p.open + 20.0f * seconds) : std::max(0.0f, p.open - 20.0f * seconds);
+    Animation *art = portal ? portal->portal : this->typeList[p.type].art[1][0];
+    if (!art) { p.open = 0; continue; }
+    const float frames = static_cast<float>(std::max(0, art->frameCount() - 1));
+    const float rate = 1000.0f / std::max(1u, art->frameTimeMs());
+    p.open = std::clamp(p.open, 0.0f, frames);
+    if(portal && ((near && p.open<=0) || (!near && p.open>=frames))) {
+      const auto &sound=near?portal->portalOpenSound:portal->portalCloseSound;
+      if(!sound.empty())Sound::get().play(sound,near?portal->portalOpenAtten:portal->portalCloseAtten);
+    }
+    p.open = near ? std::min(frames, p.open + rate * seconds) : std::max(0.0f, p.open - rate * seconds);
   }
 }
 
@@ -979,6 +1044,7 @@ std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int y
     ex.constructedYear = year;
     // A tank when every piece round it is a tank wall
     bool tank = true, any = false;
+    int showEdges = 0, ordinaryEdges = 0;
     for (auto [x, y] : ex.tiles) {
       const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
       for (auto &dd : d) {
@@ -999,11 +1065,13 @@ std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int y
         if (!p)
           continue;
         any = true;
+        (this->typeList[p->type].showFence ? showEdges : ordinaryEdges)++;
         if (!this->typeList[p->type].tank)
           tank = false;
       }
     }
     ex.tank = tank && any;
+    ex.show = ex.tank && showEdges > ordinaryEdges;
     this->exhibitList.push_back(ex);
     if (ex.tank)
       this->makeTank(this->exhibitList.back(), map);
@@ -2092,8 +2160,13 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     view.worldToScreenF(mx, my, (h0 + h1) * 0.5f, sx, sy, depth);
     Drawable d{depth, sx, sy, art, side, tint, tinted};
     // (a gate: as far open as it is)
-    if (p.gate)
-      d.frame = static_cast<int>(p.open);
+    if (p.gate) {
+      // Sloped gate art may have a different number of frames. Preserve
+      // opening progress, and hold the last frame instead of wrapping it.
+      const int baseLast = t.art[1][0] ? std::max(0, t.art[1][0]->frameCount() - 1) : 0;
+      const int last = std::max(0, art->frameCount() - 1);
+      d.frame = baseLast ? std::clamp(static_cast<int>(p.open * last / baseLast), 0, last) : 0;
+    }
     // In two halves, each sorted at its own middle: a building's strips
     // are a quarter tile wide, sorted the same way, so one standing against
     // the fence goes behind all of it (sorted as a whole at its middle,
@@ -2188,6 +2261,15 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       CompassDirection side = tankSide(view, ts);
       std::vector<TankPiece> pieces;
       this->tankPieces(e, p, ex, view, ts.front, pieces);
+      // A shared portal belongs to the same tank pass as its wall. Drawing
+      // it as an outside sprite put it over every swimming animal.
+      if(!ts.front)if(const FenceType *portal=portalType(e)) {
+        float px,py,pd;
+        view.worldToScreenF(mx,my,ex.wallTop()-2.0f,px,py,pd);
+        Sprite gate{depth+0.04f,px,py,portal->portal,side,SDL_Color{255,255,255,255},false};
+        gate.frame=std::clamp(static_cast<int>(p.open),0,std::max(0,portal->portal->frameCount()-1));
+        back.push_back(gate);
+      }
       for (const TankPiece &tp : pieces) {
         // (a front wall: drawn with everything else, cut at the ground; what's
         // under the ground isn't drawn at all, as the original - drawn here
@@ -2458,7 +2540,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       // the tank is drawn between them, at the zoom, as it was
       layered(r, [&] {
         for (const Sprite &s : back)
-          s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr);
+          s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr, s.frame);
       });
       // (what's in the tank under the water, the water over it)
       if (this->drawTankContents)
@@ -2480,7 +2562,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       (void)level;
       layered(r, [&] {
         for (const Sprite &s : frontLow)
-          s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr);
+          s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr, s.frame);
       });
       if (this->redrawGround)
         this->redrawGround(r, cover);

@@ -307,7 +307,8 @@ bool changed() {
   for (const Mods::Mod &m : Mods::list())
     if (m.enabled)
       now.insert(m.folder);
-  return now != g_loaded;
+  const auto loaded = Mods::appliedFolders();
+  return now != std::set<std::string>(loaded.begin(), loaded.end());
 }
 
 UiLayout *open(ResourceManager *rm, const std::string &layoutPath) {
@@ -335,7 +336,7 @@ UiLayout *open(ResourceManager *rm, const std::string &layoutPath) {
   setText(layout, kAboutLabel, "About it");
   setText(layout, kDetailsLabel, "It changes");
   setLabel(layout, kFolderButton, "Folder...");
-  setLabel(layout, kRestart, "Restart");
+  if (UiButton *b = el<UiButton>(layout, kRestart)) b->setHidden(true); // switches apply automatically
   g_repo = false;
   setLabel(layout, kRepository, "Mod repository");
   // (only the official installs carry the repository's client, modrepo.dll:
@@ -350,6 +351,8 @@ UiLayout *open(ResourceManager *rm, const std::string &layoutPath) {
 }
 
 void refresh(UiLayout *layout, ResourceManager *rm) {
+  const auto loaded = Mods::appliedFolders();
+  g_loaded = std::set<std::string>(loaded.begin(), loaded.end());
   if (g_repo)
     return repositoryRefresh(layout);
   UiListBox *list = el<UiListBox>(layout, kList);
@@ -367,7 +370,7 @@ void refresh(UiLayout *layout, ResourceManager *rm) {
     setText(layout, kAbout,
             "No mods in this folder yet.\n\nA mod is a folder with a mod.json and its files (a .ztd), "
             "made in the ZT1 Lab or by hand. Put one in the mods folder, or choose another folder.");
-    setLabel(layout, kToggle, "Switch on");
+    setLabel(layout, kToggle, "Enable");
     setDetails(layout, "It changes", {});
   }
   selectionChanged(layout, rm);
@@ -387,12 +390,13 @@ void selectionChanged(UiLayout *layout, ResourceManager *rm) {
   if (!m.author.empty())
     about += "\nby " + m.author;
   about += std::string("\n\n") + (m.enabled ? "Switched on" : "Switched off");
-  if (m.enabled != (g_loaded.count(m.folder) > 0))
-    about += m.enabled ? " - loads when the game restarts (Restart)" : " - goes when the game restarts (Restart)";
+  const std::string required = m.enabled ? Mods::offReason(m.folder) : "";
+  if (!required.empty()) about += "\n\n" + required;
+  if (UiButton *b = el<UiButton>(layout, kToggle)) b->setDisabled(!required.empty());
   if (!m.about.empty())
     about += "\n\n" + m.about;
   setText(layout, kAbout, about);
-  setLabel(layout, kToggle, m.enabled ? "Switch off" : "Switch on");
+  setLabel(layout, kToggle, !required.empty() ? "Required" : m.enabled ? "Disable" : "Enable");
   // What it changes, in the objectives' list
   std::vector<std::string> lines = m.replaces;
   if (lines.empty())

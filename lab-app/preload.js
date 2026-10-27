@@ -29,12 +29,13 @@ contextBridge.exposeInMainWorld('lab', {
   onFrame: (fn) => on('engine:frame', (_e, f) => fn(f)),
   // Experiments > HD art: the AI-upscaled map art mod
   // the game, in the Play view
-  playStart: () => ipcRenderer.invoke('play:start'),
+  playStart: (testFolder) => ipcRenderer.invoke('play:start', testFolder),
   playStop: () => ipcRenderer.invoke('play:stop'),
   playCmd: (line) => ipcRenderer.send('play:cmd', line),
   playArea: (area) => ipcRenderer.send('play:area', area),
   playShot: (file) => ipcRenderer.invoke('play:shot', file),
   playState: () => ipcRenderer.invoke('play:state'),
+  playWindowCheck: () => ipcRenderer.invoke('play:windowCheck'),
   recStatus: () => ipcRenderer.invoke('orig:recStatus'),
   learnIdle: (seconds) => ipcRenderer.invoke('orig:learnIdle', seconds),
   recStart: (label) => ipcRenderer.invoke('orig:recStart', label),
@@ -113,6 +114,9 @@ contextBridge.exposeInMainWorld('lab', {
   animTool: (req) => ipcRenderer.invoke('anim:tool', req),
   gameModsList: () => ipcRenderer.invoke('gamemods:list'),
   gameModsEnable: (folder, on) => ipcRenderer.invoke('gamemods:enable', folder, on),
+  gameModsTestZoo: (folder) => ipcRenderer.invoke('gamemods:testZoo', folder),
+  gameModsTestState: () => ipcRenderer.invoke('gamemods:testState'),
+  onModTest: (fn) => on('gamemods:test', (_e, mod) => fn(mod)),
   // Experiments > Your mods (renderer/modkit.js)
   modkitNew: (req) => ipcRenderer.invoke('modkit:new', req),
   modkitImport: (file) => ipcRenderer.invoke('modkit:import', file),

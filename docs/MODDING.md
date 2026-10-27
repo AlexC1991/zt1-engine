@@ -132,7 +132,7 @@ For a quick prototype, **Link other poses…** reuses one drawn animation for th
 
 Under **Pictures → Use an animation frame…**, choose one drawn frame to make its icon, list picture and plaque at the game's sizes. Each picture remains editable. Under **Needs**, set its food, habitat, terrain and compatibility; the Inspector sets its price, group size, space and other values.
 
-**Test in the zoo** enables the mod and restarts the Test Zoo. Build an appropriate enclosure, add companions, shelter and keepers, and compare its recommendations before and after meeting its needs. **Play with it** tests the ordinary game: **Adopt Animals → Mods → choose the animal → male or female button → place it**. Selecting the icon alone does not start adoption.
+**Test in the zoo** loads the mod in a temporary test session and restarts the Test Zoo. Your normal mod switches are unchanged. Use **End test** to return to them. Build an appropriate enclosure, add companions, shelter and keepers, and compare its recommendations before and after meeting its needs. **Play with it** starts a separate temporary Play test: **Adopt Animals → Mods → choose the animal → male or female button → place it**. Selecting the icon alone does not start adoption. Stopping that Play session ends its temporary selection; ordinary **Play ZT1 Engine** uses your normal switches.
 
 For a zoo animal that swims, start from an amphibious species and keep its land
 and water animation slots separate. Test natural entry into the pond and return
@@ -146,7 +146,13 @@ diagnostics, and compare inherited warnings with the base species.
 **Save as a map** preserves the habitat design for ordinary Play. Live animals
 and staff must be adopted again when starting that freeform map.
 
-**Publish → Check it** checks the package locally. **Upload it** sends it to the repository for its own checks; a local pass does not mean it is published. Players download through the game's **Mod Menu → Mod repository**, then switch the downloaded mod on under **Your mods** and restart. In the Lab's Play view, stop and start Play to reload mods.
+**Publish → Check it** checks the package locally. **Upload it** sends it to the repository for its own checks; a local pass does not mean it is published. Players download through the game's **Mod Menu → Mod repository**, then switch the downloaded mod on under **Your mods** or **Settings → Mods & Updates**. Downloaded mods remain listed while switched off. Settings has left and right arrow buttons and a page counter for the full installed list.
+
+Optional mod switches apply to the running engine without manually restarting Play. Turning off a replacement restores the stock asset. A pack that supplies the current custom map, or unique animals, objects, fencing, paths, food or filters in use, stays enabled and explains why. Leave that map or remove its dependent custom content first. The engine checkpoints the current zoo privately before refreshing assets and rolls back a change that would lose zoo contents or cash; it does not overwrite the player's save.
+
+A mod can declare external requirements with `"dependencies": ["other-mod-id"]` (or `"requires"`). Required mods must be installed; enabling the dependent mod enables them too. They stay enabled until their dependent mod is switched off. A self-contained theme pack already includes its component files: its `themePack.components` list records those components and does not require the separate component mods to be enabled.
+
+**Download** installs a mod switched off; it is separate from **Enable**. The main-menu Mod Menu and Settings use the same smart switch. After **Load mods** was switched off, enabling one mod activates only that mod and its requirements. The old remembered selection is not reactivated. Temporary tests have their own master switch and load only the selected mod and its requirements.
 
 ## Habitat items and theme packs
 

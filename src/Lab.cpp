@@ -4926,8 +4926,11 @@ void LabApp::hostCommand(const Json &c) {
   } else if (cmd == "maps") {
     sendMaps();
   } else if (cmd == "load") {
-    if (loadMap(c["map"].str(mapStem), c["flat"].truthy()))
-      sendOutline();
+    const bool ok = loadMap(c["map"].str(mapStem), c["flat"].truthy());
+    if (ok) sendOutline();
+    if (!c["request"].str().empty())
+      host->send(JObj().str("t", "mapLoaded").str("request", c["request"].str())
+                 .flag("ok", ok).add("scene", sceneJson()).done());
   } else if (cmd == "mapEdit") {
     // Editing the map (the map editor): walls, entrances and scenery go
     // anywhere; off, the zoo's inside worked out again from its wall
@@ -5152,12 +5155,7 @@ void LabApp::hostCommand(const Json &c) {
     // (said before it's done: if one never finishes, this names it)
     host->send("{\"t\":\"speciesCheckProgress\",\"species\":" + jq(want) + ",\"starting\":true,\"done\":" +
                std::to_string(checkOf - checkQueue.size() - 1) + ",\"of\":" + std::to_string(checkOf) + "}");
-    static const std::set<std::string> doneFns = {"fplay", "fplaywithsound", "fplaytime", "fplaypingpong",
-                                                  "fplayreverse", "fplayset", "fplaysettank", "fplaysetprob",
-                                                  "fwalk", "fmove", "frun", "ffacetowardfood", "fplaysetterrain",
-                                                  "ftrot", "fmovewithsound", "fmovereverse", "fhatch",
-                                                  "fhalt", "fsetbase", "fkeepcontrol", "fdie", "fdustball",
-                                                  "fenterbuilding", "fexitbuilding"};
+    // Command recognition is the same table used by Animals::nextStep.
     static const std::set<std::string> playFns = {"fplay", "fplaywithsound", "fplaytime", "fplaypingpong",
                                                   "fplayreverse"};
     // (prey: the chase is the engine's own - Animals::hunt, with its set's
@@ -5318,7 +5316,7 @@ void LabApp::hostCommand(const Json &c) {
             std::string fn = st.fn;
             for (char &ch : fn)
               ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-            if (!doneFns.count(fn))
+            if (Animals::behaviorCommand(fn) == Animals::Command::Unknown)
               fns[fn]++;
             std::string a0 = st.args.empty() ? "" : st.args[0];
             auto has = [&](const std::string &anim) {
@@ -5492,6 +5490,9 @@ void LabApp::hostCommand(const Json &c) {
     else if (n == "paths") world->debugPaths = on;
     else if (n == "routes") showRoutes = on;
     else if (n == "footprints") showFootprints = on;
+  } else if (cmd == "modReason") {
+    host->send("{\"t\":\"modReason\",\"id\":" + std::to_string(static_cast<int>(c["id"].num())) +
+               ",\"reason\":" + jq(Mods::offReason(c["folder"].str())) + "}");
   } else if (cmd == "console") {
     std::string line = c["line"].str(), text;
     std::vector<std::string> words;
@@ -5504,7 +5505,7 @@ void LabApp::hostCommand(const Json &c) {
       text = "The game's console isn't in this engine.";
     else
       text = console(words);
-    host->send("{\"t\":\"console\",\"line\":" + jq(line) + ",\"text\":" + jq(text) + "}");
+    host->send("{\"t\":\"console\",\"request\":" + jq(c["request"].str()) + ",\"line\":" + jq(line) + ",\"text\":" + jq(text) + "}");
   } else if (cmd == "saveMap") {
     // The lab zoo as a map design (Test Zoo > Save as a map): over the map
     // it was loaded from - its .scn's [start] savegame= (a map from a mod:

@@ -15,6 +15,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <chrono>
 #include <cstdlib>
 
 namespace fs = std::filesystem;
@@ -24,15 +25,23 @@ namespace {
 // for each mod switched on
 // (in the engine's data folder: beside the exe when portable,
 // %LocalAppData%\zt1-engine when installed - Paths.hpp)
-std::string cfgPath() { return (fs::path(Paths::dataDir()) / "mods.cfg").string(); }
+std::string cfgPath() {
+  // The Lab can test a mod in a private session without changing the player\'s
+  // normal on/off switches. The in-game menu reads and writes that same file.
+  if (const char *session = std::getenv("ZT1_MODS_CONFIG"); session && *session)
+    return session;
+  return (fs::path(Paths::dataDir()) / "mods.cfg").string();
+}
 
 struct Cfg {
   std::string folder;
   std::set<std::string> enabled;
+  bool loadMods = true, hasLoadFlag = false;
 };
 
 Cfg readCfg() {
   Cfg c;
+  c.loadMods = Features::mods; // legacy zoo.ini, until this config has its own flag
   std::ifstream in(cfgPath());
   std::string line;
   while (std::getline(in, line)) {
@@ -44,7 +53,10 @@ Cfg readCfg() {
     std::string k = line.substr(0, eq), v = line.substr(eq + 1);
     if (k == "folder")
       c.folder = v;
-    else if (k == "enabled" && !v.empty())
+    else if (k == "loadMods") {
+      c.loadMods = v != "0";
+      c.hasLoadFlag = true;
+    } else if (k == "enabled" && !v.empty())
       c.enabled.insert(v);
   }
   return c;
@@ -100,16 +112,79 @@ std::vector<Mods::Setting> settingsOf(const std::string &folder, const Json &lis
   return out;
 }
 
-void writeCfg(const Cfg &c) {
-  std::ofstream out(cfgPath(), std::ios::trunc);
-  if (!c.folder.empty())
-    out << "folder=" << c.folder << "\n";
-  for (const std::string &e : c.enabled)
-    out << "enabled=" << e << "\n";
+bool writeCfg(const Cfg &c) {
+  const fs::path target = cfgPath();
+  const fs::path temporary = target.string() + ".tmp-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  std::ofstream out(temporary, std::ios::trunc);
+  if (!c.folder.empty()) out << "folder=" << c.folder << "\n";
+  out << "loadMods=" << (c.loadMods ? 1 : 0) << "\n";
+  for (const std::string &e : c.enabled) out << "enabled=" << e << "\n";
+  out.close();
+  std::error_code ec;
+  if (out) fs::rename(temporary, target, ec);
+  const bool ok = out && !ec;
+  if (!ok) { std::error_code ignored; fs::remove(temporary, ignored); }
+  return ok;
 }
 } // namespace
 
 namespace Mods {
+namespace {
+std::function<std::string(const std::string &)> disableCheck;
+std::string toggleError, appliedKey;
+Cfg appliedConfig;
+bool appliedFeature = true;
+std::vector<std::string> applied;
+}
+void setDisableCheck(std::function<std::string(const std::string &)> check) { disableCheck = std::move(check); }
+const std::string &lastError() { return toggleError; }
+std::string selectionKey() {
+  const Cfg c = readCfg();
+  std::string key = c.loadMods ? "mods:on\n" : "mods:off\n";
+  key += c.folder;
+  for (const auto &folder : c.enabled) { key += '\n'; key += folder; }
+  return key;
+}
+void markApplied() {
+  appliedKey = selectionKey();
+  appliedConfig = readCfg();
+  appliedFeature = Features::mods;
+  applied.clear();
+  if (Features::mods) for (const Mod &mod : list()) if (mod.enabled) applied.push_back(mod.folder);
+}
+std::vector<std::string> appliedFolders() { return applied; }
+void restoreApplied() { writeCfg(appliedConfig); Features::mods = appliedFeature; }
+void loadSelectionSettings() {
+  Cfg c = readCfg();
+  const bool normalize = !c.hasLoadFlag || (!c.loadMods && !c.enabled.empty());
+  if (!c.loadMods) c.enabled.clear();
+  Features::mods = c.loadMods;
+  if (normalize) writeCfg(c);
+}
+bool setMasterEnabled(bool on) {
+  toggleError.clear();
+  Cfg c = readCfg();
+  const bool previous = c.loadMods;
+  if (!on && disableCheck) for (const auto &folder : applied) {
+    toggleError = disableCheck(folder);
+    if (!toggleError.empty()) { Features::mods = c.loadMods; return false; }
+  }
+  c.loadMods = on;
+  c.hasLoadFlag = true;
+  if (!on) c.enabled.clear();
+  if (!writeCfg(c)) { Features::mods = previous; toggleError = "The mod switches could not be saved."; return false; }
+  Features::mods = on;
+  return true;
+}
+std::string offReason(const std::string &folder) {
+  const auto mods = list();
+  std::string id = folder;
+  for (const Mod &mod : mods) if (mod.folder == folder) id = mod.id;
+  for (const Mod &mod : mods) if (mod.enabled && mod.folder != folder)
+    for (const auto &dep : mod.dependencies)
+      if (dep == folder || dep == id) return "Required by " + mod.name + ". Switch that mod off first.";
+  return disableCheck ? disableCheck(folder) : "";
+}
 std::string folder() {
   Cfg c = readCfg();
   if (!c.folder.empty())
@@ -146,6 +221,7 @@ std::vector<Mod> list() {
       continue;
     Mod m;
     m.folder = d.path().filename().string();
+    m.id = m.folder;
     m.path = d.path().string();
     m.name = m.folder;
     std::ifstream in(d.path() / "mod.json");
@@ -154,6 +230,13 @@ std::vector<Mod> list() {
       ss << in.rdbuf();
       Json j = Json::parse(ss.str());
       m.name = j["name"].str(m.folder);
+      m.id = j["id"].str(m.folder);
+      for (const char *key : {"dependencies", "requires"})
+        for (size_t n = 0; n < j[key].size(); n++) {
+          const Json &dep = j[key][n];
+          const std::string id = dep.str(dep["id"].str());
+          if (!id.empty()) m.dependencies.push_back(id);
+        }
       m.author = j["author"].str();
       m.version = j["version"].str();
       m.about = j["about"].str();
@@ -168,7 +251,7 @@ std::vector<Mod> list() {
         m.replaces.push_back(j["replaces"][i].str());
       m.settings = settingsOf(m.folder, j["settings"]);
     }
-    m.enabled = c.enabled.count(m.folder) > 0;
+    m.enabled = c.loadMods && c.enabled.count(m.folder) > 0;
     out.push_back(m);
   }
   }
@@ -176,13 +259,36 @@ std::vector<Mod> list() {
   return out;
 }
 
-void setEnabled(const std::string &mod, bool on) {
+bool setEnabled(const std::string &mod, bool on) {
+  toggleError.clear();
   Cfg c = readCfg();
-  if (on)
-    c.enabled.insert(mod);
-  else
-    c.enabled.erase(mod);
-  writeCfg(c);
+  if (!on && c.enabled.count(mod)) {
+    toggleError = offReason(mod);
+    if (!toggleError.empty()) return false;
+  }
+  if (on) {
+    // Enabling one mod after All Off must not revive dormant selections.
+    if (!c.loadMods) c.enabled.clear();
+    c.loadMods = true;
+    c.hasLoadFlag = true;
+    // Enable declared dependencies together, or leave all switches unchanged.
+    const auto mods = list();
+    std::set<std::string> visited;
+    std::function<bool(const std::string &)> add = [&](const std::string &key) {
+      for (const auto &m : mods) if (m.folder == key || m.id == key) {
+        if (!visited.insert(m.folder).second) return true;
+        c.enabled.insert(m.folder);
+        for (const auto &dep : m.dependencies) if (!add(dep)) return false;
+        return true;
+      }
+      toggleError = "Missing required mod: " + key;
+      return false;
+    };
+    if (!add(mod)) return false;
+  } else c.enabled.erase(mod);
+  if (!writeCfg(c)) { toggleError = "The mod switches could not be saved."; return false; }
+  Features::mods = c.loadMods;
+  return true;
 }
 
 void setSetting(const std::string &mod, const std::string &name, float value) {

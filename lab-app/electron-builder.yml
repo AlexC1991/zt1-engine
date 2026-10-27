@@ -28,6 +28,8 @@ files:
   - main.js
   - preload.js
   - runtime.js
+  - mod-profiles.js
+  - play-output.js
   - update.js
   - sync.js
   - icon.png

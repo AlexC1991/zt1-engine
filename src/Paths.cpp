@@ -236,7 +236,10 @@ bool portable() { return g_portable; }
 std::string appDir() { return g_app; }
 std::string gameDir() { return g_game; }
 std::string dataDir() { return g_data; }
-std::string configFile() { return g_portable ? std::string("zoo.ini") : g_data + "zoo.ini"; }
+std::string configFile() {
+  if (const char *session = std::getenv("ZT1_CONFIG_PATH"); session && *session) return session;
+  return g_portable ? std::string("zoo.ini") : g_data + "zoo.ini";
+}
 // (portable: the source checkout's saves/, two folders above build/Release,
 // where it has always been)
 std::string scenarioProgressFile() {

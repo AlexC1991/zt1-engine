@@ -36,6 +36,8 @@ class WorldRenderer;
 // - an escaped animal near: they run ("RUN, %s has escaped!").
 class Guests {
   friend class SaveGame; // (saving and loading a game)
+  friend std::string runParityChecks(class World &, ResourceManager *);
+  friend class Shows; // Shared marine-show tasks use the normal routes and animation queues.
 public:
   enum class Kind { Man, Woman, Boy, Girl };
   struct Type {
@@ -77,9 +79,13 @@ public:
     // A building it's going to or in (an index into the placed objects),
     // for which need ("food", "drink", "bathroom", "energy", "trash")
     int building = -1;
+    int showTank = -1, showStand = -1, showSeat = -1, showRating = 0;
+    float showDoorX = 0, showDoorY = 0, showZ = 0, showExit = 0, showExitLength = 0;
     std::string need;
     bool hidden = false;      // inside it
     bool trash = false;       // holding a wrapper or cup
+    uint32_t inventory[5] = {}; // original item name ids; 0 is an empty slot
+    bool sick = false;
     int trashCheck = 0, souvenirCheck = 0;
     bool souvenir = false;    // has one
     std::set<int> visited;    // attractions this round (object ids)

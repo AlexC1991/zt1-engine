@@ -206,6 +206,11 @@ SpriteDatabase::getPathSprite(SDL_Renderer *renderer, const std::string &type,
 
 void SpriteDatabase::clear() {
   terrainSprites.clear();
+  terrainTexturePaths.clear();
+  terrainBlendFlags.clear();
+  terrainNames.clear();
+  pathSprites.clear();
+  pathArtFolders.clear();
   destroyAll(terrainTextures);
   destroyAll(terrainTexturesHi);
   textureRenderer = nullptr;

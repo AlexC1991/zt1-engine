@@ -21,9 +21,10 @@ static std::mt19937 &rng() {
   return generator;
 }
 
-void Research::load(ResourceManager *rm) {
+void Research::load(ResourceManager *rm, bool force) {
   static std::mutex loading; // see ItemCatalog::load
   std::lock_guard<std::mutex> lock(loading);
+  if (force) { this->list.clear(); this->loaded = false; }
   if (this->loaded)
     return;
   this->loaded = true;
@@ -53,6 +54,7 @@ void Research::load(ResourceManager *rm) {
     ResearchBranch branch;
     branch.file = branchFile;
     branch.name = text(b, "branch", "name");
+    branch.nameId = b->getInt("branch", "name", 0);
     branch.noProgramIcon = b->get("branch", "noprogicon");
     for (const std::string &key : b->getList("branch", "funding")) {
       ResearchFunding f;
@@ -70,6 +72,7 @@ void Research::load(ResourceManager *rm) {
       category.file = categoryFile;
       category.expansion = pack;
       category.name = text(c, "category", "name");
+      category.nameId = c->getInt("category", "name", 0);
       category.helpId = c->getInt("category", "helpid", 0);
       for (const std::string &programFile : c->getList("category", "program")) {
         IniReader *p = rm->getIniReader(programFile);
@@ -78,6 +81,7 @@ void Research::load(ResourceManager *rm) {
         ResearchProgram program;
         program.file = programFile;
         program.name = text(p, "research", "name");
+        program.nameId = p->getInt("research", "name", 0);
         program.icon = p->get("research", "icon");
         program.entityIcon = p->get("research", "entityicon");
         program.helpId = p->getInt("research", "helpid", 0);

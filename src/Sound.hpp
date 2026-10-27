@@ -34,6 +34,7 @@ public:
   int loopAt(const std::string &path, float dxPixels, float dyPixels, int atten);
   // Everything holds while the game is paused
   void setPaused(bool paused);
+  void reload();
 
   bool enabled = true;
   int master = 0; // the options' attenuation ([UI] userAttenuation)

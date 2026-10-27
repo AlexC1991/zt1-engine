@@ -131,16 +131,34 @@ void Staff::loadTypes(ResourceManager *rm) {
             semi == std::string::npos ? 0 : std::atoi(v.substr(semi + 1).c_str())};
       }
       t.skin = ai->getList("cr_skin", "pal");
+      if (t.kind == Kind::Helicopter) {
+        t.flightHeight = ai->getInt(ints, "cminheight", 128) / 16.0f;
+        t.flightSpeed = ai->getInt(ints, "cfastrate", 150) / 60.0f;
+        t.weaponRange = ai->getInt(ints, "cweaponrange", 5);
+        t.rotorSound = Utils::string_to_lower(ai->get("characteristics/strings", "cloopsoundname"));
+        auto shots = ai->getList("sounds", "fire_weapon");
+        t.fireSound = shots.empty() ? "staff/heligun1.wav" : Utils::string_to_lower(shots.front());
+        t.listImage[0] = Utils::string_to_lower(ai->get("characteristics/strings", "clistimagename"));
+        t.infoImage[0] = Utils::string_to_lower(ai->get("characteristics/strings", "cinfoimagename"));
+      }
       delete ai;
       if (t.kind == Kind::Helicopter) {
         t.baseFile = "scenery/building/helibase.ai";
         if (IniReader *b = rm->getIniReader(t.baseFile)) {
           t.footX = std::max(1, (b->getInt("characteristics/integers", "cfootprintx", 10) + 1) / 2);
           t.footY = std::max(1, (b->getInt("characteristics/integers", "cfootprinty", 8) + 1) / 2);
+          const auto slot = b->getList("slot0", "slotpos");
+          // Same facing-0 slot transform as Guests::doorTiles: across=-X, forward=-Y.
+          if (slot.size() >= 2) { t.padX = -std::stof(slot[0]) / 64; t.padY = -std::stof(slot[1]) / 64; }
+          t.padZ = b->getInt("slot0", "slotposz", 80) / 16.0f;
+          t.approachZ = b->getInt("slot0", "entrposz", 160) / 16.0f;
+          t.padFacing = b->getInt("slot0", "facing", 7);
           delete b;
         }
         if (rm->hasResource("objects/helibase/idle/idle.ani"))
           t.base = rm->getAnimation("objects/helibase/idle/idle");
+        if (rm->hasResource("objects/helibase/used/used.ani"))
+          t.baseUsed = rm->getAnimation("objects/helibase/used/used");
       }
       this->typeList.push_back(t);
   }
@@ -157,6 +175,7 @@ int Staff::typeOfFile(const std::string &file) const {
 }
 
 void Staff::clear() {
+  for (auto &m : this->list) { releaseCatch(m); Sound::get().stop(m.rotorChannel); }
   this->list.clear();
   this->counts.clear();
   // (a zoo loaded afresh: no exhibit visited yet - the last zoo's visits
@@ -309,7 +328,7 @@ bool Staff::walkable(int x, int y, const WorldMap &map, const Fences &fences, in
   // DRT bases
   for (const Member &m : this->list) {
     const Type &t = this->typeList[m.type];
-    if (t.kind != Kind::Helicopter)
+    if (t.kind != Kind::Helicopter || m.id == this->carried)
       continue;
     int x0 = static_cast<int>(std::floor(m.x - t.footX / 2.0f));
     int y0 = static_cast<int>(std::floor(m.y - t.footY / 2.0f));
@@ -358,20 +377,36 @@ Fences::Fit Staff::canPlace(float x, float y, const WorldMap &map, const Fences 
   return Fences::Fit::Ok;
 }
 
+std::pair<float, float> Staff::placementPoint(int type, float x, float y) const {
+  if (type >= 0 && type < static_cast<int>(typeList.size()) && typeList[type].kind == Kind::Helicopter) {
+    const auto &t = typeList[type];
+    return {std::floor(x - t.footX * 0.5f) + t.footX * 0.5f,
+            std::floor(y - t.footY * 0.5f) + t.footY * 0.5f};
+  }
+  return {x, y};
+}
+
 Fences::Fit Staff::canPlaceType(int type, float x, float y, const WorldMap &map,
                                 const Fences &fences) const {
   if (type >= 0 && type < static_cast<int>(this->typeList.size()) &&
       this->typeList[type].kind == Kind::Helicopter) {
-    // The base's whole footprint on clear zoo ground
+    // Preview, collision and placed anchor all use the same grid-aligned point.
+    const auto point = placementPoint(type, x, y); x = point.first; y = point.second;
     const Type &t = this->typeList[type];
     int x0 = static_cast<int>(std::floor(x - t.footX / 2.0f));
     int y0 = static_cast<int>(std::floor(y - t.footY / 2.0f));
+    const MapTile *first = map.getTile(x0, y0);
+    if (!first) return Fences::Fit::Outside;
+    const int height = first->cornerHeight[0];
     for (int ty = y0; ty < y0 + t.footY; ty++)
-      for (int tx = x0; tx < x0 + t.footX; tx++)
-        if (!walkable(tx, ty, map, fences))
-          return Fences::Fit::Outside;
+      for (int tx = x0; tx < x0 + t.footX; tx++) {
+        if (!walkable(tx, ty, map, fences)) return Fences::Fit::Outside;
+        if (map.isPath(tx, ty)) return Fences::Fit::InTheWay;
+        const auto *tile = map.getTile(tx, ty);
+        for (int corner = 0; corner < 4; corner++) if (tile->cornerHeight[corner] != height) return Fences::Fit::Outside;
+      }
     for (const Member &m : this->list)
-      if (m.x >= x0 && m.x < x0 + t.footX && m.y >= y0 && m.y < y0 + t.footY)
+      if (m.id != this->carried && m.x >= x0 && m.x < x0 + t.footX && m.y >= y0 && m.y < y0 + t.footY)
         return Fences::Fit::InTheWay;
     return Fences::Fit::Ok;
   }
@@ -644,6 +679,7 @@ bool Staff::findLayeredPath(Member &m, int gx, int gy, const WorldMap &map, cons
 void Staff::addToIndex(WorldIndex &index) const {
   for (const Member &m : this->list) {
     const Type &t = this->typeList[m.type];
+    if (m.id == this->carried) continue;
     if (t.kind == Kind::Helicopter) {
       // Its base stands in the way
       int x0 = static_cast<int>(std::floor(m.x - t.footX / 2.0f));
@@ -750,7 +786,9 @@ void Staff::climb(Member &m, float x, float y, float z, bool down, bool inside, 
   m.path.clear();
   m.pathAt = 0;
   if (std::hypot(x - m.x, y - m.y) > 0.01f)
-    face(m, x, y);
+    // A descending climber backs down: keep facing the rungs, rather
+    // than turning away from the wall with the direction of travel.
+    face(m, down ? 2 * m.x - x : x, down ? 2 * m.y - y : y);
 }
 
 // fMaintRoutine: a worn fence or a run-down tank filter it's assigned to,
@@ -758,8 +796,9 @@ void Staff::climb(Member &m, float x, float y, float z, bool down, bool inside, 
 bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
   ZT_FN("", "Finding work");
   const Type &t = this->typeList[m.type];
-  // Any zookeeper goes after an escaped animal first (zoo.exe 0x423dae)
-  if (t.kind == Kind::Keeper && catchWork(m, map, fences))
+  // zoo.exe 0x50cd14: keepers catch zoo animals; scientists contain
+  // dinosaurs only after the helicopter has tranquilized them.
+  if ((t.kind == Kind::Keeper || t.kind == Kind::Scientist) && catchWork(m, map, fences))
     return true;
   if (t.kind == Kind::Keeper || t.kind == Kind::Scientist || t.kind == Kind::Trainer)
     return keeperWork(m, map, fences);
@@ -1490,8 +1529,13 @@ bool Staff::tourWork(Member &m, const WorldMap &map, Fences &fences) {
 
 void Staff::gatherFollowers(Member &m) {
   const Type &t = this->typeList[m.type];
-  if (!this->guests || static_cast<int>(m.followers.size()) >= t.maxGroup)
-    return;
+  if (!this->guests) return;
+  m.followers.erase(std::remove_if(m.followers.begin(), m.followers.end(), [&](int id) {
+    const auto *g = this->guests->guest(id);
+    return !g || g->guide != m.id || g->leaving || g->building >= 0 ||
+           g->state == Guests::State::Fleeing || g->state == Guests::State::Caught;
+  }), m.followers.end());
+  if (static_cast<int>(m.followers.size()) >= t.maxGroup) return;
   int gx = static_cast<int>(std::floor(m.x)), gy = static_cast<int>(std::floor(m.y));
   for (const Guests::Guest &g : this->guests->guests()) {
     if (static_cast<int>(m.followers.size()) >= t.maxGroup)
@@ -1607,8 +1651,11 @@ bool Staff::catchWork(Member &m, const WorldMap &map, const Fences &fences) {
   const Animals::Member *target = nullptr;
   float best = 1e9f;
   for (const Animals::Member &a : this->animals->members()) {
-    if (!a.escaped || a.boxed || a.id == this->animals->carried)
+    if (!a.escaped || a.boxed || a.dying || a.id == this->animals->carried)
       continue;
+    const bool dinosaur = this->animals->types()[a.type].dinosaur;
+    const Kind kind = this->typeList[m.type].kind;
+    if (dinosaur ? (kind != Kind::Scientist || !a.tranquilised) : kind != Kind::Keeper) continue;
     if (a.claimedBy >= 0 && a.claimedBy != m.id && this->member(a.claimedBy))
       continue;
     const MapTile *t = map.getTile(static_cast<int>(a.x), static_cast<int>(a.y));
@@ -1639,7 +1686,10 @@ bool Staff::catchWork(Member &m, const WorldMap &map, const Fences &fences) {
 
 void Staff::catchStep(Member &m, float seconds, const WorldMap &map, const Fences &fences) {
   Animals::Member *a = this->animals ? this->animals->member(m.jobAnimal) : nullptr;
-  if (!a || a->boxed || (!a->escaped && !a->tranquilised)) {
+  const bool dinosaur = a && this->animals->types()[a->type].dinosaur;
+  const bool permitted = dinosaur ? this->typeList[m.type].kind == Kind::Scientist && a->tranquilised
+                                  : this->typeList[m.type].kind == Kind::Keeper;
+  if (!a || a->boxed || a->dying || !permitted || (!a->escaped && !a->tranquilised)) {
     if (a && a->claimedBy == m.id)
       a->claimedBy = -1;
     m.job = Job::None;
@@ -1701,6 +1751,7 @@ int Staff::hire(int type, float x, float y, const WorldMap &map, const Fences &f
   if (canPlaceType(type, x, y, map, fences) != Fences::Fit::Ok)
     return -1;
   const Type &t = this->typeList[type];
+  const auto point = placementPoint(type, x, y); x = point.first; y = point.second;
   Member m;
   m.id = this->nextId++;
   m.type = type;
@@ -1728,6 +1779,7 @@ int Staff::hire(int type, float x, float y, const WorldMap &map, const Fences &f
 }
 
 void Staff::fire(int id) {
+  if (auto *m = member(id)) { releaseCatch(*m); Sound::get().stop(m->rotorChannel); }
   if (this->guests)
     this->guests->releaseTour(id);
   this->list.erase(std::remove_if(this->list.begin(), this->list.end(),
@@ -1741,8 +1793,12 @@ void Staff::fire(int id) {
 
 void Staff::moveTo(int id, float x, float y) {
   if (Member *m = this->member(id)) {
-    m->x = x;
-    m->y = y;
+    releaseCatch(*m);
+    Sound::get().stop(m->rotorChannel); m->rotorChannel = -1;
+    m->heliStage = HeliStage::Parked;
+    const auto point = placementPoint(m->type, x, y);
+    m->x = point.first;
+    m->y = point.second;
     m->path.clear();
     m->job = Job::None;
     m->visit = m->access = -1;
@@ -1755,6 +1811,118 @@ void Staff::moveTo(int id, float x, float y) {
     m->water = 0;
     m->z = 0;
     m->climbing = m->sweeping = false;
+  }
+}
+
+void Staff::releaseCatch(Member &m) {
+  if (auto *a = animals ? animals->member(m.jobAnimal) : nullptr)
+    if (a->claimedBy == m.id) a->claimedBy = -1;
+  m.jobAnimal = -1;
+  if (m.job == Job::Catch) m.job = Job::None;
+}
+
+// The original's bSpinup, bAscend, bChaseAnimal, bFireWeapon, bDescend
+// and reverse bSpindown. The base never moves with the aircraft.
+void Staff::helicopterStep(Member &m, float seconds, const WorldMap &map) {
+  const Type &t = typeList[m.type];
+  if (m.heliStage == HeliStage::Parked) {
+    const auto anchor = placementPoint(m.type, m.x, m.y); m.x = anchor.first; m.y = anchor.second;
+  }
+  const float padX = m.x + t.padX, padY = m.y + t.padY;
+  const float ground = groundAt(map, m.x, m.y), padZ = ground + t.padZ;
+  auto stage = [&](HeliStage s, const char *anim, int duty) {
+    m.heliStage = s; m.anim = anim; m.animTime = 0; m.dutyId = duty;
+  };
+  auto valid = [&](const Animals::Member *a) {
+    return a && a->type >= 0 && a->type < static_cast<int>(animals->types().size()) &&
+      animals->types()[a->type].dinosaur && a->escaped && !a->boxed &&
+      !a->tranquilised && !a->dying && !a->egg && a->id != animals->carried;
+  };
+  auto padFacing = [&] {
+    const float angle = t.padFacing * 3.14159265f / 4;
+    m.fx = std::sin(angle); m.fy = -std::cos(angle);
+  };
+  if (m.heliStage == HeliStage::Parked) {
+    m.heliX = padX; m.heliY = padY; m.heliZ = padZ; padFacing();
+    m.anim = "idle"; m.dutyId = kWaitingAtBase;
+    if (!animals || m.workCheck > 0) return;
+    m.workCheck = 1;
+    Animals::Member *nearest = nullptr;
+    float best = 1e30f;
+    for (const auto &candidate : animals->members()) {
+      if (!valid(&candidate)) continue;
+      if (candidate.claimedBy >= 0 && candidate.claimedBy != m.id && member(candidate.claimedBy)) continue;
+      const float distance = std::hypot(candidate.x - padX, candidate.y - padY);
+      if (distance < best) { best = distance; nearest = animals->member(candidate.id); }
+    }
+    if (!nearest) return;
+    nearest->claimedBy = m.id; m.job = Job::Catch; m.jobAnimal = nearest->id;
+    m.dutyArg = nearest->name;
+    stage(HeliStage::SpinUp, "warmup", 10318);
+    if (!t.rotorSound.empty()) m.rotorChannel = Sound::get().loop(t.rotorSound, 1200);
+    SDL_Log("[DRT] %s dispatched for %s", m.name.c_str(), m.dutyArg.c_str());
+    return;
+  }
+  auto *target = animals ? animals->member(m.jobAnimal) : nullptr;
+  if (m.heliStage >= HeliStage::SpinUp && m.heliStage <= HeliStage::Fire && !valid(target)) {
+    releaseCatch(m);
+    stage(m.heliStage == HeliStage::SpinUp ? HeliStage::SpinDown : HeliStage::Return,
+          m.heliStage == HeliStage::SpinUp ? "warmup" : "fly", 10319);
+  }
+  auto move = [&](float x, float y, float speed) {
+    const float dx = x - m.heliX, dy = y - m.heliY, distance = std::hypot(dx, dy);
+    const float step = std::max(0.0f, seconds * speed);
+    if (distance > 0.001f) { m.fx = dx / distance; m.fy = dy / distance; }
+    if (distance <= step) { m.heliX = x; m.heliY = y; return true; }
+    m.heliX += dx / distance * step; m.heliY += dy / distance * step;
+    return false;
+  };
+  const float cruise = std::max(t.flightHeight, t.approachZ);
+  switch (m.heliStage) {
+  case HeliStage::SpinUp:
+    if (m.animTime >= animSeconds(m, "warmup")) stage(HeliStage::Ascend, "level", 10318);
+    break;
+  case HeliStage::Ascend:
+    m.heliZ = std::min(ground + cruise, m.heliZ + seconds * t.flightSpeed * 4);
+    if (m.heliZ >= ground + cruise) stage(HeliStage::Chase, "fly", 10308);
+    break;
+  case HeliStage::Chase:
+    if (target) {
+      m.heliZ = std::max(m.heliZ, groundAt(map, m.heliX, m.heliY) + cruise);
+      if (std::hypot(target->x - m.heliX, target->y - m.heliY) <= t.weaponRange) {
+        const float d = std::max(0.001f, std::hypot(target->x - m.heliX, target->y - m.heliY));
+        m.fx = (target->x - m.heliX) / d; m.fy = (target->y - m.heliY) / d;
+        stage(HeliStage::Fire, "fire", 10308);
+        Sound::get().play(t.fireSound, 1000);
+      } else move(target->x, target->y, t.flightSpeed * (250.0f / 150));
+    }
+    break;
+  case HeliStage::Fire:
+    if (m.animTime >= animSeconds(m, "fire")) {
+      if (valid(target) && std::hypot(target->x - m.heliX, target->y - m.heliY) <= t.weaponRange) {
+        animals->tranquilise(target->id);
+        SDL_Log("[DRT] %s tranquilized %s; ready for scientist containment", m.name.c_str(), target->name.c_str());
+        releaseCatch(m); stage(HeliStage::Return, "fly", 10319);
+      } else stage(HeliStage::Chase, "fly", 10308);
+    }
+    break;
+  case HeliStage::Return:
+    m.heliZ = std::max(m.heliZ, groundAt(map, m.heliX, m.heliY) + cruise);
+    if (move(padX, padY, t.flightSpeed)) { padFacing(); stage(HeliStage::Descend, "level", 10317); }
+    break;
+  case HeliStage::Descend:
+    m.heliZ = std::max(padZ, m.heliZ - seconds * t.flightSpeed * 4);
+    if (m.heliZ <= padZ) stage(HeliStage::SpinDown, "warmup", 10317);
+    break;
+  case HeliStage::SpinDown:
+    if (m.animTime >= animSeconds(m, "warmup")) {
+      Sound::get().stop(m.rotorChannel); m.rotorChannel = -1;
+      stage(HeliStage::Parked, "idle", kWaitingAtBase);
+      m.dutyArg.clear(); m.workCheck = 1;
+      SDL_Log("[DRT] %s landed at its unchanged base", m.name.c_str());
+    }
+    break;
+  default: break;
   }
 }
 
@@ -1772,11 +1940,19 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
                                     [&](int ex) { return fences.exhibit(ex) == nullptr; }),
                      m.exhibits.end());
     m.animTime += seconds;
+    m.baseAnimTime += seconds;
     m.workCheck -= seconds;
-    if (m.id == this->carried)
+    if (m.id == this->carried) {
+      if (t.kind == Kind::Helicopter) {
+        releaseCatch(m); Sound::get().stop(m.rotorChannel); m.rotorChannel = -1;
+        m.heliStage = HeliStage::Parked; m.anim = "idle";
+      }
       continue;
+    }
+    if (m.showTank >= 0)
+      continue; // Shows advances the normal route and trainer cues.
     if (t.kind == Kind::Helicopter) {
-      m.anim = "idle";
+      helicopterStep(m, seconds, map);
       continue;
     }
     // Climbing (in or out of a tank, down under its water or up): along a
@@ -1880,6 +2056,8 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
         }
         if (m.speakLeft <= 0) {
           m.speaking = false;
+          if (this->guests) this->guests->releaseTour(m.id);
+          m.followers.clear();
           m.job = Job::None;
           m.anim = "idle";
           m.idleLeft = 0.5f;
@@ -2067,6 +2245,12 @@ CompassDirection Staff::facing(const WorldRenderer &view, const Member &m) const
   return dirs[octant];
 }
 
+Animation *Staff::baseArt(const Member &m) const {
+  const auto &t = this->typeList[m.type];
+  const bool onPad = m.heliStage == HeliStage::Parked || m.heliStage == HeliStage::SpinUp || m.heliStage == HeliStage::SpinDown;
+  return onPad && t.baseUsed ? t.baseUsed : t.base;
+}
+
 void Staff::collect(const WorldRenderer &view, const WorldMap &map,
                     std::vector<Fences::Drawable> &all,
                     std::vector<Fences::Drawable> *raised) const {
@@ -2078,19 +2262,59 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
     if (this->onlyTank != -2 ? (!withTank || m.tank != this->onlyTank) : withTank)
       continue;
     if (t.kind == Kind::Helicopter) {
-      // Its base, and the helicopter in the base's slot (slotpos -64, 0,
-      // slotposz 80: a tile along x, five units up)
+      const float g = groundAt(map, m.x, m.y);
       float bx, by, bdepth;
-      float g = groundAt(map, m.x, m.y);
       view.worldToScreenF(m.x, m.y, g, bx, by, bdepth);
-      bool lit = m.id == this->hovered;
-      SDL_Color tint{255, 255, 110, 255};
-      if (t.base)
-        out.push_back({bdepth, bx, by, t.base, CompassDirection::SE, tint, lit});
-      if (Animation *heli = this->art(m, "idle")) {
+      const bool lit = m.id == this->hovered;
+      const SDL_Color tint{255, 255, 110, 255};
+      const auto baseSide = view.screenSide(0, -1);
+      float baseFrontDepth = bdepth;
+      Animation *base = baseArt(m);
+      if (base) {
+        // Exactly as a large building: each screen strip sorts at the front
+        // of its fixed world footprint, rather than floating over its neighbours.
+        float xs[4], ds[4], ignored;
+        const float hx = t.footX * 0.5f, hy = t.footY * 0.5f;
+        const float px[4] = {m.x-hx,m.x+hx,m.x+hx,m.x-hx};
+        const float py[4] = {m.y-hy,m.y-hy,m.y+hy,m.y+hy};
+        int left=0,right=0,front=0;
+        for(int k=0;k<4;k++) {
+          view.worldToScreenF(px[k],py[k],g,xs[k],ignored,ds[k]);
+          if(xs[k]<xs[left])left=k;if(xs[k]>xs[right])right=k;if(ds[k]>ds[front])front=k;
+        }
+        baseFrontDepth = ds[front];
+        auto edgeDepth=[&](float x) {
+          const int end=x<=xs[front]?left:right;
+          const float width=xs[front]-xs[end];
+          return std::abs(width)>0.001f?ds[end]+(x-xs[end])/width*(ds[front]-ds[end]):ds[front];
+        };
+        const float step=std::max(4.0f,view.getTileWidth()/4.0f);
+        const int count=std::max(1,static_cast<int>(std::ceil((xs[right]-xs[left])/step)));
+        for(int k=0;k<count;k++) {
+          const float a=xs[left]+k*step,b=std::min(xs[right],a+step);
+          Fences::Drawable strip{edgeDepth((a+b)*0.5f)-0.02f,bx,by,base,baseSide,tint,lit};
+          strip.frame=static_cast<int>(std::fmod(m.baseAnimTime*1000/std::max(1u,base->frameTimeMs()),std::max(1,base->frameCount())));strip.clip=true;strip.clipX0=k?a:-1e9f;strip.clipX1=k==count-1?1e9f:b;
+          out.push_back(strip);
+        }
+      }
+      if (Animation *heli = this->art(m, m.anim)) {
+        const bool parked = m.heliStage == HeliStage::Parked;
+        const float x = parked ? m.x+t.padX : m.heliX;
+        const float y = parked ? m.y+t.padY : m.heliY;
+        const float z = parked ? g+t.padZ : m.heliZ;
         float hx, hy, hdepth;
-        view.worldToScreenF(m.x - 1.0f, m.y, g + 5.0f, hx, hy, hdepth);
-        out.push_back({bdepth + 0.01f, hx, hy, heli, CompassDirection::SE, tint, lit});
+        view.worldToScreenF(x, y, z, hx, hy, hdepth);
+        auto side = parked ? view.screenSide(std::sin(t.padFacing*3.14159265f/4),-std::cos(t.padFacing*3.14159265f/4)) : facing(view,m);
+        // An aircraft on/above its roof must sort over every base strip.
+        if (std::abs(x-m.x) <= t.footX*0.5f && std::abs(y-m.y) <= t.footY*0.5f && z >= g+t.padZ-0.01f)
+          hdepth = std::max(hdepth, baseFrontDepth);
+        Fences::Drawable d{hdepth+0.02f,hx,hy,heli,side,tint,lit};
+        int frame=static_cast<int>(m.animTime*1000/std::max(1u,heli->frameTimeMs()));
+        if(m.heliStage==HeliStage::SpinUp || m.heliStage==HeliStage::SpinDown || m.heliStage==HeliStage::Fire)
+          frame=std::min(frame,std::max(0,heli->frameCount()-1));
+        if(m.heliStage==HeliStage::SpinDown)frame=std::max(0,heli->frameCount()-1-frame);
+        d.frame=frame;out.push_back(d);
+        if(m.id==selected && selectArrow)out.push_back({hdepth+0.03f,hx,hy-65,selectArrow,CompassDirection::N,tint,false});
       }
       continue;
     }
@@ -2173,7 +2397,8 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
                           groundAt(map, this->previewX, this->previewY), sx, sy, depth);
       SDL_Color tint = this->previewFit == Fences::Fit::Ok ? SDL_Color{0, 255, 0, 255}
                                                            : SDL_Color{255, 60, 60, 255};
-      out.push_back({depth, sx, sy, a, CompassDirection::SE, tint, true});
+      const auto side = pt.kind == Kind::Helicopter ? view.screenSide(0, -1) : CompassDirection::SE;
+      out.push_back({depth, sx, sy, a, side, tint, true});
     }
   }
 }
@@ -2202,6 +2427,21 @@ int Staff::pick(float px, float py, const WorldRenderer &view, const WorldMap &m
     // A figure about 12 wide and 30 tall standing at its anchor; a DRT
     // base its pad
     bool heli = this->typeList[m.type].kind == Kind::Helicopter;
+    if (heli) {
+      const auto &t = this->typeList[m.type];
+      float left, top, right, bottom;
+      bool hit = t.base && t.base->anchoredBounds(sx, sy, view.screenSide(0,-1), left, top, right, bottom) &&
+                 px>=left && px<=right && py>=top && py<=bottom;
+      if (m.heliStage != HeliStage::Parked) {
+        float hx, hy, hd; view.worldToScreenF(m.heliX,m.heliY,m.heliZ,hx,hy,hd);
+        Animation *a = art(m,m.anim);
+        const bool aircraftHit = a && a->anchoredBounds(hx,hy,facing(view,m),left,top,right,bottom) &&
+                                 px>=left && px<=right && py>=top && py<=bottom;
+        if (aircraftHit) { hit=true; sx=hx; sy=hy; }
+      }
+      if (hit) { float d=std::abs(px-sx)+std::abs(py-sy); if(d<best){best=d;found=m.id;} }
+      continue;
+    }
     float hw = heli ? 90.0f : 9.0f, top = heli ? 90.0f : 32.0f, bottom = heli ? 40.0f : 4.0f;
     if (px < sx - hw || px > sx + hw || py < sy - top || py > sy + bottom)
       continue;

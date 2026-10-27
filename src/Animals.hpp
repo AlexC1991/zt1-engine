@@ -40,7 +40,12 @@ class WorldRenderer;
 // animations and walk them about the exhibit.
 class Animals {
   friend class SaveGame; // (saving and loading a game)
+  friend std::string runParityChecks(class World &, ResourceManager *);
+  friend class Shows; // Shared marine-show tasks use the normal routes and animation queues.
 public:
+  // Shared with the Lab checker: unsupported steps cannot be mistaken for handled ones.
+  enum class Command { Unknown, EndTrick, Play, PlayWithSound, PlayTime, PlayPingPong, PlayReverse, Halt, SetBase, KeepControl, Die, PlaySet, PlaySetTank, PlaySetProb, PlaySetTerrain, Walk, Move, Run, Trot, MoveWithSound, MoveReverse, FaceTowardFood, Hatch, Dustball, EnterBuilding, ExitBuilding, CaughtPrey, FaceTowardTarget, PlayStopAtEnd, TargetBuilding, PlaySpecial };
+  static Command behaviorCommand(const std::string &name);
   // One step of a behaviour set: f = fPlay(stand)
   struct Step {
     std::string fn;
@@ -70,6 +75,8 @@ public:
     // level; type +0x68 - the lowest it swims over the floor, 0x43dc11);
     // cSurface (type +0x17d, 0x402112): swims at the surface only
     bool underwater = false, surfaceOnly = false;
+    bool showAnimal = false;
+    int skipTrickHappiness = 50, skipTrickChance = 10;
     int needDepth = 0;
     // cOnlyUnderwater (+0x17f): a tank's its whole home; without it a
     // cUnderwater animal needs land too (type slot 0xcc, 0x410e41).
@@ -85,6 +92,7 @@ public:
     // now and then a drink (cDrinkWaterChance against cChaseAnimalChance,
     // every cBoredCheck ticks) at the nearest fresh water
     int waterNeeded = 0, landNeeded = 0, enterWaterChance = 0, enterLandChance = 0;
+    int underwaterNeeded = 0, enterTankChance = 0;
     int drinkWaterChance = 0, chaseAnimalChance = 0;
     // How it rates its exhibit (see Animals.cpp, from zoo.exe): the terrain
     // it wants (percent of the exhibit, or a flat penalty when negative),
@@ -164,6 +172,8 @@ public:
     bool female = false, baby = false;
     std::string name;
     int exhibit = -1;
+    int showTank = -1, showHome = -1;
+    bool showTrick = false, showDone = false;
     float x = 0, y = 0;   // tiles
     float fx = 0, fy = 1; // facing (world)
     // What it's playing: once, looping for a time, there and back, or
@@ -179,7 +189,9 @@ public:
     size_t pathAt = 0;
     std::string moveAnim = "walk";
     float speed = 0.5f;
+    bool mealTaken = false; // transient: bEat has already consumed its mouthful
     int foodItem = -1; // the food it's gone to eat
+    float awarenessWait = 0, awarenessCheck = 0; // transient local steering timers
     // Happiness, -100 to 100 (the panel shows it as 0-100); changes wait
     // for the next tick
     float happiness = 50, pending = 0;
@@ -226,6 +238,7 @@ public:
     // overlay) and its tick count (+0x35c): over past cRampageTimeMax
     bool rampaging = false;
     int rampageTicks = 0;
+    int rampageBuilding = -1; // transient reachable building target, never a shelter occupancy
     // The tile it's on (-1: not yet): stepping onto another is when a
     // rampage rubbles what stands there (zoo.exe 0x437572)
     int tileX = -1, tileY = -1;
@@ -484,7 +497,24 @@ public:
   void labBehave(int id, const std::string &set);
   std::vector<std::string> labAnims(int id) const;
   std::vector<std::string> labSets(int id) const;
+  std::string awarenessReport() const;
 private:
+  float bodyRadius(const Member &m) const;
+  float tankClearance(const Member &m, float x, float y, const Fences &fences, bool planning = false) const;
+  const Fences *fencesRef = nullptr;
+  bool awareOf(const Member &a, const Member &b) const;
+  float bodyHeight(const Member &m, float x, float y, float swim) const;
+  float bodyDistance(const Member &a, float ax, float ay, float az,
+                     const Member &b, float bx, float by, float bz) const;
+  bool destinationFree(const Member &m, float x, float y, float swim, bool reservations) const;
+  bool awareStep(const Member &m, int x, int y, int nx, int ny,
+                 const WorldMap &map, const Fences &fences) const;
+  bool feedingPlace(Member &m, float x, float y, const WorldMap &map, const Fences &fences);
+  void consumeFood(Member &m);
+  void reactOne(int exhibit, Change change, const std::string &file, int animalType, bool removed,
+                const WorldMap &map, const Fences &fences);
+  bool moveAware(Member &m, float tx, float ty, float seconds, const WorldMap &map, const Fences &fences);
+  void separateIdle(Member &m, float seconds, const WorldMap &map, const Fences &fences);
   const WorldMap *mapRef = nullptr; // (the map, for the art: swimmers' swim / water idle)
   bool onWater(const Member &m) const;
   void waterTick(Member &m, const WorldMap &map, const Fences &fences);
@@ -498,6 +528,7 @@ private:
   struct ObjectInfo {
     int nameId = 0, habitat = 0, fx = 1, fy = 1, capacity = 0, toy = 0;
     bool foliage = false, rock = false, stink = false, shelter = false, building = false;
+    bool hideBuilding = false, rubbleable = true;
     bool rest = false, hideUser = false; // animals use it (animalrest), out of sight
     float adultChange = 0, childChange = 0, hungerChange = 0, energyChange = 0;
     int timeInside = 10;

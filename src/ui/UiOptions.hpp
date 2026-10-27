@@ -77,6 +77,10 @@ public:
   void open(bool inGame, int page = -1);
   void close() { this->closeAsked = true; }
   bool isOpen() const { return this->layout != nullptr; }
+  int shownPage() const { return page; }
+  int modListStart() const { return modStart; }
+  void setModListStart(int start) { modStart = start; if (layout) showMods(); }
+  void refreshModSwitches() { if (layout) { wire(); showMods(); } }
 
   // While it's open it takes every input (it's modal); the Game page's
   // buttons give back GAME_LOAD / GAME_SAVE / GAME_MAIN_MENU / GAME_EXIT
@@ -126,6 +130,7 @@ private:
   // A mod's own settings (its mod.json "settings"): the page for the mod
   // whose Settings button was pressed (its folder)
   std::string modShown;
+  int modStart = 0;
   void showUpdates();
   void showModSettings();
   // The Shaders page for the shader mods switched on: the list, and the

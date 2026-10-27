@@ -378,17 +378,26 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
 
         // --- FIXED LAZY LOAD ---
         // Only try to load if we haven't tried before.
-        if (item.iconTex == nullptr && !item.iconPath.empty() && !item.loadAttempted) {
-            item.iconTex = loadIconTexture(renderer, item.iconPath);
-            item.loadAttempted = true; // Stop asking if it fails!
+        if (!item.iconArt && !item.iconTex && !item.iconPath.empty() && !item.loadAttempted) {
+            // Use the UI animation path: it receives the same HD/upscale
+            // handling as the rest of the interface, including show tricks.
+            if (item.iconPath.find('.') == std::string::npos)
+                item.iconArt = resource_manager->getAnimation(item.iconPath);
+            if (!item.iconArt)
+                item.iconTex = loadIconTexture(renderer, item.iconPath);
+            item.loadAttempted = true;
         }
 
         int text_x_offset = minicon_width > 0 ? minicon_width + 2 : 2;
         if (item.iconArt) {
             int iw = 0, ih = 0;
             item.iconArt->queryTexture(CompassDirection::N, &iw, &ih);
-            SDL_Rect iconRect = {item_rect.x + 3 + std::max(0, (minicon_width - 6 - iw) / 2),
+            int column = minicon_width > 0 ? minicon_width : 24;
+            float fit = std::min(1.0f,std::min((column-6.0f)/std::max(1,iw),(item_height-4.0f)/std::max(1,ih)));
+            iw = std::max(1,static_cast<int>(iw*fit));ih = std::max(1,static_cast<int>(ih*fit));
+            SDL_Rect iconRect = {item_rect.x + 3 + std::max(0, (column - 6 - iw) / 2),
                                  item_rect.y + (item_height - ih) / 2, iw, ih};
+            if (minicon_width <= 0) text_x_offset = 24;
             if (art)
                 item.iconArt->draw(renderer, &iconRect, CompassDirection::N);
         } else if (item.iconTex) {
@@ -426,22 +435,33 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
                 SDL_RenderCopy(renderer, t, nullptr, &dst);
             }
         } else if (!item.text.empty()) {
-            SDL_Texture* text_texture = resource_manager->getStringTexture(
-                renderer, font_id, item.text, item.hasColor && item_index != selected_index ? item.color : *fg, font_size_id);
+            std::string label = item.text;
+            SDL_Color color = item.hasColor && item_index != selected_index ? item.color : *fg;
+            SDL_Texture* text_texture = resource_manager->getStringTexture(renderer,font_id,label,color,font_size_id);
 
             if (text_texture) {
                 int tex_w, tex_h;
                 resource_manager->getTextSize(text_texture, &tex_w, &tex_h);
+                int available = std::max(0,item_rect.w-text_x_offset-2);
+                if (tex_w > available) {
+                    // Keep native-resolution glyphs. Shrinking the destination
+                    // rectangle squeezed long show names into blurry lettering.
+                    do {
+                        if (label.empty()) break;
+                        size_t end=label.size()-1;
+                        while(end>0 && (static_cast<unsigned char>(label[end])&0xc0)==0x80)--end;
+                        label.resize(end);
+                        text_texture=resource_manager->getStringTexture(renderer,font_id,label+"...",color,font_size_id);
+                        if(text_texture)resource_manager->getTextSize(text_texture,&tex_w,&tex_h);
+                    } while(text_texture && tex_w>available);
+                }
                 SDL_Rect text_rect = {
                     centered ? item_rect.x + (item_rect.w - tex_w) / 2
                              : item_rect.x + text_x_offset,
                     item_rect.y + (item_height - tex_h) / 2,
                     tex_w, tex_h
                 };
-                if (text_rect.w > item_rect.w - text_x_offset) {
-                    text_rect.w = item_rect.w - text_x_offset;
-                }
-                if (RenderSettings::drawsUiText())
+                if (text_texture && tex_w <= available && RenderSettings::drawsUiText())
                     SDL_RenderCopy(renderer, text_texture, nullptr, &text_rect);
             }
         }

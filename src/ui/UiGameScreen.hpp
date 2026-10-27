@@ -18,6 +18,7 @@ class UiImage;
 class UiLayout;
 class UiListBox;
 class ZooSim;
+class Shows;
 class Fences;
 class UiScrollingRegion;
 class UiText;
@@ -179,6 +180,9 @@ public:
   void refreshCatalog();
   // Opens the Exhibit/Show List on an exhibit (clicked on the map)
   void showExhibit(int id);
+  void setShows(Shows *shows) { this->shows = shows; }
+  void showShow(int id);
+  void refreshShow();
   // Opens a tank filter's panel (filter.lyt: its name, Sell, its status
   // and upkeep)
   void showFilter(int index);
@@ -464,6 +468,12 @@ private:
   UiScaleControl panelScale;
   void dragUiScale(SDL_Renderer *renderer);
   void setupAnimalPanel();
+  Shows *shows = nullptr;
+  UiLayout *showPanelLayout = nullptr;
+  int shownShow = -1;
+  std::string showListSignature;
+  void setupShows();
+  bool showSelection(UiAction action);
   // The Game Options panel's settings pages, and the Extras tab
   void setupGameOptions();
   Uint32 tooltipDurationMs = 3000; // [UI] tooltipDuration (zoo.exe 0x539a66: 3000)

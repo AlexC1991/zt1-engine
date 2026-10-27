@@ -18,6 +18,13 @@ Sound &Sound::get() {
   return instance;
 }
 
+void Sound::reload() {
+  Mix_HaltChannel(-1);
+  for (const auto &[file, sound] : chunks) if (sound) Mix_FreeChunk(sound);
+  chunks.clear();
+  paused = false;
+}
+
 void Sound::init(ResourceManager *rm) {
   this->rm = rm;
   // Room for the many that can play at once (animals, guests, the UI)

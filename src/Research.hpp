@@ -31,6 +31,7 @@ class ResourceManager;
 // Funding starts at none.
 // ============================================================================
 struct ResearchProgram {
+  int nameId = 0;
   std::string file;
   std::string name;
   std::string icon;
@@ -46,6 +47,7 @@ struct ResearchProgram {
 };
 
 struct ResearchCategory {
+  int nameId = 0;
   std::string file;
   std::string name;
   int expansion = 0; // 0 Zoo Tycoon, 1 Dinosaur Digs, 2 Marine Mania
@@ -61,6 +63,7 @@ struct ResearchFunding {
 };
 
 struct ResearchBranch {
+  int nameId = 0;
   std::string file;
   std::string name;
   std::string noProgramIcon;
@@ -77,7 +80,7 @@ public:
   static Research &get();
 
   // Reads research.cfg and its files once (later calls do nothing)
-  void load(ResourceManager *resource_manager);
+  void load(ResourceManager *resource_manager, bool force = false);
 
   std::vector<ResearchBranch> &branches() { return this->list; }
   ResearchBranch *branch(int index) {

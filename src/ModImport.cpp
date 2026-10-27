@@ -132,7 +132,7 @@ Result wrapZtds(const std::vector<fs::path> &ztds, const std::string &name, cons
   r.ok = true;
   r.folder = dest.filename().u8string() | u8;
   r.name = name;
-  r.message = name + " is in your mods, switched off: switch it on, then Restart.";
+  r.message = name + " is in your mods, switched off: switch it on when you want to use it.";
   return r;
 }
 
@@ -165,7 +165,7 @@ Result copyMod(const fs::path &src) {
   r.ok = true;
   r.folder = dest.filename().u8string() | u8;
   r.name = name;
-  r.message = name + " is in your mods, switched off: switch it on, then Restart.";
+  r.message = name + " is in your mods, switched off: switch it on when you want to use it.";
   return r;
 }
 

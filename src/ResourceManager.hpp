@@ -6,6 +6,7 @@
 #include <string>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "SDL_ttf.h"
 
@@ -24,8 +25,14 @@ class ResourceManager {
 public:
   ResourceManager(Config *config);
   ~ResourceManager();
+  // Live mod refresh discards world/HUD consumers before releasing their art.
 
   void load_all(std::atomic<float> *progress, std::atomic<bool> *is_done);
+  // Call between frames after discarding the old world/HUD, then rebuild them.
+  void reloadMods();
+  // Who supplies a resource, and whether it survives without that mod.
+  std::string modOf(const std::string &file) const;
+  bool availableWithout(const std::string &file, const std::string &mod) const;
 
   void *getFileContent(const std::string &file_name, int *size);
   // magnified: art drawn scaled up (menus, HUD, the zoomed-in map), which
@@ -118,10 +125,15 @@ public:
 private:
   std::unordered_map<std::string, std::function<std::string(ResourceManager *)>> provided;
   std::unordered_map<std::string, std::string> resource_map;
+  std::unordered_map<std::string, std::vector<std::string>> resourceSources;
+  std::vector<std::pair<std::string, std::string>> loadedModRoots;
   std::unordered_map<std::string, int> archive_priority; // archive -> path index
   int modPaths = 0; // the mods' folders, first in the path
   std::unordered_map<uint32_t, std::string> string_map;
   std::unordered_map<std::string, Animation *> animation_map;
+  std::unordered_set<Animation *> ownedAnimations;
+  Animation *withArtOptions(Animation *a, const std::string &name, const std::string &aniKey);
+  void clearAnimations();
   std::unordered_map<std::string, Pallet *> pallet_map;
 
   // Cache ZT1 preview textures to avoid repeated decode/scans when switching

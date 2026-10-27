@@ -4,6 +4,8 @@
 #include "MemoryManager.hpp"
 #include <SDL.h>
 #include <cstdint>
+#include <array>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -63,6 +65,7 @@ public:
     // from their fixed places
     bool decoded = false;
     uint32_t direction = 0;          // 0-7 (loadUnitCommon +0x12c)
+    int32_t filterHealth = -1;       // ZTTankFilter +0x15c; -1 when not a filter
     int32_t food = 0;                // scenery's food counter (food, poo)
     std::vector<uint8_t> colours;    // colour choices, from version 67
     bool hasCondition = false;       // fences and tank walls, from 55
@@ -73,11 +76,38 @@ public:
       int32_t happiness = 0, hunger = 0, health = 0, energy = 0;
       bool female = false;
       int32_t dung = 0;
+      std::array<int32_t, 10> checks{}; // hunger, health, energy, other, keeper, captivity, habitat, bored, social, reproduction
+      int32_t chaseCheck = 0, grow = 0, ready = 0, life = 0, hatchIn = 0, rampageTicks = 0;
+      bool hasLife = false, sick = false, sleeping = false;
+      uint64_t lastAte = 0, lastSlept = 0;
       bool keeperVisited = false, dying = false, mourning = false, crated = false, thirsty = false,
            rampaging = false, egg = false, escaped = false;
     };
     bool hasAnimal = false;
     Animal animal;
+    // ZTGuest::load 0x455fa2: the five status values precede its private
+    // counters and inventory. The common record retains identity and colours.
+    struct Guest {
+      int32_t happiness = 50, hunger = 0, thirst = 0, energy = 0, bathroom = 0;
+      std::array<int32_t, 10> checks{}; // hunger, thirst, bathroom, leave, souvenir, energy, trash, like, view, surroundings
+      int32_t chaseCheck = 0, favourite = 0;
+      uint64_t arrived = 0;
+      std::array<uint32_t, 5> items{};
+      std::vector<uint32_t> seen;
+      bool leaving = false, afraid = false, sick = false;
+      uint32_t guide = 0;
+    };
+    bool hasGuest = false;
+    Guest guest;
+    struct Staff {
+      int32_t work = 0, chase = 0, crowd = 0;
+      std::array<bool, 4> duties{{true, true, true, true}};
+      std::vector<std::pair<int32_t, int32_t>> exhibits;
+      std::vector<uint32_t> followers;
+      uint32_t captured = 0;
+    };
+    bool hasStaff = false;
+    Staff staff;
 
     int tileX() const { return x >= 0 ? x / 64 : (x - 63) / 64; }
     int tileY() const { return y >= 0 ? y / 64 : (y - 63) / 64; }
@@ -115,6 +145,17 @@ public:
   // The view the zoo was saved with: zoom, rotation, scroll x, scroll y,
   // the terraform brush's size
   const int32_t *getView() const { return view; }
+  struct ResearchRecord { int kind = 0, id = 0; uint32_t value = 0; };
+  const std::vector<ResearchRecord> &getResearch() const { return research; }
+  const std::vector<int> &getAwards() const { return awards; }
+  int getMarketing() const { return marketing; }
+  struct Books {
+    uint32_t month = 0, year = 0;
+    std::vector<std::array<float, 12>> monthly;
+    std::vector<std::vector<float>> yearly;
+    std::vector<float> total;
+  };
+  const Books &getBooks() const { return books; }
   // How many entity records decoded to exactly their size, of how many
   int decodedCount() const { return decoded; }
   // Where the exact read stopped, when it did ("" when it didn't)
@@ -125,6 +166,10 @@ private:
   uint32_t language = 0, nextUnitId = 0, rating = 0;
   std::vector<Habitat> habitats;
   float cash = 0, admission = 49.0f;
+  std::vector<ResearchRecord> research;
+  std::vector<int> awards;
+  int marketing = 0;
+  Books books;
   uint16_t date[8] = {};
   int32_t view[5] = {};
   int decoded = 0;

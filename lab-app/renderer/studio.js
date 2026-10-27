@@ -273,7 +273,7 @@ function stTopHtml(m) {
       }<div class="stmodtx"><div class="nm">${esc(m ? m.name || m.folder : 'No mod picked')}</div><div class="meta">${esc(m ? [m.version && 'v' + m.version, m.author && 'by ' + m.author].filter(Boolean).join(' · ') || m.folder : 'Pick or make one')}</div></div><span class="stcaret">▾</span></div>
       ${
         m
-          ? `<div class="mkonoff${m.enabled ? ' on' : ''}" data-act="mkToggle" title="Switched on, it's in the Test Zoo and in Play when they next start"><span class="mktoggle${m.enabled ? ' on' : ''}"></span>${m.enabled ? 'On' : 'Off'}</div>
+          ? `<div class="mkonoff${m.enabled ? ' on' : ''}" data-act="mkToggle" title="Your normal mod switch. Required content stays on while the zoo uses it."><span class="mktoggle${m.enabled ? ' on' : ''}"></span>${m.enabled ? 'On' : 'Off'}</div>
       <span class="stsaved${dirty ? ' no' : ''}">${dirty ? 'Not saved' : 'All saved'}</span>
       <div class="spacer"></div>
       <div class="btn small${busy}" data-act="mkTryZoo" title="Switch it on and restart the Test Zoo with it">▶ Test in the zoo</div>
@@ -753,11 +753,10 @@ Object.assign(ACTIONS, {
   stEditMap: async (file) => {
     const stem = String(file).split('/').pop().replace(/\.scn$/i, '');
     const m = MK.mods.find((x) => x.folder === MK.sel);
-    if (m && !m.enabled) {
-      await lab.gameModsEnable(m.folder, true);
-      lab.engineRestart();
-      toast('Switched on: the Test Zoo starts again with it, then loads the map.', 4000);
-      await new Promise((r) => setTimeout(r, 1500));
+    if (m) {
+      if (!(await testModInZoo(m.folder))) return;
+      for (let n = 0; n < 240 && S.engine.status !== 'connected'; n++) await new Promise(r => setTimeout(r, 250));
+      if (S.engine.status !== 'connected') return toast('The Test Zoo did not reconnect. Try again once it is running.', 5000);
     }
     setTab('scene');
     const r = await CONTROL.sceneLoad({ map: stem });

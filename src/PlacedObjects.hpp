@@ -4,6 +4,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <random>
 #include <unordered_map>
 #include <vector>
 
@@ -68,6 +69,16 @@ public:
     // a guest is at it (set by the guests each tick)
     Animation *bg = nullptr, *used = nullptr;
     bool inUse = false;
+    // Simulation time, shared by every render strip of this object. Pausing
+    // the zoo freezes shopkeepers, smoke, rides and customer-use sequences.
+    double animTime = 0, useTime = 0;
+    bool wasInUse = false;
+    // Decorative eruptions use their definition's timed use cycle, without guests.
+    bool randomUse = false, randomActive = false, randomStarted = false;
+    float minUsePeriod = 20, maxUsePeriod = 60;
+    int useAnimCount = 1;
+    double randomWait = 0, randomTime = 0;
+    bool showHidden = false; // A trick animation carries this object while it is used.
     // Trash cans: the rubbish in it (a guest's piece +1, taken while 24 or
     // less: 25 at most, cCapacity isn't used - zoo.exe 0x42d181), shown
     // half full over 12 (its "full" art never shows in the original:
@@ -87,11 +98,16 @@ public:
   void explode(Object &o);
   // Time on (game seconds): explosions played out
   void tick(float seconds);
+  static int animationFrame(const Object &o, const Animation *art);
+  static Animation *displayArt(const Object &o) {
+    return (o.inUse || o.randomActive) && o.used ? o.used : o.art;
+  }
 
   // The HUD's Hide Foliage / Hide Buildings toggles: not drawn, not
   // picked (the zoo's entrance stays, as the original)
   bool hideFoliage = false, hideBuildings = false;
   bool hiddenNow(const Object &o) const {
+    if(o.showHidden)return true;
     if (this->hideFoliage && o.subClass == "foliage")
       return true;
     if (!this->hideBuildings || o.subClass != "building")
@@ -176,6 +192,7 @@ public:
 
 private:
   int nextId = 1;
+  std::mt19937 randomUseRng{2001};
   std::map<std::string, int> counts; // per type: how many were ever bought
   std::vector<Object> list;
   ResourceManager *rm = nullptr;

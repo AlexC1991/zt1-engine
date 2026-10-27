@@ -2,6 +2,7 @@
 #define ANIMATION_HPP
 
 #include <string>
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
@@ -14,6 +15,10 @@
 #include "PalletManager.hpp"
 
 class Animation {
+  friend class ResourceManager;
+  // Registrations belong to the allocation (not its moved frame buffers).
+  // A manager-owned animation unregisters if a caller deletes it early.
+  std::function<void()> onRelease;
 public:
   Animation() = default;
   Animation(std::unordered_map<std::string, AnimationData *> *data);

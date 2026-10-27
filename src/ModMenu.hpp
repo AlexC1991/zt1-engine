@@ -13,8 +13,8 @@ class UiLayout;
 // story and objectives, scroll bars and button frames - listing the mods in
 // the mods folder (Mods.hpp): each one's name, author and art, its details
 // where a scenario's story is and what it changes where its objectives are;
-// switch one on or off, point the menu at another folder, and restart the
-// game to load them (mods are read as the game starts).
+// switch optional mods on or off, with live refresh. Required content stays
+// enabled while the active map or zoo uses it.
 namespace ModMenu {
 // The window, built on the game's own map-select layout (its path given)
 UiLayout *open(ResourceManager *rm, const std::string &layoutPath);

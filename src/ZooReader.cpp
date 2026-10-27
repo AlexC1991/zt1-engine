@@ -272,24 +272,31 @@ void animal(Cursor &r, ZooReader::ZooObject &o) {
   a.hunger = r.i32();
   a.health = r.i32();
   a.energy = r.i32();
-  r.skip(5);
+  a.sick = r.u8() != 0;
+  a.sleeping = r.u8() != 0;
+  r.skip(3);
   r.skip(5 + 20);
   a.female = r.str().rfind('M', 0) != 0; // ("M..." is a male)
   r.str();
-  r.skip(10 * 4); // (status counters)
+  for (auto &check : a.checks) check = r.i32();
   r.skip(4);
   if (v <= 53)
     r.skip(4);
-  r.skip(4 + 4);
+  r.skip(4);
+  a.chaseCheck = r.i32();
   a.dung = r.i32();
   a.keeperVisited = r.u8() != 0;
   r.skip(2);
   r.skip(4);
-  r.skip(6 + 12 + 16 + 2);
+  r.skip(6);
+  a.grow = r.i32(); a.ready = r.i32(); r.skip(4);
+  a.lastAte = r.u32(); a.lastAte |= uint64_t(r.u32()) << 32;
+  a.lastSlept = r.u32(); a.lastSlept |= uint64_t(r.u32()) << 32;
+  r.skip(2);
   if (v >= 41)
     r.skip(8);
   if (v >= 43) {
-    r.skip(12);
+    r.skip(4); a.life = r.i32(); a.hasLife = true; r.skip(4);
     a.dying = r.u8() != 0;
   }
   if (v >= 44)
@@ -312,13 +319,12 @@ void animal(Cursor &r, ZooReader::ZooObject &o) {
     r.skip(1);
   if (v >= 76)
     a.rampaging = r.u8() != 0;
-  if (v >= 77)
-    r.skip(8);
+  if (v >= 77) { r.skip(4); a.rampageTicks = r.i32(); }
   if (v >= 78)
     r.skip(1);
   if (v >= 79) {
     a.egg = r.u8() != 0;
-    r.skip(4);
+    a.hatchIn = r.i32();
   }
   if (v >= 87)
     r.skip(8);
@@ -328,17 +334,27 @@ void animal(Cursor &r, ZooReader::ZooObject &o) {
 }
 
 // A guest's own part (zoo.exe ZTGuest::load 0x455fa2)
-void guest(Cursor &r) {
+void guest(Cursor &r, ZooReader::ZooObject &o) {
   const uint32_t v = r.v;
-  r.skip(20 + 1 + 20);
+  o.guest.happiness = r.i32(); // ZTGuest +0x2a8
+  o.guest.hunger = r.i32();    // +0x2b0
+  o.guest.thirst = r.i32();    // +0x2b8
+  o.guest.energy = r.i32();    // +0x2c0 (tiredness, not remaining stamina)
+  o.guest.bathroom = r.i32();  // +0x2c8
+  o.hasGuest = true;
+  o.guest.sick = r.u8() != 0;
+  r.skip(20);
   if (v <= 66)
     r.skip(4);
   r.skip(8);
   if (v <= 64)
     r.skip(6);
-  r.skip(40);
-  r.skipList(4);
-  r.skipList(4);
+  for (auto &check : o.guest.checks) check = r.i32();
+  for (uint32_t k = 0, n = r.count(4); k < n && r.ok; ++k) {
+    uint32_t item = r.u32();
+    if (k < o.guest.items.size()) o.guest.items[k] = item;
+  }
+  for (uint32_t k = 0, n = r.count(4); k < n && r.ok; ++k) o.guest.seen.push_back(r.u32());
   if (v <= 93) {
     r.str();
     r.str();
@@ -347,7 +363,12 @@ void guest(Cursor &r) {
     r.str();
   }
   r.skipList(8);
-  r.skip(4 + 6 + 2 + 12 + 2 + 8);
+  o.guest.chaseCheck = r.i32();
+  o.guest.leaving = r.u8() != 0; o.guest.afraid = r.u8() != 0;
+  r.skip(4 + 2);
+  o.guest.arrived = r.u32(); o.guest.arrived |= uint64_t(r.u32()) << 32;
+  o.guest.favourite = r.i32();
+  r.skip(2 + 8);
   if (v >= 42)
     r.skip(2);
   if (v >= 54)
@@ -355,12 +376,13 @@ void guest(Cursor &r) {
   if (v >= 56)
     r.skip(1);
   if (v >= 65)
-    r.skip(4);
+    o.guest.guide = r.u32();
 }
 
 // Staff's own part (zoo.exe ZTKeeper 0x455444, ZTMaintenanceWorker 0x4c60bc,
 // ZTTourGuide 0x59b3a1, ZTHelicopter 0x46b1dd, then ZTStaff 0x455370)
-void staff(Cursor &r, const std::string &cls) {
+void staff(Cursor &r, const std::string &cls, ZooReader::ZooObject &o) {
+  auto &s = o.staff; o.hasStaff = true;
   const uint32_t v = r.v;
   if (cls == "keeper") {
     r.skip(4 + 16 + 1);
@@ -370,25 +392,28 @@ void staff(Cursor &r, const std::string &cls) {
     r.skip(4);
     if (v >= 92) {
       r.skip(10);
-      r.skipList(1);
+      for (uint32_t k = 0, n = r.count(1); k < n && r.ok; ++k) {
+        bool on = r.u8() != 0; if (k < s.duties.size()) s.duties[k] = on;
+      }
     }
   } else if (cls == "tour") {
     r.skip(4);
     if (v >= 54)
-      r.skip(4);
+      s.crowd = r.i32();
     if (v >= 54 && v <= 64)
       r.skip(4);
     if (v >= 65)
-      r.skipList(4);
+      for (uint32_t k = 0, n = r.count(4); k < n && r.ok; ++k) s.followers.push_back(r.u32());
     if (v >= 66)
       r.skip(1);
   } else if (cls == "helicopter" && v >= 75) {
     r.skip(12);
   }
-  r.skip(8);
-  r.skipList(8);
-  if (v >= 75)
-    r.skip(4);
+  s.work = r.i32(); s.chase = r.i32();
+  for (uint32_t k = 0, n = r.count(8); k < n && r.ok; ++k) {
+    int32_t x = r.i32(), y = r.i32(); s.exhibits.emplace_back(x, y);
+  }
+  if (v >= 75) s.captured = r.u32();
 }
 
 // A building's own part (zoo.exe ZTBuilding::load 0x45184a)
@@ -432,7 +457,7 @@ bool body(Cursor &r, const std::string &cls, ZooReader::ZooObject &o) {
     common(r, o);
   } else if (cls == "filter") {
     scenery(r, o); // (zoo.exe ZTTankFilter::load 0x45d468)
-    r.skip(4);
+    o.filterHealth = r.i32(); // +0x15c: health, used by setArtForState 0x45d234
     if (v >= 95)
       r.skip(12 + 16 + 4);
   } else if (cls == "rubble") {
@@ -446,10 +471,10 @@ bool body(Cursor &r, const std::string &cls, ZooReader::ZooObject &o) {
     animal(r, o);
     zooUnit(r, o, false);
   } else if (cls == "guests") {
-    guest(r);
+    guest(r, o);
     zooUnit(r, o, true);
   } else if (cls == "staff" || cls == "keeper" || cls == "maint" || cls == "tour" || cls == "helicopter") {
-    staff(r, cls);
+    staff(r, cls, o);
     zooUnit(r, o, false);
   } else {
     return false;
@@ -657,11 +682,17 @@ bool ZooReader::readExact(const uint8_t *data, size_t size) {
     return failLate("the name counters");
   r.skip(4 + 12 + 1);
   const uint32_t zooRating = r.u32();
-  r.skip(12 + 4 + 8);
+  r.skip(12 + 4);
+  books.month = r.u32(); books.year = r.u32();
   const uint32_t rows = r.u32(), cols = r.u32();
   if (!r.ok || (static_cast<uint64_t>(12 + cols + 1) * 4 * rows) > r.left)
     return failLate("the zoo's books");
-  r.skip(static_cast<size_t>(12 + cols + 1) * 4 * rows);
+  books.monthly.resize(rows);
+  for (auto &row : books.monthly) for (auto &value : row) value = r.f32();
+  books.yearly.assign(rows, std::vector<float>(cols));
+  for (auto &row : books.yearly) for (auto &value : row) value = r.f32();
+  books.total.resize(rows);
+  for (auto &value : books.total) value = r.f32();
   const float price = v >= 39 ? r.f32() : 49.0f;
   if (v >= 71)
     r.skip(8);
@@ -688,21 +719,22 @@ bool ZooReader::readExact(const uint8_t *data, size_t size) {
       int kind = r.i32();
       if (kind < 0)
         break;
-      r.skip(4);
+      ResearchRecord record; record.kind = kind; record.id = r.i32();
       if (kind == 0 || kind == 2)
-        r.skip(4);
+        record.value = r.u32();
       else if (kind == 1)
-        r.skip(1);
+        record.value = r.u8();
       else
         return failLate("a research record of an unknown kind");
+      research.push_back(record);
     }
   }
   if (!r.ok)
     return failLate("the events and the research");
   if (v >= 59)
-    r.skipList(4); // (the awards, awardsLoad 0x594093)
+    for (uint32_t k = 0, n = r.count(4); k < n && r.ok; ++k) awards.push_back(r.i32());
   if (v >= 60)
-    r.skip(4); // (the marketing, marketingMgr)
+    marketing = r.i32(); // funding level, ZTMarketingMgr::load 0x594129
   if (v >= 89 && v <= 96)
     shows();
   if (v >= 104)
@@ -764,6 +796,17 @@ bool ZooReader::load(const AssetBuffer &buffer) {
   tileDataOffset = 0;
   tiles.clear();
   objects.clear();
+  // A failed second load must not expose the previous zoo's saved state.
+  exact = game = false;
+  habitats.clear();
+  decoded = 0;
+  why.clear();
+  language = nextUnitId = rating = 0;
+  cash = 0;
+  research.clear(); awards.clear(); marketing = 0; books = {};
+  admission = 49.0f;
+  std::fill(std::begin(date), std::end(date), 0);
+  std::fill(std::begin(view), std::end(view), 0);
 
   SDL_Log("[ZooReader] Loading map file (%zu bytes)", buffer.size);
 

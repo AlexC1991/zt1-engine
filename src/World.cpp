@@ -37,6 +37,8 @@ World::World(ResourceManager *resourceManager)
     : resourceManager(resourceManager) {
   ZT_MEMORY_CONTEXT(MemoryOwner::World);
 
+  shows.init(this, resourceManager);
+
   // Initialize sprite systems
   SpriteDatabase::get().init(resourceManager);
   SpriteDatabase::get().loadDefinitions();
@@ -109,6 +111,43 @@ void World::refindInside() {
     }
   this->fences.findInside(gates);
   this->reindex();
+}
+
+std::string World::modRequiredReason(const std::string &mod) const {
+  if (!resourceManager) return "";
+  for (const auto &file : loadedMapResources)
+    if (!file.empty() && resourceManager->modOf(file) == mod)
+      return "Required by the current map. Leave this zoo before switching this pack off.";
+  std::set<std::string> checked;
+  auto unique = [&](const std::string &file, const std::string &what) -> std::string {
+    if (!checked.insert(file).second) return "";
+    if (!file.empty() && resourceManager->modOf(file) == mod && !resourceManager->availableWithout(file, mod))
+      return "Required by " + what + " in this zoo. Remove that custom content first.";
+    return "";
+  };
+  std::string reason;
+  for (const auto &animal : animals.members()) if (animal.type >= 0 && animal.type < static_cast<int>(animals.types().size()))
+    if (!(reason = unique(animals.types()[animal.type].file, animal.name)).empty()) return reason;
+  for (const auto &member : staff.members()) if (member.type >= 0 && member.type < static_cast<int>(staff.types().size()))
+    if (!(reason = unique(staff.types()[member.type].file, member.name)).empty()) return reason;
+  for (const auto &object : placedObjects.objects())
+    if (!(reason = unique(PlacedObjects::fileOf(object), "a custom object")).empty()) return reason;
+  for (const auto &filter : fences.filters())
+    if (!(reason = unique(filter.file, "a custom filter")).empty()) return reason;
+  for (const auto &food : items.items()) if (food.kind == ZooItems::Kind::Food)
+    if (!(reason = unique(ZooItems::foodFile(food.food), "custom animal food")).empty()) return reason;
+  for (const auto &[edge, piece] : fences.pieces()) if (piece.type >= 0 && piece.type < static_cast<int>(fences.types().size()))
+    if (!(reason = unique(fences.types()[piece.type].file, "custom fencing")).empty()) return reason;
+  std::set<int> paths;
+  for (int y = 0; y < worldMap.getHeight(); y++) for (int x = 0; x < worldMap.getWidth(); x++) {
+    const int type = worldMap.getPathType(x, y);
+    if (type >= 0) paths.insert(type);
+  }
+  for (int type : paths) if (type < static_cast<int>(worldMap.getPathTypes().size()))
+    if (!(reason = unique("paths/" + worldMap.getPathTypes()[type] + ".ai", "a custom path")).empty()) return reason;
+  for (const auto &[position, deck] : walkways.all())
+    if (!(reason = unique("paths/" + deck.type + ".ai", "a custom walkway")).empty()) return reason;
+  return "";
 }
 
 bool World::loadFreeform(const std::string &path) {
@@ -202,6 +241,7 @@ bool World::loadFreeform(const std::string &path) {
     return false;
   }
 
+  loadedMapResources = {path, actualPath, design};
   // Load entities
   entityManager.loadFromZooReader(zooReader);
   placedObjects.load(zooReader, resourceManager);
@@ -215,6 +255,7 @@ bool World::loadFreeform(const std::string &path) {
   staff.setIndex(&index);
   staff.setWalkways(&walkways);
   animals.loadTypes(resourceManager);
+  shows.clear();
   animals.clear();
   animals.setItems(&items);
   animals.setIndex(&index);
@@ -433,10 +474,20 @@ void World::update(const Uint8 *state, float deltaTime) {
         e->dinosaurs = animals.dinosaursIn(ex.id);
       }
     staff.update(deltaTime, worldMap, fences);
+    shows.update(deltaTime);
     // Gates open for staff coming through
     fences.updateGates(deltaTime, [this](const Fences::Edge &e) {
       float mx = e.alongX ? e.x + 0.5f : static_cast<float>(e.x);
       float my = e.alongX ? static_cast<float>(e.y) : e.y + 0.5f;
+      int show=-1,home=-1;
+      if(this->fences.showPortal(e,show,home)) {
+        const auto *performance=this->shows.show(show);
+        if(!performance || (performance->phase!=Shows::Phase::Gathering && performance->phase!=Shows::Phase::Returning))return false;
+        for(const auto &m:this->animals.members())
+          if(m.showTank==show && m.showHome==home && !m.showTrick &&
+             std::hypot(m.x-mx,m.y-my)<2.5f)return true;
+        return false;
+      }
       for (const Staff::Member &m : this->staff.members())
         if (std::hypot(m.x - mx, m.y - my) < 1.1f)
           return true;
@@ -2149,6 +2200,14 @@ void World::updateBuildingSounds(float seconds) {
     if (o.fence)
       continue;
     std::string file = PlacedObjects::fileOf(o);
+    if (o.randomStarted)
+      if (IniReader *ai = this->resourceManager->getIniReader(file)) {
+        const auto sound = ai->get("usesound", "name");
+        float dx = 0, dy = 0;
+        if (!sound.empty() && this->animals.viewOffset(o.x, o.y, dx, dy))
+          Sound::get().playAt(sound, dx, dy, ai->getInt("usesound", "attenuation", 0));
+        delete ai;
+      }
     auto a = this->ambientOf.find(file);
     if (a == this->ambientOf.end()) {
       std::pair<std::string, int> s{"", 0};
@@ -2558,6 +2617,8 @@ void World::centreOnAnimal(int id) {
 
 void World::pickUpStaff(int id) {
   this->staff.carried = id;
+  if (const auto *m = this->staff.member(id)) this->staff.moveTo(id, m->x, m->y);
+  this->reindex(); // A carried DRT base must not block its old footprint.
 }
 
 void World::centreOnStaff(int id) {
@@ -2973,8 +3034,9 @@ void World::mouseMove(int x, int y) {
       return;
     }
     this->staff.previewType = this->staffTool;
-    this->staff.previewX = wx;
-    this->staff.previewY = wy;
+    const auto point = this->staff.placementPoint(this->staffTool, wx, wy);
+    this->staff.previewX = point.first;
+    this->staff.previewY = point.second;
     this->staff.previewFit = this->staff.canPlaceType(this->staffTool, wx, wy, this->worldMap, this->fences);
     // "-$1000" where one can go (the first month's pay), "$0" where not
     this->hoverPrice = this->staff.previewFit == Fences::Fit::Ok
@@ -3335,12 +3397,13 @@ World::ToolResult World::mouseDown(int x, int y) {
     if (const Staff::Member *m = this->staff.member(id)) {
       float mx = m->x, my = m->y;
       this->staff.moveTo(id, -1000, -1000); // (not in its own way)
-      if (this->staff.canPlaceMember(mx, my, this->worldMap, this->fences) == Fences::Fit::Ok) {
+      if (this->staff.canPlaceType(m->type, mx, my, this->worldMap, this->fences) == Fences::Fit::Ok) {
         this->staff.moveTo(id, mx, my);
       } else {
         this->staff.carried = id; // can't go there: still held
         this->staff.moveTo(id, mx, my);
       }
+      this->reindex();
     }
     return r;
   }

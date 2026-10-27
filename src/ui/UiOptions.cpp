@@ -244,7 +244,7 @@ enum : int {
 enum : int { kShaderFirst = 1, kShaderRows = 3, kSettingFirst = 20, kSettingRows = 12, kShadersNone = 50 };
 // (Mods & Updates: each mod a tick box and its name, kModFirst + 2i, + 1,
 // and its Settings button when it has some, kModSettingsFirst + i)
-enum : int { kModMenu = 1, kModMenuText, kModsTitle, kModsNote, kUpdateNow = 12, kModFirst = 20, kModRows = 5, kModSettingsFirst = 80 };
+enum : int { kModMenu = 1, kModMenuText, kModsTitle, kModsNote, kModPrev, kModNext, kModPageText, kUpdateNow = 12, kModFirst = 20, kModRows = 5, kModSettingsFirst = 80 };
 // (Mods & Updates' Check for updates row: which of the page's switches it is)
 int updatesRow();
 // (a mod's settings page: Back, its name and what it is; each setting from
@@ -563,12 +563,28 @@ std::string optionsLayout() {
   // each on or off right here
   t += goldButton(pageId(kMods, kModMenu), kLabelX, kRowsY + 2);
   t += bodyText(pageId(kMods, kModMenuText), kLabelX + 126, kRowsY + 4, kW - 348, "26");
-  t += bodyText(pageId(kMods, kModsTitle), kLabelX, kRowsY + 118, 200);
+  t += bodyText(pageId(kMods, kModsTitle), kLabelX, kRowsY + 118, 132);
   t += bodyText(pageId(kMods, kModsNote), kLabelX + 150, kRowsY + 118, kW - 372);
+  const int modRowsY = kRowsY + 134, modRowStep = 24;
   for (int i = 0; i < kModRows; i++) {
-    onOff(pageId(kMods, kModFirst + 2 * i), kLabelX, kRowsY + 134 + i * 28, 270);
-    t += goldButton(pageId(kMods, kModSettingsFirst + i), kW - 146, kRowsY + 134 + i * 28);
+    onOff(pageId(kMods, kModFirst + 2 * i), kLabelX, modRowsY + i * modRowStep, 270);
+    t += goldButton(pageId(kMods, kModSettingsFirst + i), kW - 146, modRowsY + i * modRowStep);
   }
+
+  // Compact arrows and the page number fit between the list and its footer.
+  const int modArrowW = 32, modArrowH = 24, modPagerGap = 8, modPageTextW = 96;
+  const int modPagerW = 2 * modArrowW + 2 * modPagerGap + modPageTextW;
+  const int modPagerX = kLabelX + (kW - 222 - modPagerW) / 2;
+  const int modPagerY = modRowsY + kModRows * modRowStep + 8;
+  auto modPageButton = [&t](int id, int x, int y) {
+    std::string b = goldButton(id, x, y);
+    t += b.substr(0, b.size() - 2) + "dx=" + std::to_string(modArrowW) +
+         "\r\ndy=" + std::to_string(modArrowH) + "\r\n\r\n";
+  };
+  modPageButton(pageId(kMods, kModPrev), modPagerX, modPagerY);
+  t += bodyText(pageId(kMods, kModPageText), modPagerX + modArrowW + modPagerGap,
+                modPagerY + kTextDown, modPageTextW, "fitfont", true);
+  modPageButton(pageId(kMods, kModNext), modPagerX + modPagerW - modArrowW, modPagerY);
 
   // A mod's settings: Back and its name, then its settings three across - a
   // slider under its words, or a tick box beside them
@@ -698,29 +714,45 @@ void UiOptions::showMods() {
       t->setText(s);
   };
   std::vector<Mods::Mod> mods = Mods::list();
+  const int total = static_cast<int>(mods.size());
+  modStart = std::clamp(modStart, 0, total ? ((total - 1) / kModRows) * kModRows : 0);
+  if (UiButton *b = dynamic_cast<UiButton *>(L->getElementById(pageId(kMods, kModPrev)))) {
+    b->setLabel("<");
+    b->setDisabled(modStart == 0);
+    b->onClick = [this] { modStart = std::max(0, modStart - kModRows); showMods(); };
+  }
+  if (UiButton *b = dynamic_cast<UiButton *>(L->getElementById(pageId(kMods, kModNext)))) {
+    b->setLabel(">");
+    b->setDisabled(modStart + kModRows >= total);
+    b->onClick = [this] { modStart += kModRows; showMods(); };
+  }
+  this->about[pageId(kMods, kModPrev)] = "Previous page.";
+  this->about[pageId(kMods, kModNext)] = "Next page.";
+  const int pageCount = total ? (total - 1) / kModRows + 1 : 0;
+  text(pageId(kMods, kModPageText),
+       total ? "Page " + std::to_string(modStart / kModRows + 1) + " of " + std::to_string(pageCount) : "0 mods");
   text(pageId(kMods, kModsTitle), mods.empty() ? "Your mods: none yet" : "Your mods (" + std::to_string(mods.size()) + ")");
   std::string note;
   if (!Features::mods)
     note = "Load mods is off: none load.";
+  else if (!Mods::lastError().empty())
+    note = "Required content stays on.";
   else if (ModMenu::changed())
-    note = "Restart to load the changes (HD art: at once).";
+    note = "Applying changes...";
+  else if (!mods.empty())
+    note = "Changes apply in this session.";
   else if (mods.empty())
     note = "Add some to the mods folder (Mod Menu).";
   text(pageId(kMods, kModsNote), note);
   for (int i = 0; i < kModRows; i++) {
     int box = pageId(kMods, kModFirst + 2 * i), words = box + 1, more = pageId(kMods, kModSettingsFirst + i);
-    bool shown = i < static_cast<int>(mods.size());
+    bool shown = modStart + i < total;
     this->hideRow({box, words}, !shown);
-    this->hideRow({more}, !shown || mods[i].settings.empty());
+    this->hideRow({more}, !shown || mods[modStart + i].settings.empty());
     if (!shown)
       continue;
-    const Mods::Mod &m = mods[i];
-    if (i == kModRows - 1 && static_cast<int>(mods.size()) > kModRows) {
-      // (the last row: how many more there are)
-      this->hideRow({box, more}, true);
-      text(words, "... and " + std::to_string(mods.size() - kModRows + 1) + " more in the Mod Menu");
-      continue;
-    }
+    const Mods::Mod &m = mods[modStart + i];
+    const std::string required = m.enabled ? Mods::offReason(m.folder) : "";
     // (its own settings: a page of their own)
     if (UiButton *b = dynamic_cast<UiButton *>(L->getElementById(more))) {
       b->setLabel("Settings");
@@ -732,11 +764,13 @@ void UiOptions::showMods() {
       };
     }
     this->about[more] = "This mod's own settings.";
-    text(words, m.name + (m.author.empty() ? "" : "  (" + m.author + ")"));
-    this->about[box] = this->about[words] =
-        aboutText(m.about.empty() ? "A mod in " + m.folder + "." : m.about);
+    text(words, m.name + (required.empty() ? "" : " [Required]"));
+    this->about[box] = this->about[words] = required.empty()
+        ? aboutText(m.about.empty() ? "A mod in " + m.folder + "." : m.about)
+        : required;
     if (UiButton *b = dynamic_cast<UiButton *>(L->getElementById(box))) {
       b->setToggledOn(m.enabled);
+      b->setDisabled(!required.empty());
       std::string folder = m.folder;
       b->onClick = [this, b, folder] {
         Mods::setEnabled(folder, b->isToggledOn());
@@ -1369,6 +1403,7 @@ void UiOptions::wire() {
       b->onClick = [b, value, name] {
         *value = b->isToggledOn();
         Settings::saveExtra(name, *value);
+        b->setToggledOn(*value); // a required map pack can refuse All Off
       };
     }
     describe({pageId(p, kSwitchFirst + k), pageId(p, kSwitchTextFirst + k)}, extraAbout(f));

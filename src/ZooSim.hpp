@@ -94,6 +94,10 @@ public:
 
 private:
   std::vector<Month> months;
+  // Original annual rows/totals have no monthly detail before its rolling
+  // year. Retain them separately so a portable save does not discard them.
+  std::vector<std::vector<float>> importedAnnual;
+  std::vector<float> importedTotals;
   double money = 0;
   double zooRating = 0;
   double day = 0;  // days into this month, fractional
