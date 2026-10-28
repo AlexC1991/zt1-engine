@@ -366,6 +366,47 @@ void Animals::loadTypes(ResourceManager *rm) {
     }
     // Female-only species (such as the mermaid) use their declared default.
     if(t.sets[0].empty())t.sets[0]=t.sets[defSub=="f"?1:0];
+    // Show-only artwork comes from the actual trick definitions, rather than
+    // guessing from names such as "swim" or "jump". Some stock ambient sets
+    // reuse this artwork; those steps require a reserved, active performer.
+    std::string tricksBase="m/tricks";
+    if(ai->getList(tricksBase,"trick").empty())tricksBase=defSub+"/tricks";
+    for(const auto &key:ai->getList(tricksBase,"trick")) {
+      const std::string section=tricksBase+"/"+key;
+      const int kind=ai->getInt(section,"type",0);
+      if(kind==3 || ai->getInt(section,"visible",1)==0)continue; // feeding remains ordinary care
+      const std::string behavior=lower(ai->get(section,"name",key));
+      if(kind==0)t.showSets.insert("b"+behavior);
+      else if(kind==1)for(int sex=0;sex<3;++sex)for(const auto &[name,steps]:t.sets[sex]) {
+        const std::string suffix=behavior+"0";
+        if(name.size()>=suffix.size() && name.compare(name.size()-suffix.size(),suffix.size(),suffix)==0)
+          t.showSets.insert(name);
+      }
+    }
+    const std::set<std::string> shared={"walk","run","trot","stand","idle","swim","surfswim","subswim",
+      "surfidle","subidle","water_idle","surface_rest","surface_2_rest","surface_feed","surface_eat"};
+    std::set<std::string> visited;
+    std::function<void(const std::string &)> collectTrick=[&](const std::string &name) {
+      if(!visited.insert(name).second)return;
+      for(int sex=0;sex<3;++sex) {
+        auto it=t.sets[sex].find(name);if(it==t.sets[sex].end())continue;
+        for(const auto &step:it->second) {
+          const auto command=behaviorCommand(step.fn);
+          if(command==Command::PlaySet || command==Command::PlaySetTank || command==Command::PlaySetTerrain)
+            for(const auto &arg:step.args)collectTrick(arg);
+          else if(command==Command::PlaySetProb)
+            for(size_t i=0;i<step.args.size();i+=2)collectTrick(step.args[i]);
+          const bool moving=command==Command::Move || command==Command::MoveWithSound || command==Command::MoveReverse;
+          const bool playing=command==Command::Play || command==Command::PlayWithSound || command==Command::PlayTime ||
+            command==Command::PlayReverse || command==Command::PlayPingPong || command==Command::PlayStopAtEnd ||
+            command==Command::PlaySpecial || command==Command::SetBase;
+          const size_t index=moving?2:0;
+          if((moving || playing) && step.args.size()>index && !shared.count(step.args[index]))
+            t.showAnimations.insert(step.args[index]);
+        }
+      }
+    };
+    for(const auto &name:t.showSets)collectTrick(name);
     // [AmbientAnims]: a = low, a = high, b = set; in turn
     std::vector<std::string> a = ai->getList("ambientanims", "a"), b = ai->getList("ambientanims", "b");
     for (size_t i = 0; i < b.size() && 2 * i + 1 < a.size(); i++)
@@ -435,6 +476,7 @@ void Animals::rehome(const WorldMap &map, const Fences &fences) {
     // A crate put down in an exhibit lets its animal out (every
     // cBoxedCheck, 2 ticks: about two seconds)
     if (m.boxed && ex >= 0) {
+      if(e && e->show && m.showTank<0)continue; // A cancelled performer must be moved home before unboxing.
       if (m.boxTimer >= 2.0f) {
         m.boxed = false;
         m.escaped = false;
@@ -905,8 +947,13 @@ bool Animals::standable(int x, int y, const Type &t, int exhibit, const WorldMap
     return false;
   if (!t.swims && (tile->terrainType == 9 || tile->terrainType == 10))
     return false;
-  if (this->index && this->index->blocked(x, y))
-    return false;
+  if (this->index && this->index->blocked(x, y)) {
+    // Floor scenery does not seal the water column above it. Land walkers
+    // still avoid it; tank swimmers can pass over plants and rocks.
+    const auto *pool=physical>=0?fences.exhibit(physical):nullptr;
+    if(!(t.underwater && pool && pool->tank &&
+         this->index->at(x,y)==WorldIndex::What::Object))return false;
+  }
   return true;
 }
 
@@ -1016,6 +1063,14 @@ float Animals::tankTargetHeight(Member &m, const std::string &target) {
   return static_cast<float>(z);
 }
 
+float Animals::placementDepth(int type,int tank) const {
+  if(type<0 || type>=static_cast<int>(typeList.size()) || tank<0 || !tankDepth)return 0;
+  const auto &t=typeList[type];if(!t.underwater)return 0;
+  const float top=std::max(0.0f,tankDepth(tank));
+  const float low=std::clamp(static_cast<float>(t.needDepth),0.0f,top);
+  return t.surfaceOnly?top:std::clamp(top-2.0f,low,top);
+}
+
 int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
                    const Fences &fences, bool restoring) {
   ZT_FN("", "Adopt an animal");
@@ -1037,7 +1092,7 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   m.waterMode=t.swims && (isWater(map,static_cast<int>(x),static_cast<int>(y)) ||
                          (this->tankAt && this->tankAt(x,y)>=0));
   if (this->tankAt && this->tankAt(x, y) >= 0)
-    m.swimZ = m.swimTo = this->tankTargetHeight(m, "");
+    m.swimZ = m.swimTo = this->placementDepth(type,this->tankAt(x,y));
   m.name = (!t.displayName.empty() ? t.displayName : this->rm ? this->rm->getString(t.nameId) : t.key) + " " +
            std::to_string(++this->counts[type]);
   m.happiness = static_cast<float>(std::clamp(t.initialHappiness, -100, 100));
@@ -1127,8 +1182,11 @@ void Animals::moveTo(int id, float x, float y) {
 }
 
 void Animals::hold(int id, const WorldMap &map, const Fences &fences) {
-  if (const Member *m = this->member(id))
+  if (Member *m = this->member(id)) {
+    const int tank=this->tankAt?this->tankAt(m->x,m->y):-1;
+    m->swimZ=m->swimTo=this->placementDepth(m->type,tank);
     this->carriedFit = canDrop(id, m->x, m->y, map, fences);
+  }
 }
 
 bool Animals::canDrop(int id, float x, float y, const WorldMap &map, const Fences &fences) const {
@@ -1142,6 +1200,7 @@ void Animals::drop(int id, float x, float y, const Fences &fences) {
     return;
   m->x = x;
   m->y = y;
+  m->swimZ=m->swimTo=this->placementDepth(m->type,this->tankAt?this->tankAt(x,y):-1);
   this->markDirty(m->exhibit);
   m->exhibit = fences.exhibitAt(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
   this->markDirty(m->exhibit);
@@ -1179,7 +1238,14 @@ const std::vector<Animals::Step> *Animals::set(const Member &m, const std::strin
   return nullptr;
 }
 
+bool Animals::mayPerform(const Member &m) const {
+  if(m.showTank<0 || !m.showTrick || !tankAt || tankAt(m.x,m.y)!=m.showTank)return false;
+  const auto *tank=fencesRef?fencesRef->exhibit(m.showTank):nullptr;
+  return tank && tank->show;
+}
+
 void Animals::pushSet(Member &m, const std::string &name) {
+  if(typeList[m.type].showSets.count(name) && !mayPerform(m))return;
   if (m.stack.size() < 8 && this->set(m, name)) {
     if(name=="beat")m.mealTaken=false;
     m.stack.push_back({name, 0});
@@ -1352,6 +1418,11 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
     if (objects) for (const auto &o : objects->objects()) if (o.id == id) return &o;
     return nullptr;
   };
+  // Discard stale performance queues, for example after a show is cancelled
+  // or an older save resumes a trick outside its assigned show tank.
+  if(!mayPerform(m) && std::any_of(m.stack.begin(),m.stack.end(),[&](const auto &frame){return t.showSets.count(frame.first)!=0;})) {
+    m.stack.clear();m.path.clear();m.pathAt=0;m.stepping=false;
+  }
   // (dying: its bDie, then nothing more)
   if (m.stack.empty() && m.dying) {
     m.dieAfter = 0;
@@ -1384,7 +1455,14 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
     Step s = (*steps)[m.stack.back().second++];
     const Command command = behaviorCommand(s.fn);
     auto arg = [&](size_t i) { return i < s.args.size() ? s.args[i] : std::string(); };
+    const bool moving=command==Command::Move || command==Command::MoveWithSound || command==Command::MoveReverse;
+    const bool playing=command==Command::Play || command==Command::PlayWithSound || command==Command::PlayTime ||
+      command==Command::PlayReverse || command==Command::PlayPingPong || command==Command::PlayStopAtEnd ||
+      command==Command::PlaySpecial || command==Command::SetBase;
+    if(!mayPerform(m) && ((moving && t.showAnimations.count(arg(2))) ||
+        (playing && t.showAnimations.count(arg(0)))))continue;
     if (command == Command::EndTrick) {
+      if(!mayPerform(m))continue;
       m.showDone = true; m.showTrick = false; m.stack.clear();
       play(m, "surfidle", Member::Mode::Loop, 1.0f);
       return;
@@ -1637,42 +1715,46 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
 
 bool Animals::walkTo(Member &m, float gx, float gy, const WorldMap &map, const Fences &fences) {
   const Type &t = this->typeList[m.type];
-  if (!destinationFree(m,gx,gy,m.swimTo,true) || tankClearance(m,gx,gy,fences,true)<-0.001f) return false;
+  // As before 2026.10.28: a route is planned against the ground, the fences
+  // and the slopes, never against other animals - animals may pass one
+  // another, and separateIdle() is what keeps them from idling on a spot.
   int sx = static_cast<int>(std::floor(m.x)), sy = static_cast<int>(std::floor(m.y));
   int tx = static_cast<int>(std::floor(gx)), ty = static_cast<int>(std::floor(gy));
   // (its own tile always: something just put down on it, it walks out)
+  // A performer of a marine show swims through the portal into the show tank
+  // and back out again, so both tanks of the pair count as its own ground and
+  // the portal is a way through the wall they share. The original keeps the
+  // tanks an animal may cross into in its own set (ZTAnimal+0x15c, a std::set
+  // of tank ids): Task85_GoToShowTank's ctor holds a pointer to that set
+  // (zoo.exe 0x5a3c4f) and both show tasks accept a tank only if the set has
+  // it (showTankSetHas, 0x5a3585; Task85 0x5a3897, Task86 0x5a375c). That
+  // set is exactly the show tank and the home tank this checks.
   auto pass = [&](int x, int y) {
-    int ex=fences.exhibitAt(x,y);
-    if(m.showTank>=0 && (ex==m.showTank || ex==m.showHome))return standable(x,y,t,ex,map,fences);
-    return (x==sx && y==sy) || standable(x,y,t,m.exhibit,map,fences);
+    if (x == sx && y == sy) return true;
+    if (standable(x, y, t, m.exhibit, map, fences)) return true;
+    return m.showTank >= 0 &&
+           (standable(x, y, t, m.showTank, map, fences) ||
+            (m.showHome >= 0 && standable(x, y, t, m.showHome, map, fences)));
   };
   auto step = [&](int x, int y, int nx, int ny) {
-    return awareStep(m,x,y,nx,ny,map,fences);
-  };
-  const float beforeWall=tankClearance(m,m.x,m.y,fences,true);
-  auto clear = [&](int x,int y) {
-    if(!pass(x,y))return false;
-    if(x==sx && y==sy)return true;
-    float gx=x+0.5f,gy=y+0.5f;
-    float wall=tankClearance(m,gx,gy,fences,true);
-    if(wall<-0.001f && !(beforeWall<0 && wall>beforeWall))return false;
-    for(const auto &other:list)if(awareOf(m,other)) {
-      float oz=bodyHeight(other,other.x,other.y,other.swimZ);
-      float before=bodyDistance(m,m.x,m.y,bodyHeight(m,m.x,m.y,m.swimZ),other,other.x,other.y,oz);
-      float after=bodyDistance(m,gx,gy,bodyHeight(m,gx,gy,m.swimTo),other,other.x,other.y,oz);
-      if(after<1.0f && !(before<1.0f && after>before))return false;
-    }
-    return true;
+    Fences::Edge e = nx != x ? Fences::Edge{false, std::max(x, nx), y}
+                             : Fences::Edge{true, x, std::max(y, ny)};
+    int pool=-1,land=-1;
+    if(t.underwater && !t.onlyUnderwater && t.swims && fences.shoreAccess(e,map,pool,land))return true;
+    if (canStep(x, y, nx, ny, map, fences)) return true;
+    if (m.showTank < 0) return false;
+    int show = -1, home = -1;
+    return fences.showPortal(e, show, home) && (show == m.showTank || home == m.showTank);
   };
   std::vector<std::pair<int, int>> tiles;
-  if (!Pathfinder::find(map.getWidth(), map.getHeight(), sx, sy, tx, ty, clear, step, tiles, 4000))
+  if (!Pathfinder::find(map.getWidth(), map.getHeight(), sx, sy, tx, ty, pass, step, tiles, 4000))
     return false;
   std::vector<std::pair<float, float>> points;
   points.push_back({m.x, m.y});
   for (size_t i = 1; i + 1 < tiles.size(); i++)
     points.push_back({tiles[i].first + 0.5f, tiles[i].second + 0.5f});
   points.push_back({gx, gy});
-  Pathfinder::smooth(points, clear, step);
+  Pathfinder::smooth(points, pass, step);
   m.path.assign(points.begin() + 1, points.end());
   m.pathAt = 0;
   if (m.path.empty())
@@ -1692,7 +1774,7 @@ bool Animals::testRoute(int id, int gx, int gy, const WorldMap &map, const Fence
   const Type &t = this->typeList[m->type];
   int sx = static_cast<int>(std::floor(m->x)), sy = static_cast<int>(std::floor(m->y));
   auto pass = [&](int x, int y) { return (x == sx && y == sy) || standable(x, y, t, m->exhibit, map, fences); };
-  auto step = [&](int x, int y, int nx, int ny) { return awareStep(*m,x,y,nx,ny,map,fences); };
+  auto step = [&](int x, int y, int nx, int ny) { return canStep(x, y, nx, ny, map, fences); };
   return Pathfinder::find(map.getWidth(), map.getHeight(), sx, sy, gx, gy, pass, step, out, 4000);
 }
 
@@ -2114,7 +2196,36 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
         m.speed = std::max(0.2f, dist / secs);
         m.crossAnim.clear();
       }
-      if (moveAware(m,tx,ty,seconds,map,fences)) {
+      // The swimming this engine has always had (v2026.10.20 and before): a
+      // straight run down the planned path at m.speed, passing through
+      // anything in the way, rising or falling to swimTo as it goes. The
+      // 10.28 steering turned each step into a search for a heading that
+      // avoided other animals, which in a tank reads as fish milling about
+      // rather than swimming. The one addition kept from 10.28 is that an
+      // animal with nothing to do steps off another one (separateIdle).
+      const int previousTank=tankAt?tankAt(m.x,m.y):-1;
+      const bool amphibious=t.underwater && !t.onlyUnderwater && t.swims;
+      if(amphibious && previousTank>=0 && !m.waterMode && !m.path.empty() &&
+         (!tankAt || tankAt(m.path.back().first,m.path.back().second)<0)) {
+        if(const auto *pool=fences.exhibit(previousTank)) {
+          m.swimTo=static_cast<float>(fences.waterLevel(*pool));
+          m.swimZ+=std::clamp(m.swimTo-m.swimZ,-seconds*2.0f,seconds*2.0f);
+          if(std::abs(m.swimZ-m.swimTo)>0.001f)continue;
+        }
+      }
+      float step = m.speed * seconds;
+      if (dist > 0.0001f) {
+        m.fx = dx / dist;
+        m.fy = dy / dist;
+      }
+      // (swimming up or down as it goes: there by the end of the leg)
+      if (m.swimZ != m.swimTo) {
+        float frac = dist > step ? step / dist : 1.0f;
+        m.swimZ += (m.swimTo - m.swimZ) * frac;
+      }
+      if (dist <= step) {
+        m.x = tx;
+        m.y = ty;
         if (static_cast<int>(m.pathAt) == m.crossAt) {
           // (landed: on at its run)
           m.crossAt = -1;
@@ -2122,6 +2233,16 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
           m.speed = t.fast;
         }
         m.pathAt++;
+      } else {
+        m.x += dx / dist * step;
+        m.y += dy / dist * step;
+      }
+      if(amphibious) {
+        const int currentTank=tankAt?tankAt(m.x,m.y):-1;
+        if(previousTank>=0 && currentTank<0)m.swimZ=m.swimTo=0;
+        else if(previousTank<0 && currentTank>=0)
+          if(const auto *pool=fences.exhibit(currentTank))
+            m.swimZ=m.swimTo=static_cast<float>(fences.waterLevel(*pool));
       }
       // Onto another tile (zoo.exe 0x437572): rampaging - and not going
       // over a fence, that's its own - it turns to rubble whatever stands
@@ -2208,7 +2329,7 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
   for (const Member &m : this->list) {
     // (in a tank: drawn with the tank, unless that's being drawn now)
     bool inTank = this->tankAt && this->tankAt(m.x, m.y) >= 0;
-    if (this->onlyTank != -2 ? (!inTank || this->tankAt(m.x, m.y) != this->onlyTank) : (inTank && m.id != this->carried))
+    if (this->onlyTank != -2 ? (!inTank || this->tankAt(m.x, m.y) != this->onlyTank) : inTank)
       continue;
     Animation *a = m.boxed ? this->crate(m) : this->art(m, m.anim);
     if (!a)
@@ -2219,7 +2340,12 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
     // Held (Move Animal): its likeness at the cursor, green where it can go
     if (m.id == this->carried) {
       float sx, sy, depth;
-      view.worldToScreenF(m.x, m.y, groundAt(map, m.x, m.y), sx, sy, depth);
+      view.worldToScreenF(m.x, m.y, groundAt(map, m.x, m.y)+(inTank?m.swimZ:0), sx, sy, depth);
+      if(inTank) {
+        Animation *under=!m.boxed?this->underArt(m,a):nullptr;
+        if(this->onlySurface && !under)continue;
+        if(!this->onlySurface && under)a=under;
+      }
       SDL_Color tint = this->carriedFit ? SDL_Color{0, 255, 0, 255} : SDL_Color{255, 60, 60, 255};
       Fences::Drawable g{depth, sx, sy, a, m.boxed ? CompassDirection::SE : facing(view, m), tint, true};
       g.frame = 0;
@@ -2353,44 +2479,281 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
   }
   // The one being adopted: its likeness at the cursor, green where it can
   // go, red where not
-  if (this->previewType >= 0)
-    if (Animation *a = this->preview(this->previewType, this->previewFemale)) {
-      float sx, sy, depth;
-      view.worldToScreenF(this->previewX, this->previewY,
-                          groundAt(map, this->previewX, this->previewY), sx, sy, depth);
-      SDL_Color tint = this->previewFit == Fences::Fit::Ok ? SDL_Color{0, 255, 0, 255}
-                                                           : SDL_Color{255, 60, 60, 255};
-      out.push_back({depth, sx, sy, a, CompassDirection::SE, tint, true});
+  if (this->previewType >= 0) {
+    Member preview;preview.type=this->previewType;preview.female=this->previewFemale;
+    preview.x=this->previewX;preview.y=this->previewY;
+    const int tank=this->tankAt?this->tankAt(preview.x,preview.y):-1;
+    const bool include=this->onlyTank==-2?tank<0:tank==this->onlyTank;
+    preview.swimZ=this->placementDepth(preview.type,tank);
+    if(include)if(Animation *a=this->art(preview,"stand")) {
+      Animation *under=tank>=0?this->underArt(preview,a):nullptr;
+      if(!this->onlySurface || under) {
+        if(!this->onlySurface && under)a=under;
+        float sx,sy,depth;
+        view.worldToScreenF(preview.x,preview.y,groundAt(map,preview.x,preview.y)+preview.swimZ,sx,sy,depth);
+        const SDL_Color tint=this->previewFit==Fences::Fit::Ok?SDL_Color{0,255,0,255}:SDL_Color{255,60,60,255};
+        out.push_back({depth,sx,sy,a,CompassDirection::SE,tint,true});
+      }
     }
+  }
 }
 
+namespace {
+struct PreparedTankAnimals {
+  bool ready=false,maskReady=false;
+  std::vector<Fences::Drawable> out;
+  std::vector<std::pair<float,float>> hull;
+};
+bool tankAnimalFrame=false,fastTankSprites=true;
+std::map<int,PreparedTankAnimals> tankAnimalCache;
+}
+// Cache only within one World::draw. Direct inspector/tests still prepare afresh.
+void beginTankAnimalFrame(bool active) {tankAnimalCache.clear();tankAnimalFrame=active;}
+void tankAnimalFastPaths(bool enabled) {fastTankSprites=enabled;}
 void Animals::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, const WorldMap &map, int tank,
                          bool surface) {
-  std::vector<Fences::Drawable> out;
-  this->onlyTank = tank;
-  this->onlySurface = surface;
-  this->collect(view, map, out);
-  this->onlyTank = -2;
-  this->onlySurface = false;
-  std::stable_sort(out.begin(), out.end(),
-                   [](const Fences::Drawable &a, const Fences::Drawable &b) { return a.depth < b.depth; });
+  PreparedTankAnimals local;
+  auto &prepared=tankAnimalFrame?tankAnimalCache[tank*2+(surface?1:0)]:local;
+  auto &out=prepared.out;
+  if(!prepared.ready) {
+    this->onlyTank=tank;this->onlySurface=surface;
+    this->collect(view,map,out);this->onlyTank=-2;this->onlySurface=false;
+    std::stable_sort(out.begin(),out.end(),[](const Fences::Drawable &a,const Fences::Drawable &b){return a.depth<b.depth;});
+    std::vector<Fences::Drawable> unique;
+    for(const auto &d:out) {
+      if(!d.art)continue;
+      if(d.animalStrip && std::any_of(unique.begin(),unique.end(),[&](const auto &old){
+        return old.art==d.art && old.sx==d.sx && old.sy==d.sy && old.side==d.side && old.frame==d.frame;
+      }))continue;
+      unique.push_back(d);
+    }
+    out=std::move(unique);prepared.ready=true;
+  }
+  if(out.empty())return;
   // (a big one comes as strips, for sorting against the fences outside a
   // tank: in one it's drawn once - each strip drawn whole, a whale shark
   // was drawn ten times over itself, its see-through edges darkened)
-  std::vector<const Fences::Drawable *> drawn;
-  for (Fences::Drawable &d : out) {
-    if (!d.art)
-      continue;
-    if (d.animalStrip) {
-      bool again = false;
-      for (const Fences::Drawable *o : drawn)
-        again = again || (o->art == d.art && o->sx == d.sx && o->sy == d.sy && o->frame == d.frame);
-      if (again)
-        continue;
-      drawn.push_back(&d);
+  // Submerged artwork stays inside the glass. The separate surface layer
+  // includes heads, splashes and airborne tricks and may rise above the rim.
+//
+// A body is drawn as its art, which is far bigger than the tile its centre
+// stands on - a whale shark's four tiles of fish hang off its anchor on both
+// sides. Movement stays free (animals walk and turn as they always did), so a
+// big one by a wall does have more body than water; the original simply drew
+// all of it, its head and tail over the glass and out across the ground.
+//
+// The water's screen shape is a hexagon, not a rectangle: the surface's diamond
+// with its fronts drawn down from it. One clip rectangle round the lot would
+// have to reach from the far surface edge to the floor's near edge, and that
+// reaches back over the ground in front of the tank - the very place the
+// overflow showed. So the tank is cut into columns, each as tall as its own
+// tile's water goes on screen, and the animals are drawn once per column: what
+// falls outside every column is not painted at all.
+//
+// Only this tank's animals are in `out` (onlyTank), so the columns cover them.
+// The water's outline on screen: the corners of the surface of every water
+// tile, and of the floor beneath them. A tile's own box is NOT the tank's
+// shape - the tank's sides slope, so a box round a tile reaches past the water
+// and up over the grass beside and behind it, which is the top edge a big
+// fish's back still came out of. The outline of all the tiles together is the
+// water, so that is the shape the animals are clipped to.
+if(!prepared.maskReady) {
+std::vector<std::pair<float, float>> rimPts, floorPts;
+if (Features::tankClip && fencesRef && !surface) {
+  const Fences::Exhibit *ex = fencesRef->exhibit(tank);
+  if (ex && ex->tank && !ex->tiles.empty()) {
+    // (the water's surface and the floor it stands on, both measured from the
+    // tank's OWN floor - not from the ground round it, which a raised tank
+    // stands above and a sunken one lies under. waterLevel is the water's
+    // height over the floor in whole units, the same figure animals' swim
+    // depth is measured against, so the clip and the swimmers agree.)
+    const float floor = static_cast<float>(ex->floorHeight);
+    const float level = ex->level > -1e8f ? ex->level : floor + static_cast<float>(fencesRef->waterLevel(*ex));
+    for (const auto &t : ex->tiles) {
+      const std::pair<float, float> corners[4] = {{static_cast<float>(t.first), static_cast<float>(t.second)},
+                                                  {t.first + 1.0f, static_cast<float>(t.second)},
+                                                  {t.first + 1.0f, t.second + 1.0f},
+                                                  {static_cast<float>(t.first), t.second + 1.0f}};
+      for (const auto &c : corners) {
+        float px = 0, py = 0, pd = 0;
+        view.worldToScreenF(c.first, c.second, level, px, py, pd);
+        rimPts.push_back({px, py});
+        view.worldToScreenF(c.first, c.second, floor, px, py, pd);
+        floorPts.push_back({px, py});
+      }
     }
-    d.art->drawAnchored(renderer, d.sx, d.sy, d.side, d.tinted ? &d.tint : nullptr, d.frame);
+
   }
+}
+// (the outline round a set of points: a monotone chain, the water's silhouette
+// being convex)
+auto outlineOf = [](std::vector<std::pair<float, float>> pts) {
+  std::vector<std::pair<float, float>> hull;
+  if (pts.size() < 3)
+    return hull;
+  std::sort(pts.begin(), pts.end());
+  auto cross = [](const std::pair<float, float> &o, const std::pair<float, float> &a,
+                  const std::pair<float, float> &b) {
+    return (a.first - o.first) * (b.second - o.second) - (a.second - o.second) * (b.first - o.first);
+  };
+  hull.resize(pts.size() * 2 + 1);
+  size_t k = 0;
+  for (size_t i = 0; i < pts.size(); i++) {
+    while (k >= 2 && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0)
+      k--;
+    hull[k++] = pts[i];
+  }
+  for (size_t i = pts.size() - 1, mark = k + 1; i-- > 0;) {
+    while (k >= mark && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0)
+      k--;
+    hull[k++] = pts[i];
+  }
+  hull.resize(k - 1);
+  return hull;
+};
+// (ONE outline round the surface's corners AND the floor's: a tank is a
+// box, and what a box looks like on screen is exactly the outline round
+// its eight corners. Two outlines, the surface's and the floor's, were
+// taken separately and merged column by column before - and away from the
+// middle, toward the left and right ends, the surface's diamond has
+// already narrowed while the floor's has not, so the column reached
+// higher and lower there than the tank ever does: a shark's tail showed
+// on the grass at whichever angle put it out at that end.)
+std::vector<std::pair<float, float>> allPts = rimPts;
+allPts.insert(allPts.end(), floorPts.begin(), floorPts.end());
+prepared.hull=outlineOf(allPts);prepared.maskReady=true;
+}
+const auto &hullTank=prepared.hull;
+// (how high and how low the outline reaches at one screen x)
+auto spanAt = [](const std::vector<std::pair<float, float>> &poly, float x, float &lo, float &hi) {
+  lo = 1e9f, hi = -1e9f;
+  bool any = false;
+  for (size_t i = 0; i < poly.size(); i++) {
+    const std::pair<float, float> &a = poly[i], &b = poly[(i + 1) % poly.size()];
+    if (x < std::min(a.first, b.first) - 0.001f || x > std::max(a.first, b.first) + 0.001f)
+      continue;
+    const float t = std::fabs(b.first - a.first) > 0.001f ? (x - a.first) / (b.first - a.first) : 0.0f;
+    const float y = a.second + t * (b.second - a.second);
+    lo = std::min(lo, y);
+    hi = std::max(hi, y);
+    any = true;
+  }
+  return any;
+};
+// (the tank's body, column by column: the outline's own top and bottom at
+// that screen x, so a column never reaches past the tank's ends)
+float sxScale = 1.0f, syScale = 1.0f;
+SDL_RenderGetScale(renderer, &sxScale, &syScale);
+const bool hadClip = SDL_RenderIsClipEnabled(renderer);
+SDL_Rect oldClip;
+// Parent tank strips use device pixels. Read and restore in that same space.
+SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+SDL_RenderGetClipRect(renderer, &oldClip);
+SDL_RenderSetScale(renderer, sxScale, syScale);
+std::vector<SDL_FRect> bounds;
+float visibleLeft=1e9f,visibleRight=-1e9f;
+for(const auto &d:out) {
+  float left,top,right,bottom;
+  if(!d.art->anchoredBounds(d.sx,d.sy,d.side,left,top,right,bottom)){left=-1e9f;right=1e9f;top=-1e9f;bottom=1e9f;}
+  bounds.push_back({left,top,right-left,bottom-top});
+  visibleLeft=std::min(visibleLeft,left);visibleRight=std::max(visibleRight,right);
+}
+if(hadClip) {
+  visibleLeft=std::max(visibleLeft,oldClip.x/sxScale);
+  visibleRight=std::min(visibleRight,(oldClip.x+oldClip.w)/sxScale);
+}
+std::vector<std::pair<std::pair<float, float>, std::pair<float, float>>> columns;
+if (!hullTank.empty()) {
+  float minX = hullTank[0].first, maxX = hullTank[0].first;
+  for (const auto &p : hullTank) {
+    minX = std::min(minX, p.first);
+    maxX = std::max(maxX, p.first);
+  }
+  float pixelScaleX=1, pixelScaleY=1;
+  SDL_RenderGetScale(renderer,&pixelScaleX,&pixelScaleY);
+  const float step = 1.0f/std::max(0.001f,pixelScaleX);
+  minX+=std::max(0.0f,std::floor((visibleLeft-minX)/step))*step;
+  maxX=std::min(maxX,visibleRight+step);
+  for (float x = minX; x < maxX; x += step) {
+    float lo = 0, hi = 0;
+    if (!spanAt(hullTank, std::min(maxX,x+step*0.5f), lo, hi))
+      continue;
+    // (each column ends exactly where the next begins: overlapping them draws
+    // a see-through thing - a tank floor's shadow - twice in the seam, which
+    // darkened it into a band)
+    columns.push_back({{x, lo}, {std::min(maxX, x + step), hi}});
+  }
+}
+
+std::vector<SDL_Rect> strips;
+  if (!columns.empty()) {
+    // (in device pixels: the scale off while a clip is set, as PlacedObjects.
+    // The columns are laid edge to edge to the very pixel - one's right edge
+    // is the next one's left - because a column that overlapped its neighbour
+    // painted whatever is see-through twice in the seam, and a tank floor's
+    // shadow, at a quarter strength, came out as a dark band)
+    auto px = [&](float v) { return static_cast<int>(std::lround(v * sxScale)); };
+    int left = px(columns.front().first.first);
+    for (size_t i = 0; i < columns.size(); i++) {
+      const auto &c = columns[i];
+      const float t = c.first.second, b = c.second.second;
+      const int right = i + 1 == columns.size() ? px(c.second.first) : px(columns[i + 1].first.first);
+      SDL_Rect rc = {left, static_cast<int>(std::floor(t * syScale)), right - left,
+                     static_cast<int>(std::ceil((b - t) * syScale)) + 1};
+      left = right;
+      if (rc.w <= 0 || rc.h <= 0) continue;
+      if (hadClip) {
+        SDL_Rect both;
+        if (!SDL_IntersectRect(&rc, &oldClip, &both)) continue;
+        rc = both;
+      }
+      strips.push_back(rc);
+    }
+  }
+  if (strips.empty()) {
+    // No intersection with an active tank mask means nothing is visible.
+    // Drawing everything here would bypass the glass clip at its edges.
+    if (!hullTank.empty()) return;
+    std::vector<const Fences::Drawable *> drawn;
+    for (Fences::Drawable &d : out) {
+      if (!d.art) continue;
+      if(d.animalStrip) {
+        bool again=false;
+        for(const auto *old:drawn)again |= old->art==d.art && old->sx==d.sx && old->sy==d.sy && old->frame==d.frame;
+        if(again)continue;
+        drawn.push_back(&d);
+      }
+      d.art->drawAnchored(renderer, d.sx, d.sy, d.side, d.tinted ? &d.tint : nullptr, d.frame);
+    }
+    return;
+  }
+  // A sprite wholly inside the same convex mask needs no per-pixel redraw.
+  // At the boundary retain the exact pixel-wide clips, but visit only its bounds.
+  auto inside=[&](float x,float y) {
+    for(size_t i=0;i<hullTank.size();++i) {
+      const auto &a=hullTank[i],&b=hullTank[(i+1)%hullTank.size()];
+      if((b.first-a.first)*(y-a.second)-(b.second-a.second)*(x-a.first)<-0.001f)return false;
+    }
+    return true;
+  };
+  for(size_t i=0;i<out.size();++i) {
+    auto &d=out[i];const auto &box=bounds[i];
+    const float right=box.x+box.w,bottom=box.y+box.h;
+    SDL_RenderSetScale(renderer,1,1);
+    if(fastTankSprites && inside(box.x,box.y) && inside(right,box.y) && inside(right,bottom) && inside(box.x,bottom)) {
+      SDL_RenderSetClipRect(renderer,hadClip?&oldClip:nullptr);
+      SDL_RenderSetScale(renderer,sxScale,syScale);
+      d.art->drawAnchored(renderer,d.sx,d.sy,d.side,d.tinted?&d.tint:nullptr,d.frame);
+    } else for(const auto &rc:strips) {
+      if(rc.x+rc.w<=box.x*sxScale || rc.x>=right*sxScale || rc.y+rc.h<=box.y*syScale || rc.y>=bottom*syScale)continue;
+      SDL_RenderSetScale(renderer,1,1);SDL_RenderSetClipRect(renderer,&rc);
+      SDL_RenderSetScale(renderer,sxScale,syScale);
+      d.art->drawAnchored(renderer,d.sx,d.sy,d.side,d.tinted?&d.tint:nullptr,d.frame);
+    }
+  }
+  SDL_RenderSetScale(renderer,1,1);
+  SDL_RenderSetClipRect(renderer, hadClip ? &oldClip : nullptr);
+  SDL_RenderSetScale(renderer, sxScale, syScale);
 }
 
 int Animals::pick(float px, float py, const WorldRenderer &view, const WorldMap &map) const {

@@ -34,6 +34,7 @@ inline bool customMaps = true;    // freeform maps from mods (a map design over 
 inline bool infoClosesLists = false; // an information window closes the bottom bar's open list (off: the list stays open under it, as the original)
 inline bool smartStack = true;   // windows that would cover one another are placed beside it (off: where the original puts them)
 inline bool dragWindows = true;  // every window can be dragged by its title and keeps its place (off: only those the original lets you drag)
+inline bool tankClip = true;     // a tank animal's art is cut off at the water's edge (off: as the original, its body drawn on over the wall)
 
 inline std::vector<Switch> &all() {
   static std::vector<Switch> list = {
@@ -56,6 +57,7 @@ inline std::vector<Switch> &all() {
       {"infocloseslists", "opening an information window (an animal, a guest, a keeper...) closes the bottom bar's open list - Animals, Guests, Exhibits or Staff - so it doesn't cover the window (off: the list stays open, as the original)", &infoClosesLists},
       {"smartstack", "a window opening where it would cover another open window goes beside it instead - above it, or to its left (off: where the original puts it, over the other)", &smartStack},
       {"dragwindows", "every window can be dragged by its title bar and stays where you leave it, next time too (off: only the windows the original lets you drag - Zoo Status, Recommendations, plaques, messages - and only until the game closes)", &dragWindows},
+      {"tankclip", "a tank animal is drawn only as far as the water goes: its art is cut off at the glass, so a big fish turning by a wall no longer shows its head and tail over it, out across the ground (off: its whole sprite, as the original drew it)", &tankClip},
       {"optionswindow", "Game Options opens as a window with every setting - graphics, sound, controls, gameplay - and the main menu has it too (off: the original's side panel, and no main menu entry)", &optionsWindow},
   };
   return list;

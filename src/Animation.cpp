@@ -1,6 +1,8 @@
 #include "Animation.hpp"
 #include <algorithm>
 #include <iterator>
+#include <cmath>
+#include <cstring>
 #include "AniFile.hpp"
 #include "ArtScaler.hpp"
 #include "HdArt.hpp"
@@ -260,6 +262,21 @@ bool Animation::drawMapped(SDL_Renderer *renderer, CompassDirection direction, i
   const int idx[6] = {0, 1, 2, 0, 2, 3};
   SDL_RenderGeometry(renderer, texture, v, 4, idx, 6);
   return true;
+}
+
+bool Animation::hitTestAnchored(float px,float py,float x,float y,CompassDirection direction,int frame) {
+  const std::string key=convertCompassDirectionToExistingAnimationString(direction,this->surfaces);
+  const bool mirrored=this->renderer_flip==SDL_FLIP_HORIZONTAL;
+  auto frames=this->surfaces.find(key);auto anchor=this->anchor_points.find(key);
+  if(frames==this->surfaces.end() || frames->second.empty() || anchor==this->anchor_points.end())return false;
+  const int index=(frame>=0?frame:static_cast<int>(this->current_frame))%static_cast<int>(frames->second.size());
+  SDL_Surface *source=frames->second[index];if(!source)return false;
+  int sx=static_cast<int>(std::floor(px-x+(mirrored?source->w-anchor->second.x:anchor->second.x)));
+  const int sy=static_cast<int>(std::floor(py-y+anchor->second.y));
+  if(sx<0 || sy<0 || sx>=source->w || sy>=source->h)return false;
+  if(mirrored)sx=source->w-1-sx;
+  Uint32 pixel=0;std::memcpy(&pixel,static_cast<Uint8*>(source->pixels)+sy*source->pitch+sx*source->format->BytesPerPixel,source->format->BytesPerPixel);
+  Uint8 r,g,b,a;SDL_GetRGBA(pixel,source->format,&r,&g,&b,&a);return a>=32;
 }
 
 bool Animation::anchoredBounds(float x, float y, CompassDirection direction, float &left, float &top,
@@ -658,18 +675,26 @@ void Animation::loadSurfaces(std::string direction_string,
     return;
   }
 
-  // Frame 0 lands in its surface at (offset_x - its offset_x, 0). Note the
-  // frame header's fields: offset_x holds the y anchor, offset_y the x one.
-  {
-    const AnimationFrameData &f = data->frames[0];
-    int placedX = offset_x - f.offset_x;
-    this->anchor_offsets[direction_string] = {
-        f.width / 2 - f.offset_y - placedX, f.height / 2 - f.offset_x};
-    // Where the anchor lands in the surface: the frame is placed at
-    // (placedX, offset_y - f.offset_y)
-    this->anchor_points[direction_string] = {placedX + f.offset_y,
-                                             offset_y - f.offset_y + f.offset_x};
+  // Keep the original placement, expanding the canvas in every direction
+  // needed by later frames. Airborne flips can rise above frame 0 without
+  // being taller than the declared box; growing its height alone cropped them.
+  const AnimationFrameData &first = data->frames[0];
+  int frameAnchorX=offset_x-first.offset_x+first.offset_y;
+  int frameAnchorY=offset_y-first.offset_y+first.offset_x;
+  int minX=0,minY=0,maxX=data->width,maxY=data->height;
+  for(uint32_t i=0;i<data->frame_count;++i) {
+    const auto &f=data->frames[i];
+    const int x=frameAnchorX-f.offset_y,y=frameAnchorY-f.offset_x;
+    minX=std::min(minX,x);minY=std::min(minY,y);
+    maxX=std::max(maxX,x+f.width);maxY=std::max(maxY,y+f.height);
   }
+  if(maxX-minX>65535 || maxY-minY>65535) {
+    AniFile::freeAnimationData(data);return;
+  }
+  data->width=std::max(1,maxX-minX);data->height=std::max(1,maxY-minY);
+  frameAnchorX-=minX;frameAnchorY-=minY;
+  this->anchor_points[direction_string]={frameAnchorX,frameAnchorY};
+  this->anchor_offsets[direction_string]={first.width/2-frameAnchorX,first.height/2-frameAnchorY};
 
   int loop_limit = (int)data->frame_count + (int)data->has_background;
 
@@ -687,9 +712,8 @@ void Animation::loadSurfaces(std::string direction_string,
     // anchor, offset_y its x anchor), lined up on frame 0's: frames whose
     // anchors differ (a zebra's walk: x anchor 11 to 15) no longer shift
     // about (they shook)
-    const AnimationFrameData &f0 = data->frames[0];
-    const int anchorX = offset_x - f0.offset_x + f0.offset_y;
-    const int anchorY = offset_y - f0.offset_y + f0.offset_x;
+    const int anchorX = frameAnchorX;
+    const int anchorY = frameAnchorY;
     // (art with a background frame, the UI's, kept as it was: matched)
     const int left = data->has_background ? offset_x - data->frames[i].offset_x
                                           : anchorX - data->frames[i].offset_y;

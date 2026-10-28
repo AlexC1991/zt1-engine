@@ -7,9 +7,9 @@
 >
 > **Back up any saves you care about.**
 
-### Alpha 2026.10.28
+### Alpha 2026.10.29
 
-This alpha is **2026.10.28**, following **v2026.10.20**. See the release notes for changes and known limitations.
+This alpha is **2026.10.29**, following **v2026.10.20**. See the release notes for changes and known limitations.
 
 
 > **You need your own copy of Zoo Tycoon.** ZT1-Engine comes with **no** Zoo Tycoon art, sound, maps or game files: it plays the copy you have installed, reading it where it is (it never changes your game's folder).

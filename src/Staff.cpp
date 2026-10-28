@@ -304,10 +304,14 @@ float Staff::groundAt(const WorldMap &map, float x, float y) const {
 // Zoo ground: inside the main wall, not water, not in an exhibit, not
 // under a building or a tank filter
 bool Staff::walkable(int x, int y, const WorldMap &map, const Fences &fences, int access) const {
-  // Rocks, trees, buildings, filters, bases stand in the way
-  if (this->index && this->index->blocked(x, y))
-    return false;
   int ex = fences.exhibitAt(x, y);
+  // A visiting marine specialist swims above floor scenery. It must not
+  // be trapped beside the ladder by the plants it is meant to tend.
+  if(this->index && this->index->blocked(x,y)) {
+    const auto *pool=fences.exhibit(ex);
+    if(!(ex==access && pool && pool->tank && pool->water>0 &&
+         this->index->at(x,y)==WorldIndex::What::Object))return false;
+  }
   if (ex >= 0) {
     // In an exhibit only on a visit to it (a tank: all of it, swimming)
     if (ex != access)
@@ -1012,6 +1016,7 @@ bool Staff::needsVisit(const Member &m, int exhibit, const Fences &fences) const
         heal = heal || this->animals->needsHealing(a);
         starving = starving || (a.hunger >= this->animals->types()[a.type].hungerThreshold && food <= 0);
       }
+    if(ex->show)starving=false;
     bool poo = !this->items->ofKind(ZooItems::Kind::Dung, exhibit).empty();
     auto last = this->lastVisit.find(exhibit);
     bool due = last == this->lastVisit.end() || this->clock - last->second > kRevisitSeconds;
@@ -1025,7 +1030,7 @@ bool Staff::needsVisit(const Member &m, int exhibit, const Fences &fences) const
     return heal || starving || poo || due || murky;
   }
   float low = ex->animalCount() * ZooItems::kFoodPerAnimal * 0.5f;
-  bool hungry = this->items->foodIn(exhibit) < low;
+  bool hungry = !ex->show && this->items->foodIn(exhibit) < low;
   if (ex->tank)
     return hungry || (ex->water > 0 && ex->purity < kMurkyPurity);
   (void)m;
@@ -1129,6 +1134,21 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     done();
     return;
   }
+  // A platform can move when another tank or building covers its bank.
+  // End an active dive safely at the new bank; the next duty plans a fresh entry.
+  if(ex->tank && m.tank==m.visit) {
+    for(const auto &[edge,piece]:fences.pieces()) {
+      if(!piece.gate || fences.exhibitOf(edge)!=m.visit)continue;
+      const int ax=edge.alongX?edge.x:edge.x-1,ay=edge.alongX?edge.y-1:edge.y;
+      const bool aIn=fences.exhibitAt(ax,ay)==m.visit;
+      const float ix=(aIn?ax:edge.x)+0.5f,iy=(aIn?ay:edge.y)+0.5f;
+      if(std::hypot(m.inX-ix,m.inY-iy)<0.01f)break;
+      m.inX=ix;m.inY=iy;
+      m.outX=(aIn?edge.x:ax)+0.5f;m.outY=(aIn?edge.y:ay)+0.5f;
+      m.path.clear();m.pathAt=0;m.playsLeft=0;
+      done();return;
+    }
+  }
   // Food down when what its animals need (cNeededFood each) is more than
   // what's there and there's none of it left (one pile: zoo.exe 0x507ff8)
   bool hungry;
@@ -1142,6 +1162,7 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
   } else {
     hungry = this->items->foodIn(m.visit) < ex->animalCount() * ZooItems::kFoodPerAnimal * 0.5f;
   }
+  if(ex->show)hungry=false; // Performers receive show rewards; ordinary food piles belong in home tanks.
   bool carnivore = false;
   std::string food = foodFor(m.visit, fences, carnivore);
   ZT_STEP("0x507ff8", "Food down? (what its animals need, cNeededFood each, against what's there)",
@@ -1363,8 +1384,10 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     play(m, tank ? "subfeed" : carnivore ? "feedc" : "feedh", 3);
     return;
   case 2: // food down where it stands
-    this->items->addFood(m.visit, m.dropX, m.dropY, ex->animalCount(), food);
-    buy();
+    if(!ex->show) {
+      this->items->addFood(m.visit, m.dropX, m.dropY, ex->animalCount(), food);
+      buy();
+    }
     ZT_STEP("0x4e7a7d", "Puts the food down", {"chow", food}, {"x", m.dropX}, {"y", m.dropY},
             {"food there now", this->items->foodIn(m.visit)});
     m.phase = 3;
@@ -1619,8 +1642,14 @@ int Staff::assign(int id, int exhibit, const Fences &fences) {
   } else {
     return 0;
   }
-  if (ex->animalCount() <= 0)
-    return 10329; // "Zoo staff cannot be assigned to empty exhibits."
+  bool linkedPerformers=false;
+  if(k==Kind::Trainer && ex->show)for(const auto &[edge,piece]:fences.pieces()) {
+    int show=-1,home=-1;
+    if(fences.showPortal(edge,show,home) && show==exhibit)
+      if(const auto *linked=fences.exhibit(home);linked && linked->animalCount()>0){linkedPerformers=true;break;}
+  }
+  if (ex->animalCount() <= 0 && !linkedPerformers)
+    return 10329; // Empty tanks remain invalid unless this show has linked performers.
   if (std::find(m->exhibits.begin(), m->exhibits.end(), exhibit) == m->exhibits.end())
     m->exhibits.push_back(exhibit);
   m->workCheck = 0;
@@ -2258,6 +2287,8 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
   for (const Member &m : this->list) {
     const Type &t = this->typeList[m.type];
     // In a tank's water: drawn with the tank (drawInTank), not here
+    // A standing show specialist is collected with the platform itself.
+    if(m.showTank>=0 && m.phase==2 && !m.climbing)continue;
     bool withTank = m.tank >= 0 && (m.water >= 2 || (m.climbing && m.climbInside));
     if (this->onlyTank != -2 ? (!withTank || m.tank != this->onlyTank) : withTank)
       continue;

@@ -37,6 +37,7 @@ class Guests;
 class PlacedObjects;
 
 class Staff {
+  friend std::string runShowManagementChecks(class World &, ResourceManager *);
   friend class SaveGame; // (saving and loading a game)
   friend std::string runParityChecks(class World &, ResourceManager *);
   friend class Shows; // Shared marine-show tasks use the normal routes and animation queues.

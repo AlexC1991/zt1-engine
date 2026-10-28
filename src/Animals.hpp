@@ -42,6 +42,7 @@ class Animals {
   friend class SaveGame; // (saving and loading a game)
   friend std::string runParityChecks(class World &, ResourceManager *);
   friend class Shows; // Shared marine-show tasks use the normal routes and animation queues.
+  friend std::string runShowPolishChecks(class World &, ResourceManager *, bool);
 public:
   // Shared with the Lab checker: unsupported steps cannot be mistaken for handled ones.
   enum class Command { Unknown, EndTrick, Play, PlayWithSound, PlayTime, PlayPingPong, PlayReverse, Halt, SetBase, KeepControl, Die, PlaySet, PlaySetTank, PlaySetProb, PlaySetTerrain, Walk, Move, Run, Trot, MoveWithSound, MoveReverse, FaceTowardFood, Hatch, Dustball, EnterBuilding, ExitBuilding, CaughtPrey, FaceTowardTarget, PlayStopAtEnd, TargetBuilding, PlaySpecial };
@@ -160,6 +161,8 @@ public:
     // Per subtype (0 m, 1 f, 2 y): animation name -> art path (no .ani)
     std::map<std::string, std::string> anims[3];
     std::map<std::string, std::vector<Step>> sets[3];
+    // Derived from the species' declared tricks, including show-object sets.
+    std::set<std::string> showSets, showAnimations;
     std::vector<Ambient> ambient;
     std::vector<Ambient> ambientWater; // [AmbientAnimsWater]: in the water
     // In a tank: [AmbientAnimsUnderwater] / [AmbientAnimsSurface], by where
@@ -310,6 +313,7 @@ public:
   // Where one can go: an exhibit's ground (a land exhibit for a zoo
   // animal), not water, not on top of another
   Fences::Fit canPlace(int type, float x, float y, const WorldMap &map, const Fences &fences) const;
+  float placementDepth(int type,int tank) const;
   int adopt(int type, bool female, float x, float y, const WorldMap &map, const Fences &fences,
             bool restoring = false);
   // (restoring: an animal of a saved zoo put back as it was - wherever it
@@ -499,6 +503,17 @@ public:
   std::vector<std::string> labSets(int id) const;
   std::string awarenessReport() const;
 private:
+  // The space an animal occupies, from its species' footprint and the height
+  // of its own art - an oriented box, not one radius for every species. In a
+  // tank the height is what lets two fish pass one above the other.
+  struct BodyVolume {
+    float halfAcross = 0.22f; // across the way it faces, tiles
+    float halfAlong = 0.22f;  // along the way it faces, tiles
+    float halfHeight = 0.17f; // up the screen, height units
+  };
+  BodyVolume bodyVolume(const Member &m) const;
+  float bodyOverlap(const Member &a, float ax, float ay, float az, float afx, float afy,
+                    const Member &b, float bx, float by, float bz, float bfx, float bfy) const;
   float bodyRadius(const Member &m) const;
   float tankClearance(const Member &m, float x, float y, const Fences &fences, bool planning = false) const;
   const Fences *fencesRef = nullptr;
@@ -507,13 +522,10 @@ private:
   float bodyDistance(const Member &a, float ax, float ay, float az,
                      const Member &b, float bx, float by, float bz) const;
   bool destinationFree(const Member &m, float x, float y, float swim, bool reservations) const;
-  bool awareStep(const Member &m, int x, int y, int nx, int ny,
-                 const WorldMap &map, const Fences &fences) const;
   bool feedingPlace(Member &m, float x, float y, const WorldMap &map, const Fences &fences);
   void consumeFood(Member &m);
   void reactOne(int exhibit, Change change, const std::string &file, int animalType, bool removed,
                 const WorldMap &map, const Fences &fences);
-  bool moveAware(Member &m, float tx, float ty, float seconds, const WorldMap &map, const Fences &fences);
   void separateIdle(Member &m, float seconds, const WorldMap &map, const Fences &fences);
   const WorldMap *mapRef = nullptr; // (the map, for the art: swimmers' swim / water idle)
   bool onWater(const Member &m) const;
@@ -587,6 +599,7 @@ private:
                  const Fences &fences) const;
   bool canStep(int x, int y, int nx, int ny, const WorldMap &map, const Fences &fences) const;
   const std::vector<Step> *set(const Member &m, const std::string &name) const;
+  bool mayPerform(const Member &m) const;
   void pushSet(Member &m, const std::string &name);
   void chooseBehaviour(Member &m);
   void nextStep(Member &m, const WorldMap &map, const Fences &fences);

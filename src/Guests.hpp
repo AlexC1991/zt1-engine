@@ -35,9 +35,11 @@ class WorldRenderer;
 //   crowded; unhappy, they may leave; seen it all, most leave;
 // - an escaped animal near: they run ("RUN, %s has escaped!").
 class Guests {
+  friend std::string runShowManagementChecks(class World &, ResourceManager *);
   friend class SaveGame; // (saving and loading a game)
   friend std::string runParityChecks(class World &, ResourceManager *);
   friend class Shows; // Shared marine-show tasks use the normal routes and animation queues.
+  friend std::string runShowPolishChecks(class World &, ResourceManager *, bool);
 public:
   enum class Kind { Man, Woman, Boy, Girl };
   struct Type {
@@ -264,11 +266,14 @@ private:
     // Its doors: each [slot]'s entrpos, from its middle facing the way it
     // was built (64 a tile; ZTBuildingType::loadConfig 0x4c0b4d)
     std::vector<std::pair<int, int>> doors;
+    struct DrawSlot { float x, y, z; };
+    std::vector<DrawSlot> drawSlots;
   };
   mutable std::map<std::string, BuildingInfo> buildingInfo;
   const BuildingInfo &infoOf(const std::string &file) const;
   bool seekBuilding(Guest &g, const std::string &need, int radius);
   void useBuilding(Guest &g);
+  bool positionShowSeat(Guest &g, const PlacedObjects::Object &stand, int seat) const;
   std::vector<Type> typeList;
   std::vector<Guest> list;
   int nextId = 1;

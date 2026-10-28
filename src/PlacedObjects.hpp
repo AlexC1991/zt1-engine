@@ -68,6 +68,16 @@ public:
     // (objects/<type>/bg), idle drawn over it; "used" in place of idle while
     // a guest is at it (set by the guests each tick)
     Animation *bg = nullptr, *used = nullptr;
+    // A thing that stands half in the water and half out (a show tank's toys:
+    // orcaball, otthoop, iceberg). Its [Animations] underidle is the part under
+    // the surface and idle the part on it (cHasUnderwaterSection, with
+    // cUnderwater and cSurface both set); the two are drawn either side of the
+    // water's own pass, as a marine animal's under and surface layers are.
+    // Without it, only idle was ever drawn - the toy sat on the surface and its
+    // underidle, which is most of a ball or an iceberg, was never shown.
+    bool onWater = false; // derived from cSurface; its upper art sorts with platforms and walls
+    Animation *underIdle = nullptr;
+    bool underwaterSection = false;
     bool inUse = false;
     // Simulation time, shared by every render strip of this object. Pausing
     // the zoo freezes shopkeepers, smoke, rides and customer-use sequences.
@@ -129,6 +139,7 @@ public:
   // The tank a spot is in (-1: none): what's in a tank is drawn with it
   // (drawInTank), under its water and behind its front walls, not here
   std::function<int(float x, float y)> tankAt;
+  std::function<float(const Object &,float ground)> tankHeight; // same height for drawing and picking
   // Whether a type is one of the entrance's pieces (Fences::isZooGate): placed,
   // it's a "building", as the map files have them
   std::function<bool(const std::string &type)> isEntrance;

@@ -12,6 +12,7 @@ class ResourceManager;
 // Marine Mania's linked tanks, species scripts and show actors. See
 // docs/MARINE_SHOWS.md for original addresses and the recorded comparison.
 class Shows {
+  friend std::string runShowManagementChecks(class World &, ResourceManager *);
   friend class SaveGame;
 public:
   struct Trick {
@@ -43,6 +44,8 @@ public:
     int visitors = 0;
     double income = 0;
     std::string status;
+    float audienceCheck = 0; // transient, staggered attendance decisions
+    size_t audienceCursor = 0;
   };
   struct Settings {
     int interval[3] = {65, 90, 120};
@@ -69,6 +72,10 @@ public:
   bool move(int tank, int index, int by);
   bool setFrequency(int tank, int frequency);
   bool setAdmission(int tank, double price);
+  int standShow(int object) const;
+  bool isStand(int object) const {return standLinks.count(object)!=0;}
+  bool setStandAdmission(int object,double price);
+  struct AudienceStats { size_t considered=0,routeAttempts=0,admitted=0; } audienceStats;
   bool start(int tank, std::string &why);
   void cancel(int tank, const std::string &why);
   int benefit(int tank);
@@ -85,13 +92,17 @@ private:
   std::map<int, Show> list;
   std::map<std::string, std::vector<Trick>> definitions;
   double incomePending = 0;
+  float refreshIn = 0;
+  std::map<int,int> standLinks; // derived from the stand's facing, never shared between shows
+  std::map<int,float> guestShowRetry; // guest id -> next decision time (game clock)
+  void linkStands();
   std::vector<std::string> messages;
   const Trick *find(const std::string &species, const std::string &key);
   std::vector<std::pair<Fences::Edge, int>> links(int tank) const;
   std::vector<Trick> resolved(Show &s, std::vector<int> *benefits = nullptr);
   std::string ready(Show &s) const;
   bool planStaging(Show &s);
-  bool trainerStep(Show &s, float seconds);
+  bool trainerStep(Show &s, float seconds, bool leaving = false);
   void trainerCue(Show &s, const std::string &behavior);
   void actorStep(Show &s, Actor &actor, float seconds);
   void audiences(Show &s, float seconds);

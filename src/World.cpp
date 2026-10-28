@@ -19,6 +19,31 @@
 #include <cmath>
 #include <vector>
 #include "SpriteDatabase.hpp"
+#include <sstream>
+
+// F9 in Play records complete visible frames, including the normal HUD and present.
+namespace FrameProfile {
+bool active=false;Uint64 frameStart=0;
+std::vector<double> frames;std::map<std::string,double> totals;
+double ms(Uint64 start){return 1000.0*(SDL_GetPerformanceCounter()-start)/SDL_GetPerformanceFrequency();}
+void start(){active=true;frameStart=0;frames.clear();totals.clear();SDL_Log("[FrameProfile] recording 240 visible frames");}
+void begin(){frameStart=active?SDL_GetPerformanceCounter():0;}
+struct Scope {
+  const char *name;Uint64 start;
+  explicit Scope(const char *n):name(n),start(active?SDL_GetPerformanceCounter():0){}
+  ~Scope(){if(start && active)totals[name]+=ms(start);}
+};
+void end(){
+  if(!active || !frameStart)return;
+  frames.push_back(ms(frameStart));
+  if(frames.size()<240)return;
+  active=false;std::sort(frames.begin(),frames.end());
+  double total=0;for(double value:frames)total+=value;
+  SDL_Log("[FrameProfile] frames=%zu mean=%.3fms p95=%.3fms p99=%.3fms observed=%.1ffps",
+    frames.size(),total/frames.size(),frames[227],frames[237],1000.0*frames.size()/total);
+  for(const auto &[name,value]:totals)SDL_Log("[FrameProfile] %s mean=%.3fms",name.c_str(),value/frames.size());
+}
+}
 
 // ============================================================================
 // WORLD IMPLEMENTATION - Coordinator
@@ -26,6 +51,8 @@
 // Coordinates all subsystems following original ZT1 architecture
 // Each subsystem has clear separation of concerns
 // ============================================================================
+
+void beginTankAnimalFrame(bool active);
 
 // Global zoom level (used by InputManager)
 float g_ZoomLevel = 1.0f;
@@ -155,6 +182,10 @@ bool World::loadFreeform(const std::string &path) {
   SDL_Log("[World] Loading map: %s", path.empty() ? "(a blank map)" : path.c_str());
   SDL_Log("[World] ========================================");
   int blankW = this->blankW, blankH = this->blankH;
+  // Cached preview artwork belongs to the map's object cache.
+  this->objectPreview={};
+  this->objectTool.clear();
+  this->objectGhost=false;
 
   // Resolve path: a .scn names its map in [start] savegame=, e.g.
   // freeform/ff01.scn -> maps/default.zoo
@@ -310,10 +341,21 @@ bool World::loadFreeform(const std::string &path) {
     }
     return false;
   };
+  fences.platformBlocked=[this](int x,int y) {
+    const auto *tile=this->worldMap.getTile(x,y);
+    return !tile || !this->fences.insideZoo(x,y) || tile->terrainType==9 || tile->terrainType==10 || this->index.blocked(x,y);
+  };
   placedObjects.tankAt = [this](float x, float y) {
     int ex = this->fences.exhibitAt(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
     const Fences::Exhibit *e = ex >= 0 ? this->fences.exhibit(ex) : nullptr;
     return e && e->tank ? ex : -1;
+  };
+  placedObjects.tankHeight = [this](const PlacedObjects::Object &o,float ground) {
+    const int id=this->placedObjects.tankAt(o.x,o.y);
+    const auto *tank=this->fences.exhibit(id);
+    if(tank && (o.underIdle || o.onWater))
+      return tank->level > -1e8f ? tank->level : tank->floorHeight+this->fences.waterLevel(*tank);
+    return ground;
   };
   animals.tankAt = placedObjects.tankAt;
   placedObjects.isEntrance = [this](const std::string &t) { return this->fences.isZooGate(t); };
@@ -392,6 +434,7 @@ bool World::loadFreeform(const std::string &path) {
 }
 
 void World::update(const Uint8 *state, float deltaTime) {
+  FrameProfile::Scope profile("world update");
   // Sync mouse wheel zoom (modified by InputManager) with camera
   Camera &cam = worldRenderer.getCamera();
   cam.zoom = g_ZoomLevel;
@@ -473,8 +516,8 @@ void World::update(const Uint8 *state, float deltaTime) {
         e->animals = animals.countIn(ex.id);
         e->dinosaurs = animals.dinosaursIn(ex.id);
       }
-    staff.update(deltaTime, worldMap, fences);
-    shows.update(deltaTime);
+    {FrameProfile::Scope profile("staff update");staff.update(deltaTime, worldMap, fences);}
+    {FrameProfile::Scope profile("shows update");shows.update(deltaTime);}
     // Gates open for staff coming through
     fences.updateGates(deltaTime, [this](const Fences::Edge &e) {
       float mx = e.alongX ? e.x + 0.5f : static_cast<float>(e.x);
@@ -493,7 +536,7 @@ void World::update(const Uint8 *state, float deltaTime) {
           return true;
       return false;
     });
-    animals.update(deltaTime, clock, worldMap, fences);
+    {FrameProfile::Scope profile("animals update");animals.update(deltaTime, clock, worldMap, fences);}
     animals.lifeEvents(worldMap, fences);
     // Fences animals broke getting out
     for (const Fences::Edge &e : animals.takeBreaks())
@@ -501,7 +544,7 @@ void World::update(const Uint8 *state, float deltaTime) {
     // (the entrance found once the zoo wall is known)
     if (!guests.hasEntrance())
       this->findEntrance();
-    guests.update(deltaTime, zooRating, zooAdmission);
+    {FrameProfile::Scope profile("guests update");guests.update(deltaTime, zooRating, zooAdmission);}
     // Each exhibit's viewing time and donations on its books; an exhibit's
     // clock starts when it's first seen
     for (const auto &[id, b] : guests.takeExhibitBooks())
@@ -665,6 +708,8 @@ bool World::shrinkTarget(SDL_Renderer *renderer, int level, int w, int h) {
 }
 
 void World::draw(SDL_Renderer *renderer) {
+  FrameProfile::Scope profile("world draw");
+  beginTankAnimalFrame(true);
   // Clear screen (the bars beside a centred view stay black)
   SDL_RenderSetViewport(renderer, nullptr);
   SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
@@ -737,30 +782,54 @@ void World::draw(SDL_Renderer *renderer) {
     RenderSettings::artScaleMode = RenderSettings::lookFor(zoom);
 
   // Render terrain layer
-  worldRenderer.renderTerrain(renderer, worldMap, SpriteDatabase::get());
+  {FrameProfile::Scope profile("terrain");worldRenderer.renderTerrain(renderer, worldMap, SpriteDatabase::get());}
 
   // Tank water, then the map's objects: entrance, fences, rocks, trees
-  fences.drawWater(renderer, worldRenderer, worldMap);
+  {FrameProfile::Scope profile("tank water");fences.drawWater(renderer, worldRenderer, worldMap);}
   this->drawToolOverlay(renderer);
   ambient.drawShadows(renderer, worldRenderer, worldMap);
   std::vector<Fences::Drawable> fenceArt;
+  fences.collectPlatformStaff = [this](int tank,float depth,std::vector<Fences::Drawable> &out) {
+    for(const auto &m:staff.members()) {
+      if(m.showTank!=tank || m.phase!=2 || m.climbing || m.id==staff.carried)continue;
+      Animation *art=staff.art(m,m.anim);if(!art)continue;
+      float x,y,d;worldRenderer.worldToScreenF(m.x,m.y,staff.heightOf(m,worldMap),x,y,d);
+      Fences::Drawable actor{depth,x,y,art,worldRenderer.screenSide(m.fx,m.fy),
+        SDL_Color{255,255,110,255},m.id==staff.hovered};
+      actor.frame=static_cast<int>(m.animTime*1000/std::max(1u,art->frameTimeMs()));
+      out.push_back(actor);
+    }
+  };
   fences.drawTankContents = [this](SDL_Renderer *r, int tank, bool surface, float level) {
+    FrameProfile::Scope profile("tank contents");
     this->placedObjects.drawInTank(r, this->worldRenderer, this->worldMap, tank, surface, level,
                                    [this](const std::string &file) {
                                      const TankFlags &f = this->tankFlagsOf(file);
-                                     return f.surface && !f.underwater;
+                                     return f.surface;
                                    });
     if (!surface)
       this->items.drawInTank(r, this->worldRenderer, this->worldMap, tank);
     // (animals in both: under the water, and a surface move's part above it)
     this->animals.drawInTank(r, this->worldRenderer, this->worldMap, tank, surface);
+    if(this->objectGhost && this->objectPreview.art && this->placedObjects.tankAt(this->ghostX,this->ghostY)==tank) {
+      const bool floating=this->objectPreview.underIdle || this->tankFlagsOf(this->objectTool).surface;
+      if(!surface && (this->objectPreview.underIdle || !floating)) {
+        const auto *tile=this->worldMap.getTile(static_cast<int>(std::floor(this->ghostX)),static_cast<int>(std::floor(this->ghostY)));
+        const float z=floating?level:tile?static_cast<float>(tile->cornerHeight[0]):0;
+        float x,y,d;this->worldRenderer.worldToScreenF(this->ghostX,this->ghostY,z,x,y,d);
+        const float angle=this->ghostFacing*3.14159265f/4.0f;
+        const SDL_Color tint=this->ghostFit==Fences::Fit::Ok?SDL_Color{0,255,0,255}:SDL_Color{255,60,60,255};
+        Animation *art=this->objectPreview.underIdle && !surface?this->objectPreview.underIdle:this->objectPreview.art;
+        art->drawAnchored(r,x,y,this->worldRenderer.screenSide(std::sin(angle),-std::cos(angle)),&tint,0);
+      }
+    }
     // (marine specialists in its water too)
     this->staff.drawInTank(r, this->worldRenderer, this->worldMap, tank, surface);
   };
   fences.redrawGround = [this](SDL_Renderer *r, const std::set<std::pair<int, int>> &tiles) {
     this->worldRenderer.renderTerrainTiles(r, this->worldMap, SpriteDatabase::get(), tiles);
   };
-  fences.collect(worldRenderer, worldMap, fenceArt);
+  {FrameProfile::Scope profile("fence collect");fences.collect(worldRenderer, worldMap, fenceArt);}
   // The bulldozer's piece glows red; the gate tool's green
   if ((bulldozer || gateTool) && highlight.x >= 0) {
     std::vector<Fences::Drawable> only;
@@ -785,8 +854,9 @@ void World::draw(SDL_Renderer *renderer) {
   staff.collect(worldRenderer, worldMap, fenceArt, &deckArt);
   animals.collect(worldRenderer, worldMap, fenceArt);
   guests.collect(worldRenderer, worldMap, fenceArt);
-  if (this->objectGhost && !this->objectTool.empty())
-    if (Animation *a = this->placedObjects.artOfFile(this->objectTool)) {
+  if (this->objectGhost && !this->objectTool.empty() &&
+      (this->placedObjects.tankAt(this->ghostX,this->ghostY)<0 || this->objectPreview.onWater || this->objectPreview.underIdle))
+    if (Animation *a = this->objectPreview.art) {
       const MapTile *t = worldMap.getTile(static_cast<int>(std::floor(ghostX)), static_cast<int>(std::floor(ghostY)));
       float h = 0;
       if (t) {
@@ -795,6 +865,13 @@ void World::draw(SDL_Renderer *renderer) {
         float bottom = t->cornerHeight[CORNER_X0Y1] * (1 - fx) + t->cornerHeight[CORNER_X1Y1] * fx;
         h = top * (1 - fy) + bottom * fy;
       }
+      // (over a tank: a surface thing hangs at the water's level, as it will
+      // once bought - on the floor it looked, in the preview, like the thing the
+      // player was about to place was going to sink to the bottom)
+      const int ghostEx = this->fences.exhibitAt(static_cast<int>(std::floor(ghostX)), static_cast<int>(std::floor(ghostY)));
+      if (const Fences::Exhibit *ge = ghostEx >= 0 ? this->fences.exhibit(ghostEx) : nullptr)
+        if (ge->tank && (this->objectPreview.onWater || this->objectPreview.underIdle))
+          h = ge->level > -1e8f ? ge->level : ge->floorHeight+this->fences.waterLevel(*ge);
       float sx, sy, depth;
       worldRenderer.worldToScreenF(ghostX, ghostY, h, sx, sy, depth);
       float angle = ghostFacing * 3.14159265f / 4.0f;
@@ -889,6 +966,7 @@ void World::draw(SDL_Renderer *renderer) {
   RenderSettings::worldZoomedIn = false;
   RenderSettings::artScaleMode = lookWas;
   cam.zoom = userZoom;
+  beginTankAnimalFrame(false);
 }
 
 // Laying fence: the grid line under each piece of it, green where it can
@@ -1215,6 +1293,23 @@ bool World::pick(int x, int y, float &wx, float &wy) {
   return on;
 }
 
+bool World::pickTankPlacement(int x,int y,const std::function<float(const Fences::Exhibit&)> &height,float &wx,float &wy) {
+  bool on=this->pick(x,y,wx,wy);
+  Camera &camera=this->worldRenderer.getCamera();const float saved=camera.zoom;
+  const float zoom=(saved>0?saved:1.0f)*this->viewScale;
+  const float lx=(x-this->viewRect.x)/zoom,ly=(y-this->viewRect.y)/zoom;
+  camera.zoom=zoom;float nearest=-1e30f;
+  for(const auto &tank:this->fences.exhibits()) {
+    if(!tank.tank || tank.water<=0)continue;
+    const float h=height(tank);float tx,ty;
+    this->worldRenderer.screenToWorldAt(lx,ly,h,tx,ty);
+    if(!tank.tiles.count({static_cast<int>(std::floor(tx)),static_cast<int>(std::floor(ty))}))continue;
+    float sx,sy,depth;this->worldRenderer.worldToScreenF(tx,ty,h,sx,sy,depth);
+    if(depth>nearest){nearest=depth;wx=tx;wy=ty;on=true;}
+  }
+  camera.zoom=saved;return on;
+}
+
 bool World::vertexToWindow(int vx, int vy, int &x, int &y) {
   const Camera &cam = worldRenderer.getCamera();
   float zoom = (cam.zoom > 0 ? cam.zoom : 1.0f) * this->viewScale;
@@ -1373,6 +1468,7 @@ void World::drawPathDebug(SDL_Renderer *renderer) {
 }
 
 void World::reindex() {
+  FrameProfile::Scope profile("index rebuild");
   this->index.rebuild(this->worldMap, this->placedObjects, this->fences, this->resourceManager);
   this->index.clearMovers();
   this->staff.addToIndex(this->index);
@@ -2355,7 +2451,19 @@ void World::setObjectTool(const std::string &file, int cost, int facing) {
   // (the same object turned with Q / E: shown turned where it is, at once -
   // it vanished until the mouse next moved)
   bool turned = file == this->objectTool && !file.empty() && this->objectGhost;
+  const bool changed=file!=this->objectTool;
   this->objectTool = file;
+  if(changed) {
+    this->objectPreview={};
+    const auto a=file.find('/'),b=file.find('/',a+1),dot=file.find_last_of('.');
+    if(a!=std::string::npos && b!=std::string::npos) {
+      this->objectPreview.subClass=file.substr(a+1,b-a-1);
+      this->objectPreview.typeName=file.substr(b+1,dot==std::string::npos?std::string::npos:dot-b-1);
+      if(dot!=std::string::npos)this->objectPreview.ext=file.substr(dot);
+      this->objectPreview.art=this->placedObjects.artOfFile(file);
+      this->placedObjects.loadLayers(this->objectPreview);
+    }
+  }
   this->objectCost = cost;
   this->objectFacing = facing;
   this->objectGhost = false;
@@ -2527,6 +2635,7 @@ const World::TankFlags &World::tankFlagsOf(const std::string &file) {
     const std::string ints = "characteristics/integers";
     f.underwater = ai->getInt(ints, "cunderwater", 0) != 0;
     f.surface = ai->getInt(ints, "csurface", 0) != 0;
+    f.deadOnLand = ai->getInt(ints,"cdeadonland",0)!=0;
     f.depth = ai->getInt(ints, "cdepth", 0);
     f.avoidEdges = ai->getInt(ints, "cavoidedges", 0);
     delete ai;
@@ -2536,6 +2645,7 @@ const World::TankFlags &World::tankFlagsOf(const std::string &file) {
 
 Fences::Fit World::objectFit(const std::string &file, float x, float y, int facing) {
   this->fitMessage = 0;
+  const auto &flags=this->tankFlagsOf(file);
   auto [fx, fy] = this->footprintOf(file);
   fx = std::max(1, fx);
   fy = std::max(1, fy);
@@ -2551,6 +2661,10 @@ Fences::Fit World::objectFit(const std::string &file, float x, float y, int faci
         return Fences::Fit::Outside;
       if (t->terrainType == 9 || t->terrainType == 10 || this->worldMap.isPath(tx, ty))
         return Fences::Fit::Outside;
+      const auto *pool=this->fences.exhibit(this->fences.exhibitAt(tx,ty));
+      if(flags.deadOnLand && (!pool || !pool->tank || pool->water<=0)) {
+        this->fitMessage=10564;return Fences::Fit::Outside;
+      }
       // In a tank (zoo.exe 0x4df688): only what goes under the water or on
       // its surface ("This object can not be placed in a tank."); a surface
       // one deep enough ("...a deeper tank.": cDepth against the water's
@@ -2799,6 +2913,8 @@ void World::mouseMove(int x, int y) {
     this->placedObjects.highlight = -1;
     this->hoverPrice = -1;
     this->bulldozeTip.clear();
+    this->fences.hoverPlatform=-1;this->fences.hoverGate={false,-1,-1};
+    this->animals.hovered=this->staff.hovered=this->guests.hovered=-1;
     auto item = [](const std::string &file) -> const CatalogItem * {
       for (const CatalogItem &it : ItemCatalog::get().all())
         if (it.file == file)
@@ -2984,7 +3100,11 @@ void World::mouseMove(int x, int y) {
   // can go, red "$0" where not
   if (!this->objectTool.empty()) {
     float wx, wy;
-    if (!this->pick(x, y, wx, wy)) {
+    const bool surface=this->tankFlagsOf(this->objectTool).surface || this->objectPreview.underIdle;
+    const bool picked=surface?this->pickTankPlacement(x,y,[this](const Fences::Exhibit &tank) {
+      return tank.level > -1e8f ? tank.level : tank.floorHeight+this->fences.waterLevel(tank);
+    },wx,wy):this->pick(x,y,wx,wy);
+    if (!picked) {
       this->objectGhost = false;
       this->hoverPrice = -1;
       return;
@@ -2993,6 +3113,7 @@ void World::mouseMove(int x, int y) {
     this->snapObject(this->objectTool, this->ghostFacing, wx, wy);
     this->ghostX = wx;
     this->ghostY = wy;
+    this->objectPreview.x=wx;this->objectPreview.y=wy;this->objectPreview.facing=this->ghostFacing;
     this->objectGhost = true;
     this->ghostFit = this->objectFit(this->objectTool, wx, wy, this->ghostFacing);
     this->hoverPrice = this->ghostFit == Fences::Fit::Ok ? this->objectCost : 0;
@@ -3001,7 +3122,12 @@ void World::mouseMove(int x, int y) {
   // An animal picked up follows the cursor
   if (this->animals.carried >= 0) {
     float wx, wy;
-    if (this->pick(x, y, wx, wy)) {
+    const auto *animal=this->animals.member(this->animals.carried);
+    const bool marine=animal && this->animals.types()[animal->type].underwater;
+    const bool picked=marine?this->pickTankPlacement(x,y,[this,animal](const Fences::Exhibit &tank) {
+      return tank.floorHeight+this->animals.placementDepth(animal->type,tank.id);
+    },wx,wy):this->pick(x,y,wx,wy);
+    if (picked) {
       this->animals.moveTo(this->animals.carried, wx, wy);
       this->animals.hold(this->animals.carried, this->worldMap, this->fences);
     }
@@ -3011,7 +3137,11 @@ void World::mouseMove(int x, int y) {
   // anywhere else
   if (this->animalTool >= 0) {
     float wx, wy;
-    if (!this->pick(x, y, wx, wy)) {
+    const bool marine=this->animals.types()[this->animalTool].underwater;
+    const bool picked=marine?this->pickTankPlacement(x,y,[this](const Fences::Exhibit &tank) {
+      return tank.floorHeight+this->animals.placementDepth(this->animalTool,tank.id);
+    },wx,wy):this->pick(x,y,wx,wy);
+    if (!picked) {
       this->animals.previewType = -1;
       this->hoverPrice = -1;
       return;
@@ -3234,15 +3364,9 @@ World::ToolResult World::mouseDown(int x, int y) {
                    : !this->pathTool.empty()   ? "path"
                                                : "none"});
   if (this->bulldozer) {
+    this->mouseMove(x,y); // Clicking consumes exactly the target highlighted at this position.
     {
-      const Camera &cam = worldRenderer.getCamera();
-      float zoom = (cam.zoom > 0 ? cam.zoom : 1.0f) * this->viewScale;
-      float lx = (x - this->viewRect.x) / zoom, ly = (y - this->viewRect.y) / zoom;
-      Camera &c = worldRenderer.getCamera();
-      float saved = c.zoom;
-      c.zoom = zoom;
-      int f = this->fences.filterAt(lx, ly, worldRenderer, worldMap);
-      c.zoom = saved;
+      int f = this->fences.highlightFilter;
       if (f >= 0) {
         r.refund = static_cast<int>(std::lround(this->fences.filterType(this->fences.filters()[f].file).cost * 0.8));
         this->fences.removeFilter(f);
@@ -3251,14 +3375,7 @@ World::ToolResult World::mouseDown(int x, int y) {
     }
     // Scenery under it: taken away, 80% of its price back
     {
-      const Camera &cam = worldRenderer.getCamera();
-      float zoom = (cam.zoom > 0 ? cam.zoom : 1.0f) * this->viewScale;
-      float lx = (x - this->viewRect.x) / zoom, ly = (y - this->viewRect.y) / zoom;
-      Camera &c = worldRenderer.getCamera();
-      float saved = c.zoom;
-      c.zoom = zoom;
-      int o = this->placedObjects.pick(lx, ly, worldRenderer, worldMap);
-      c.zoom = saved;
+      int o = this->placedObjects.highlight;
       if (o >= 0) {
         std::string file = PlacedObjects::fileOf(this->placedObjects.objects()[o]);
         for (const CatalogItem &item : ItemCatalog::get().all())
@@ -3297,8 +3414,8 @@ World::ToolResult World::mouseDown(int x, int y) {
         return r;
       }
     }
-    Fences::Edge e;
-    if (!this->pickFence(x, y, e)) {
+    Fences::Edge e=this->highlight;
+    if (e.x<0) {
       // A path tile under it: lifted, 80% back
       if (onMap) {
         int tx = static_cast<int>(std::floor(wx)), ty = static_cast<int>(std::floor(wy));
@@ -3458,6 +3575,7 @@ World::ToolResult World::mouseDown(int x, int y) {
     Fences::Edge e;
     if (this->pickFence(x, y, e) && this->fences.canGate(e)) {
       r.cost = this->fences.gateCostOf(e);
+      if(this->fences.tankOf(e)>=0)this->shows.cancel(this->fences.tankOf(e),"The show platform was moved.");
       this->fences.moveGate(e);
       Sound::get().play("sounds/place");
     } else {
@@ -3529,8 +3647,9 @@ World::ToolResult World::mouseDown(int x, int y) {
     return r;
   }
   if (this->animalTool >= 0) {
-    if (!onMap)
-      return r;
+    this->mouseMove(x,y);
+    if(this->animals.previewType<0)return r;
+    wx=this->animals.previewX;wy=this->animals.previewY;
     int ex = this->fences.exhibitAt(static_cast<int>(std::floor(wx)), static_cast<int>(std::floor(wy)));
     bool fits = this->animals.canPlace(this->animalTool, wx, wy, this->worldMap, this->fences) == Fences::Fit::Ok;
     if (fits)

@@ -2,6 +2,7 @@
 #define FENCES_HPP
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <map>
 #include <set>
@@ -240,6 +241,18 @@ public:
   // The water's level over the floor in whole height units (the original's
   // tank +0x188: animals' cDepth, trick and scenery depths)
   int waterLevel(const Exhibit &ex) const { return this->waterSubtiles(ex) / 2; }
+  // What a tank's animals may be drawn on: its NEAR glass walls at the water
+  // level and at its floor, as world points (x, y, z). A tank is seen from
+  // outside through the walls at its front (tankSide: the ones whose outside
+  // faces down-left or down-right), so those are the edges its art must not
+  // pass - not a silhouette of the whole water, which reaches down to the
+  // floor's near edge and so lets a fish overhang the glass and land on the
+  // ground in front of it. Which walls are near follows the view's rotation,
+  // which is why one rotation looked right and the next did not.
+  // Cleared when the tank has a side with no wall at all: then there is no
+  // glass to clip to and its animals are drawn whole, as the original did.
+  void tankNearGlass(const Exhibit &ex, const WorldMap &map, const WorldRenderer &view,
+                     std::vector<std::array<float, 3>> &out) const;
   bool showPortal(const Edge &edge, int &show, int &home) const;
   const FenceType *portalType(const Edge &edge) const;
   // Its tile inside the gate (the ladder's and platform's); within r tiles
@@ -290,6 +303,7 @@ public:
   // Something standing across an edge (a building, rock or tree's
   // footprint): no fence there
   std::function<bool(const Edge &)> edgeBlocked;
+  std::function<bool(int x,int y)> platformBlocked; // static obstruction on the outside approach
   // The state of an exhibit's fence (zoo.exe 0x449920, the Exhibit/Show
   // List's icon): 2 a piece broken, 1 a piece worn to its cDecayedLife
   // (one that wears), else 0
@@ -489,6 +503,8 @@ public:
   // What's in a tank (its objects, its animals), drawn with its inside:
   // those under the water before it (surface false), on it after
   std::function<void(SDL_Renderer *, int tank, bool surface, float level)> drawTankContents;
+  // Show staff on the deck sort immediately after that platform's artwork.
+  std::function<void(int tank, float depth, std::vector<Drawable> &out)> collectPlatformStaff;
   // The exhibit gate under the cursor: lit, as an animal is
   Edge hoverGate{false, -1, -1};
   // Draws some tiles' ground again (the world's terrain), over a tank's

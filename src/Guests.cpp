@@ -451,6 +451,9 @@ const Guests::BuildingInfo &Guests::infoOf(const std::string &file) const {
         for (size_t k = 0; k + 1 < e.size(); k += 2)
           b.doors.push_back({e[k], e[k + 1]});
       }
+      const auto positions=ai->getIntList(ai->get("slot","cHasDrawSlots","drawslots"),"p");
+      for(size_t i=0;i+2<positions.size();i+=3)
+        b.drawSlots.push_back({positions[i]/64.0f,positions[i+1]/64.0f,positions[i+2]/16.0f});
       delete ai;
     }
   // The bare-word sections ([Satisfies], [Sells]), read from the file text
@@ -514,6 +517,19 @@ std::vector<std::pair<int, int>> Guests::doorTiles(const PlacedObjects::Object &
       tiles.push_back(t);
   }
   return tiles;
+}
+
+bool Guests::positionShowSeat(Guest &g,const PlacedObjects::Object &stand,int seat) const {
+  const auto &positions=infoOf(PlacedObjects::fileOf(stand)).drawSlots;
+  if(seat<0 || static_cast<size_t>(seat)>=positions.size())return false;
+  const float x=positions[seat].x,y=positions[seat].y;
+  const float angle=stand.facing*3.14159265f/4.0f;
+  // The art's across/forward axes turn with the building, not the camera.
+  g.x=stand.x-x*std::cos(angle)+y*std::sin(angle);
+  g.y=stand.y-x*std::sin(angle)-y*std::cos(angle);
+  g.showZ=groundAt(stand.x,stand.y)+positions[seat].z-groundAt(g.x,g.y);
+  g.fx=std::sin(angle);g.fy=-std::cos(angle);
+  return true;
 }
 
 // The nearest building for a need it can walk to (in cSearchRadius tiles;
@@ -1575,6 +1591,19 @@ void Guests::collect(const WorldRenderer &view, const WorldMap &map, std::vector
     float ms = a->frameTimeMs() ? static_cast<float>(a->frameTimeMs()) : 100.0f;
     float sx, sy, depth;
     view.worldToScreenF(g.x, g.y, groundAt(g.x, g.y) + g.showZ, sx, sy, depth);
+    if(g.showSeat>=0 && objects)if(const auto *stand=objects->byId(g.showStand)) {
+      const auto &info=infoOf(PlacedObjects::fileOf(*stand));
+      std::pair<int,int> fp{info.fx,info.fy};
+      if((stand->facing&6)==2 || (stand->facing&6)==6)std::swap(fp.first,fp.second);
+      const float hx=fp.first/4.0f,hy=fp.second/4.0f;
+      float front=depth;
+      for(float x:{stand->x-hx,stand->x+hx})for(float y:{stand->y-hy,stand->y+hy}) {
+        float px,py,d;view.worldToScreenF(x,y,0,px,py,d);front=std::max(front,d);
+      }
+      // The stand is sorted in strips at its footprint's front edge. Its
+      // seated occupants belong above those strips, not behind the steps.
+      depth=front+0.02f+depth*0.00001f;
+    }
     Fences::Drawable d{depth, sx, sy, a, facing(view, g), SDL_Color{255, 255, 110, 255}, g.id == this->hovered};
     d.frame = static_cast<int>(g.animTime * 1000.0f / ms);
     out.push_back(d);

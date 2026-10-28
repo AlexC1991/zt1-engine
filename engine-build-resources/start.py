@@ -72,7 +72,26 @@ def ask_for_folder():
     return os.path.normpath(typed) if typed else None
 
 
+def ensure_mod_repository_key():
+    """A portable install owns its key; no developer key is distributed."""
+    dll = os.path.join(zt1_paths.REL_DIR, "modrepo.dll")
+    key = os.path.join(zt1_paths.REL_DIR, "modrepo.key")
+    if not os.path.isfile(dll) or os.path.exists(key):
+        return
+    import secrets
+    try:
+        with open(key, "x", encoding="ascii") as out:
+            out.write(secrets.token_hex(32) + "\n")
+    except FileExistsError:
+        pass  # Another startup already created this install's key.
+
+
 def main():
+    try:
+        ensure_mod_repository_key()
+    except OSError as error:
+        print(f"Could not initialize the mod repository: {error}")
+        return 1
     os.system("cls" if os.name == "nt" else "clear")
     print(f"""{C.CYAN}{C.BOLD}
     +==================================================================+

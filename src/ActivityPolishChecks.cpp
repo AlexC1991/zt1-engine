@@ -3,6 +3,7 @@
 #include "ItemCatalog.hpp"
 #include "IniReader.hpp"
 #include "ZooSim.hpp"
+#include "Features.hpp"
 #include <algorithm>
 #include <cmath>
 #include <set>
@@ -29,6 +30,31 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
   world.reindex();
 
   if(!demo) {
+    // A later frame above frame 0 must survive decoding, with one common
+    // anchor across the sequence (the dolphin's airborne flip regression).
+    auto *data=static_cast<AnimationData*>(std::calloc(1,sizeof(AnimationData)));
+    data->width=data->height=4;data->frame_count=2;data->frame_time_in_ms=100;
+    data->frames=static_cast<AnimationFrameData*>(std::calloc(2,sizeof(AnimationFrameData)));
+    for(int i=0;i<2;++i) {
+      auto &frame=data->frames[i];frame.width=frame.height=2;
+      frame.offset_y=1;frame.offset_x=1+i*10;frame.is_shadow=true;
+      frame.lines=static_cast<AnimationLineData*>(std::calloc(2,sizeof(AnimationLineData)));
+      for(int y=0;y<2;++y) {
+        auto &line=frame.lines[y];line.instruction_count=1;
+        line.instructions=static_cast<AnimationDrawInstruction*>(std::calloc(1,sizeof(AnimationDrawInstruction)));
+        line.instructions[0].color_count=2;
+      }
+    }
+    std::unordered_map<std::string,AnimationData*> frames{{"N",data}};
+    Animation probeFrames(&frames);int completeFrames=0;
+    probeFrames.forEachFrame([&](const auto &,int,SDL_Surface *surface) {
+      int pixels=0;for(int y=0;y<surface->h;++y)for(int x=0;x<surface->w;++x) {
+        const auto pixel=reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(surface->pixels)+y*surface->pitch)[x];
+        pixels+=(pixel & surface->format->Amask)!=0;
+      }
+      completeFrames+=pixels==4;
+    });
+    check("airborne frames above the first frame retain every source pixel",completeFrames==2);
     ZooReader empty, fixture;
     PlacedObjects probe; probe.load(empty,rm);
     auto &records=const_cast<std::vector<ZooReader::ZooObject>&>(fixture.getObjects());
@@ -182,6 +208,54 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
   check("ladder fixture tank built",ex && ex->tank);
   if(!ex)return report.str();
   ex->water=1; ex->testAnimals=2;
+  // The animal pass nests inside the tank's device-pixel strips. A changed
+  // clip or scale corrupts later glass, platform and filter drawing.
+  SDL_Surface *canvas=SDL_CreateRGBSurfaceWithFormat(0,512,512,32,SDL_PIXELFORMAT_RGBA32);
+  SDL_Renderer *probe=canvas?SDL_CreateSoftwareRenderer(canvas):nullptr;
+  bool restored=probe!=nullptr;const bool oldTankClip=Features::tankClip;Features::tankClip=true;
+  world.centreOn(38,32);
+  if(probe)for(float scale:{1.0f,1.5f,2.0f})for(int turn=0;turn<4;++turn) {
+    SDL_RenderSetScale(probe,1,1);SDL_Rect expected{17,23,3000,3000};
+    SDL_RenderSetClipRect(probe,&expected);SDL_RenderSetScale(probe,scale,scale);
+    animals.drawInTank(probe,world.getRenderer(),map,tankId,false);
+    float xScale=0,yScale=0;SDL_RenderGetScale(probe,&xScale,&yScale);
+    SDL_RenderSetScale(probe,1,1);SDL_Rect got;SDL_RenderGetClipRect(probe,&got);
+    restored &= SDL_RenderIsClipEnabled(probe) && got.x==expected.x && got.y==expected.y &&
+      got.w==expected.w && got.h==expected.h && xScale==scale && yScale==scale;
+    world.getRenderer().rotateView(1);
+  }
+  // Keep the probe alive for the pixel comparison below.
+  check("tank animal clip preserves parent renderer state at every zoom and rotation",restored);
+  // Compare accelerated mask shortcuts with the exact clipped path using real artwork.
+  extern void tankAnimalFastPaths(bool);
+  bool samePixels=probe!=nullptr,sawPixels=false;
+  const int swimmer=animals.adopt(animals.typeOfFile("animals/whleshrk.ai"),false,37.5f,31.5f,map,fn,true);
+  auto *fish=animals.member(swimmer);
+  samePixels &= fish!=nullptr;
+  const Camera oldCamera=world.getCamera();
+  if(probe && fish)for(float scale:{1.0f,1.5f,2.0f})for(int rotation=0;rotation<4;++rotation) {
+    float sx,sy,depth;world.getRenderer().worldToScreenF(38,32,ex->floorHeight,sx,sy,depth);
+    world.getCamera().x+=128-sx;world.getCamera().y+=100-sy;
+    fish->anim="subswim";fish->swimZ=fish->swimTo=fn.waterLevel(*ex)*0.5f;
+    fish->x=rotation%2?36.1f:38.0f;fish->y=rotation%2?30.1f:32.0f;
+    std::vector<Uint8> reference;
+    for(bool fast:{false,true}) {
+      tankAnimalFastPaths(fast);
+      SDL_RenderSetScale(probe,1,1);SDL_RenderSetClipRect(probe,nullptr);
+      SDL_SetRenderDrawColor(probe,0,0,0,0);SDL_RenderClear(probe);
+      SDL_Rect parent{17,23,450,450};SDL_RenderSetClipRect(probe,&parent);SDL_RenderSetScale(probe,scale,scale);
+      animals.drawInTank(probe,world.getRenderer(),map,tankId,false);SDL_RenderFlush(probe);
+      const auto *bytes=static_cast<const Uint8*>(canvas->pixels);
+      if(!fast) {
+        reference.assign(bytes,bytes+canvas->pitch*canvas->h);
+        sawPixels |= std::any_of(reference.begin(),reference.end(),[](Uint8 value){return value!=0;});
+      } else samePixels &= std::equal(reference.begin(),reference.end(),bytes);
+    }
+    world.getRenderer().rotateView(1);
+  }
+  tankAnimalFastPaths(true);world.getCamera()=oldCamera;if(swimmer>=0)animals.remove(swimmer);
+  check("optimized whale clipping matches exact pixel clips at three scales and four rotations",samePixels && sawPixels);
+  Features::tankClip=oldTankClip;if(probe)SDL_DestroyRenderer(probe);if(canvas)SDL_FreeSurface(canvas);
   const Fences::Edge sides[4]={{true,37,30},{false,40,31},{true,37,34},{false,36,31}};
   if(demo) {
     fn.moveGate(sides[0]); ex->purity=20;
@@ -450,32 +524,39 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
   if(auto *tank=f.exhibit(swimTank))tank->water=12;
   world.reindex();
   const int shark=a.typeOfFile("animals/whleshrk.ai");
-  check("whale shark steering fixture available",shark>=0 && swimTank>=0);
+  check("whale shark swimming fixture available",shark>=0 && swimTank>=0);
   out<<"STEERING fixture type="<<shark<<" tank="<<swimTank<<"\n";
   if(shark>=0 && swimTank>=0) {
+    // Planning: an animal's own plan straight at a point must succeed, with
+    // nothing in the way, and end standing clear of the tank wall. (The
+    // steering that used to be exercised here is gone - animals swim their
+    // planned path the way the engine did before 2026.10.28.)
     Animals::Member swimmer;swimmer.id=910001;swimmer.type=shark;
     swimmer.exhibit=swimTank;swimmer.x=34;swimmer.y=54;swimmer.swimZ=swimmer.swimTo=3;
-    swimmer.fx=1;swimmer.fy=0;swimmer.speed=4;
+    swimmer.fx=1;swimmer.fy=0;swimmer.speed=4;swimmer.moveAnim="walk";
     const float target=swimmer.x+3;
-    Animals::Member obstacle=swimmer;obstacle.id=910002;
-    obstacle.x=target+2*a.bodyRadius(swimmer)+0.13f;obstacle.speed=0;
-    a.list={swimmer,obstacle};a.list[0].path={{target,54}};world.reindex();
-    bool reached=false;int reversals=0;float previousTurn=0;
-    for(int k=0;k<600 && !reached;++k) {
-      auto &m=a.list[0];const float oldX=m.fx,oldY=m.fy;
-      reached=a.moveAware(m,target,54,1.0f/60,map,f);
-      const float turn=oldX*m.fy-oldY*m.fx;
-      if(std::abs(turn)>0.2f && turn*previousTurn<0)++reversals;
-      if(std::abs(turn)>0.2f)previousTurn=turn;
-      world.reindex();
-    }
-    check("swimmer reaches free route endpoint before nearby animal",reached);
-    check("swimmer avoids rapid alternating steering at route endpoint",reversals<4);
-    out<<"STEERING reached="<<reached<<" reversals="<<reversals
-       <<" x="<<a.list[0].x<<" y="<<a.list[0].y<<"\\n";
-    check("swimmer retains body and tank wall clearance",
-      a.destinationFree(a.list[0],a.list[0].x,a.list[0].y,a.list[0].swimZ,false) &&
-      a.tankClearance(a.list[0],a.list[0].x,a.list[0].y,f)>=-0.001f);
+    a.list={swimmer};world.reindex();
+    check("swimmer can plan a clear route",a.walkTo(a.list[0],target,54,map,f));
+    check("swimmer's plan ends clear of the wall",
+      a.tankClearance(a.list[0],target,54,f)>=-0.001f);
+
+    // Idling: two animals standing on the same spot must be parted. This is
+    // the one thing 10.28 added that is kept, so it is what this guards.
+    Animals::Member one=a.list[0], two=a.list[0];
+    one.id=910011;one.x=40.5f;one.y=54.5f;one.fx=1;one.fy=0;
+    one.path.clear();one.pathAt=0;one.speed=1;one.moveAnim="walk";one.anim="stand";
+    one.awarenessCheck=0;
+    two.id=910012;two.x=40.5f;two.y=54.5f;two.fx=1;two.fy=0;
+    two.path.clear();two.pathAt=0;two.speed=1;two.moveAnim="walk";two.anim="stand";
+    a.list={one,two};world.reindex();
+    const float together=a.bodyDistance(a.list[0],a.list[0].x,a.list[0].y,
+      a.bodyHeight(a.list[0],a.list[0].x,a.list[0].y,a.list[0].swimZ),
+      a.list[1],a.list[1].x,a.list[1].y,
+      a.bodyHeight(a.list[1],a.list[1].x,a.list[1].y,a.list[1].swimZ));
+    for(int k=0;k<8;++k) a.separateIdle(a.list[0],0.5f,map,f);
+    check("an idle pair really is standing on each other first",together<1.0f);
+    check("the idle animal plans a step off the other",a.list[0].pathAt<a.list[0].path.size());
+    out<<"IDLE together="<<together<<" steps="<<a.list[0].path.size()<<"\n";
   }
   a.clear();world.reindex();
   Guests::Guest arrived;arrived.arrived=0;

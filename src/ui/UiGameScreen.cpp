@@ -1,4 +1,5 @@
 #include "UiGameScreen.hpp"
+#include "../Shows.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -167,6 +168,18 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   this->resource_manager = resource_manager;
   resource_manager->provide("ui/gameopts.lyt", gameOptionsWithExtras);
   resource_manager->provide("ui/gameopt2.lyt", soundVideoPage);
+  resource_manager->provide("ui/show.lyt", [](ResourceManager *rm) {
+    return rm->getGameText("ui/show.lyt") +
+      "\n[ShowStatus]\ntype=UIText\nid=71100\nx=12\ny=244\ndx=418\ndy=22\n"
+      "font=3452\nfontsize=3453\nborder=0\ntransparent=1\nshadowtext=1\nlayer=7\n"
+      "forecolor=255\nforecolor=228\nforecolor=173\n";
+  });
+  resource_manager->provide("ui/infocom.lyt", [](ResourceManager *rm) {
+    return rm->getGameText("ui/infocom.lyt") +
+      "\n[LinkedShow]\ntype=UIText\nid=71110\nx=15\ny=190\ndx=177\ndy=18\n"
+      "font=3452\nfontsize=3453\nborder=0\ntransparent=1\nshadowtext=1\nlayer=7\n"
+      "forecolor=255\nforecolor=228\nforecolor=173\n";
+  });
   this->options = new UiOptions(resource_manager);
   this->options->onTooltips = [this](int delay, int durationMs) {
     this->tooltipDelayMs = delay;
@@ -3461,6 +3474,7 @@ void UiGameScreen::showBuilding(int id) {
   PlacedObjects::Object *o = this->objects ? this->objects->byId(id) : nullptr;
   if (!o)
     return;
+  if(this->shows)this->shows->refresh();
   bool commerce = o->price >= 0;
   UiLayout *z = nullptr;
   for (Entry &e : this->entries)
@@ -3507,13 +3521,29 @@ void UiGameScreen::showBuilding(int id) {
     if (UiButton *up = dynamic_cast<UiButton *>(z->getElementById(4557)))
       up->onClick = [this, hi] {
         if (PlacedObjects::Object *b = this->objects->byId(this->shownBuilding))
-          b->price = std::min({b->price + Original::priceStep, Original::economy().buildingUseCostMax, hi});
+          if(!this->shows || !this->shows->setStandAdmission(b->id,b->price+Original::priceStep))
+            b->price = std::min({b->price + Original::priceStep, Original::economy().buildingUseCostMax, hi});
       };
     if (UiButton *dn = dynamic_cast<UiButton *>(z->getElementById(4556)))
       dn->onClick = [this, lo] {
         if (PlacedObjects::Object *b = this->objects->byId(this->shownBuilding))
-          b->price = std::max({b->price - Original::priceStep, 0.0f, lo});
+          if(!this->shows || !this->shows->setStandAdmission(b->id,b->price-Original::priceStep))
+            b->price = std::max({b->price - Original::priceStep, 0.0f, lo});
       };
+  }
+  if(commerce)if(auto *price=dynamic_cast<UiText*>(z->getElementById(4555))) {
+    price->onBeginEdit=[this]{auto *b=this->objects->byId(this->shownBuilding);return b?std::to_string(b->price):"0";};
+    price->onCommit=[this](const std::string &v) {
+      auto *b=this->objects->byId(this->shownBuilding);const float value=static_cast<float>(std::atof(v.c_str()));
+      if(!b || !std::isfinite(value))return;
+      if(this->shows && this->shows->setStandAdmission(b->id,value))return;
+      float lo=1,hi=1;
+      if(auto *ai=this->resource_manager->getIniReader(PlacedObjects::fileOf(*b))) {
+        lo=std::atof(ai->get("characteristics/floats","clowcost","1").c_str());
+        hi=std::atof(ai->get("characteristics/floats","chighcost","1").c_str());delete ai;
+      }
+      b->price=std::clamp(value,std::max(0.0f,lo),std::max(lo,std::min(hi,Original::economy().buildingUseCostMax)));
+    };
   }
   if (UiButton *sell = dynamic_cast<UiButton *>(z->getElementById(commerce ? 4516 : 4616)))
     sell->onClick = [this, commerce] {
@@ -3651,6 +3681,13 @@ void UiGameScreen::refreshBuilding() {
     std::snprintf(b, sizeof b, v < 0 ? "-$%.0f" : "$%.0f", std::fabs(v));
     return std::string(b);
   };
+  if(auto *linked=dynamic_cast<UiText*>(z->getElementById(71110))) {
+    const bool stand=this->shows && this->shows->isStand(o->id);linked->setHidden(!stand);
+    if(stand) {
+      const int id=this->shows->standShow(o->id);const auto *tank=this->fences?this->fences->exhibit(id):nullptr;
+      linked->setText(tank?"Show: "+tank->name:"Face a show tank to link");
+    }
+  }
   this->refreshColours(z, o, open21);
   int months = std::max(1, this->monthNumber - o->openedMonth + 1);
   if (open21) {

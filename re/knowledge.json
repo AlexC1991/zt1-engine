@@ -3628,6 +3628,11 @@
    "kind": "ui",
    "meaning": "The Single_Undo button's id"
   },
+  "11491": {
+   "by": "batty251",
+   "kind": "message",
+   "meaning": "Message: 'A show is starting in %s.' - pushed by showStartingAnnounce (0x5a3fa3) with the show tank's name (tank+0x154)"
+  },
   "157": {
    "by": "zt1-engine (batty251, earlier sessions)",
    "kind": "message",
@@ -15632,6 +15637,14 @@
    "provisional": false,
    "summary": "Job 0x13 (Job19: a job (not yet known)) - its destructor (deleting when asked) - class slot 0 (table 0x633d44)"
   },
+  "0x5a3585": {
+   "by": "batty251",
+   "class": "Shows",
+   "confidence": "likely",
+   "name": "showTankSetHas",
+   "provisional": false,
+   "summary": "The set lookup both show tasks use: is the tank the animal is heading for in its own set at animal+0x15c (a std::set of tank ids) - the only tanks a show animal may cross into"
+  },
   "0x5a36d1": {
    "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
    "class": "Task86_ReturnHomeTank",
@@ -15657,35 +15670,36 @@
    "summary": "Task86_ReturnHomeTank: frees the task when its destructor is asked to (flag 1)"
   },
   "0x5a370b": {
-   "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
+   "by": "batty251",
    "class": "Task86_ReturnHomeTank",
    "confidence": "likely",
-   "name": "atTarget",
+   "name": "Task86_ReturnHomeTank_atTarget",
    "provisional": false,
-   "summary": "Task 0x86 (Task86_ReturnHomeTank: a show animal going back to its home tank (\"Already in home tank\")): what the unit does once there - class slot 10"
+   "summary": "The show animal going home: same tank-set check and water test as Task85, places it in its home tank and clears the show flag at animal+0x250"
   },
   "0x5a3846": {
-   "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
+   "by": "batty251",
    "class": "Task85_GoToShowTank",
    "confidence": "likely",
-   "name": "atTarget",
+   "name": "Task85_GoToShowTank_atTarget",
    "provisional": false,
-   "summary": "Task 0x85 (Task85_GoToShowTank: a show animal going to the show tank through the show portal (\"Reached show portal\")): what the unit does once there - class slot 10"
+   "summary": "The show animal arriving: checks the tank it stands in against showTankSetHas (0x5a3585) and its water (tank+0x188), then places it at the tank's water level and turns it to face the crowd"
   },
   "0x5a3c4f": {
-   "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
+   "by": "batty251",
    "class": "Task85_GoToShowTank",
-   "confidence": "sure",
-   "name": "ctor",
+   "confidence": "likely",
+   "name": "Task85_GoToShowTank_ctor",
    "provisional": false,
-   "summary": "Task 0x85's constructor (unitMakeTask case 0x85): the unit (+4), its task state (unit+0x15c, +8), the class table 0x634184 - a show animal going to the show tank through the show portal (\"Reached show portal\")"
+   "summary": "Task85's constructor: stores 0x634184 as the task's class table and keeps animal+0x15c (the set of tanks a show animal may cross into) as its tank set"
   },
   "0x5a3de4": {
-   "by": "batty251 (the texts each uses, found with the Lab's number search)",
+   "by": "batty251",
+   "class": "Shows",
    "confidence": "likely",
    "name": "showStartingAnnounce",
    "provisional": false,
-   "summary": "11491 \"A show is starting in %s.\" (its event 10003 on the same object)"
+   "summary": "A show beginning: takes the tank the show manager picked, finds its record (0x59e216), builds the message 'A show is starting in %s.' (id 11491) from the tank's name at +0x154, then walks the show's animals calling the per-animal slot 0x1c on the check at 0x6386b0 before each one is sent"
   },
   "0x5a4556": {
    "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
@@ -15990,6 +16004,14 @@
    "name": "announce",
    "provisional": true,
    "summary": "An announcement by text number (the news)"
+  },
+  "0x5a6f96": {
+   "by": "batty251",
+   "class": "Shows",
+   "confidence": "likely",
+   "name": "trickValidateObject",
+   "provisional": false,
+   "summary": "An object trick's check: a trick whose type is 1 wants its show object in the tank - calls the show's own slot 0x21c with the trick's building (cNameID, e.g. 6502 for orcaball's Play with Ball); returns 9 when the trick is unavailable"
   },
   "0x5a72d9": {
    "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
@@ -30765,6 +30787,91 @@
    "by": "Lab recorder",
    "on": "2026-10-26",
    "what": "Seen 165 functions running: Controlled show test: orca happiness held at 100 to isolate show execution"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Named 0x5a6f96 trickValidateObject"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Named 0x5a3c4f Task85_GoToShowTank_ctor"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Named 0x5a3585 showTankSetHas"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Named 0x5a3846 Task85_GoToShowTank_atTarget"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Named 0x5a370b Task86_ReturnHomeTank_atTarget"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Field ZTAnimal+0x15c = showTanks"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Field ZTAnimal+0x250 = onShow"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Field ZTAnimal+0x251 = trickRunning"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Field ZTAnimal+0x254 = trickId"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Field ZTAnimal+0x24f = onShowTank"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Number 11491 = Message: 'A show is starting in %s.' - pushed by showStartingAnnounce (0x5a3fa3) with the show tank's name (tank+0x154)"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Named 0x5a3de4 showStartingAnnounce"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Note at 0x5a3de4: The one message a player sees when a show starts, and the only place the show's animals are gathered and checked (the 0x6386b0 characteristics check)"
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Note at 0x5a6f96: Correction to the 26 Oct note: 0x5a6f96 is a trick OBJECT check, not the general trick validation. Its guard 0x5a6f50 reads tank+0x70 and the game manager's stage (0x59f07c), then it calls 0x5a2682 to get the trick record and dispatches on the trick's type: 0 -> slot 0x224, 1 (has a show object) -> slot 0x21c with the trick's 'building' id, 2 -> slot 0x220. Returns 9 when the trick cannot be played. The tank-depth test is the compare at 0x5a700e: the trick's minimumdepth (record+0x58) against the tank's water (tank+0x188)."
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Note at 0x5a3585: showTankSetHas: a plain std::set membership test over animal+0x15c. Both show tasks call it, and Task85's constructor (0x5a3c4f) stores a pointer to animal+0x15c as the task's tank set - so the original does NOT let a show animal into any tank it likes: only the tanks registered in that per-animal set are reachable."
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Note at 0x5a6f96: OPEN LEAD: who fills animal+0x15c is still unknown. A text scan of .text finds no instruction naming 0x15c as a base with a small displacement in show code, so the fill is either through a pointer taken elsewhere or by the `set` insert helper reached with the address in a register. Chase it by breakpointing showTankSetHas (0x5a3585) in the original and reading animal+0x15c when a show animal first becomes a performer."
+  },
+  {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "what": "Lead q11 at 0x5a3585: Who inserts the show tank and the home tank into animal+0x15c? It must happen before Task85 is made, or the animal can never be sent."
   }
  ],
  "notes": {
@@ -30807,6 +30914,21 @@
    "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
    "on": "2026-10-14",
    "text": "The path shape loader stores each [Shapes] shape= code's LIST POSITION into the record's +0x14: the bytes at 0x4c25cf are 89 78 14, i.e. 'mov dword ptr [eax+0x14], edi' - checked against the pinned build (2002 Complete Collection zoo.exe, sha256 61fcc6d1..., 2,449,432 bytes), so the value kept is the index in the repeated-key list, not the code itself. Found by StevenGann, address verified here 2026-10-14."
+  },
+  "0x5a3585": {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "text": "showTankSetHas: a plain std::set membership test over animal+0x15c. Both show tasks call it, and Task85's constructor (0x5a3c4f) stores a pointer to animal+0x15c as the task's tank set - so the original does NOT let a show animal into any tank it likes: only the tanks registered in that per-animal set are reachable."
+  },
+  "0x5a3de4": {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "text": "The one message a player sees when a show starts, and the only place the show's animals are gathered and checked (the 0x6386b0 characteristics check)"
+  },
+  "0x5a6f96": {
+   "by": "batty251",
+   "on": "2026-10-28",
+   "text": "OPEN LEAD: who fills animal+0x15c is still unknown. A text scan of .text finds no instruction naming 0x15c as a base with a small displacement in show code, so the fill is either through a pointer taken elsewhere or by the `set` insert helper reached with the address in a register. Chase it by breakpointing showTankSetHas (0x5a3585) in the original and reading animal+0x15c when a show animal first becomes a performer."
   },
   "0x611b43": {
    "by": "batty251 (read the code: the fidelity money audit)",
@@ -30993,6 +31115,19 @@
    "id": "q10",
    "on": "2026-10-17",
    "question": "After entitiesLoad, a saved zoo holds 5 ints RustyZoo calls the view (zoom, rotation, scroll x, scroll y, brush; lab-sweep-marine3: 0, 0, 2984, 608, 5; lab-show-zoo: 0, 0, 1732, -483, 1) before the scenario block and name counters. Which function reads them, and what are the scroll units (the original opened marine3 on its tanks; our engine opens at the entrance)? Not entitiesLoad's freads; gameMgrLoad 0x5948c6 reads one int first, then gameMgrLoadSettings (the status/books)",
+   "status": "open"
+  },
+  {
+   "address": "0x5a3585",
+   "answer": "",
+   "answered_by": "",
+   "answered_on": "",
+   "by": "batty251",
+   "for": "user",
+   "function": "showTankSetHas",
+   "id": "q11",
+   "on": "2026-10-28",
+   "question": "Who inserts the show tank and the home tank into animal+0x15c? It must happen before Task85 is made, or the animal can never be sent.",
    "status": "open"
   }
  ],
@@ -152132,6 +152267,13 @@
      "summary": "Its species (read as the species in animalUpdateHappiness 0x4378df)",
      "type": "ZTAnimalType *"
     },
+    "0x15c": {
+     "by": "batty251",
+     "confidence": "likely",
+     "name": "showTanks",
+     "summary": "The tanks a show animal may cross into: a std::set of tank ids (header 0x1c bytes). Task85_GoToShowTank and Task86_ReturnHomeTank store a pointer to it and their atTarget only accept a tank in it (showTankSetHas 0x5a3585)",
+     "type": "set<int>"
+    },
     "0x210": {
      "by": "batty251 (the original's own debug overlay labels, class slot 0x64)",
      "confidence": "likely",
@@ -152144,6 +152286,34 @@
      "confidence": "likely",
      "name": "predator",
      "summary": "The predator after it (an id): the debug overlay's Pred; chooseTask flees it",
+     "type": "int"
+    },
+    "0x24f": {
+     "by": "batty251",
+     "confidence": "guess",
+     "name": "onShowTank",
+     "summary": "Cleared as a show animal leaves the show tank (0x5a3963)",
+     "type": "bool"
+    },
+    "0x250": {
+     "by": "batty251",
+     "confidence": "likely",
+     "name": "onShow",
+     "summary": "On a show: set by trickValidateObject (0x5a6f96) while a trick is being run and cleared by Task86_ReturnHomeTank atTarget (0x5a3825)",
+     "type": "bool"
+    },
+    "0x251": {
+     "by": "batty251",
+     "confidence": "likely",
+     "name": "trickRunning",
+     "summary": "A trick is being played: set to 1 around the trick-type dispatch in trickValidateObject (0x5a6f96) and cleared after",
+     "type": "bool"
+    },
+    "0x254": {
+     "by": "batty251",
+     "confidence": "likely",
+     "name": "trickId",
+     "summary": "The trick it is playing: saved and restored around the dispatch in trickValidateObject (0x5a6f96), and read by the show's start announce (0x5a3f05)",
      "type": "int"
     },
     "0x2a8": {

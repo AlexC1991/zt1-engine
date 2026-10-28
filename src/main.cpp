@@ -479,6 +479,7 @@ static void drawLayoutCentered(SDL_Renderer *renderer, UiLayout *layout,
 
 static UiGameScreen *g_hud = nullptr;
 static ZooSim g_sim; // the game clock and the zoo's books
+namespace FrameProfile {void start();void begin();void end();}
 static DevConsole g_console;    // ` or F10: commands to set up test states
 static float g_gameSpeed = 1.0f; // (dev console) the game's speed
 
@@ -1391,6 +1392,50 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
     if (g_hud) return "Run this fixture in the Lab Test Zoo, not a player zoo.";
     extern std::string runParityChecks(World &, ResourceManager *);
     return runParityChecks(*g_world, rm);
+  }
+  if(!w.empty() && w[0]=="showcrowdsave") {
+    if(g_hud || w.size()!=4)return "Test Zoo only: showcrowdsave count source.zt1save output.zt1save";
+    const int count=std::clamp(std::atoi(w[1].c_str()),1,1000);
+    if(std::filesystem::exists(w[3]))return "Output already exists; choose a new diagnostic name.";
+    const std::string base=SaveGame::mapOf(w[2]);
+    if(base.empty() || !g_world->loadFreeform(base))return "Cannot load source map.";
+    ZooSim books;UiGameScreen hud(rm,"ui/main.lyt","ui/gamescrn.lyt");
+    if(!SaveGame::load(w[2],*g_world,books,hud))return "Cannot restore source zoo.";
+    auto &guests=g_world->getGuests();auto &f=g_world->getFences();auto &map=g_world->getMap();
+    std::vector<std::pair<int,int>> paths;
+    for(int y=0;y<map.getHeight();++y)for(int x=0;x<map.getWidth();++x)
+      if(map.isPath(x,y) && guests.canWalk(x,y))
+        for(const auto &o:g_world->getObjects().objects())
+          if(g_world->getShows().isStand(o.id) && std::abs(o.x-x)+std::abs(o.y-y)<8){paths.push_back({x,y});break;}
+    if(paths.empty())return "No reachable paths beside grandstands.";
+    while(guests.guests().size()<static_cast<size_t>(count))guests.admit(0);
+    auto &crowd=const_cast<std::vector<Guests::Guest>&>(guests.guests());crowd.resize(count);
+    for(size_t i=0;i<crowd.size();++i) {
+      auto &g=crowd[i];auto [x,y]=paths[i%paths.size()];
+      g.x=x+0.3f+(i%3)*0.15f;g.y=y+0.3f+(i%2)*0.3f;
+      g.showTank=g.showStand=g.showSeat=-1;g.building=g.target=-1;g.hidden=g.leaving=false;
+      g.guide=-1;g.path.clear();g.pathAt=0;g.need.clear();g.happiness=80;
+      g.hunger=g.thirst=g.bathroom=g.tired=20;g.state=Guests::State::Walking;
+      g.anim="stand";g.animTime=0;g.playFor=1+(i%7)*0.15f;g.tickMs=(i%20)*50;
+    }
+    g_world->reindex();
+    if(!SaveGame::save(w[3],*g_world,books,hud,base))return "Could not write diagnostic zoo.";
+    return "Saved "+std::to_string(count)+" guests beside grandstands to "+w[3];
+  }
+  if (!w.empty() && w[0] == "showmanagementcheck") {
+    if(g_hud)return "Run this fixture in the Lab Test Zoo, not a player zoo.";
+    extern std::string runShowManagementChecks(World &,ResourceManager *);
+    return runShowManagementChecks(*g_world,rm);
+  }
+  if (!w.empty() && (w[0] == "showpolishcheck" || w[0] == "showpolishdemo")) {
+    if(g_hud)return "Run this fixture in the Lab Test Zoo, not a player zoo.";
+    extern std::string runShowPolishChecks(World &,ResourceManager *,bool);
+    return runShowPolishChecks(*g_world,rm,w[0]=="showpolishdemo");
+  }
+  if (!w.empty() && w[0] == "showstartcheck") {
+    if (g_hud) return "Run this fixture in the Lab Test Zoo, not a player zoo.";
+    extern std::string runShowStartChecks(World &);
+    return runShowStartChecks(*g_world);
   }
   if (!w.empty() && w[0] == "shows")
     return g_world->getShows().command(w);
@@ -3878,6 +3923,23 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         enter();
         for (int i = 0; i < 40; i++)
           world->getFences().update(1.0f);
+        // ZT_TANK_LAB_RAISE=<units>: the walls up so the tank stands ABOVE its
+        // ground (what a player builds), instead of sunk down into a hole where
+        // the walls are drawn over the grass and nothing below the rim shows.
+        // Default 8: three whole units of wall above the ground.
+        if (std::getenv("ZT_TANK_LAB_RAISE")) {
+          int raise = std::atoi(std::getenv("ZT_TANK_LAB_RAISE"));
+          if (raise > 0)
+            for (const Fences::Exhibit &x : fences.exhibits())
+              if (x.tank && x.tiles.count({lx, ly}))
+                world->getFences().adjustWall(x.id, raise);
+          for (int i = 0; i < 40; i++)
+            world->getFences().update(1.0f);
+          for (const Fences::Exhibit &x : fences.exhibits())
+            if (x.tank)
+              SDL_Log("[TankLab] raised: tank %d wallSub %d floor %d ground %d top %.2f level %.2f", x.id, x.wallSub,
+                      x.floorHeight, x.groundHeight, x.wallTop(), fences.waterLevel(x));
+        }
         world->centreOn(lx + 2.0f, ly + 2.0f);
         for (int r = 0; r < 4; r++) {
           capture(("tanklab_rot" + std::to_string(r)).c_str());
@@ -8657,8 +8719,19 @@ int main(int argc, char *argv[]) {
       }
     }
 
+    FrameProfile::begin();
     window.clear();
     inputs = input_manager.getInputs();
+    if(g_currentState==LayoutState::GAME_LOOP)
+      for(const Input &in:inputs)if(in.event==InputEvent::KEY_DOWN && in.key==SDLK_F9) {
+        FrameProfile::start();int width=0,height=0;SDL_GetRendererOutputSize(window.renderer,&width,&height);
+        SDL_RendererInfo device{};SDL_GetRendererInfo(window.renderer,&device);
+        SDL_Log("[FrameProfile] renderer=%s accelerated=%d targetTextures=%d vsync=%d",device.name,
+          (device.flags&SDL_RENDERER_ACCELERATED)!=0,(device.flags&SDL_RENDERER_TARGETTEXTURE)!=0,(device.flags&SDL_RENDERER_PRESENTVSYNC)!=0);
+        SDL_Log("[FrameProfile] context guests=%zu animals=%zu size=%dx%d zoom=%.2f paused=%d",
+          g_world->getGuests().guests().size(),g_world->getAnimals().members().size(),width,height,
+          g_world->getCamera().zoom,g_world->isPaused());
+      }
     // The dev console takes the keyboard while it's open
     bool consoleKeys = false;
     if (g_currentState == LayoutState::GAME_LOOP && g_hud && !UiText::isEditing()) {
@@ -9136,6 +9209,7 @@ int main(int argc, char *argv[]) {
     }
 
     window.present();
+    FrameProfile::end();
 
     // Check if it's time for periodic memory dump
     // ZT_MEMORY_DUMP_CHECK();

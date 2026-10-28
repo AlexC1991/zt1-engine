@@ -174,6 +174,12 @@ void PlacedObjects::loadLayers(Object &o) {
   if (this->rm)
     if (IniReader *ai = this->rm->getIniReader(fileOf(o))) {
       const std::string ints = "characteristics/integers";
+      o.onWater=ai->getInt(ints,"csurface",0)!=0;
+      // (a thing that stands half in the water: its underidle is the part below
+      // the surface, idle the part on it)
+      if (ai->getInt(ints, "chasunderwatersection", 0) != 0 && ai->getInt(ints, "cunderwater", 0) != 0 &&
+          ai->getInt(ints, "csurface", 0) != 0)
+        o.underIdle = this->paintedArtOf(o, "underidle");
       o.randomUse = ai->getInt(ints, "crandomuse", 0) != 0;
       if (o.randomUse) {
         o.minUsePeriod = std::max(1, ai->getInt(ints, "cminuseperiod", 20));
@@ -243,21 +249,27 @@ bool PlacedObjects::add(const std::string &file, float x, float y, int facing) {
     return false;
   o.id = this->nextId++;
   this->loadLayers(o);
-  // Buildings are numbered by type ("Snack Machine 1"; cUseNumbersInName 0
-  // and scenery go without)
-  if (o.subClass == "building" && this->rm)
+  // Its cNameID, which a show trick names as the object it needs (zoo.exe
+  // loads the tricks' "building" and matches the object placed in the tank
+  // by it): every object has one, not only the buildings - a show toy
+  // (objects/orcaball: cNameID 6502) is scenery.
+  if (this->rm)
     if (IniReader *ai = this->rm->getIniReader(file)) {
       const std::string ints = "characteristics/integers";
       int nameId = ai->getInt(ints, "cnameid", 0);
       o.nameId = nameId;
-      bool numbers = ai->getInt(ints, "cusenumbersinname", 1) != 0;
-      std::string cost = ai->get("characteristics/floats", "cdefaultcost");
-      o.price = cost.empty() ? -1.0f : static_cast<float>(std::atof(cost.c_str()));
+      // Buildings are numbered by type ("Snack Machine 1"; cUseNumbersInName 0
+      // and scenery go without)
+      if (o.subClass == "building") {
+        bool numbers = ai->getInt(ints, "cusenumbersinname", 1) != 0;
+        std::string cost = ai->get("characteristics/floats", "cdefaultcost");
+        o.price = cost.empty() ? -1.0f : static_cast<float>(std::atof(cost.c_str()));
+        const CatalogItem *item = ItemCatalog::get().find(file);
+        o.label = item ? item->name : this->rm->getString(nameId);
+        if (numbers)
+          o.label += " " + std::to_string(++this->counts[o.typeName]);
+      }
       delete ai;
-      const CatalogItem *item = ItemCatalog::get().find(file);
-      o.label = item ? item->name : this->rm->getString(nameId);
-      if (numbers)
-        o.label += " " + std::to_string(++this->counts[o.typeName]);
     }
   this->list.push_back(o);
   return true;
@@ -349,16 +361,14 @@ int PlacedObjects::pick(float px, float py, const WorldRenderer &view, const Wor
       z = top * (1 - fy) + bottom * fy;
     }
     float sx, sy, depth;
+    if(this->tankHeight)z=this->tankHeight(o,z);
     view.worldToScreenF(o.x, o.y, z, sx, sy, depth);
-    int w = 0, h = 0;
-    float angle = o.facing * 3.14159265f / 4.0f;
-    o.art->queryTexture(view.screenSide(std::sin(angle), -std::cos(angle)), &w, &h);
-    if (w <= 0 || h <= 0)
-      continue;
-    // Its art stands over its anchor (about its foot)
-    float hw = std::max(10.0f, w * 0.4f);
-    if (px < sx - hw || px > sx + hw || py < sy - h * 0.9f || py > sy + std::max(6.0f, h * 0.12f))
-      continue;
+    const float angle=o.facing*3.14159265f/4.0f;
+    const auto side=view.screenSide(std::sin(angle),-std::cos(angle));
+    bool hit=false;
+    for(Animation *layer:{displayArt(o),o.bg,o.underIdle})
+      if(layer && layer->hitTestAnchored(px,py,sx,sy,side,animationFrame(o,layer)))hit=true;
+    if(!hit)continue;
     if (depth > best) {
       best = depth;
       found = static_cast<int>(i);
@@ -433,6 +443,9 @@ static int cornerHeight(const WorldMap &map, int tx, int ty, int corner) {
 
 void PlacedObjects::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, const WorldMap &map, int tank,
                                bool surface, float level, const std::function<bool(const std::string &)> &onSurface) {
+  // Upper toy layers sort with platforms and front walls in draw().
+  // Only their submerged halves belong in the water composite.
+  if(surface)return;
   struct One {
     float depth, sx, sy;
     const Object *o;
@@ -442,16 +455,22 @@ void PlacedObjects::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view
   for (const Object &o : this->list) {
     if (o.fence || this->hiddenNow(o) || !this->tankAt || this->tankAt(o.x, o.y) != tank)
       continue;
-    if (onSurface && onSurface(fileOf(o)) != surface)
+    // A thing with both halves (a show tank's toys) is in BOTH passes: its
+    // underidle below the water, its idle on the surface. Anything else is in
+    // the one pass its kind belongs to.
+    if (!o.underIdle && onSurface && onSurface(fileOf(o)) != surface)
       continue;
     float angle = o.facing * 3.14159265f / 4.0f;
     CompassDirection side = view.screenSide(std::sin(angle), -std::cos(angle));
     float z = o.z;
     if (const MapTile *t = map.getTile(static_cast<int>(std::floor(o.x)), static_cast<int>(std::floor(o.y))))
       z = static_cast<float>(t->cornerHeight[0]);
-    if (surface)
+    // (half in the water: its body is at the surface, its underidle hung below
+    // it - the tank's own water pass is drawn between the two)
+    if (surface || o.underIdle)
       z = level;
     float sx, sy, depth;
+    if(this->tankHeight)z=this->tankHeight(o,z);
     view.worldToScreenF(o.x, o.y, z, sx, sy, depth);
     all.push_back({depth, sx, sy, &o, side});
   }
@@ -462,7 +481,8 @@ void PlacedObjects::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view
     const SDL_Color *tint = static_cast<int>(d.o - this->list.data()) == this->highlight ? &red : nullptr;
     if (d.o->bg)
       d.o->bg->drawAnchored(renderer, d.sx, d.sy, d.side, tint, animationFrame(*d.o, d.o->bg));
-    Animation *art = displayArt(*d.o);
+    // (under the water, the underidle; on the surface, idle)
+    Animation *art = d.o->underIdle && !surface ? d.o->underIdle : displayArt(*d.o);
     if (art)
       art->drawAnchored(renderer, d.sx, d.sy, d.side, tint, animationFrame(*d.o, art));
   }
@@ -508,9 +528,10 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
   for (const Object &o : this->list) {
     if (this->hiddenNow(o))
       continue;
-    // (in a tank: drawn with the tank)
-    if (!o.fence && this->tankAt && this->tankAt(o.x, o.y) >= 0)
-      continue;
+    // Floor scenery stays under the water. A toy's upper layer joins
+    // the world depth sort so a nearby platform does not always cover it.
+    const bool inTank=!o.fence && this->tankAt && this->tankAt(o.x,o.y)>=0;
+    if(inTank && !o.onWater && !o.underIdle)continue;
     // The facing as a world direction, then as the screen side it shows
     float angle = o.facing * 3.14159265f / 4.0f;
     float fx = std::sin(angle), fy = -std::cos(angle);
@@ -561,6 +582,7 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
       }
     }
     float sx, sy, depth;
+    if(inTank && this->tankHeight)z=this->tankHeight(o,z);
     view.worldToScreenF(x, y, z, sx, sy, depth);
     // Under a walkway deck: drawn before it (a deck sorts half a tile on)
     if (under && under(x, y))

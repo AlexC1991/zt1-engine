@@ -367,6 +367,7 @@ private:
     // The object at the cursor: where (snapped), its facing, and whether it
     // can go there
     bool objectGhost = false;
+    PlacedObjects::Object objectPreview;
     float ghostX = 0, ghostY = 0;
     int ghostFacing = 0;
     Fences::Fit ghostFit = Fences::Fit::Ok;
@@ -376,7 +377,7 @@ private:
     // An object's tank flags (zoo.exe's scenery loader: cUnderwater def+0x130,
     // cSurface +0x131, cDepth +0x68, cAvoidEdges +0x74)
     struct TankFlags {
-      bool underwater = false, surface = false;
+      bool underwater = false, surface = false, deadOnLand = false;
       int depth = 0, avoidEdges = 0;
     };
     std::map<std::string, TankFlags> tankFlags;
@@ -497,6 +498,7 @@ private:
     // Window pixels to the ground (world tiles); the nearest grid vertex and
     // edge
     bool pick(int x, int y, float &wx, float &wy);
+    bool pickTankPlacement(int x,int y,const std::function<float(const Fences::Exhibit&)> &height,float &wx,float &wy);
     void drawPathPreview(SDL_Renderer *renderer, const std::set<std::pair<int, int>> *only);
     // The same for the fence tool: over a tank's water, the point at its
     // rim's height (where its walls stand), not its sunken floor's - a wall

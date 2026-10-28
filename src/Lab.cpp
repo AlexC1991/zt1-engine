@@ -27,6 +27,8 @@
 #include "Animation.hpp"
 #include "Paths.hpp"
 #include "SaveGame.hpp"
+#include "ZooSim.hpp"
+#include "ui/UiGameScreen.hpp"
 #include "EngineScripts.hpp"
 #include "Fences.hpp"
 #include "Goals.hpp"
@@ -1419,6 +1421,22 @@ bool LabApp::setupScene(const std::string &mapStem) {
     goalsDisabled.clear();
     goals.load(rm, mapScn);
     world->getFences().setEditing(true);
+    return true;
+  }
+  // Native player saves can be inspected in the same Test Zoo tools.
+  if (mapStem.rfind("native:", 0) == 0) {
+    const std::string path=mapStem.substr(7),base=SaveGame::mapOf(path);
+    if(base.empty() || !world->loadFreeform(base)) {
+      addLog("Couldn't load the native saved zoo " + path);return false;
+    }
+    ZooSim books;
+    UiGameScreen hud(rm,"ui/main.lyt","ui/gamescrn.lyt");
+    if(!SaveGame::load(path,*world,books,hud)) {
+      addLog("Couldn't restore the native saved zoo " + path);return false;
+    }
+    this->mapStem=mapStem;this->mapName=fs::path(path).filename().string();
+    mapScn=base;simClock=0;setupGoals();goalsDisabled.clear();
+    addLog("Lab zoo: native save " + path);
     return true;
   }
   // (save:<name> - one of the original game's own saved zoos, its whole world

@@ -88,6 +88,13 @@ void UiGameScreen::refreshShow() {
   int frequencyIndex=s->frequency==-1?3:s->frequency;
   if(auto *l=dynamic_cast<UiListBox*>(z->getElementById(11191)))l->setSelectedIndex(frequencyIndex);
   if(auto *b=button(11108))b->setLabel(resource_manager->getString(11195-frequencyIndex));
+  std::string status=s->status;
+  if(s->phase==Shows::Phase::Gathering)status="Preparing show: gathering performers.";
+  else if(s->phase==Shows::Phase::Performing)status="Show in progress.";
+  else if(s->phase==Shows::Phase::Returning)status="Returning performers to their home tank.";
+  else if(s->frequency<0)status="Shows disabled (Never).";
+  if(auto *t=dynamic_cast<UiText*>(z->getElementById(71100)))
+    if(t->getText()!=status)t->setMessage(status);
   bool active=s->phase!=Shows::Phase::Waiting;
   for(int id:{11113,11114,11117,11118,11123})if(auto *b=button(id))b->setDisabled(active);
   std::string signature=s->species+"|";

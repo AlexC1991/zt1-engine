@@ -23,6 +23,15 @@ selected or entered. The loader still requires an original `TZFB` body.
 The engine's load dialog now also offers **All files** and identifies the
 actual format from the file contents.
 
+SlendyMilky's [28 October follow-up](https://github.com/AlexC1991/zt1-engine/issues/5#issuecomment-6443994223)
+points to RustyZoo's `zoo.rs`, `zoo/body.rs`, `unit.rs` and `staff.rs` for section
+order and version-dependent records. Their original-format writer preserves
+unmodeled records, including show and manager data, rather than claiming to
+decode them fully. The proposed next export step should follow that distinction:
+preserve unknown bytes, patch understood fields, check deterministic round trips,
+then open the result in the original game. Those writer checks are RustyZoo's
+reported coverage; this engine has not yet implemented or passed them.
+
 The trailer test is a container experiment on an unchanged original save.
 It is not an export of an edited engine zoo and must not be described as one.
 The original cannot preserve engine-only trailer data when it saves again.

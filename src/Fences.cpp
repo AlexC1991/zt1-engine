@@ -788,11 +788,13 @@ void Fences::dropOrphanGates() {
 
 bool Fences::canGate(const Edge &e) const {
   const Piece *p = this->at(e);
-  if (!p || p->gate || p->tank >= 0 || this->typeList[p->type].zooWall)
+  if (!p || p->gate || this->typeList[p->type].zooWall)
     return false;
   int a = e.alongX ? this->exhibitAt(e.x, e.y - 1) : this->exhibitAt(e.x - 1, e.y);
   int b = this->exhibitAt(e.x, e.y);
-  return (a >= 0) != (b >= 0); // exactly one side an exhibit, the other open zoo
+  if((a>=0)==(b>=0))return false;
+  const int ox=a>=0?e.x:(e.alongX?e.x:e.x-1),oy=a>=0?e.y:(e.alongX?e.y-1:e.y);
+  return p->tank<0 || !this->platformBlocked || !this->platformBlocked(ox,oy);
 }
 
 int Fences::gateCostOf(const Edge &e) const {
@@ -810,7 +812,7 @@ void Fences::moveGate(const Edge &e) {
   int a = e.alongX ? this->exhibitAt(e.x, e.y - 1) : this->exhibitAt(e.x - 1, e.y);
   int ex = a >= 0 ? a : this->exhibitAt(e.x, e.y);
   for (auto &[o, p] : this->edges)
-    if (p.gate && p.tank < 0 && this->exhibitOf(o) == ex)
+    if (p.gate && this->exhibitOf(o) == ex)
       p.gate = false;
   auto it = this->edges.find(e);
   it->second.gate = true;
@@ -1077,6 +1079,8 @@ std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int y
       this->makeTank(this->exhibitList.back(), map);
     created.push_back(ex.id);
   }
+  if(!loading)for(const auto &ex:this->exhibitList)
+    if(ex.tank && ex.named)this->finishExhibit(ex.id,ex.name,map);
   return created;
 }
 
@@ -1115,8 +1119,14 @@ int Fences::finishExhibit(int id, const std::string &name, WorldMap &map) {
   // Already has one (a reshaped exhibit keeps its gate)
   for (const Edge &e : boundaryOf(*ex)) {
     auto it = this->edges.find(e);
-    if (it != this->edges.end() && it->second.gate)
-      return 0;
+    if (it != this->edges.end() && it->second.gate) {
+      if(!ex->tank)return 0;
+      const int ax=e.alongX?e.x:e.x-1,ay=e.alongX?e.y-1:e.y;
+      const bool aIn=ex->tiles.count({ax,ay})!=0;
+      const int ox=aIn?e.x:ax,oy=aIn?e.y:ay;
+      if(this->exhibitAt(ox,oy)<0 && (!this->platformBlocked || !this->platformBlocked(ox,oy)))return 0;
+      it->second.gate=false; // A neighbouring tank or building covered its approach.
+    }
   }
   // The gate: in the middle of the first-laid stretch of the loop, on a
   // wall to the open zoo (never one shared with another exhibit)
@@ -1128,7 +1138,8 @@ int Fences::finishExhibit(int id, const std::string &name, WorldMap &map) {
     int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
     bool aIn = ex->tiles.count({ax, ay}) > 0;
     int ox = aIn ? e.x : ax, oy = aIn ? e.y : ay;
-    if (this->exhibitAt(ox, oy) >= 0 || this->typeList[it->second.type].zooWall)
+    if (this->exhibitAt(ox, oy) >= 0 || this->typeList[it->second.type].zooWall ||
+        (ex->tank && this->platformBlocked && this->platformBlocked(ox,oy)))
       continue;
     round.push_back({e, &it->second});
   }
@@ -1917,6 +1928,64 @@ bool Fences::byTankWall(const Exhibit &ex, int x, int y, int r) const {
   return false;
 }
 
+// A tank's near glass, corner by corner, for clipping what is drawn in it.
+// Every edge of it that belongs to the tank is asked whether it faces the
+// viewer (tankSide, the same test the wall art uses), and the ones that do
+// give their two ends: at the water's level and at the tank's floor. Those
+// corners are the shape a body in the water must not pass.
+void Fences::tankNearGlass(const Exhibit &ex, const WorldMap &map, const WorldRenderer &view,
+                           std::vector<std::array<float, 3>> &out) const {
+  out.clear();
+  if (!ex.tank || ex.tiles.empty())
+    return;
+  // (the tank's walls: an edge with a tank tile on one side and not the other)
+  std::set<Edge> walls;
+  for (const auto &t : ex.tiles) {
+    const Edge four[4] = {Edge{true, t.first, t.second}, Edge{true, t.first, t.second + 1},
+                          Edge{false, t.first, t.second}, Edge{false, t.first + 1, t.second}};
+    for (const Edge &e : four) {
+      const Piece *p = this->at(e);
+      if (p && (p->tank == ex.id || p->tank2 == ex.id))
+        walls.insert(e);
+    }
+  }
+  if (walls.empty())
+    return;
+  // The whole rim, to tell whether every side has a wall (a tank short of one
+  // is open to the air: its animals are drawn whole, as the original did)
+  size_t rimSides = 0;
+  for (const auto &t : ex.tiles) {
+    const Edge four[4] = {Edge{true, t.first, t.second}, Edge{true, t.first, t.second + 1},
+                          Edge{false, t.first, t.second}, Edge{false, t.first + 1, t.second}};
+    for (const Edge &e : four) {
+      int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
+      const bool aIn = ex.tiles.count({ax, ay}) > 0, bIn = ex.tiles.count({e.x, e.y}) > 0;
+      if (aIn != bIn)
+        rimSides++;
+    }
+  }
+  if (walls.size() < rimSides)
+    return;
+  // (the tank's own water level when it has one: wall height and fill, as
+  // its water and glass are drawn - the height its fish swim at)
+  const float top = ex.level > -1e8f ? ex.level
+                                     : static_cast<float>(ex.floorHeight + this->waterLevel(ex));
+  const float bottom = static_cast<float>(ex.floorHeight);
+  for (const Edge &e : walls) {
+    TankSide ts;
+    if (!tankSide(ex, e, map, view, ts) || !ts.front)
+      continue;
+    const float x0 = static_cast<float>(e.alongX ? e.x : e.x - 1);
+    const float y0 = static_cast<float>(e.alongX ? e.y - 1 : e.y);
+    const float x1 = e.alongX ? x0 + 1.0f : x0;
+    const float y1 = e.alongX ? y0 : y0 + 1.0f;
+    out.push_back({x0, y0, top});
+    out.push_back({x1, y1, top});
+    out.push_back({x1, y1, bottom});
+    out.push_back({x0, y0, bottom});
+  }
+}
+
 int Fences::drawnWith(const Edge &e, const Piece &p, const WorldMap &map, const WorldRenderer &view) const {
   if (p.tank2 < 0)
     return p.tank;
@@ -1968,6 +2037,7 @@ int Fences::platformAt(float px, float py, const WorldRenderer &view) const {
 void Fences::collect(const WorldRenderer &view, const WorldMap &map,
                      std::vector<Drawable> &out) const {
   auto add = [&](const Edge &e, const Piece &p, int type, bool tinted, SDL_Color tint) {
+    const bool placed = !tinted;
     const FenceType &t = this->typeList[type];
     if (p.gate && !tinted && e == this->hoverGate) {
       tinted = true;
@@ -2096,6 +2166,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
             pushCut(plat);
           else
             out.push_back(plat);
+          if(placed && this->collectPlatformStaff)this->collectPlatformStaff(ex->id,plat.depth+0.001f,out);
           if (!tinted && this->selectedTank == ex->id && this->selectArrow)
             out.push_back({wallDepth + 0.101f, sx, sy - 40.0f, this->selectArrow, CompassDirection::N,
                            SDL_Color{255, 255, 255, 255}, false});
@@ -2423,6 +2494,10 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
             int nx = x + dx, ny = y + dy;
             if (ex.tiles.count({nx, ny}) || cover.count({nx, ny}) || !map.getTile(nx, ny))
               continue;
+            // A neighbouring tank owns its floor and water. Repainting its
+            // ground here cuts an opaque strip through that tank's composite.
+            const Exhibit *neighbour=this->exhibit(this->exhibitAt(nx,ny));
+            if(neighbour && neighbour->tank)continue;
             float sx, sy, d;
             view.worldToScreenF(nx + 0.5f, ny + 0.5f, 0, sx, sy, d);
             for (const Spot &s : spots)
@@ -2432,6 +2507,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
               }
           }
     }
+
     Drawable inside{backDepth - 0.01f, 0, 0, nullptr, CompassDirection::N, SDL_Color{255, 255, 255, 255}, false};
     std::stable_sort(frontLow.begin(), frontLow.end(),
                      [](const Sprite &p, const Sprite &q) { return p.depth < q.depth; });
@@ -2594,6 +2670,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     float sx, sy, depth;
     view.worldToScreenF(f.x + fk.footprintX * 0.5f, f.y + fk.footprintY * 0.5f,
                         this->filterGround(f, map), sx, sy, depth);
+
     out.push_back({depth, sx, sy, a, d, tint, tinted});
   };
   for (const Filter &f : this->filterList) {
@@ -2644,6 +2721,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
   if (this->previewType >= 0)
     for (const auto &pv : this->preview) {
       Piece p = ownerFor(pv.first, map);
+      if(this->deleting)if(const Piece *placed=this->at(pv.first))p=*placed;
       p.type = this->previewType;
       add(pv.first, p, this->previewType, true,
           pv.second ? SDL_Color{0, 255, 0, 255}

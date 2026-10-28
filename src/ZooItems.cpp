@@ -133,7 +133,10 @@ void ZooItems::update(float seconds, const Fences &fences) {
     i.units -= animals * kEatenPerHour * seconds / kSecondsPerHour;
   }
   this->list.erase(std::remove_if(this->list.begin(), this->list.end(),
-                                  [](const Item &i) { return i.kind == Kind::Food && i.units <= 0; }),
+                                  [&fences](const Item &i) {
+                                    const auto *ex=fences.exhibit(i.exhibit);
+                                    return i.kind==Kind::Food && (i.units<=0 || (ex && ex->show));
+                                  }),
                    this->list.end());
 }
 

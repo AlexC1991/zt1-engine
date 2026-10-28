@@ -13,10 +13,87 @@
 
 // Engine behaviour: body clearance and local avoidance. Footprints come from
 // the species data; this steering policy is not a claimed zoo.exe formula.
-float Animals::bodyRadius(const Member &m) const {
+// The space one animal occupies, measured the way it is drawn.
+//
+// Its species file gives a footprint - cFootprintX across and cFootprintY along
+// the way it faces, in half tiles - and its art gives how tall it is drawn. An
+// oriented box from those two matches the animal on screen instead of one
+// blanket radius for every species and size: a dolphin is long and thin, a
+// walrus is nearly round, and in a tank it is the height that decides whether
+// two can pass one above the other.
+//
+// halfAlong / halfAcross are in tiles; halfHeight is in height units, turned
+// into the same tiles' worth of screen by the caller's scale.
+//
+// cFootprint is in HALF tiles, so its quarter is the body's half extent: a whale
+// shark's cFootprintY of 8 is four tiles long, two either side of its centre.
+// The draw code lays out the same box with footY / 4.0f, so the two agree;
+// halving it again here made every body half the size it is drawn.
+Animals::BodyVolume Animals::bodyVolume(const Member &m) const {
   const Type &t = typeList[m.type];
-  float r = std::max(0.22f, std::max(t.footX, t.footY) * 0.25f);
-  return r * (m.egg ? 0.3f : m.baby ? 0.6f : 1.0f);
+  const float scale = m.egg ? 0.3f : m.baby ? 0.6f : 1.0f;
+  // (the old minimum of 0.22 tiles a side keeps a very young or very small
+  // animal a real body)
+  const float halfAcross = std::max(0.22f, t.footX / 4.0f) * scale;
+  const float halfAlong = std::max(0.22f, t.footY / 4.0f) * scale;
+  // Its own art, if it has been loaded: the drawn height is the honest one.
+  float drawn = 0.0f;
+  if (Animation *a = art(m, m.anim)) {
+    int w = 0, h = 0;
+    a->queryTexture(CompassDirection::SE, &w, &h);
+    // A 64-px tile is one tile: convert the drawn pixels to tiles.
+    if (h > 0)
+      drawn = h / 64.0f;
+  }
+  // Without art, fall back to the footprint's own size with a share for the
+  // body standing above it.
+  float height = drawn > 0.05f ? drawn : std::max(halfAcross, halfAlong) * 1.8f;
+  // Never a paper-thin body: a third of a tile is the least anything occupies.
+  height = std::max(height, 0.34f);
+  BodyVolume v;
+  v.halfAcross = halfAcross;
+  v.halfAlong = halfAlong;
+  v.halfHeight = height * 0.5f;
+  return v;
+}
+
+void Animals::consumeFood(Member &m) {
+  const auto *food=items?items->item(m.foodItem):nullptr;
+  if(!food || food->exhibit!=m.exhibit ||
+     std::hypot(m.x-food->x,m.y-food->y)>bodyRadius(m)+1.1f)return;
+  const auto &t=typeList[m.type];
+  float got=items->eat(m.foodItem,static_cast<float>(t.foodEaten));
+  if(got<=0){m.foodItem=-1;return;}
+  float was=m.hunger;
+  m.mealTaken=true;m.noFoodSeen=false;
+  m.hunger=std::max(0.0f,m.hunger-got*t.foodUnitValue);
+  m.food=std::clamp(100.0f-m.hunger,0.0f,100.0f);m.lastAte=now;
+  ZT_STEP("","Eats a mouthful",{"hunger",was,m.hunger},{"food eaten",got});
+}
+
+bool Animals::feedingPlace(Member &m, float x, float y,
+                           const WorldMap &map, const Fences &fences) {
+  const Type &t=typeList[m.type];
+  float reach=bodyRadius(m)+0.25f;
+  // Keep an already reserved feeding place through a marine eating/dive step.
+  float d=std::hypot(m.x-x,m.y-y);
+  if (d >= 0.2f && d <= reach+0.85f &&
+      destinationFree(m,m.x,m.y,m.swimTo,true) && walkTo(m,m.x,m.y,map,fences))
+    return true;
+  struct Spot { float x,y,cost; };
+  std::vector<Spot> spots;
+  float start=std::atan2(m.y-y,m.x-x);
+  for (int ring=0;ring<2;++ring) for (int i=0;i<16;++i) {
+    float angle=start+i*6.2831853f/16, radius=reach+ring*0.8f;
+    float gx=x+std::cos(angle)*radius, gy=y+std::sin(angle)*radius;
+    if (!standable(static_cast<int>(std::floor(gx)),static_cast<int>(std::floor(gy)),
+                   t,m.exhibit,map,fences) ||
+        !destinationFree(m,gx,gy,m.swimTo,true)) continue;
+    spots.push_back({gx,gy,std::hypot(gx-m.x,gy-m.y)+ring*0.25f});
+  }
+  std::stable_sort(spots.begin(),spots.end(),[](const Spot &a,const Spot &b){return a.cost<b.cost;});
+  for (const auto &p:spots) if (walkTo(m,p.x,p.y,map,fences)) return true;
+  return false;
 }
 
 // Reserve a circle enclosing the rotated footprint, so a turn cannot swing
@@ -77,12 +154,78 @@ float Animals::bodyHeight(const Member &m, float x, float y, float swim) const {
          (tankAt && tankAt(x,y) >= 0 ? swim : 0.0f);
 }
 
+// How far apart two bodies are, as a multiple of the distance at which they
+// touch: 1.0 is touching, under 1.0 is overlapping.
+//
+// Flat distance and height are compared in the units the sprites are drawn
+// in. A height unit shows as elevationScale*(tileHeight/32) pixels of screen -
+// 16 by the standard 64x32 tile, a quarter of the tile's width - while two
+// bodies standing together are worth a whole tile of it. Giving height a fixed
+// divisor of its own therefore made DEPTH separate animals far more cheaply
+// than water ever can: in a crowded tank it read as "apart" for two fish drawn
+// one over the other. Seven marine animals in a 7x7 tank sat pinned at exactly
+// 1.000 clearance, each reversing direction twelve times in twenty seconds -
+// the twitch. Air in a tank must not buy an animal room it does not have; they
+// have to give each other room in the water, at whatever depth.
+// How much room two animals have, as a multiple of what they need to touch:
+// 1.0 means their boxes are exactly touching, under 1.0 that they overlap.
+//
+// The separation is taken per axis and each axis is measured against what the
+// two bodies actually need there, rather than wrapping one shared radius round
+// both. Up the screen, a height unit is elevationScale*(tileHeight/32) pixels -
+// 16 by the standard 64x32 tile, a quarter of a tile's width - so heights are
+// scaled into tiles before being compared. That is what lets two fish pass one
+// above the other in deep water while refusing them the same water.
+float Animals::bodyOverlap(const Member &a, float ax, float ay, float az,
+                           float afx, float afy,
+                           const Member &b, float bx, float by, float bz,
+                           float bfx, float bfy) const {
+  // Pixels of screen per tile of ground, and per height unit.
+  constexpr float kHeightPerTile = 16.0f / 64.0f;
+  const BodyVolume va = bodyVolume(a), vb = bodyVolume(b);
+  const float needAcross = va.halfAcross + vb.halfAcross;
+  const float needAlong = va.halfAlong + vb.halfAlong;
+  // Height in tiles: what the two bodies need between them, up the screen.
+  const float needUp = (va.halfHeight + vb.halfHeight) * kHeightPerTile;
+
+  // Flat separation, resolved along each animal's own facing. Of the two
+  // boxes, take the direction that separates them best, which is what a
+  // swept pair does: an animal lengthways to another can pass close.
+  float nx = ax - bx, ny = ay - by;
+  const float flat = std::hypot(nx, ny);
+  float alongA = 0.0f, acrossA = 0.0f, alongB = 0.0f, acrossB = 0.0f;
+  auto split = [&](float fx, float fy, float &along, float &across) {
+    const float len = std::hypot(fx, fy);
+    if (len < 0.001f) { along = 0.0f; across = flat; return; }
+    fx /= len; fy /= len;
+    along = std::abs(nx * fx + ny * fy);
+    across = std::abs(nx * fy - ny * fx);
+  };
+  split(afx, afy, alongA, acrossA);
+  split(bfx, bfy, alongB, acrossB);
+  // Each body's share: how much of the gap it must cover on the worse axis.
+  const float along = std::max(alongA / std::max(needAlong, 0.001f),
+                              alongB / std::max(needAlong, 0.001f));
+  const float across = std::max(acrossA / std::max(needAcross, 0.001f),
+                               acrossB / std::max(needAcross, 0.001f));
+  const float up = std::abs(az - bz) * kHeightPerTile / std::max(needUp, 0.001f);
+  // The boxes are clear when ANY axis clears (a box test), so the axis with
+  // the most room is the one that decides; 1.0 is where all three touch.
+  return std::max({along, across, up});
+}
+
+// How wide an animal is, for the places that only need a horizontal radius
+// (spacing at a show, a swimmer turning by a wall).
+float Animals::bodyRadius(const Member &m) const {
+  const BodyVolume v = bodyVolume(m);
+  return std::max(v.halfAcross, v.halfAlong);
+}
+
+// Room between two animals, measured with each one's own facing, in the units
+// the old function used: 1.0 is touching, under 1.0 is overlapping.
 float Animals::bodyDistance(const Member &a, float ax, float ay, float az,
                            const Member &b, float bx, float by, float bz) const {
-  float r = bodyRadius(a) + bodyRadius(b) + 0.08f;
-  float vertical = std::max(0.65f, r * 0.6f);
-  float dx = (ax-bx)/r, dy = (ay-by)/r, dz = (az-bz)/vertical;
-  return std::sqrt(dx*dx + dy*dy + dz*dz);
+  return bodyOverlap(a, ax, ay, az, a.fx, a.fy, b, bx, by, bz, b.fx, b.fy);
 }
 
 bool Animals::destinationFree(const Member &m, float x, float y, float swim,
@@ -101,240 +244,67 @@ bool Animals::destinationFree(const Member &m, float x, float y, float swim,
   return true;
 }
 
-bool Animals::awareStep(const Member &m, int x, int y, int nx, int ny,
-                        const WorldMap &map, const Fences &fences) const {
-  Fences::Edge edge = nx != x ? Fences::Edge{false,std::max(x,nx),y}
-                             : Fences::Edge{true,x,std::max(y,ny)};
-  if (m.crossing.x>=0 && edge.x==m.crossing.x && edge.y==m.crossing.y &&
-      edge.alongX==m.crossing.alongX) return true;
-  const auto &animal=typeList[m.type];
-  int pool=-1,land=-1;
-  if(animal.underwater && !animal.onlyUnderwater && animal.swims &&
-     fences.shoreAccess(edge,map,pool,land))return true;
-  if (m.showTank >= 0) {
-    int show=-1, home=-1;
-    if (fences.showPortal(edge,show,home) && show==m.showTank && home==m.showHome) {
-      const auto *p=fences.at(edge);
-      const auto *type=fences.portalType(edge);
-      return p && type && p->open >= std::max(0,type->portal->frameCount()-1);
-    }
-  }
-  return canStep(x,y,nx,ny,map,fences);
-}
-
-void Animals::consumeFood(Member &m) {
-  const auto *food=items?items->item(m.foodItem):nullptr;
-  if(!food || food->exhibit!=m.exhibit ||
-     std::hypot(m.x-food->x,m.y-food->y)>bodyRadius(m)+1.1f)return;
-  const auto &t=typeList[m.type];
-  float got=items->eat(m.foodItem,static_cast<float>(t.foodEaten));
-  if(got<=0){m.foodItem=-1;return;}
-  float was=m.hunger;
-  m.mealTaken=true;m.noFoodSeen=false;
-  m.hunger=std::max(0.0f,m.hunger-got*t.foodUnitValue);
-  m.food=std::clamp(100.0f-m.hunger,0.0f,100.0f);m.lastAte=now;
-  ZT_STEP("","Eats a mouthful",{"hunger",was,m.hunger},{"food eaten",got});
-}
-
-bool Animals::feedingPlace(Member &m, float x, float y,
-                           const WorldMap &map, const Fences &fences) {
-  const Type &t=typeList[m.type];
-  float reach=bodyRadius(m)+0.25f;
-  // Keep an already reserved feeding place through a marine eating/dive step.
-  float d=std::hypot(m.x-x,m.y-y);
-  if (d >= 0.2f && d <= reach+0.85f &&
-      destinationFree(m,m.x,m.y,m.swimTo,true) && walkTo(m,m.x,m.y,map,fences))
-    return true;
-  struct Spot { float x,y,cost; };
-  std::vector<Spot> spots;
-  float start=std::atan2(m.y-y,m.x-x);
-  for (int ring=0;ring<2;++ring) for (int i=0;i<16;++i) {
-    float angle=start+i*6.2831853f/16, radius=reach+ring*0.8f;
-    float gx=x+std::cos(angle)*radius, gy=y+std::sin(angle)*radius;
-    if (!standable(static_cast<int>(std::floor(gx)),static_cast<int>(std::floor(gy)),
-                   t,m.exhibit,map,fences) ||
-        !destinationFree(m,gx,gy,m.swimTo,true)) continue;
-    spots.push_back({gx,gy,std::hypot(gx-m.x,gy-m.y)+ring*0.25f});
-  }
-  std::stable_sort(spots.begin(),spots.end(),[](const Spot &a,const Spot &b){return a.cost<b.cost;});
-  for (const auto &p:spots) if (walkTo(m,p.x,p.y,map,fences)) return true;
-  return false;
-}
-
-bool Animals::moveAware(Member &m, float tx, float ty, float seconds,
-                        const WorldMap &map, const Fences &fences) {
-  float dx=tx-m.x, dy=ty-m.y, distance=std::hypot(dx,dy);
-  auto replan=[&] {
-    auto goal=m.path.back();
-    bool feeding=std::any_of(m.stack.begin(),m.stack.end(),[](const auto &s) {
-      return s.first=="beat" || s.first=="bfindkeeperfood" || s.first=="bfindotherfood";
-    });
-    if(feeding && items)if(const auto *food=items->item(m.foodItem)) {
-      feedingPlace(m,food->x,food->y,map,fences);return;
-    }
-    walkTo(m,goal.first,goal.second,map,fences);
-  };
-  if (distance < 0.0001f) {
-    float swim=m.swimZ+std::clamp(m.swimTo-m.swimZ,-seconds*2.0f,seconds*2.0f);
-    float z=bodyHeight(m,m.x,m.y,swim), beforeZ=bodyHeight(m,m.x,m.y,m.swimZ);
-    for(const auto &other:list) if(awareOf(m,other)) {
-      float oz=bodyHeight(other,other.x,other.y,other.swimZ);
-      float before=bodyDistance(m,m.x,m.y,beforeZ,other,other.x,other.y,oz);
-      float after=bodyDistance(m,m.x,m.y,z,other,other.x,other.y,oz);
-      float nearestZ=std::clamp(oz,std::min(z,beforeZ),std::max(z,beforeZ));
-      float closest=bodyDistance(m,m.x,m.y,nearestZ,other,other.x,other.y,oz);
-      if(before<1.0f ? after<=before+0.00001f : closest<1.0f)return false;
-    }
-    m.swimZ=swim;
-    return std::abs(m.swimZ-m.swimTo)<0.0001f;
-  }
-  float step=std::min(distance,std::max(0.0f,m.speed*seconds));
-  if (step<=0) return false;
-  const Type &t=typeList[m.type];
-  int sx=static_cast<int>(std::floor(m.x)), sy=static_cast<int>(std::floor(m.y));
-  auto pass=[&](int x,int y) {
-    int ex=fences.exhibitAt(x,y);
-    if (x==sx && y==sy) return true;
-    if (m.crossing.x>=0) {
-      int outX=m.crossingFromX+(m.crossing.alongX?0:(m.crossingFromX<m.crossing.x?1:-1));
-      int outY=m.crossingFromY+(m.crossing.alongX?(m.crossingFromY<m.crossing.y?1:-1):0);
-      if(x==outX && y==outY)return standable(x,y,t,-1,map,fences);
-    }
-    if (m.showTank>=0 && (ex==m.showTank || ex==m.showHome))
-      return standable(x,y,t,ex,map,fences);
-    return standable(x,y,t,m.exhibit,map,fences);
-  };
-  auto edge=[&](int x,int y,int nx,int ny){return awareStep(m,x,y,nx,ny,map,fences);};
-  std::vector<const Member*> nearby;
-  if (index) {
-    float radius=8.0f;
-    for(const auto &type:typeList)
-      radius=std::max(radius,bodyRadius(m)+std::max(type.footX,type.footY)*0.25f+1.0f);
-    for (const auto &p:index->near(m.x,m.y,step+radius))
-      if (p.kind==WorldIndex::Kind::Animal)
-        if (const Member *other=member(p.id);other && awareOf(m,*other)) nearby.push_back(other);
-  } else {
-    for (const auto &other:list) if (awareOf(m,other)) nearby.push_back(&other);
-  }
-  int fromTank=tankAt?tankAt(m.x,m.y):-1;
-  bool leavingShore=false;
-  if(t.underwater && !t.onlyUnderwater && fromTank>=0 && !m.waterMode) {
-    auto goal=m.path.back();
-    leavingShore=(!tankAt || tankAt(goal.first,goal.second)<0) &&
-                 fences.habitatRoot(fromTank,map)!=fromTank;
-    if(leavingShore)if(const auto *pool=fences.exhibit(fromTank)) {
-      m.swimTo=static_cast<float>(fences.waterLevel(*pool));
-      float rise=m.swimZ+std::clamp(m.swimTo-m.swimZ,-seconds*2.0f,seconds*2.0f);
-      if(destinationFree(m,m.x,m.y,rise,false))m.swimZ=rise;
-    }
-  }
-  float startZ=bodyHeight(m,m.x,m.y,m.swimZ);
-  const float oldWall=tankClearance(m,m.x,m.y,fences);
-  float best=-std::numeric_limits<float>::infinity(), bx=m.x, by=m.y, bs=m.swimZ;
-  // Both animals choose their own right in a head-on encounter.
-  const float turns[]={0,-0.44f,0.44f,-0.87f,0.87f,-1.31f,1.31f,-1.92f,1.92f,3.14159265f};
-  for (int verticalChoice=0;verticalChoice<2;++verticalChoice) for (float turn:turns) {
-    float vx=(dx*std::cos(turn)-dy*std::sin(turn))/distance;
-    float vy=(dx*std::sin(turn)+dy*std::cos(turn))/distance;
-    float nx=m.x+vx*step, ny=m.y+vy*step;
-    float swim=verticalChoice ? m.swimZ : m.swimZ+(m.swimTo-m.swimZ)*std::min(step/distance,1.0f);
-    int toTank=tankAt?tankAt(nx,ny):-1;
-    if(leavingShore && toTank<0 && std::abs(m.swimZ-m.swimTo)>0.01f)continue;
-    if(fromTank<0 && toTank>=0 && t.underwater && !t.onlyUnderwater)
-      if(const auto *pool=fences.exhibit(toTank))swim=static_cast<float>(fences.waterLevel(*pool));
-    float nz=bodyHeight(m,nx,ny,swim);
-    if (!Pathfinder::clearLine(m.x,m.y,nx,ny,pass,edge)) continue;
-    float wall=tankClearance(m,nx,ny,fences);
-    if(wall<-0.001f && !(oldWall<0 && wall>oldWall+0.00001f))continue;
-    bool safe=true;
-    float proximity=0,recovery=0;
-    for (const auto *other:nearby) {
-      float oz=bodyHeight(*other,other->x,other->y,other->swimZ);
-      float r=bodyRadius(m)+bodyRadius(*other)+0.08f, v=std::max(0.65f,r*0.6f);
-      float ax=(m.x-other->x)/r, ay=(m.y-other->y)/r, az=(startZ-oz)/v;
-      float ux=(nx-m.x)/r, uy=(ny-m.y)/r, uz=(nz-startZ)/v;
-      float len=ux*ux+uy*uy+uz*uz;
-      float along=len>0 ? std::clamp(-(ax*ux+ay*uy+az*uz)/len,0.0f,1.0f) : 0;
-      float closest=std::sqrt(std::pow(ax+ux*along,2)+std::pow(ay+uy*along,2)+std::pow(az+uz*along,2));
-      float before=std::sqrt(ax*ax+ay*ay+az*az);
-      float after=bodyDistance(m,nx,ny,nz,*other,other->x,other->y,oz);
-      if (before<1.0f) {
-        // Old saves/placements may already overlap: allow escape, never deepen it.
-        if (after<=before+0.00001f || closest<before-0.0001f) {safe=false;break;}
-        recovery+=(after-before)*r/std::max(step,0.001f);
-      } else if (closest<1.0f) {safe=false;break;}
-      float px=other->x,py=other->y;
-      if (other->pathAt<other->path.size()) {
-        auto [gx,gy]=other->path[other->pathAt];
-        float dd=std::hypot(gx-px,gy-py), horizon=std::min(dd,other->speed*0.65f);
-        if(dd>0.001f){px+=(gx-px)/dd*horizon;py+=(gy-py)/dd*horizon;}
-      }
-      // Stop prediction at this waypoint. Projecting beyond a destination
-      // invents a collision the animal will never make, so it can circle or
-      // alternate avoidance directions instead of finishing its move.
-      float horizon=std::min(std::hypot(tx-nx,ty-ny),m.speed*0.65f);
-      float future=bodyDistance(m,nx+vx*horizon,ny+vy*horizon,nz,*other,px,py,oz);
-      proximity+=std::max(0.0f,1.3f-future);
-    }
-    if (!safe) continue;
-    float progress=(distance-std::hypot(tx-nx,ty-ny))/step;
-    // Retain a safe steering direction when either side is nearly tied.
-    // Without this continuity, tiny position changes flip left/right on
-    // successive frames and rapidly swap the swimmer's directional sprites.
-    // Collision rejection above still wins over this preference.
-    float heading=std::clamp(vx*m.fx+vy*m.fy,-1.0f,1.0f);
-    float score=progress+recovery*4.0f-proximity*2.0f-
-                (1.0f-heading)*0.35f-std::abs(turn)*0.015f-verticalChoice*0.01f;
-    if (score>best){best=score;bx=nx;by=ny;bs=swim;}
-  }
-  if (!std::isfinite(best)) {
-    m.awarenessWait+=seconds;
-    if (m.awarenessWait>2.0f) {
-      // Keep the behaviour pending; reassign an occupied feeding place.
-      replan();
-      m.awarenessWait=0;
-    }
-    return false;
-  }
-  float moved=std::hypot(bx-m.x,by-m.y);
-  float progress=distance-std::hypot(tx-bx,ty-by);
-  m.awarenessWait=progress>moved*0.1f ? std::max(0.0f,m.awarenessWait-seconds*0.25f) : m.awarenessWait+seconds;
-  if(moved>0.00001f){m.fx=(bx-m.x)/moved;m.fy=(by-m.y)/moved;}
-  m.x=bx;m.y=by;m.swimZ=bs;
-  int nowTank=tankAt?tankAt(m.x,m.y):-1;
-  if(fromTank>=0 && nowTank<0)m.swimZ=m.swimTo=0;
-  else if(fromTank<0 && nowTank>=0)m.swimTo=m.swimZ;
-  bool arrived=std::hypot(tx-m.x,ty-m.y)<0.0001f;
-  if(!arrived && m.awarenessWait>1.5f) {
-    replan();
-    m.awarenessWait=0;
-  }
-  return arrived;
-}
-
+// What to do about two animals IDLING on top of each other.
+//
+// Animals may swim through one another - in a tank there is often no room to
+// go round, and refusing those steps is what made them stall and turn on the
+// spot. The fault was narrower than that: an animal that stops for a while
+// would pick a spot another animal was already standing on, and the two were
+// drawn one over the other like a doubled fish, sometimes for minutes. So
+// only the idle case is handled here, and a moving animal is never touched.
+//
+// It is also a nudge, not a standoff. A crowded tank has no clear spot to
+// offer, so an animal that finds nowhere free still takes one step toward the
+// roomiest place it can see, without having to satisfy every neighbour. And
+// it only moves if that really gives it more room than it has now.
 void Animals::separateIdle(Member &m,float seconds,const WorldMap &map,const Fences &fences) {
   if (m.pathAt<m.path.size() || m.showTank>=0 || m.sleeping || m.egg ||
       m.dying || m.inside || m.tranquilised || m.building>=0) return;
   m.awarenessCheck-=seconds;
   if(m.awarenessCheck>0)return;
   m.awarenessCheck=0.5f;
-  if(destinationFree(m,m.x,m.y,m.swimZ,false) && tankClearance(m,m.x,m.y,fences)>=-0.001f)return;
+  // How close the nearest other body is, in bodyDistance units: 1.0 is
+  // touching, under 1.0 means standing inside it.
+  auto clearanceAt=[&](float x,float y) {
+    const float z=bodyHeight(m,x,y,m.swimZ);
+    float clear=1000;
+    for(const auto &o:list) if(awareOf(m,o))
+      clear=std::min(clear,bodyDistance(m,x,y,z,o,o.x,o.y,
+        bodyHeight(o,o.x,o.y,o.swimZ)));
+    return clear;
+  };
+  if(clearanceAt(m.x,m.y)>=1.0f)return; // standing clear: nothing to do
+  // The nearest spot that is genuinely clear of every other body. Nearest,
+  // so an animal steps aside rather than crossing the tank to the far side.
   const Type &t=typeList[m.type];
-  std::string saved=m.moveAnim;
-  float speed=m.speed;
-  // art() selects walk, swim or submerged swim from the physical tile.
+  const std::string savedAnim=m.moveAnim;
+  const float savedSpeed=m.speed;
   m.moveAnim="walk";
-  m.speed=std::max(0.3f,t.slow);m.swimTo=m.swimZ;
-  float angle=m.id*2.39996323f;
-  for(int ring=1;ring<=3;++ring) for(int i=0;i<16;++i) {
-    float a=angle+i*6.2831853f/16, r=ring*(bodyRadius(m)+0.5f);
-    float x=m.x+std::cos(a)*r,y=m.y+std::sin(a)*r;
-    if(standable(static_cast<int>(std::floor(x)),static_cast<int>(std::floor(y)),t,m.exhibit,map,fences) &&
-       walkTo(m,x,y,map,fences)) {
-      m.stack.clear();m.foodItem=-1;return;
+  const float angle=m.id*2.39996323f;
+  for(int ring=1;ring<=3;++ring) {
+    int found=-1;
+    float foundX=0, foundY=0, foundD=1e9f;
+    for(int i=0;i<16;++i) {
+      const float a=angle+i*6.2831853f/16, r=ring*(bodyRadius(m)+0.5f);
+      const float x=m.x+std::cos(a)*r, y=m.y+std::sin(a)*r;
+      const int tx=static_cast<int>(std::floor(x)), ty=static_cast<int>(std::floor(y));
+      if(!standable(tx,ty,t,m.exhibit,map,fences))continue;
+      if(tankClearance(m,x,y,fences)<-0.001f)continue;
+      if(clearanceAt(x,y)<1.0f)continue;          // another body stands there
+      const float d=std::hypot(x-m.x,y-m.y);
+      if(d<foundD){foundD=d;foundX=x;foundY=y;found=i;}
+    }
+    if(found>=0 && walkTo(m,foundX,foundY,map,fences)) {
+      // A proper walk at the animal's fast pace, so it gets there before the
+      // spot is taken; the route itself is the old one.
+      m.speed=std::max(0.3f,t.fast);
+      m.stack.clear();m.foodItem=-1;
+      return;
     }
   }
-  m.moveAnim=saved;m.speed=speed;
+  // Nowhere clear within reach (a tank that is genuinely full): leave the
+  // animal exactly as it was rather than shoving it about.
+  m.moveAnim=savedAnim;m.speed=savedSpeed;m.swimTo=m.swimZ;
 }
 
 std::string Animals::awarenessReport() const {
@@ -342,6 +312,7 @@ std::string Animals::awarenessReport() const {
   int overlaps=0;
   for(const auto &a:list) {
     if(a.boxed || a.inside || a.id==carried)continue;
+    const BodyVolume v=bodyVolume(a);
     float nearest=999;
     for(const auto &b:list) if(awareOf(a,b)) {
       float d=bodyDistance(a,a.x,a.y,bodyHeight(a,a.x,a.y,a.swimZ),b,b.x,b.y,bodyHeight(b,b.x,b.y,b.swimZ));
@@ -349,7 +320,9 @@ std::string Animals::awarenessReport() const {
       if(a.id<b.id && d<0.99f)++overlaps;
     }
     out<<"Animal "<<a.id<<" "<<typeList[a.type].file<<" x="<<a.x<<" y="<<a.y<<" z="<<a.swimZ
-       <<" radius="<<bodyRadius(a)<<" clearance="<<nearest<<" waiting="<<a.awarenessWait;
+       <<" radius="<<bodyRadius(a)<<" vsize="<<v.halfAcross<<","<<v.halfAlong<<","<<v.halfHeight
+       <<" face="<<a.fx<<","<<a.fy
+       <<" clearance="<<nearest<<" waiting="<<a.awarenessWait;
     if(fencesRef)out<<" wall="<<tankClearance(a,a.x,a.y,*fencesRef);
     if(a.pathAt<a.path.size())out<<" goal="<<a.path.back().first<<","<<a.path.back().second;
     out<<" doing="<<a.anim<<" hunger="<<a.hunger<<" foodItem="<<a.foodItem;
