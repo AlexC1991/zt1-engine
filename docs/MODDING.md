@@ -204,6 +204,24 @@ on **About** first, using your own image or the Test Zoo view.
 - **To update it**, raise its version and upload it again.
 - **To take it down**, use **Your uploads › Take it down**. You can only change or remove mods you uploaded yourself.
 
+## Saved zoos with custom content
+
+Ordinary Play defaults to **Shared zoo (.zoo)**: one file holds an
+original-compatible stock world and the engine's full native snapshot. The
+engine restores custom entities and elevated paths from its section, with their
+required mods enabled. Definitions and artwork still come from those mods.
+
+Unique engine-only animals, staff, objects, food and filters are omitted from
+the original-compatible section. Custom paths and fences use stock counterparts;
+custom terrain uses a stock terrain where needed. A replacement of a stock
+definition can use that definition's original counterpart. The original needs
+the relevant expansions/assets; arbitrary fan-mod compatibility is not promised.
+
+An original-game resave discards the engine snapshot. Save the original-game
+copy separately if you want to keep engine-only features. **Engine-only save
+(.zt1save)** remains available. New native snapshots use version 14 and cannot
+be read by older released engines. See [save compatibility and limits](ORIGINAL_SAVE_COMPATIBILITY.md).
+
 ## Old mods from the 2001 game
 
 Fan-made downloads from 2001 to 2010 (new animals, objects, expansion-style packs) are `.ztd` files, the same kind the game itself uses. To use one you already have:

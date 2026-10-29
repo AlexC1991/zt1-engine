@@ -1,6 +1,10 @@
 #include "World.hpp"
 #include "Animation.hpp"
 #include "ItemCatalog.hpp"
+#include "SaveGame.hpp"
+#include "ZooSim.hpp"
+#include "ui/UiGameScreen.hpp"
+#include <filesystem>
 #include <algorithm>
 #include <cmath>
 #include <set>
@@ -8,7 +12,7 @@
 
 // Explicit Lab-only fixture; the console refuses it while a player HUD exists.
 // Adults are restored as an escaped-save fixture, rather than adopted as eggs.
-std::string runBuildingPolishChecks(World &world, bool demo) {
+std::string runBuildingPolishChecks(World &world, ResourceManager *rm, bool demo) {
   std::ostringstream report;
   int checks=0, failures=0;
   auto check=[&](const std::string &name,bool pass) {
@@ -58,18 +62,51 @@ std::string runBuildingPolishChecks(World &world, bool demo) {
   check("overlapping second DRT is refused",staff.canPlaceType(heliType,baseX,baseY,map,fences)!=Fences::Fit::Ok);
   world.reindex();
   if(!demo) {
-    std::set<Staff::HeliStage> stages;bool asleep=false,baseFixed=true;
+    auto fileRoundTrip=[&](const std::string &stage) {
+      const size_t na=animals.members().size(),ns=staff.members().size();
+      ZooSim books;books.start(1000000,50);UiGameScreen hud(rm,"","");
+      Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
+      for(const char *extension:{".zt1save",".zoo"}) {
+        const auto file=std::filesystem::temp_directory_path()/
+          ("zt1-drt-save-"+std::to_string(SDL_GetTicks64())+extension);
+        const bool saved=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn");
+        const bool loaded=saved&&SaveGame::load(file.string(),world,books,hud);
+        check(stage+" full-file "+extension+" restores actors and safely parks DRT",loaded&&
+          animals.members().size()==na&&staff.members().size()==ns&&staff.member(heli)&&
+          staff.member(heli)->heliStage==Staff::HeliStage::Parked&&staff.member(heli)->jobAnimal<0&&
+          animals.member(animal)&&animals.member(animal)->claimedBy<0);
+        std::error_code ec;std::filesystem::remove(file,ec);
+      }
+      SaveGame::goals=priorGoals;
+    };
+    std::set<Staff::HeliStage> stages,savedStages;bool asleep=false,baseFixed=true,savedContainment=false;
     for(int n=0;n<1600;n++) {
       staff.update(0.05f,map,fences);
       const auto *h=staff.member(heli);const auto *a=animals.member(animal);
       stages.insert(h->heliStage);asleep|=a && a->tranquilised;
       baseFixed&=std::abs(h->x-baseX)<0.001f && std::abs(h->y-baseY)<0.001f;
+      if(h->heliStage>=Staff::HeliStage::SpinUp&&h->heliStage<=Staff::HeliStage::Fire&&savedStages.insert(h->heliStage).second)
+        fileRoundTrip("DRT flight phase "+std::to_string(int(h->heliStage)));
+      if(a&&a->tranquilised&&!a->boxed&&!savedContainment) {
+        fileRoundTrip("darted dinosaur awaiting containment");savedContainment=true;
+        check("darted dinosaur remains asleep and available to scientist",animals.member(animal)&&
+          animals.member(animal)->tranquilised&&!animals.member(animal)->boxed&&animals.member(animal)->claimedBy<0);
+      }
     }
     check("helicopter plays spin-up, ascent, chase and firing",
           stages.count(Staff::HeliStage::SpinUp) && stages.count(Staff::HeliStage::Ascend) &&
           stages.count(Staff::HeliStage::Chase) && stages.count(Staff::HeliStage::Fire));
     check("helicopter darts the dinosaur",asleep);
     check("scientist contains the darted dinosaur",animals.member(animal) && animals.member(animal)->boxed);
+    // A reload immediately after the dart safely parks the craft. Run a
+    // second uninterrupted mission to verify its entire return animation.
+    if(savedContainment) {
+      adult(dinoType,38.5f,28.5f);
+      for(int n=0;n<1600;++n) {
+        staff.update(0.05f,map,fences);
+        if(const auto *h=staff.member(heli))stages.insert(h->heliStage);
+      }
+    }
     check("helicopter returns, descends, spins down and parks",
           stages.count(Staff::HeliStage::Return) && stages.count(Staff::HeliStage::Descend) &&
           stages.count(Staff::HeliStage::SpinDown) && staff.member(heli)->heliStage==Staff::HeliStage::Parked);

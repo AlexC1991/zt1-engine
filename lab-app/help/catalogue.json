@@ -229,6 +229,15 @@
     "source": "../../docs/MODDING.md"
   },
   {
+    "id": "save-reference",
+    "title": "Save between the engine and original",
+    "summary": "Shared .zoo files, engine-only saves, custom content and compatibility limits.",
+    "group": "Reference",
+    "tabs": ["play"],
+    "legacy": false,
+    "source": "../../docs/ORIGINAL_SAVE_COMPATIBILITY.md"
+  },
+  {
     "id": "lab-reference",
     "title": "Complete Lab reference",
     "summary": "Detailed tools, panels, recordings, traces, scripts and engine investigation.",

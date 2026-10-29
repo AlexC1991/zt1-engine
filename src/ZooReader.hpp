@@ -10,6 +10,7 @@
 #include <vector>
 
 class ZooReader {
+  friend class SaveGame;
 public:
   // One 10-byte tile record (see ZooReader.cpp for the full layout)
   struct ZooTile {
@@ -64,8 +65,14 @@ public:
     // to its stored size - see ZooReader.cpp); else only the fields above,
     // from their fixed places
     bool decoded = false;
+    // Validated byte boundaries inside payload; used by the original writer.
+    size_t commonAt = 0, commonEnd = 0, ownEnd = 0;
+    std::vector<uint8_t> suffixOverride; // current building state, when exporting
     uint32_t direction = 0;          // 0-7 (loadUnitCommon +0x12c)
     int32_t filterHealth = -1;       // ZTTankFilter +0x15c; -1 when not a filter
+    std::array<uint32_t, 3> filterCosts{}; // last/current/lifetime, +0x168..170
+    uint64_t filterBuilt = 0, filterViewed = 0;
+    uint32_t filterPeriod = 1;
     int32_t food = 0;                // scenery's food counter (food, poo)
     std::vector<uint8_t> colours;    // colour choices, from version 67
     bool hasCondition = false;       // fences and tank walls, from 55
@@ -93,7 +100,8 @@ public:
       int32_t chaseCheck = 0, favourite = 0;
       uint64_t arrived = 0;
       std::array<uint32_t, 5> items{};
-      std::vector<uint32_t> seen;
+      std::vector<uint32_t> seen; // last five viewed species name ids, not unit ids
+      std::vector<std::pair<int32_t,int32_t>> visited; // recent visited grid coordinates
       bool leaving = false, afraid = false, sick = false;
       uint32_t guide = 0;
     };
@@ -127,9 +135,25 @@ public:
     uint32_t stats[9] = {};
     bool tank = false, show = false;
     int tankHeight = 0, waterLevel = 0; // steps above the tank's floor
-    bool salt = true;
+    bool salt = true, filling = true;
+    uint32_t tankCounter = 100;
     int purity = 100;
+    std::vector<uint8_t> rawShow; // original show program, without the surrounding habitat
+    uint64_t built = 0, viewed = 0;
+    uint32_t service = 0;
+    int showInterval = 65;
+    uint16_t showId = 0;
+    std::vector<uint32_t> showSpecies;
+    struct ShowAssignment { uint32_t species = 0; uint16_t program = 0; float admission = 5.5f; };
+    std::vector<ShowAssignment> showAssignments;
   };
+  struct ShowTrick { uint16_t id = 0; std::string behavior; std::vector<uint8_t> raw; };
+  struct ShowProgram {
+    uint16_t id = 0; int nameId = -1, species = 0;
+    std::vector<ShowTrick> tricks;
+    std::vector<uint8_t> raw;
+  };
+  const std::vector<ShowProgram> &getShowPrograms() const { return showPrograms; }
   const std::vector<Habitat> &getHabitats() const { return habitats; }
   uint32_t getLanguage() const { return language; }
   int getEntranceX() const { return startCameraX; }
@@ -149,6 +173,13 @@ public:
   const std::vector<ResearchRecord> &getResearch() const { return research; }
   const std::vector<int> &getAwards() const { return awards; }
   int getMarketing() const { return marketing; }
+  // ZTThoughtMgr records (0x594e63): text id, speaker/subject unit ids,
+  // and an optional habitat tile x/y. The last two are not dates.
+  struct Thought {
+    uint32_t text = 0, owner = 0, subject = 0;
+    int32_t habitatX = -1, habitatY = -1;
+  };
+  const std::vector<Thought> &getThoughts() const { return thoughts; }
   struct Books {
     uint32_t month = 0, year = 0;
     std::vector<std::array<float, 12>> monthly;
@@ -161,12 +192,30 @@ public:
   // Where the exact read stopped, when it did ("" when it didn't)
   const std::string &problem() const { return why; }
 
+  // The validated original archive survives native saves. Offsets are rebuilt
+  // by parsing it again, never trusted from an external index.
+  const std::vector<uint8_t> &originalBytes() const { return original; }
+  bool writeOriginal(std::vector<uint8_t> &out, std::string &error) const;
+
 private:
+  struct ArchiveLayout {
+    size_t habitatBegin = 0, habitatEnd = 0, showsBegin = 0, showsEnd = 0;
+    size_t entitiesEnd = 0, finance = 0, admission = 0, date = 0, cash = 0;
+    size_t researchBegin = 0, researchEnd = 0, awardsBegin = 0, awardsEnd = 0;
+    size_t eventsBegin = 0, eventsEnd = 0, thoughtsBegin = 0, thoughtsEnd = 0;
+    size_t marketing = 0;
+  } archive;
+  std::vector<uint8_t> original;
+  std::vector<ShowProgram> showPrograms;
+  uint16_t showProgramCounter = 2000, showInstanceCounter = 1000;
+  std::vector<uint8_t> replacementShows;
+  bool resetOriginalEvents = false;
   bool exact = false, game = false;
   uint32_t language = 0, nextUnitId = 0, rating = 0;
   std::vector<Habitat> habitats;
   float cash = 0, admission = 49.0f;
   std::vector<ResearchRecord> research;
+  std::vector<Thought> thoughts;
   std::vector<int> awards;
   int marketing = 0;
   Books books;

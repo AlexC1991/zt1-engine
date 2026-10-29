@@ -32,6 +32,9 @@ bool quitAsked();
 // Embedded and not on show (the Lab on another view, or minimised): the
 // game holds still - no updates, no sound - until it's shown again
 bool hidden();
+// Real keys plus keys held by the Lab's input commands. Synthetic SDL events
+// do not update SDL_GetKeyboardState; this does not change the user's keyboard.
+const Uint8 *keyboardState();
 // Asked for a screenshot (snap): true once, then cleared
 bool snapAsked();
 // Where the next frame is to be saved (shot <file>): the path once, then ""

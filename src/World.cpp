@@ -25,22 +25,38 @@
 namespace FrameProfile {
 bool active=false;Uint64 frameStart=0;
 std::vector<double> frames;std::map<std::string,double> totals;
+int cameraSamples=0,cameraMoves=0,lastCameraX=0,lastCameraY=0,pausedFrames=0,slowLogged=0;
+double cameraTravel=0;Uint64 phaseStart=0;std::map<std::string,double> frameCosts;
+void record(const char *name,double elapsed){if(active){totals[name]+=elapsed;frameCosts[name]+=elapsed;}}
+void phase(const char *name){if(active && frameStart){Uint64 now=SDL_GetPerformanceCounter();record(name,1000.0*(now-phaseStart)/SDL_GetPerformanceFrequency());phaseStart=now;}}
+void camera(int x,int y,bool paused) {
+  if(!active || !frameStart)return;
+  if(cameraSamples && (x!=lastCameraX || y!=lastCameraY)) {
+    ++cameraMoves;cameraTravel+=std::hypot(double(x-lastCameraX),double(y-lastCameraY));
+  }
+  ++cameraSamples;pausedFrames+=paused;lastCameraX=x;lastCameraY=y;
+}
 double ms(Uint64 start){return 1000.0*(SDL_GetPerformanceCounter()-start)/SDL_GetPerformanceFrequency();}
-void start(){active=true;frameStart=0;frames.clear();totals.clear();SDL_Log("[FrameProfile] recording 240 visible frames");}
-void begin(){frameStart=active?SDL_GetPerformanceCounter():0;}
+void start(){active=true;frameStart=0;frames.clear();totals.clear();cameraSamples=cameraMoves=pausedFrames=slowLogged=0;cameraTravel=0;SDL_Log("[FrameProfile] recording 240 visible frames");}
+void begin(){phaseStart=frameStart=active?SDL_GetPerformanceCounter():0;if(active)frameCosts.clear();}
 struct Scope {
   const char *name;Uint64 start;
   explicit Scope(const char *n):name(n),start(active?SDL_GetPerformanceCounter():0){}
-  ~Scope(){if(start && active)totals[name]+=ms(start);}
+  ~Scope(){if(start && active)record(name,ms(start));}
 };
 void end(){
   if(!active || !frameStart)return;
-  frames.push_back(ms(frameStart));
+  const double elapsed=ms(frameStart);
+  if(elapsed>33.333 && slowLogged++<8){std::ostringstream row;row<<"slow="<<elapsed<<"ms";for(const auto &[name,value]:frameCosts)if(value>0.2)row<<" "<<name<<"="<<value<<"ms";SDL_Log("[FrameProfile] %s",row.str().c_str());}
+  frames.push_back(elapsed);
   if(frames.size()<240)return;
   active=false;std::sort(frames.begin(),frames.end());
   double total=0;for(double value:frames)total+=value;
-  SDL_Log("[FrameProfile] frames=%zu mean=%.3fms p95=%.3fms p99=%.3fms observed=%.1ffps",
-    frames.size(),total/frames.size(),frames[227],frames[237],1000.0*frames.size()/total);
+  SDL_Log("[FrameProfile] frames=%zu mean=%.3fms median=%.3fms p95=%.3fms p99=%.3fms observed=%.1ffps",
+    frames.size(),total/frames.size(),(frames[119]+frames[120])*0.5,frames[227],frames[237],1000.0*frames.size()/total);
+  SDL_Log("[FrameProfile] max=%.3fms over33ms=%zu over50ms=%zu cameraSamples=%d movedFrames=%d cameraTravel=%.1fpx pausedFrames=%d",
+    frames.back(),std::count_if(frames.begin(),frames.end(),[](double t){return t>33.333;}),
+    std::count_if(frames.begin(),frames.end(),[](double t){return t>50;}),cameraSamples,cameraMoves,cameraTravel,pausedFrames);
   for(const auto &[name,value]:totals)SDL_Log("[FrameProfile] %s mean=%.3fms",name.c_str(),value/frames.size());
 }
 }
@@ -394,7 +410,7 @@ bool World::loadFreeform(const std::string &path) {
   const int32_t *vw = zooReader.getView();
   if (blankW > 0)
     worldRenderer.startViewAt(worldMap, mapW / 2, mapH / 2); // (a blank map: its middle)
-  else if (!zooReader.hasGame() || vw[0] != 0 || !worldRenderer.startViewSaved(worldMap, vw[1], vw[2], vw[3]))
+  else if (!zooReader.hasGame() || !worldRenderer.startViewSaved(worldMap, vw[1], vw[2], vw[3], vw[0]))
     worldRenderer.startViewAt(worldMap, zooReader.getStartCameraX(),
                               zooReader.getStartCameraY());
 
@@ -732,6 +748,7 @@ void World::draw(SDL_Renderer *renderer) {
   const float zoom = userZoom * this->viewScale;
   cam.zoom = zoom;
   worldRenderer.applyPendingView();
+  FrameProfile::camera(cam.x,cam.y,paused);
 
   // Zoomed in past 1x, GPU FSR draws the map at 1:1 into a layer and
   // upscales it into the view; without it the map's art is drawn from its
@@ -879,11 +896,11 @@ void World::draw(SDL_Renderer *renderer) {
       fenceArt.push_back({depth, sx, sy, a, worldRenderer.screenSide(std::sin(angle), -std::cos(angle)), tint, true});
     }
   // (big animals' strips on the right side of the fences in their columns)
-  Fences::sideOfFences(fenceArt);
-  placedObjects.draw(renderer, worldRenderer, worldMap, fenceArt, [this](float x, float y) {
+  {FrameProfile::Scope profile("fence ordering");Fences::sideOfFences(fenceArt);}
+  {FrameProfile::Scope profile("objects draw");placedObjects.draw(renderer, worldRenderer, worldMap, fenceArt, [this](float x, float y) {
     return Features::elevatedPaths &&
            this->walkways.at(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y))) != nullptr;
-  });
+  });}
   // (debug) footprints
   if (this->debugFootprints)
     for (const PlacedObjects::Object &o : this->placedObjects.objects()) {

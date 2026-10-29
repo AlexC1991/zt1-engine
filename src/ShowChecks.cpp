@@ -6,12 +6,76 @@
 #include "ui/UiListBox.hpp"
 #include "ui/UiButton.hpp"
 #include <fstream>
+#include <filesystem>
 #include <sstream>
 #include <algorithm>
 #include <functional>
 #include <set>
 #include <cmath>
 #include "Animation.hpp"
+
+// Lab-only real-time soak setup. Uses stock definitions and ordinary needs;
+// it changes the initial zoo, never keeps animals healthy during the run.
+std::string prepareMarineSoak(World &world,ResourceManager *rm) {
+  auto &map=world.getMap();auto &f=world.getFences();auto &a=world.getAnimals();
+  auto &st=world.getStaff();auto &objects=world.objectsMutable();auto &shows=world.getShows();
+  if(!f.exhibits().empty()||map.getWidth()<70)return "Load flat ff01 first.";
+  int drag=1900;
+  auto rectangle=[&](int x,int y,int width,int height,int type,const char *name) {
+    for(int k=0;k<width;++k){f.place({true,x+k,y},type,drag,map);f.place({true,x+k,y+height},type,drag+1,map);}
+    for(int k=0;k<height;++k){f.place({false,x,y+k},type,drag+2,map);f.place({false,x+width,y+k},type,drag+3,map);}
+    drag+=4;
+    for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,name,map);
+    const int id=f.exhibitAt(x,y);if(auto *ex=f.exhibit(id)) {
+      while(ex->wallSub<12&&f.canAdjustWall(id,1))f.adjustWall(id,1);
+      ex->water=1;ex->purity=100;
+    }
+    return id;
+  };
+  const int home=rectangle(22,22,20,20,f.typeIndex("tankwal2"),"Dolphin home");
+  const int show=rectangle(42,22,20,20,f.typeIndex("tankwal3"),"Dolphin show");
+  if(home<0||show<0)return "Tank setup failed.";
+  // Use the dolphin's preferred kelp and ocean-floor rocks, with enough
+  // open swimming space. Report the actual suitability after construction.
+  for(int tankX:{22,42}) {
+    for(int row=0;row<4;++row)for(int column=0;column<5;++column)
+      objects.add("scenery/foliage/kelp.ai",tankX+2+column*3,24+row*3,0);
+    objects.add("scenery/other/aqrock3.ai",tankX+5,38,0);
+    objects.add("scenery/other/aqrock3.ai",tankX+13,38,0);
+    objects.add("scenery/other/aqrock3.ai",tankX+16,28,0);
+    objects.add("scenery/other/aqrock3.ai",tankX+16,39,0);
+  }
+  world.reindex();
+  a.adopt(a.typeOfFile("animals/dolphin.ai"),false,36.5f,32.5f,map,f,true);
+  a.adopt(a.typeOfFile("animals/dolphin.ai"),true,37.5f,35.5f,map,f,true);
+  for(auto &ex:const_cast<std::vector<Fences::Exhibit>&>(f.exhibits()))ex.animals=a.countIn(ex.id);
+  for(int k=0;k<4;++k) {
+    const int worker=st.hire(st.typeOfFile("staff/trainer.ai"),45.5f+k*2,44.5f,map,f);
+    if(worker>=0)st.assign(worker,k==0?show:home,f);
+  }
+  f.selectFilter("scenery/other/filter1.ai");
+  for(int tank:{home,show}) {
+    bool placed=false;
+    for(int y=18;y<46&&!placed;++y)for(int x=18;x<65&&!placed;++x) {
+      int beside=-1;if(f.filterFit(x,y,map,&beside)==Fences::Fit::Ok&&beside==tank)placed=f.placeFilter(x,y,map);
+    }
+  }
+  st.hire(st.typeOfFile("staff/maint.ai"),20.5f,44.5f,map,f);
+  st.hire(st.typeOfFile("staff/maint.ai"),22.5f,44.5f,map,f);
+  for(const auto &[file,x]:std::vector<std::pair<std::string,float>>{
+      {"bgrstnd",24.5f},{"drkstnd",29.5f},{"bathroom",34.5f},{"restrant",40.5f}})
+    objects.add("scenery/building/"+file+".ai",x,49.5f,0);
+  objects.add("scenery/building/gstand.ai",65.5f,30.5f,6);
+  world.reindex();
+  for(int y=1;y<map.getHeight()-1;++y)for(int x=1;x<map.getWidth()-1;++x)
+    if(world.canLayPath(x,y))map.setPath(x,y,"path");
+  world.reindex();shows.refresh();
+  shows.selectSpecies(show,"animals/dolphin.ai");shows.add(show,"airflip");shows.add(show,"tailwalk");
+  shows.setFrequency(show,0);world.centreOn(42,32);
+  std::ostringstream report;report<<"Stock marine soak ready; normal needs and timers. home="<<home<<" show="<<show<<"\n";
+  for(const auto &animal:a.members())report<<animal.name<<" suitability="<<a.suitability(animal.id,map,f)<<"\n";
+  report<<shows.describe();return report.str();
+}
 
 // An opt-in integration fixture. Run through --panel-shots with
 // ZT_SHOW_CHECKS=1 and ZT_FLAT_LAB=1 on sm_aqua. It exercises the real
@@ -353,10 +417,32 @@ std::string runShowPolishChecks(World &world,ResourceManager *rm,bool demo) {
   shows.add(tank,"finswim");shows.add(tank,"ballplay");shows.add(tank,"spit");
   auto *s=shows.show(tank);shows.setFrequency(tank,0);s->clock=shows.settings.interval[0];
   bool climbed=false,descended=false,onDeck=false,seated=false,performed=false,snapshotChecked=false;
+  auto fileRoundTrip=[&](const std::string &stage) {
+    const auto animalsBefore=a.list.size(),guestsBefore=g.list.size(),staffBefore=st.members().size();
+    const double incomeBefore=shows.show(tank)->income;
+    ZooSim books;books.start(1000000,50);UiGameScreen hud(rm,"","");
+    Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
+    for(const char *ext:{".zt1save",".zoo"}) {
+      const auto file=std::filesystem::temp_directory_path()/
+          ("zt1-show-save-"+std::to_string(SDL_GetTicks64())+ext);
+      const bool saved=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn");
+      const bool loaded=saved&&SaveGame::load(file.string(),world,books,hud);
+      s=shows.show(tank);m=st.member(trainer);
+      check(stage+" full-file "+ext+" restores actors and income",
+            loaded&&s&&m&&a.list.size()==animalsBefore&&g.list.size()==guestsBefore&&
+            st.members().size()==staffBefore&&std::abs(s->income-incomeBefore)<0.01);
+      if(!saved)out<<"SAVE ERROR "<<SaveGame::lastError()<<"\n";
+      std::error_code ec;std::filesystem::remove(file,ec);
+    }
+    SaveGame::goals=priorGoals;
+  };
+  std::set<int> savedPhases;
   for(int i=0;i<6000 && (s->completed==0 || s->phase!=Shows::Phase::Waiting);++i) {
     for(auto &animal:a.list){animal.happiness=100;animal.pending=0;animal.hunger=0;animal.energy=0;}
     world.update(SDL_GetKeyboardState(nullptr),0.05f);
     m=st.member(trainer);climbed |= m->climbing && !m->climbDown;descended |= m->climbing && m->climbDown;
+    if(!demo && s->phase!=Shows::Phase::Waiting && savedPhases.insert(int(s->phase)).second)
+      fileRoundTrip("orca phase "+std::to_string(int(s->phase)));
     if(s->phase==Shows::Phase::Performing) {
       performed=true;onDeck |= std::hypot(m->x-m->inX,m->y-m->inY)<0.01f &&
         std::abs(st.heightOf(*m,map)-(f.exhibit(tank)->wallTop()-0.5f))<0.01f;
@@ -388,10 +474,13 @@ std::string runShowPolishChecks(World &world,ResourceManager *rm,bool demo) {
     const int before=s->completed,done=s->tricksDone,skipped=s->tricksSkipped;
     const int expected=static_cast<int>(s->script.size())*2;
     s->clock=shows.settings.interval[0];bool dolphinPerformed=false;
+    savedPhases.clear();
     for(int i=0;i<8000 && (s->completed==before || s->phase!=Shows::Phase::Waiting);++i) {
       for(auto &animal:a.list){animal.happiness=100;animal.pending=0;animal.hunger=0;animal.energy=0;}
       world.update(SDL_GetKeyboardState(nullptr),0.05f);
       dolphinPerformed |= s->phase==Shows::Phase::Performing;
+      if(s->phase!=Shows::Phase::Waiting && savedPhases.insert(int(s->phase)).second)
+        fileRoundTrip("dolphin phase "+std::to_string(int(s->phase)));
     }
     check("roaming specialist automatically takes the scheduled dolphin show",dolphinPerformed && m->exhibits.empty());
     check("dolphins perform their available plain-trick program",dolphinPerformed && expected>0 && s->tricksDone==done+expected && s->tricksSkipped==skipped);

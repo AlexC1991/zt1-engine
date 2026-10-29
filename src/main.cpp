@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <vector>
 #include <string>
 #include <thread>
@@ -479,7 +480,7 @@ static void drawLayoutCentered(SDL_Renderer *renderer, UiLayout *layout,
 
 static UiGameScreen *g_hud = nullptr;
 static ZooSim g_sim; // the game clock and the zoo's books
-namespace FrameProfile {void start();void begin();void end();}
+namespace FrameProfile {void start();void begin();void end();void phase(const char *name);}
 static DevConsole g_console;    // ` or F10: commands to set up test states
 static float g_gameSpeed = 1.0f; // (dev console) the game's speed
 
@@ -1380,8 +1381,8 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
   }
   if (!w.empty() && (w[0] == "polishcheck" || w[0] == "polishdemo")) {
     if (g_hud) return "Run this fixture in the Lab Test Zoo, not a player zoo.";
-    extern std::string runBuildingPolishChecks(World &, bool);
-    return runBuildingPolishChecks(*g_world, w[0] == "polishdemo");
+    extern std::string runBuildingPolishChecks(World &, ResourceManager *, bool);
+    return runBuildingPolishChecks(*g_world, rm, w[0] == "polishdemo");
   }
   if (!w.empty() && (w[0] == "activitycheck" || w[0] == "activitydemo")) {
     if (g_hud) return "Run this fixture in the Lab Test Zoo, not a player zoo.";
@@ -1392,6 +1393,43 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
     if (g_hud) return "Run this fixture in the Lab Test Zoo, not a player zoo.";
     extern std::string runParityChecks(World &, ResourceManager *);
     return runParityChecks(*g_world, rm);
+  }
+  if(!w.empty() && (w[0]=="originalwrite" || w[0]=="originalexport")) {
+    if(g_hud || w.size()!=2)return "Test Zoo only: originalwrite|originalexport new-output.zoo";
+    return SaveGame::checkOriginalWriter(*g_world,w[1],w[0]=="originalexport");
+  }
+  if(!w.empty() && w[0]=="labzoosave") {
+    if(g_hud || (w.size()!=3 && w.size()!=4))return "Test Zoo only: labzoosave freeform/map.scn new-diagnostic.zt1save [crowd]";
+    if(std::filesystem::exists(w[2]))return "Output already exists; choose a new diagnostic name.";
+    if(w.size()==4) {
+      auto &guests=g_world->getGuests();auto &map=g_world->getMap();
+      std::vector<std::pair<int,int>> paths;
+      for(int y=0;y<map.getHeight();++y)for(int x=0;x<map.getWidth();++x)
+        if(map.isPath(x,y) && guests.canWalk(x,y))
+          for(const auto &o:g_world->getObjects().objects())
+            if(o.bought && o.className=="building" && std::abs(o.x-x)+std::abs(o.y-y)<3) {
+              paths.push_back({x,y});break;
+            }
+      if(paths.empty())return "No walkable paths beside placed buildings.";
+      const size_t count=std::clamp(std::atoi(w[3].c_str()),1,1000);
+      while(guests.guests().size()<count) {
+        const size_t before=guests.guests().size();guests.admit(0);
+        if(before==guests.guests().size())return "Cannot admit diagnostic guests.";
+      }
+      auto &crowd=const_cast<std::vector<Guests::Guest>&>(guests.guests());crowd.resize(count);
+      for(size_t i=0;i<crowd.size();++i) {
+        auto &g=crowd[i];auto [x,y]=paths[i%paths.size()];g.x=x+0.35f+(i%3)*0.15f;g.y=y+0.35f;
+        g.showTank=g.showStand=g.showSeat=-1;g.building=g.target=g.guide=-1;
+        g.hidden=g.leaving=false;g.path.clear();g.pathAt=0;g.need.clear();g.state=Guests::State::Walking;
+        g.happiness=80;g.hunger=(i%3==0)?75:20;g.thirst=(i%3==1)?75:20;
+        g.bathroom=g.tired=15;g.playFor=0;g.tickMs=(i%20)*50;
+      }
+    }
+    ZooSim books;books.start(1000000,50);
+    UiGameScreen hud(rm,"ui/main.lyt","ui/gamescrn.lyt");
+    g_world->reindex();
+    if(!SaveGame::save(w[2],*g_world,books,hud,w[1]))return "Could not write diagnostic zoo.";
+    return "Saved Test Zoo diagnostic to "+w[2];
   }
   if(!w.empty() && w[0]=="showcrowdsave") {
     if(g_hud || w.size()!=4)return "Test Zoo only: showcrowdsave count source.zt1save output.zt1save";
@@ -1431,6 +1469,11 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
     if(g_hud)return "Run this fixture in the Lab Test Zoo, not a player zoo.";
     extern std::string runShowPolishChecks(World &,ResourceManager *,bool);
     return runShowPolishChecks(*g_world,rm,w[0]=="showpolishdemo");
+  }
+  if (!w.empty() && w[0] == "marinesoaksetup") {
+    if(g_hud)return "Test Zoo only; load flat ff01 first.";
+    extern std::string prepareMarineSoak(World &,ResourceManager *);
+    return prepareMarineSoak(*g_world,rm);
   }
   if (!w.empty() && w[0] == "showstartcheck") {
     if (g_hud) return "Run this fixture in the Lab Test Zoo, not a player zoo.";
@@ -1640,9 +1683,11 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
       return e->name + ": no food";
     }
     float x, y;
-    if (randomTile(e, x, y))
-      items.addFood(e->id, x, y, std::max(1, e->testAnimals),
-                    e->tank ? "fish" : e->testCarnivore ? "carnchow" : "herbchow");
+    if (randomTile(e, x, y)) {
+      bool carnivore=false;
+      // The Lab's Food down control uses the same species/custom chow as staff.
+      items.addFood(e->id, x, y, std::max({1,e->testAnimals,g_world->getAnimals().countIn(e->id)}),staff.foodFor(e->id,fences,carnivore));
+    }
     return e->name + ": food put down";
   }
   if (c == "litter") {
@@ -1682,6 +1727,7 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
     }
     return std::to_string(n) + " fence pieces " + (c == "break" ? "broken" : "worn");
   }
+  if (c == "saveerror") return SaveGame::lastError();
   if (c == "saveimportcheck") {
     if (g_hud) return "Use the Lab Test Zoo, not a player's zoo.";
     return SaveGame::checkOriginalImport(*g_world);
@@ -2863,7 +2909,7 @@ static bool gameSave(const std::string &given = "") {
     return false; // (cancelled)
   bool ok = SaveGame::save(path, *g_world, g_sim, *g_hud, g_currentMapPath);
   SDL_Log("[Save] %s %s", ok ? "saved" : "couldn't save", path.c_str());
-  g_hud->showMessage(ok ? "Zoo saved." : "The zoo couldn't be saved.",
+  g_hud->showMessage(ok ? "Zoo saved." : (SaveGame::lastError().empty()?"The zoo couldn't be saved.":SaveGame::lastError()),
                      ok ? SDL_Color{255, 255, 255, 255} : SDL_Color{255, 40, 40, 255});
   return ok;
 }
@@ -2871,54 +2917,87 @@ static bool gameSave(const std::string &given = "") {
 // Load Game: "Load a zoo..." (or the file given): its map started afresh
 // with a new screen, then the save put back over it
 static bool gameLoad(ResourceManager *rm, const std::string &given = "") {
-  if (!g_world)
+  if (!g_world) return false;
+  const std::string path = given.empty() ? SaveGame::askLoadPath() : given;
+  if (path.empty()) return false;
+  const Uint32 loadStarted = SDL_GetTicks();
+  Uint32 loadStage = loadStarted;
+  auto loadedStage = [&](const char *stage) {
+    const Uint32 now = SDL_GetTicks();
+    SDL_Log("[Save] load stage %s: %u ms (%u ms total)", stage,
+            unsigned(now - loadStage), unsigned(now - loadStarted));
+    loadStage = now;
+  };
+  SDL_Log("[Save] begin loading %s", path.c_str());
+  // The menu worker may still be filling these lists. load() takes each
+  // loader's mutex, so wait before copying or restarting research state.
+  ItemCatalog::get().load(rm);
+  Research::get().load(rm);
+  loadedStage("catalogue and research ready");
+  // Validate a separate world before replacing the current unsaved session.
+  const auto researchBefore = Research::get().branches();
+  const auto tickBefore = Research::get().tickClock;
+  const auto zoomBefore = g_ZoomLevel;
+  Goals *const previousGoals = SaveGame::goals;
+  const bool original = SaveGame::isOriginal(path);
+  const std::string mapPath = original ? path : SaveGame::mapOf(path);
+  const bool scenario = mapPath.rfind("scenario:", 0) == 0;
+  auto next = std::make_unique<World>(rm);
+  const bool started = !mapPath.empty() && (scenario ? next->loadScenario(mapPath.substr(9))
+                                                     : next->loadFreeform(mapPath));
+  loadedStage("map ready");
+  auto savedHud = std::make_unique<UiGameScreen>(rm, "ui/main.lyt", "ui/gamescrn.lyt");
+  loadedStage("interface ready");
+  ZooSim savedBooks; savedBooks.start(g_currentStartingCash, 37);
+  Goals savedGoals;
+  if (started) Research::get().restart();
+  savedGoals.load(rm, scenario ? mapPath.substr(9) : mapPath);
+  SaveGame::goals = &savedGoals;
+  const bool ok = started && (original ? SaveGame::loadOriginal(*next, savedBooks, *savedHud)
+                                      : SaveGame::load(path, *next, savedBooks, *savedHud));
+  loadedStage("save decoded");
+  SaveGame::goals = previousGoals;
+  if (!ok) {
+    Research::get().branches() = researchBefore;
+    Research::get().tickClock = tickBefore;
+    g_ZoomLevel = zoomBefore;
+    std::string message = !started || SaveGame::lastError().empty()
+        ? "That zoo couldn't be loaded. Your current zoo is unchanged." : SaveGame::lastError();
+    if(!started&&!mapPath.empty()&&!rm->hasResource(mapPath)&&!std::filesystem::exists(mapPath))
+      message="Missing map: "+std::filesystem::path(mapPath).filename().string()+". Enable its mod and try again.";
+    SDL_Log("[Save] load rejected: %s: %s", path.c_str(), message.c_str());
+    if (g_hud) g_hud->showMessage(message, SDL_Color{255, 40, 40, 255});
+    else SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Zoo could not be loaded", message.c_str(), nullptr);
     return false;
-  std::string path = given.empty() ? SaveGame::askLoadPath() : given;
-  if (path.empty())
-    return false; // (cancelled)
-  // The original game's own saved zoo: it is its own map
-  if (SaveGame::isOriginal(path)) {
-    if (!g_world->loadFreeform(path)) {
-      if (g_hud)
-        g_hud->showMessage("That saved zoo couldn't be read.", SDL_Color{255, 40, 40, 255});
-      return false;
-    }
-    destroyHud();
-    createHud(rm, g_world, g_currentStartingCash);
-    g_currentMapPath = path;
-    startGoals(rm, path);
-    bool ok = SaveGame::loadOriginal(*g_world, g_sim, *g_hud);
-    resetResearchEffects();
-    updateHudClock(rm);
-    SDL_Log("[Save] the original's %s %s", ok ? "loaded" : "couldn't read", path.c_str());
-    g_hud->showMessage(ok ? "Zoo loaded." : "The saved zoo couldn't be read.",
-                       ok ? SDL_Color{255, 255, 255, 255} : SDL_Color{255, 40, 40, 255});
-    return ok;
   }
-  std::string mapPath = SaveGame::mapOf(path);
-  // (a scenario's save: its scenario started afresh, else a freeform map)
-  const std::string scn = "scenario:";
-  bool scenario = mapPath.rfind(scn, 0) == 0;
-  bool started = !mapPath.empty() && (scenario ? g_world->loadScenario(mapPath.substr(scn.size()))
-                                               : g_world->loadFreeform(mapPath));
-  if (!started) {
-    SDL_Log("[Save] not a saved zoo: %s (map '%s')", path.c_str(), mapPath.c_str());
-    if (g_hud)
-      g_hud->showMessage("That isn't a saved zoo.", SDL_Color{255, 40, 40, 255});
-    return false;
-  }
+  const auto restoredResearch = Research::get().branches();
+  const auto restoredTick = Research::get().tickClock;
+  const auto restoredInfo = savedHud->zooInfo();
+  std::vector<int> restoredStates;
+  for (const auto &goal : savedGoals.all()) restoredStates.push_back(goal.state);
+  const auto restoredAwards = savedGoals.awards;
   destroyHud();
+  delete g_world;
+  g_world = next.release();
+  delete g_nextHud;
+  g_nextHud = savedHud.release();
   createHud(rm, g_world, g_currentStartingCash);
   g_currentMapPath = mapPath;
-  if (!scenario)
-    startGoals(rm, mapPath);
-  bool ok = SaveGame::load(path, *g_world, g_sim, *g_hud);
+  startGoals(rm, scenario ? mapPath.substr(9) : mapPath);
+  g_sim = std::move(savedBooks);
+  g_hud->setZooInfo(restoredInfo);
+  g_goals.restore(restoredStates);
+  g_goals.awards = restoredAwards;
+  g_hud->setAwards(restoredAwards);
+  Research::get().branches() = restoredResearch;
+  Research::get().tickClock = restoredTick;
+  g_ZoomLevel = g_world->getCamera().zoom;
   resetResearchEffects();
   updateHudClock(rm);
-  SDL_Log("[Save] %s %s", ok ? "loaded" : "couldn't read", path.c_str());
-  g_hud->showMessage(ok ? "Zoo loaded." : "The saved zoo couldn't be read.",
-                     ok ? SDL_Color{255, 255, 255, 255} : SDL_Color{255, 40, 40, 255});
-  return ok;
+  loadedStage("zoo activated");
+  SDL_Log("[Save] loaded %s", path.c_str());
+  g_hud->showMessage("Zoo loaded.", SDL_Color{255, 255, 255, 255});
+  return true;
 }
 // Apply switches between frames. The checkpoint is private runtime state,
 // never the player's save. Required content is checked before rebuilding.
@@ -3425,6 +3504,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   // animals listed, then quit - for looking at a player's save
   if (const char *view = std::getenv("ZT_VIEW_SAVE")) {
     bool ok = gameLoad(rm, view);
+    world = g_world;
     note((std::string("loaded save ") + view + (ok ? " ok" : " FAILED")).c_str());
     if (!ok)
       return 1;
@@ -3441,6 +3521,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     for (int pass = 0; pass < (std::getenv("ZT_VIEW_TWICE") ? 2 : 1); pass++) {
       if (pass == 1) {
         gameLoad(rm, view);
+        world = g_world;
         world->getAnimals().takeMessages();
       }
       // (how long a frame takes to draw here)
@@ -8207,6 +8288,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       capture("menu_load_open");
       bool loadButton = click(1501) == UiAction::GAME_LOAD;
       bool read = gameLoad(rm, menuFile);
+      world = g_world;
       // (compared straight after loading: a few ticks later an animal may
       // have walked across a tile line)
       std::string now = snapshot();
@@ -8598,7 +8680,14 @@ int main(int argc, char *argv[]) {
                     i + 1 < argc ? argv[i + 1] : "deathmtn");
     if (std::string(argv[i]) == "--lab-host")
       return runLab(window.window, window.renderer, &resource_manager, g_scenarioManager, g_world, "deathmtn",
-                    i + 1 < argc ? std::atoi(argv[i + 1]) : 18490, g_console.run);
+                    i + 1 < argc ? std::atoi(argv[i + 1]) : 18490,
+                    [&](const std::vector<std::string> &words) {
+                      if (!words.empty() && words[0] == "camerarendercheck") {
+                        extern std::string runCameraRenderChecks(SDL_Renderer *);
+                        return runCameraRenderChecks(window.renderer);
+                      }
+                      return g_console.run(words);
+                    });
   }
 
   for (int i = 1; i + 1 < argc; i++) {
@@ -8720,17 +8809,24 @@ int main(int argc, char *argv[]) {
     }
 
     FrameProfile::begin();
-    window.clear();
-    inputs = input_manager.getInputs();
+    window.clear();FrameProfile::phase("clear");
+    inputs = input_manager.getInputs();FrameProfile::phase("input collection");
+    static bool spriteCulling = true;
+    if (Embed::active()) for (const Input &in : inputs)
+      if (in.event == InputEvent::KEY_DOWN && in.key == SDLK_F8) {
+        extern void worldSpriteCulling(bool);
+        spriteCulling = !spriteCulling; worldSpriteCulling(spriteCulling);
+        SDL_Log("[FrameProfile] sprite pruning %s (Lab reference comparison)", spriteCulling ? "on" : "off");
+      }
     if(g_currentState==LayoutState::GAME_LOOP)
       for(const Input &in:inputs)if(in.event==InputEvent::KEY_DOWN && in.key==SDLK_F9) {
         FrameProfile::start();int width=0,height=0;SDL_GetRendererOutputSize(window.renderer,&width,&height);
         SDL_RendererInfo device{};SDL_GetRendererInfo(window.renderer,&device);
         SDL_Log("[FrameProfile] renderer=%s accelerated=%d targetTextures=%d vsync=%d",device.name,
           (device.flags&SDL_RENDERER_ACCELERATED)!=0,(device.flags&SDL_RENDERER_TARGETTEXTURE)!=0,(device.flags&SDL_RENDERER_PRESENTVSYNC)!=0);
-        SDL_Log("[FrameProfile] context guests=%zu animals=%zu size=%dx%d zoom=%.2f paused=%d",
+        SDL_Log("[FrameProfile] context guests=%zu animals=%zu size=%dx%d zoom=%.2f paused=%d spriteCulling=%d",
           g_world->getGuests().guests().size(),g_world->getAnimals().members().size(),width,height,
-          g_world->getCamera().zoom,g_world->isPaused());
+          g_world->getCamera().zoom,g_world->isPaused(),spriteCulling);
       }
     // The dev console takes the keyboard while it's open
     bool consoleKeys = false;
@@ -8915,7 +9011,8 @@ int main(int argc, char *argv[]) {
         std::filesystem::file_time_type newest{};
         std::error_code ec;
         for (const auto &e : std::filesystem::directory_iterator(SaveGame::folder(), ec))
-          if (e.path().extension() == ".zt1save" && (path.empty() || e.last_write_time() > newest)) {
+          if ((e.path().extension() == ".zt1save" || e.path().extension() == ".zoo") &&
+              (path.empty() || e.last_write_time() > newest)) {
             newest = e.last_write_time();
             path = e.path().string();
           }
@@ -9059,10 +9156,11 @@ int main(int argc, char *argv[]) {
       // SDL_Log("MainLoop: Loop Heartbeat");
     }
 
+    FrameProfile::phase("input dispatch");
     // UPDATE LOGGING
     if (g_currentState == LayoutState::GAME_LOOP) {
       // SDL_Log("MainLoop: Pre-Update");
-      const Uint8 *state = SDL_GetKeyboardState(nullptr);
+      const Uint8 *state = Embed::keyboardState();
       static const Uint8 noKeys[SDL_NUM_SCANCODES] = {};
       // Game Options (window or original panel), questions and naming boxes
       // stop the whole simulation. Only resume a game that the modal paused;
@@ -9177,6 +9275,7 @@ int main(int argc, char *argv[]) {
       }
       // SDL_Log("MainLoop: Post-Update");
 
+      FrameProfile::phase("simulation");
       // SDL_Log("MainLoop: Pre-Draw");
       // (the zoo at the UI's scale: 1:1 as the original, or the uiscale
       // extra's whole steps)
@@ -9208,7 +9307,8 @@ int main(int argc, char *argv[]) {
       drawOptions(window.renderer, &resource_manager, g_menuOptions); // (over the menu)
     }
 
-    window.present();
+    FrameProfile::phase("rendering");
+    window.present();FrameProfile::phase("present");
     FrameProfile::end();
 
     // Check if it's time for periodic memory dump

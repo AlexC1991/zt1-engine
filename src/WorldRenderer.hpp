@@ -83,7 +83,7 @@ public:
   void startViewAt(const WorldMap &map, int tileX, int tileY);
   // The view a map was saved with (its game block: rotation, scroll), as the
   // original opens it; false where that rotation's origin isn't known
-  bool startViewSaved(const WorldMap &map, int rotation, int scrollX, int scrollY);
+  bool startViewSaved(const WorldMap &map, int rotation, int scrollX, int scrollY, int zoom = 0);
   // (the saved view put in place, at the first draw: World::draw)
   void applyPendingView();
   // (another start or a move before then drops it)

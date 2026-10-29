@@ -13,7 +13,8 @@ class UiGameScreen;
 // since (the ground, fences and exhibits, what's been built, the animals,
 // staff and guests, the books, research), so loading starts that map
 // afresh and puts it all back. That's our own file format; the original's
-// own saved zoos (.zoo) are read too (loadOriginal), not written.
+// own saved zoos (.zoo) are imported, and shared saves include a current
+// original-compatible world followed by the complete engine snapshot.
 class Goals;
 
 class SaveGame {
@@ -22,6 +23,7 @@ public:
   static Goals *goals;
   // Where saved zoos go (Documents/zt1-engine/Saved Games), made if need be
   static std::string folder();
+  static const std::string &lastError();
   static bool save(const std::string &path, World &world, ZooSim &sim, UiGameScreen &hud,
                    const std::string &mapPath);
   // The map a save was started on (empty: not a save)
@@ -38,6 +40,9 @@ public:
   // (its world alone - habitats, food and dung, animals, staff - for the
   // ZT1 Lab's test zoo, which keeps no books)
   static bool loadOriginalWorld(World &world);
+  static bool saveOriginal(const std::string &path, World &world, ZooSim &sim,
+                           UiGameScreen &hud, std::string &error);
+  static std::string checkOriginalWriter(World &world, const std::string &path, bool current = false);
   // Native Lab regression: compare a just-loaded original zoo with its
   // decoded records (run before advancing time; never in a player's zoo).
   static std::string checkOriginalImport(World &world);
@@ -51,6 +56,8 @@ public:
   static std::string askLoadPath();
 
 private:
+  static bool encodeOriginal(World &world, ZooSim &sim, UiGameScreen &hud,
+                             std::vector<uint8_t> &bytes, std::string &error);
   // (the world as made - in a saved zoo and a map design alike: their own
   // writer and reader, SaveGame.cpp's Out and In)
   static void putWorld(void *out, World &world);

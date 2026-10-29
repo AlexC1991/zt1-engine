@@ -1314,7 +1314,8 @@ void Animals::chooseBehaviour(Member &m) {
     return;
   }
   // Tired (cEnergyThreshold): to sleep; rested after (zoo.exe 0x4384ba)
-  if (m.energy >= t.energyThreshold && !m.escaped && this->set(m, "bsleep")) {
+  if ((m.sleeping || m.energy >= t.energyThreshold) && !m.escaped && this->set(m, "bsleep")) {
+    m.sleeping = true;
     float wasEnergy = m.energy;
     m.energy = 0;
     m.lastSlept = this->now;
@@ -1449,6 +1450,7 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       // Primates' bEat uses mouth/arm animations, not an animation named
       // "eat". Completing the feeding behaviour must still consume food.
       if(m.stack.back().first=="beat" && !m.mealTaken)consumeFood(m);
+      if(m.stack.back().first=="bsleep")m.sleeping=false;
       m.stack.pop_back();
       continue;
     }

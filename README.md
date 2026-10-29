@@ -104,7 +104,7 @@ Each download's own README has the rest.
 The base game's **freeform** mode is the focus, and most of it works as in the original:
 
 - **Menus and screens:** loading screen, main menu, freeform and scenario selection, credits, the in-game HUD and panels, tooltips, messages.
-- **Saving and loading:** the original's save and load dialogs, Continue Saved Game. (Saves use our own format; reading the original's `.zoo` saves comes later.)
+- **Saving and loading:** original `.zoo` imports, shared `.zoo` saves with a compatible world for the original and full engine state, engine-only `.zt1save` files, the original's file dialogs and Continue Saved Game. Exact original save-state parity remains incomplete. See the [2026.10.30 release notes](docs/RELEASE_NOTES_2026-10-30.md).
 - **Building:** terraforming, paths, every fence type and gate, exhibits, scenery, foliage, rocks, buildings and shops, shelters and toys; the bulldozer and undo.
 - **Animals:** adopting and selling, the original's behaviours and animations, eating, drinking, sleeping, swimming, exhibit suitability and happiness worked out as `zoo.exe` does, breeding, illness, old age.
 - **Escapes and predators:** jumpers jump, climbers climb, bashers break fences. Loose meat-eaters chase guests and keepers dart and crate them. Predators hunt their prey in exhibits.
@@ -188,8 +188,8 @@ You're also free to fork it and take it your own way. That's what open source is
 1. **Base Zoo Tycoon freeform, one to one with the original.** Every system checked against `zoo.exe`, function by function.
 2. ~~An options menu for the extras~~ (done: Game Options › Extras), and a friendlier mod menu.
 3. **Scenarios:** every scenario's goals and events.
-4. **Marine Mania** (started: tanks, marine animals, specialists; shows next), then **Dinosaur Digs**.
-5. **The original's `.zoo` saves:** loading them.
+4. **Marine Mania and Dinosaur Digs:** tanks, marine animals, specialists, scheduled shows, dinosaur eggs and DRT capture are implemented; wider expansion parity remains in progress.
+5. **The original's `.zoo` saves:** imports and shared original-compatible export are implemented. Exact AI/task continuation and remaining state conversion still need work.
 
 ---
 
@@ -212,7 +212,7 @@ For a one-person project, that's what makes an engine like this possible. You're
 Yes. The engine ships none of the game's art, sound or files. It reads them from your own installed copy, the first time it runs.
 
 **Is the base game enough, or do I need the Complete Collection?**
-The base game is enough. The Complete Collection works too, and adds Marine Mania's animals and tanks (the shows come later). Dinosaur Digs content isn't playable yet.
+The base game is enough. The Complete Collection adds Marine Mania's animals, tanks and shows, along with Dinosaur Digs animals, eggs and DRT capture. These expansion systems are still being polished.
 
 **Which download do I want?**
 Almost everyone wants `ZT1-Engine-Setup`. It's small, needs no admin rights, finds your game by itself and offers each new alpha at the main menu. `ZT1-Game-Build` is the same game as a folder you unzip and run with `start.bat`. It needs Python 3 the first time and doesn't update itself. `ZT1-Lab-Setup` is 570 MB and is only for people who want to look inside `zoo.exe`. You don't need it to play.
@@ -221,7 +221,7 @@ Almost everyone wants `ZT1-Engine-Setup`. It's small, needs no admin rights, fin
 No. The installer version reads your game where it is and never writes to that folder.
 
 **Can I load my old saves, or play scenarios?**
-Not yet. Saves from this engine use their own format. Scenarios and loading the original's `.zoo` saves are on the roadmap, after the base game's freeform mode matches the original.
+Original `.zoo` saves can be imported. New shared `.zoo` saves contain a compatible stock world for the original game and the full engine state in the same file; engine-only `.zt1save` files remain available. Compatibility is incomplete, especially exact AI/task continuation and scenarios. Resaving in the original removes engine-only data from that copy, so keep a separate engine copy and older backups.
 
 **Something behaves differently from the original. Where do I report it?**
 Open an issue. Say what you did, what the original does and what the engine does. A screenshot or a saved zoo helps a lot. These reports are the most useful thing anyone can send me.

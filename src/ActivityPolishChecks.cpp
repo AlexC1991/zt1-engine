@@ -3,11 +3,76 @@
 #include "ItemCatalog.hpp"
 #include "IniReader.hpp"
 #include "ZooSim.hpp"
+#include "SaveGame.hpp"
+#include "ui/UiGameScreen.hpp"
+#include <filesystem>
 #include "Features.hpp"
+#include "SpriteDatabase.hpp"
 #include <algorithm>
 #include <cmath>
 #include <set>
 #include <sstream>
+
+// Compare visible traversal against the complete map traversal on the same
+// real renderer and source terrain/path textures. This does not modify a zoo.
+std::string runCameraRenderChecks(SDL_Renderer *renderer) {
+  extern void worldTerrainCulling(bool);
+  constexpr int width=517,height=389;
+  SDL_Texture *saved=SDL_GetRenderTarget(renderer);
+  float xs=1,ys=1;SDL_RenderGetScale(renderer,&xs,&ys);
+  SDL_RenderSetScale(renderer,1,1);SDL_Rect viewport,clip;
+  SDL_RenderGetViewport(renderer,&viewport);SDL_RenderGetClipRect(renderer,&clip);
+  const bool clipped=SDL_RenderIsClipEnabled(renderer);
+  SDL_Texture *target=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_TARGET,width,height);
+  if(!target) {SDL_RenderSetScale(renderer,xs,ys);return "FAIL camera render target unavailable";}
+  SDL_SetRenderTarget(renderer,target);SDL_RenderSetViewport(renderer,nullptr);SDL_RenderSetClipRect(renderer,nullptr);
+  WorldMap map;map.makeBlank(200,120,0);
+  for(int y=0;y<120;++y)for(int x=0;x<200;++x) {
+    auto *t=map.getTileMutable(x,y);
+    const int h=(x>=60 && x<80 && y>=30 && y<50)?18:
+                (x>=128 && x<148 && y>=70 && y<90)?-12:0;
+    t->height=h;t->terrainType=(x/17+y/13)%6;
+    for(int k=0;k<4;++k)t->cornerHeight[k]=h;
+    if(x%19==0)t->cornerHeight[CORNER_X1Y0]++;
+    if(y==40 || x==138)map.setPath(x,y,"path");
+  }
+  map.touch();WorldRenderer view;auto &camera=view.getCamera();
+  camera.screenCenterX=width/2;camera.screenCenterY=height/2;
+  view.renderTerrain(renderer,map,SpriteDatabase::get());
+  std::set<std::pair<int,int>> cover;
+  for(int y=26;y<54;++y)for(int x=56;x<84;++x)cover.insert({x,y});
+  bool equal=true,sawPixels=false;int cases=0;
+  const SDL_Point positions[]={{0,0},{199,0},{199,119},{0,119},{100,60},{70,40},{138,80}};
+  for(float zoom:{0.45f,1.0f,1.1f,2.25f})for(int rotation=0;rotation<4;++rotation) {
+    camera.zoom=zoom;
+    for(const auto p:positions) {
+      const auto *tile=map.getTile(p.x,p.y);view.centreOnWorld(p.x+0.5f,p.y+0.5f,tile->height);
+      for(bool partial:{false,true}) {
+        std::vector<Uint32> reference(width*height),pixels(width*height);
+        for(bool bounded:{false,true}) {
+          worldTerrainCulling(bounded);SDL_RenderSetScale(renderer,1,1);
+          SDL_SetRenderDrawColor(renderer,0,0,0,255);SDL_RenderClear(renderer);SDL_RenderSetScale(renderer,zoom,zoom);
+          if(partial)view.renderTerrainTiles(renderer,map,SpriteDatabase::get(),cover);
+          else view.renderTerrain(renderer,map,SpriteDatabase::get());
+          SDL_RenderFlush(renderer);
+          const bool read=SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA8888,pixels.data(),width*4)==0;
+          equal &= read;
+          if(!bounded) {reference=pixels;sawPixels |= std::any_of(pixels.begin(),pixels.end(),[](Uint32 p){return p!=0x000000ff;});}
+          else equal &= pixels==reference;
+        }
+        ++cases;
+      }
+    }
+    view.rotateView(1);
+  }
+  worldTerrainCulling(true);SDL_SetRenderTarget(renderer,saved);
+  SDL_RenderSetScale(renderer,1,1);SDL_RenderSetViewport(renderer,&viewport);
+  SDL_RenderSetClipRect(renderer,clipped?&clip:nullptr);SDL_RenderSetScale(renderer,xs,ys);SDL_DestroyTexture(target);
+  std::ostringstream report;
+  report<<(equal && sawPixels && cases==224?"PASS ":"FAIL ")<<cases
+        <<" terrain pixel comparisons: four zooms, four rotations, map edges, raised cliffs, deep pits, paths and partial ground redraw";
+  SDL_Log("[CameraRender] %s",report.str().c_str());return report.str();
+}
 
 // Only reached from the Lab-only console guard. Uses the same definitions,
 // clocks, gate renderer and specialist visit state machine as normal Play.
@@ -18,6 +83,22 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
     ++checks; failures+=!pass;
     report<<(pass?"PASS ":"FAIL ")<<name<<"\n";
     SDL_Log("[ActivityPolish] %s %s",pass?"PASS":"FAIL",name.c_str());
+  };
+  auto fileRoundTrip=[&](const std::string &stage) {
+    const auto na=world.getAnimals().members().size(),ns=world.getStaff().members().size(),ng=world.getGuests().guests().size();
+    ZooSim books;books.start(1000000,50);UiGameScreen hud(rm,"","");
+    Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
+    for(const char *extension:{".zt1save",".zoo"}) {
+      const auto file=std::filesystem::temp_directory_path()/
+        ("zt1-activity-save-"+std::to_string(SDL_GetTicks64())+extension);
+      const bool written=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn");
+      const bool loaded=written&&SaveGame::load(file.string(),world,books,hud);
+      check(stage+" full-file "+extension+" preserves every actor",loaded&&
+        world.getAnimals().members().size()==na&&world.getStaff().members().size()==ns&&world.getGuests().guests().size()==ng);
+      if(!loaded)report<<"SAVE ERROR "<<SaveGame::lastError()<<"\n";
+      std::error_code ec;std::filesystem::remove(file,ec);
+    }
+    SaveGame::goals=priorGoals;
   };
   auto &map=world.getMap(); auto &fn=world.getFences();
   auto &st=world.getStaff(); auto &animals=world.getAnimals();
@@ -255,8 +336,68 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
   }
   tankAnimalFastPaths(true);world.getCamera()=oldCamera;if(swimmer>=0)animals.remove(swimmer);
   check("optimized whale clipping matches exact pixel clips at three scales and four rotations",samePixels && sawPixels);
+  // Compare sprite visibility pruning with unpruned drawing, including eaves,
+  // animated buildings, clipped halves, custom passes, and all four view edges.
+  extern void worldSpriteCulling(bool);
+  bool cullPixels=probe!=nullptr,cullSawPixels=false,cullState=true;int cullCases=0;
+  if(probe) {
+    PlacedObjects scene;ZooReader empty;scene.load(empty,rm);
+    bool assets=true;
+    for(const char *file:{"scenery/building/carousal.ai","scenery/building/restrant.ai",
+                         "scenery/building/geyser1.ai","scenery/building/drkstnd.ai"})
+      assets &= scene.add(file,37.5f,31.5f,4);
+    for(auto &o:scene.all()) {o.inUse=o.used!=nullptr;o.animTime=o.useTime=0.7f;}
+    cullPixels &= assets;
+    const Camera cameraWas=world.getCamera();
+    for(float scale:{0.65f,1.0f,1.5f,2.0f})for(int rotation=0;rotation<4;++rotation) {
+      auto &camera=world.getCamera();camera.screenCenterX=camera.screenCenterY=256;camera.zoom=scale;
+      for(SDL_Point edge: {SDL_Point{0,0},{256,256},{512,0},{0,512},{512,512}}) {
+        float sx,sy,depth;world.getRenderer().worldToScreenF(37.5f,31.5f,0,sx,sy,depth);
+        camera.x+=static_cast<int>(std::lround(edge.x/scale-sx));
+        camera.y+=static_cast<int>(std::lround(edge.y/scale-sy));
+        std::vector<Fences::Drawable> extra;
+        if(scene.last()) {
+          float x,y,d;world.getRenderer().worldToScreenF(37.5f,31.5f,0,x,y,d);
+          Fences::Drawable half{d+0.5f,x+32,y,scene.last()->art,CompassDirection::SW};
+          half.clip=true;half.clipX0=x;half.clipX1=x+50;half.clipY1=y+10;
+          extra.push_back(half);
+        }
+        Fences::Drawable custom{};custom.depth=10000;
+        custom.custom=[](SDL_Renderer *r){SDL_SetRenderDrawColor(r,250,70,30,255);SDL_Rect box{10,10,8,8};SDL_RenderFillRect(r,&box);};
+        extra.push_back(custom);
+        // An off-screen custom strip must have no effect on visible pixels.
+        custom.clip=true;custom.clipX0=-1000;custom.clipX1=-20;extra.push_back(custom);
+        std::vector<Uint8> reference;
+        for(bool cull:{false,true}) {
+          worldSpriteCulling(cull);SDL_RenderSetScale(probe,1,1);SDL_RenderSetClipRect(probe,nullptr);
+          SDL_SetRenderDrawColor(probe,0,0,0,0);SDL_RenderClear(probe);
+          SDL_Rect parent{7,9,499,497};SDL_RenderSetClipRect(probe,&parent);SDL_RenderSetScale(probe,scale,scale);
+          scene.draw(probe,world.getRenderer(),map,extra);SDL_RenderFlush(probe);
+          float xs=0,ys=0;SDL_RenderGetScale(probe,&xs,&ys);SDL_RenderSetScale(probe,1,1);
+          SDL_Rect got;SDL_RenderGetClipRect(probe,&got);
+          cullState &= xs==scale && ys==scale && SDL_RenderIsClipEnabled(probe) &&
+            got.x==parent.x && got.y==parent.y && got.w==parent.w && got.h==parent.h;
+          const auto *bytes=static_cast<const Uint8*>(canvas->pixels);
+          if(!cull) {reference.assign(bytes,bytes+canvas->pitch*canvas->h);
+            cullSawPixels |= std::any_of(reference.begin(),reference.end(),[](Uint8 p){return p!=0;});}
+          else cullPixels &= std::equal(reference.begin(),reference.end(),bytes);
+        }
+        ++cullCases;
+      }
+      world.getRenderer().rotateView(1);
+    }
+    worldSpriteCulling(true);world.getCamera()=cameraWas;
+  }
+  check("off-screen sprite pruning preserves pixels at four zooms, four rotations and five view positions",cullPixels && cullSawPixels && cullCases==80);
+  check("sprite pruning preserves the parent clip and renderer scale",cullState && probe);
   Features::tankClip=oldTankClip;if(probe)SDL_DestroyRenderer(probe);if(canvas)SDL_FreeSurface(canvas);
   const Fences::Edge sides[4]={{true,37,30},{false,40,31},{true,37,34},{false,36,31}};
+  // Full save/load deliberately does not persist fake Lab animal counts.
+  // Use a real occupant so the specialist still has work after restoration.
+  ex->testAnimals=0;
+  const int occupant=animals.adopt(animals.typeOfFile("animals/dolphin.ai"),false,37.5f,31.5f,map,fn,true);
+  check("ladder save fixture has a real marine animal",occupant>=0);
+  ex->animals=animals.countIn(tankId);
   if(demo) {
     fn.moveGate(sides[0]); ex->purity=20;
     int id=st.hire(trainerType,37.5f,28.5f,map,fn);
@@ -292,7 +433,7 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
     m->female=sex!=0;
     st.assign(id,tankId,fn);
     bool entered=false,exited=false,faceCorrect=true,frameCorrect=true,climbPause=true;
-    std::set<int> phases;
+    std::set<int> phases,savedPhases;
     for(int step=0;step<6000;step++) {
       st.update(0.05f,map,fn);
       m=st.member(id); if(!m)break;
@@ -319,14 +460,52 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
         float oldZ=m->z,oldTime=m->animTime;
         st.update(0,map,fn);
         climbPause &= m->z==oldZ && m->animTime==oldTime;
+        if(sex==0 && side==0 && savedPhases.insert(m->phase).second) {
+          const auto phase=m->phase;
+          fileRoundTrip("specialist ladder phase "+std::to_string(phase));
+          m=st.member(id);ex=fn.exhibit(tankId);
+          check("interrupted specialist safely restarts on the bank",m&&m->tank<0&&!m->climbing&&
+                m->showTank<0&&m->job==Staff::Job::None&&fn.exhibitAt(int(m->x),int(m->y))<0);
+          if(!m||!ex)break;
+          continue;
+        }
       }
-      if(entered && m->tank<0 && !m->climbing && m->job==Staff::Job::None) {exited=true;break;}
+      if(entered && m->tank<0 && !m->climbing && m->job==Staff::Job::None &&
+         phases.count(20) && phases.count(26) && phases.count(29) && ex->purity>=100) {exited=true;break;}
     }
     const std::string who=std::string(sex?"female":"male")+" side "+std::to_string(side);
     check(who+" completes entry, submerged work and exit",entered && exited && phases.count(30) && phases.count(20) && phases.count(26) && phases.count(29) && ex->purity>=100);
     check(who+" faces the ladder on ascent and descent",faceCorrect && entered);
     check(who+" plays ascent forward and descent backward",frameCorrect && entered);
     check(who+" pauses during climbing",climbPause && entered);
+  }
+  st.clear();
+  fn.selectFilter("scenery/other/filter1.ai");
+  bool pumpPlaced=false;
+  for(int y=20;y<40&&!pumpPlaced;++y)for(int x=28;x<46&&!pumpPlaced;++x)
+    if(fn.filterFit(x,y,map)==Fences::Fit::Ok)pumpPlaced=fn.placeFilter(x,y,map);
+  check("maintenance save fixture has a real pump",pumpPlaced);
+  if(pumpPlaced) {
+    const int pump=int(fn.filters().size())-1;
+    auto *filter=fn.filter(pump);filter->health=1;filter->decayClock=17;filter->filterClock=23;
+    filter->upkeepLast=50;filter->upkeepCurrent=100;filter->upkeepTotal=350;
+    const float decay=filter->decayClock,clean=filter->filterClock;
+    int maintenance=-1;const int kind=st.typeOfFile("staff/maint.ai");
+    for(int y=26;y<38&&maintenance<0;++y)for(int x=30;x<45&&maintenance<0;++x)
+      maintenance=st.hire(kind,x+0.5f,y+0.5f,map,fn);
+    bool savedService=false,repaired=false;
+    for(int k=0;k<6000 && !repaired;++k) {
+      st.update(0.05f,map,fn);
+      const auto *worker=st.member(maintenance);
+      if(worker && worker->job==Staff::Job::Filter && worker->pathAt>=worker->path.size() && !savedService) {
+        fileRoundTrip("maintenance servicing pump");savedService=true;
+        filter=fn.filter(pump);
+        check("pump clocks and costs survive both save formats",filter&&filter->decayClock==decay&&
+          filter->filterClock==clean&&filter->upkeepLast==50&&filter->upkeepCurrent==100&&filter->upkeepTotal==350);
+      }
+      filter=fn.filter(pump);repaired=filter&&filter->health==fn.filterType(filter->file).startHealth;
+    }
+    check("maintenance resumes after reload and repairs the pump",savedService&&repaired);
   }
   st.clear();
   // A show portal uses a different, vertically sliding animation from land gates.
@@ -363,6 +542,22 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     return "Load flat Basic Grass (ff01), with no exhibits, in the Test Zoo first.";
   std::ostringstream out; int passed=0,total=0;
   auto check=[&](const std::string &name,bool ok){++total;passed+=ok;out<<(ok?"PASS ":"FAIL ")<<name<<"\n";};
+  auto fileRoundTrip=[&](const std::string &stage) {
+    const auto na=a.members().size(),ns=st.members().size(),ng=g.guests().size();
+    ZooSim books;books.start(1000000,50);UiGameScreen hud(rm,"","");
+    Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
+    for(const char *extension:{".zt1save",".zoo"}) {
+      const auto file=std::filesystem::temp_directory_path()/
+        ("zt1-parity-save-"+std::to_string(SDL_GetTicks64())+extension);
+      const bool written=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn");
+      const bool loaded=written&&SaveGame::load(file.string(),world,books,hud);
+      check(stage+" full-file "+extension+" preserves actors and money",loaded&&books.cash()==1000000&&
+        a.members().size()==na&&st.members().size()==ns&&g.guests().size()==ng);
+      if(!loaded)out<<"SAVE ERROR "<<SaveGame::lastError()<<"\n";
+      std::error_code ec;std::filesystem::remove(file,ec);
+    }
+    SaveGame::goals=priorGoals;
+  };
   a.clear();st.clear();g.clear();
   int drag=200;
   auto rectangle=[&](int x,int y,int w,int h,int type,const std::string &name) {
@@ -438,6 +633,27 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
   step(egg,{{"fhatch",{}},{"fplay",{"stand"}}});
   check("hatching creates a live baby",!egg.egg && egg.baby);
 
+  a.clear();
+  const int embryo=a.adopt(dino,false,30.5f,32.5f,map,f,true);
+  if(auto *m=a.member(embryo)) {a.becomeEgg(*m);m->hatchIn=1;m->health=float(a.typeList[dino].maxHits);a.eggTick(*m);}
+  fileRoundTrip("dinosaur egg during hatch");
+  for(int k=0;k<4000&&a.member(embryo)&&a.member(embryo)->egg;++k)a.update(0.05f,a.now+0.05,map,f);
+  check("interrupted hatch produces one live baby with its identity",a.list.size()==1&&a.member(embryo)&&
+        !a.member(embryo)->egg&&a.member(embryo)->baby);
+  a.clear();
+  const int sleeper=a.adopt(a.typeOfFile("animals/zebra.ai"),false,30.5f,32.5f,map,f,true);
+  if(auto *m=a.member(sleeper)) {m->energy=float(a.typeList[m->type].energyThreshold);m->hunger=0;a.chooseBehaviour(*m);}
+  check("sleep save starts the real sleep behavior",a.member(sleeper)&&a.member(sleeper)->sleeping);
+  fileRoundTrip("sleeping animal");
+  for(int k=0;k<4000&&a.member(sleeper)&&a.member(sleeper)->sleeping;++k)a.update(0.05f,a.now+0.05,map,f);
+  check("sleeping animal wakes after reload",a.member(sleeper)&&!a.member(sleeper)->sleeping);
+  if(auto *m=a.member(sleeper)){m->sick=true;m->health=1;}
+  fileRoundTrip("sick animal");
+  check("illness is retained instead of silently healed",a.member(sleeper)&&a.member(sleeper)->sick&&a.member(sleeper)->health==1);
+  a.heal(sleeper);a.update(0.05f,a.now+0.05,map,f);
+  check("reloaded sick animal accepts treatment",a.member(sleeper)&&!a.member(sleeper)->sick);
+  a.clear();
+
   // Tour recruitment, movement, both talks, effects, interruption and removal.
   const int guideType=st.typeOfFile("staff/tour.ai");
   const int guide=st.hire(guideType,25.5f,30.5f,map,f);
@@ -493,9 +709,22 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     const bool found=g.seekBuilding(guest,"food",1000);
     check("hungry guest routes to an accessible food stand",found && guest.building>=0 && !guest.path.empty());
     check("seeking food detaches a tour follower",!found || guest.guide<0);
-    bool used=false;
-    for(int k=0;k<1600 && guest.hunger>=90;++k){g.update(0.05f,0,1000);used |= guest.state==Guests::State::Using;}
-    check("guest walks, buys food and reduces hunger",used && guest.hunger<90 && shop->income>0);
+    const int guestId=guest.id,shopId=shop->id;
+    bool used=false,savedUse=false;
+    for(int k=0;k<3200;++k) {
+      g.update(0.05f,0,1000);auto *patron=g.guest(guestId);if(!patron)break;
+      used |= patron->state==Guests::State::Using;
+      if(patron->state==Guests::State::Using&&!savedUse) {
+        const double income=objects.byId(shopId)->income;
+        fileRoundTrip("guest using food stand");savedUse=true;
+        patron=g.guest(guestId);
+        check("shop reload releases transient occupancy without charging twice",patron&&patron->building<0&&
+              !patron->hidden&&objects.byId(shopId)&&objects.byId(shopId)->income==income);
+      }
+      patron=g.guest(guestId);if(patron&&patron->hunger<90)break;
+    }
+    const auto *patron=g.guest(guestId);const auto *counter=objects.byId(shopId);
+    check("guest replans, buys food and reduces hunger after reload",used&&savedUse&&patron&&patron->hunger<90&&counter&&counter->income>0);
   }
   // A bank-level pool inside a fenced marine habitat: use the actual
   // animal routes across the shore in both directions.

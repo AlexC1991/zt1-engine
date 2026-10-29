@@ -7,6 +7,7 @@
 #include <atomic>
 #include <bitset>
 #include <cstdint>
+#include <climits>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
@@ -407,6 +408,34 @@ bool ResourceManager::availableWithout(const std::string &file, const std::strin
     for (const auto &m : mods) if (m.folder == owner && m.enabled) return true;
   }
   return false;
+}
+bool ResourceManager::availableInGame(const std::string &file) const {
+  const auto key=normalizePath(file);
+  const auto sources=resourceSources.find(key);
+  if(sources==resourceSources.end())return resource_map.count(key)&&modOf(file).empty();
+  for(const auto &source:sources->second) {
+    const auto archive=Utils::string_to_lower(std::filesystem::path(source).lexically_normal().generic_string());
+    if(std::none_of(loadedModRoots.begin(),loadedModRoots.end(),[&](const auto &root){return archive.rfind(root.first,0)==0;}))return true;
+  }
+  return false;
+}
+std::string ResourceManager::gameTextWithoutMods(const std::string &file) {
+  if(modOf(file).empty())return availableInGame(file)?getGameText(file):std::string();
+  const auto key=normalizePath(file);const auto sources=resourceSources.find(key);
+  if(sources==resourceSources.end())return {};
+  std::string stockSource;int priority=INT_MAX;
+  for(const auto &source:sources->second) {
+    const auto archive=Utils::string_to_lower(std::filesystem::path(source).lexically_normal().generic_string());
+    if(std::any_of(loadedModRoots.begin(),loadedModRoots.end(),[&](const auto &root){return archive.rfind(root.first,0)==0;}))continue;
+    const auto entry=archive_priority.find(source);
+    const int rank=entry==archive_priority.end()?INT_MAX:entry->second;
+    // Earlier folders win; within one folder the later archive wins.
+    if(stockSource.empty()||rank<=priority){stockSource=source;priority=rank;}
+  }
+  if(stockSource.empty())return {};
+  int size=0;void *data=ZtdFile::getFileContent(stockSource,key,&size);
+  if(!data||size<=0){std::free(data);return {};}
+  const std::string text(static_cast<const char*>(data),size);std::free(data);return text;
 }
 void ResourceManager::clearAnimations() {
   while (!ownedAnimations.empty()) {

@@ -7,9 +7,9 @@
 >
 > **Back up any saves you care about.**
 
-### Alpha 2026.10.29
+### Alpha 2026.10.30
 
-This alpha is **2026.10.29**, following **v2026.10.20**. See the release notes for changes and known limitations.
+This alpha is **2026.10.30**, following **v2026.10.20**. See the release notes for changes and known limitations.
 
 
 > **You need your own copy of Zoo Tycoon.** ZT1-Engine comes with **no** Zoo Tycoon art, sound, maps or game files: it plays the copy you have installed, reading it where it is (it never changes your game's folder).
@@ -100,7 +100,7 @@ Its settings stay in the folder (`build\Release\zoo.ini`), and saved zoos go to 
 - **Animal and habitat behavior:** awareness of nearby animals, marine body clearance and species preferences, mixed land/water routing, dinosaur capture and egg hatching checks.
 - **Mod studio:** PNG/sprite-sheet and OBJ-pose imports, animals and object builders, custom maps, food and eggs, theme-pack publishing and download covers. The Lab includes offline help and tutorial videos.
 - **Mod switches:** downloads start off; in-game switches preserve required map/placed content and keep temporary Lab tests separate from normal selections.
-- **Save compatibility:** partial original-save imports, more original manager/finance state and native format 12. Original-format export remains unfinished.
+- **Save compatibility:** partial original-save imports, original manager/finance state and native format 14. Shared .zoo saves also carry a compatible stock world for the original game.
 - **Polish:** building alignment/animations, DRT flights and capture roles, gates and specialist ladder animations; menu pause and clearer mod pagination; more reliable embedded Play startup and Lab command replies.
 - **Interface options:** windows can stack side by side, move, lock and remember positions. Optional layout changes have Game Options switches.
 
@@ -129,10 +129,10 @@ This alpha covers the **base Zoo Tycoon game's freeform mode**: its **animals an
 
 ### Not in this alpha yet
 
-- **Marine Mania:** shows now have linked tanks, scripts, specialists, spectators and admissions. Wider species/trick coverage, mixed habitats and containment still need testing. Original saved show performances are not restored.
+- **Marine Mania:** shows now have linked tanks, scripts, specialists, spectators and admissions. Wider species/trick coverage, mixed habitats and containment still need testing. Original show scripts import, while exact active performance and spectator continuation remains incomplete.
 - **Dinosaur Digs:** egg hatching, behavior and DRT/scientist capture are implemented and have targeted checks. Full expansion parity and every custom dinosaur are not certified.
 - **Scenarios:** they open, but their goals and events aren't implemented yet. Stick to **freeform**.
-- **Original `.zoo` saves:** import terrain and substantial animal, staff, guest and manager state. This is a partial conversion: original routes/task stacks, show state and some other details remain incomplete. Native saves cannot be opened by the original game. New saves use format 12, which older released engines cannot read; retain backup copies before testing.
+- **Original `.zoo` saves:** import terrain and substantial animal, staff, guest and manager state. This is a partial conversion: original routes/task stacks, show state and some other details remain incomplete. Shared .zoo saves carry an original-compatible world and full engine state. Engine-only .zt1save files require this engine. New snapshots use format 14, which older released engines cannot read. Resaving in the original removes engine-only data; retain separate copies.
 - **Linux and macOS:** this engine is Windows only. For Linux, see [sharkwouter's zt1-engine](https://github.com/sharkwouter/zt1-engine), which this project grew from.
 
 ---

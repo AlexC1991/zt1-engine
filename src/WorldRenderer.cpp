@@ -7,6 +7,10 @@
 #include <cstdlib>
 #include <vector>
 
+namespace { bool cullTerrainTiles = true; }
+// The Lab compares this bounded traversal with the original complete traversal.
+void worldTerrainCulling(bool enabled) { cullTerrainTiles = enabled; }
+
 // ============================================================================
 // WORLD RENDERER IMPLEMENTATION
 // ============================================================================
@@ -250,32 +254,31 @@ void WorldRenderer::startViewAt(const WorldMap &map, int tileX, int tileY) {
           tileY, viewRotation);
 }
 
-bool WorldRenderer::startViewSaved(const WorldMap &map, int rotation, int scrollX, int scrollY) {
-  // (measured on Basic Grass Map against the original at the same window
-  // size: the saved scroll is the view's top-left in its pixels, tile (0,0)
-  // at (0,0) - x (x + y) * 32, y (y - x) * 16 - unrotated. The other
-  // rotations' origins aren't measured yet)
-  if (rotation != 0)
-    return false;
+bool WorldRenderer::startViewSaved(const WorldMap &map, int rotation, int scrollX, int scrollY, int zoom) {
+  if (rotation < 0 || rotation > 3 || (zoom != -2 && zoom != 0 && zoom != 2)) return false;
   mapWidthCache = map.getWidth();
   mapHeightCache = map.getHeight();
-  viewRotation = 0;
-  // (set when it's first drawn: the view's middle, which the camera counts
-  // from, is only known then)
+  // Original rotation is clockwise in its unshifted world projection;
+  // ours rotates the finite tile grid and uses the opposite index.
+  viewRotation = (4 - rotation) & 3;
+  camera.zoom = zoom == -2 ? 0.5f : zoom == 2 ? 2.0f : 1.0f;
   pendingScroll = true;
   pendingScrollX = scrollX;
   pendingScrollY = scrollY;
-  SDL_Log("[WorldRenderer] Start view: the map's own scroll (%d,%d)", scrollX, scrollY);
   return true;
 }
 
 void WorldRenderer::applyPendingView() {
-  if (!pendingScroll)
-    return;
+  if (!pendingScroll) return;
   pendingScroll = false;
-  const float W = static_cast<float>(mapWidthCache);
-  camera.x = static_cast<int>(std::lround(W * tileWidth * 0.5f - pendingScrollX - logicalCenterX()));
-  camera.y = static_cast<int>(std::lround(-W * tileHeight * 0.5f - pendingScrollY - logicalCenterY()));
+  const float W = float(mapWidthCache), H = float(mapHeightCache);
+  const float offsetsX[] = {W, H - W, -H, 0};
+  const float offsetsY[] = {-W, -W - H, -H, 0};
+  const float zoom = camera.zoom > 0 ? camera.zoom : 1.0f;
+  camera.x = int(std::lround(offsetsX[viewRotation] * tileWidth * 0.5f -
+                            pendingScrollX / zoom - logicalCenterX()));
+  camera.y = int(std::lround(offsetsY[viewRotation] * tileHeight * 0.5f -
+                            pendingScrollY / zoom - logicalCenterY()));
 }
 
 void WorldRenderer::getViewSize(int &viewU, int &viewV) const {
@@ -775,6 +778,22 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
     vLo = std::max(vLo, 0);
     uHi = std::min(uHi, viewU - 1);
     vHi = std::min(vHi, viewV - 1);
+  }
+  // Bound the traversal before projecting every corner on the whole map.
+  // Invert a conservative screen rectangle into view-grid coordinates. Its
+  // vertical range includes the highest corner and the lowest cliff/pit floor;
+  // the existing per-tile visibility test below still makes the final decision.
+  if (cullTerrainTiles && halfW > 0 && halfH > 0) {
+    const float originX = camera.x + logicalCenterX();
+    const float originY = camera.y + logicalCenterY();
+    const float a0 = (-halfW - originX) / halfW;
+    const float a1 = (viewW + halfW - originX) / halfW;
+    const float b0 = (lowestHeight * unitPx - tileHeight - originY) / halfH;
+    const float b1 = (viewH + map.getMaxHeight() * unitPx - originY) / halfH;
+    uLo = std::max(uLo, static_cast<int>(std::floor((a0 + b0) * 0.5f)) - 1);
+    uHi = std::min(uHi, static_cast<int>(std::ceil((a1 + b1) * 0.5f)) + 1);
+    vLo = std::max(vLo, static_cast<int>(std::floor((b0 - a1) * 0.5f)) - 1);
+    vHi = std::min(vHi, static_cast<int>(std::ceil((b1 - a0) * 0.5f)) + 1);
   }
   // Back-to-front, one view diagonal (u + v = d) at a time
   for (int d = uLo + vLo; d <= uHi + vHi; d++) {

@@ -33,6 +33,10 @@ public:
   // Who supplies a resource, and whether it survives without that mod.
   std::string modOf(const std::string &file) const;
   bool availableWithout(const std::string &file, const std::string &mod) const;
+  // The installed game's definition, excluding every engine mod. Used by
+  // shared-save projection; another enabled mod is not an original asset.
+  bool availableInGame(const std::string &file) const;
+  std::string gameTextWithoutMods(const std::string &file);
 
   void *getFileContent(const std::string &file_name, int *size);
   // magnified: art drawn scaled up (menus, HUD, the zoomed-in map), which

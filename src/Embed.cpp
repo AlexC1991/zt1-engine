@@ -18,6 +18,7 @@
 
 namespace {
 std::atomic<bool> g_active{false}, g_quit{false}, g_hidden{true}, g_snap{false};
+std::atomic<bool> g_heldKeys[SDL_NUM_SCANCODES]{};
 std::atomic<bool> g_pressed{false}; // (press / release: a drag's button held)
 // (shot <file>: set by the listening thread, taken by the game's)
 std::mutex g_shotLock;
@@ -62,7 +63,7 @@ HWND openDialog() {
         GetWindowThreadProcessId(h, &pid);
         char cls[16] = {};
         GetClassNameA(h, cls, sizeof cls);
-        if (pid == GetCurrentProcessId() && IsWindowVisible(h) && !std::strcmp(cls, "#32770")) {
+        if (pid == GetCurrentProcessId() && IsWindowVisible(h) && IsWindowEnabled(h) && !std::strcmp(cls, "#32770")) {
           reinterpret_cast<Find *>(l)->found = h;
           return FALSE;
         }
@@ -79,9 +80,18 @@ void dialogCommand(const char *arg) {
   while (*arg == ' ')
     arg++;
   HWND d = openDialog();
-  if (!d)
-    return;
-  if (!std::strncmp(arg, "text ", 5)) {
+  if (!d) {SDL_Log("[Lab] no open file dialog");return;}
+  char title[256]={};GetWindowTextA(d,title,sizeof title);
+  SDL_Log("[Lab] dialog %s",title);
+  if(!std::strcmp(arg,"inspect")) {
+    EnumChildWindows(d,[](HWND control,LPARAM)->BOOL {
+      char cls[64]={},label[1024]={};
+      GetClassNameA(control,cls,sizeof cls);GetWindowTextA(control,label,sizeof label);
+      if(!std::strcmp(cls,"Edit")||!std::strcmp(cls,"ComboBox")||!std::strcmp(cls,"Button")||!std::strcmp(cls,"Static"))
+        SDL_Log("[Lab] dialog control %d %s enabled=%d text=%s",GetDlgCtrlID(control),cls,int(IsWindowEnabled(control)),label);
+      return TRUE;
+    },0);
+  } else if (!std::strncmp(arg, "text ", 5)) {
     std::string name = arg + 5;
     while (!name.empty() && (name.back() == '\n' || name.back() == '\r'))
       name.pop_back();
@@ -114,9 +124,44 @@ void dialogCommand(const char *arg) {
       edit = firstEdit(d);
     if (edit)
       SendMessageA(edit, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(name.c_str()));
+  } else if (!std::strncmp(arg,"filter ",7)) {
+    const int index=std::atoi(arg+7)-1;
+    // Modern common dialogs nest the type combo below another window.
+    struct Choice {HWND combo=nullptr;} choice;
+    EnumChildWindows(d,[](HWND control,LPARAM data)->BOOL {
+      char cls[64]={};GetClassNameA(control,cls,sizeof cls);
+      if(std::strcmp(cls,"ComboBox"))return TRUE;
+      const int count=int(SendMessageA(control,CB_GETCOUNT,0,0));
+      for(int i=0;i<count;++i) {
+        const int length=int(SendMessageA(control,CB_GETLBTEXTLEN,i,0));
+        if(length<=0||length>=512)continue;
+        char label[512]={};SendMessageA(control,CB_GETLBTEXT,i,reinterpret_cast<LPARAM>(label));
+        if(std::strstr(label,"Engine-only save")) {
+          reinterpret_cast<Choice *>(data)->combo=control;return FALSE;
+        }
+      }
+      return TRUE;
+    },reinterpret_cast<LPARAM>(&choice));
+    HWND combo=choice.combo?choice.combo:GetDlgItem(d,1136);
+    if(combo && index>=0 && index<SendMessageA(combo,CB_GETCOUNT,0,0)) {
+      SendMessageA(combo,CB_SETCURSEL,index,0);
+      // Explorer commits its type choice on SELENDOK, as a real dropdown
+      // selection does. Changing the combo index alone is only cosmetic.
+      SendMessageA(d,WM_COMMAND,MAKEWPARAM(GetDlgCtrlID(combo),CBN_SELENDOK),reinterpret_cast<LPARAM>(combo));
+      if(GetParent(combo)!=d)
+        SendMessageA(GetParent(combo),WM_COMMAND,MAKEWPARAM(GetDlgCtrlID(combo),CBN_SELENDOK),reinterpret_cast<LPARAM>(combo));
+      SDL_Log("[Lab] file-type choice %d",index+1);
+    } else SDL_Log("[Lab] file-type choice control unavailable");
   } else if (!std::strncmp(arg, "ok", 2) || !std::strncmp(arg, "cancel", 6)) {
-    if (HWND b = GetDlgItem(d, arg[0] == 'o' ? IDOK : IDCANCEL))
-      PostMessageA(b, BM_CLICK, 0, 0);
+    HWND button = GetDlgItem(d, arg[0] == 'o' ? IDOK : IDCANCEL);
+    if (!button && arg[0] == 'o') {
+      // SDL's standard error dialog uses id 100 for its sole OK button.
+      HWND candidate = GetDlgItem(d, 100);
+      char text[32] = {};
+      if (candidate) GetWindowTextA(candidate, text, sizeof text);
+      if (!std::strcmp(text, "OK")) button = candidate;
+    }
+    if (button) PostMessageA(button, BM_CLICK, 0, 0);
   }
 }
 
@@ -135,6 +180,7 @@ void holdKey(const char *name, int ms) {
     e.key.state = type == SDL_KEYDOWN ? SDL_PRESSED : SDL_RELEASED;
     e.key.keysym.scancode = sc;
     e.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+    g_heldKeys[sc].store(type == SDL_KEYDOWN, std::memory_order_relaxed);
     SDL_PushEvent(&e);
     if (type == SDL_KEYDOWN)
       SDL_Delay(static_cast<Uint32>(ms > 0 ? ms : 1));
@@ -299,6 +345,14 @@ bool into(SDL_Window *window, const char *ownerHandle) {
 bool active() { return g_active; }
 bool quitAsked() { return g_quit; }
 bool hidden() { return g_active && g_hidden; }
+const Uint8 *keyboardState() {
+  const Uint8 *physical = SDL_GetKeyboardState(nullptr);
+  if (!g_active) return physical;
+  static Uint8 combined[SDL_NUM_SCANCODES]{};
+  for (int key = 0; key < SDL_NUM_SCANCODES; ++key)
+    combined[key] = physical[key] || g_heldKeys[key].load(std::memory_order_relaxed);
+  return combined;
+}
 bool snapAsked() { return g_snap.exchange(false); }
 std::string shotAsked() {
   std::lock_guard<std::mutex> hold(g_shotLock);

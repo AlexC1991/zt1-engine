@@ -5,7 +5,9 @@ Optional interface changes have Game Options switches. Original-game parity is s
 # Known issues
 
 - **Overcrowded exhibits:** animals may repeat animations and/or twitch while trying to change direction. This also affects crowded tanks. Give animals more space or reduce the number sharing the exhibit.
-- Original-save import remains partial; original-format export and complete scenario parity are unfinished. New native saves use format 12 and cannot be read by older released engines. Keep backup copies of older saves.
+- Animals feeding from the same pile can overlap at its feeding point. Separate feeding positions are still unfinished.
+- Shared `.zoo` saves now contain an original-compatible world and a native engine snapshot. Exact original AI continuation, some guest/manager fields and scenarios remain partial. Saving again in the original discards engine-only data; keep a separate engine copy. Native format 14 cannot be read by older released engines.
+- Camera panning can still produce occasional long frames in crowded marine views. The local rendering improvements do not yet resolve every stall; this remains a release-candidate investigation.
 
 # Marine shows, habitats and animal behavior
 
@@ -37,19 +39,29 @@ Optional interface changes have Game Options switches. Original-game parity is s
 - Large swimmers retain exact wall clipping through all four camera views, including platforms and filters. Tank drawing reuses prepared geometry within a frame; show readiness and attendance decisions avoid repeated per-frame work.
 - On the development PC, the same 102-guest zoo improved from 28 FPS to 42–53 FPS in short 1904x897 captures. A running 1,000-guest show crowd measured 34 FPS. These are observed results, not a universal frame-rate guarantee. The accelerated OpenGL renderer uses the GPU; simulation and draw preparation also use the CPU.
 - Show frequency includes the original Never option and preserves it through saves.
+- The local engine now bounds terrain traversal and avoids off-screen sprite/clip submissions. Busy land scenes with shops, animated attractions, large animals and placement previews have targeted performance and pixel-regression checks. Final package checks are recorded in the release candidate document.
 
 # Original saves and native save format
 
 - **More original state:** preserve original entity identities, animal lifetime/status/timers, guest inventory/favorite species/arrival and need timers, and staff appearance, duties and assignments. Research funding, enabled categories and progress, awards and marketing are restored where mapped.
-- **Finance history:** import the original rolling monthly finance rows with the original panel's income/expense signs. Annual and lifetime records are retained in the native save; unavailable older monthly rows are not invented.
-- **Native format 12:** keeps the additional state and finance records through a full file save/load. The new reader retains older native-format branches. Back up saves before upgrading: older released engines cannot open a newly saved version-12 file.
-- Original `.zoo` import remains a partial state conversion. Saved show scripts/schedules, active performances and spectators, original behavior/task stacks, some guest state and original camera/ground details remain incomplete. The engine still cannot export a save for the original game. Selecting All files does not convert a native file into an original save.
+- **One shared save:** ordinary Save defaults to **Shared zoo (.zoo)**. It writes the current compatible world for the original plus the full engine snapshot in the same file. **Engine-only save (.zt1save)** remains available. Renaming an older native save alone does not convert it.
+- **Custom content:** unique engine mod entities and elevated paths stay in the engine snapshot. The original sees the compatible stock world, with stock counterparts for custom paths and fences. Required mod definitions/art must still be installed and enabled in the engine. The original needs the appropriate stock assets and expansions.
+- **Show saves:** original scripts, species, frequency and admission restore into the engine controller. New engine scripts export with visible tricks. Orca and newly edited dolphin programs were checked in the actual original show panel and after original resaves.
+- **Finance history:** import the original rolling monthly rows with the original panel's income/expense signs. Current mapped transactions also update exported annual/lifetime totals and calendar rings. Unavailable older monthly rows are not invented.
+- **Native format 14:** retains the validated original archive, recent viewed exhibits and guest favourites by species file, so changing catalogue order does not change a favourite. Older native-format read paths remain. New snapshots cannot be read by older released engines; keep pre-update backups.
+- **Save validation:** shared files validate both sections and reject damaged or truncated extensions. Repeated saves do not recursively embed old snapshots. Writes use a temporary file and atomic replacement.
+- **Original resaves:** the original ignores the engine snapshot on load and removes it on save. Keep that resave separate to retain the engine-only features in the earlier file. Exact original AI/task stacks, some guest/manager state, original active performances and spectators, and full scenarios remain partial.
+- **Safer loading:** validate the incoming zoo before replacing the current session. Missing definitions and custom maps are named and rejected; failed loads retain the open zoo. Older generic-food imports have a targeted migration.
+- **Mod interchange:** stock replacements use original species IDs. Unsupported custom show programs stay in the engine snapshot. Old custom-map objects with zero IDs receive valid original records, stock entrance pieces survive export, and custom tank walls use a stock equivalent.
+- **Guest history:** original thoughts about named units and habitats restore, and recent visit coordinates map to current exhibits and buildings. Exact original visit ordering remains partial.
+- **Camera and tanks:** current views convert across all four rotations at original half/normal/double zoom. Imported tanks retain their floor terrain; demolition uses surrounding ground and grass where an original file has no pre-tank snapshot. Native ground snapshots stay intact.
+- **Equipment and activity:** filter costs and native service countdowns survive reload. Full-file checks cover show stages, specialist ladders, pump servicing, hatching, sleep, illness, shop visits and DRT capture recovery. Generic engine dung below tank water stays in the native section because the original's stock dung blocks filling; dry-ground and bank dung still export.
 
 # Candidate verification and remaining limits
 
-- Lab reports: **1,131/1,131** original-import checks across four fixtures; **43/43** behavior checks; **54/54** activity checks; **44/44** building/DRT checks; **30/30** marine management and **27/27** show polish checks, with **18/18** nested show-start checks. **21/21** Lab process/profile/reply tests pass. The show programs cover all six stock performance species. The all-species scan covers 119 definitions; the original Smilodon typo `fplaywithsoud` remains unsupported and reported.
+- Lab reports so far: **1,709/1,709** save/import checks across six land/marine/dinosaur fixtures; **57/57** behavior/parity, **77/77** activity, **55/55** building/DRT, **39/39** show polish and **30/30** marine management, plus **18/18** nested show-start checks. Packaged-candidate reruns remain required. **21/21** Lab process/profile/reply tests passed earlier. Actual original load/resave checks include new marine/land content, show scripts, a T. rex egg/scientist, a real tank filter and litter. A theme-pack save restores custom animals, egg, staff, buildings, scenery, filters, paths and boundaries in the engine and its reduced stock world in the original. This is targeted coverage, not complete save parity.
 - Some buildings have only static idle artwork; movement appears in their configured use state. The catalogue audit does not promise animation for art that has no animated frames.
-- Scenarios, complete original save parity/export and wider marine/dinosaur compatibility remain unfinished. Prototype tutorial mods are examples, including the existing Amberhorn containment limitation.
+- Scenarios, exact original save-state continuation and wider marine/dinosaur/mod compatibility remain unfinished. The all-species scan covers 119 definitions; the original Smilodon `fplaywithsoud` opcode and prototype Amberhorn containment remain known limitations.
 - Publication is held for the owner's packaged-candidate test. Installer, updater and soak results are recorded separately in the current release acceptance document.
 
 # What's new
@@ -96,7 +108,7 @@ Optional interface changes have Game Options switches. Original-game parity is s
 
 - The portable Game Build now includes the mod-download client and creates its own repository key on first startup. Existing keys are preserved; no developer key is included.
 
-- Original `.zoo` imports now restore guests with their names, appearance, positions and needs, preserve young animals and fence condition, and restore tank filters as working equipment with their saved health. Newly converted native saves no longer depend on the original file remaining at its old path. Full original save-state parity and original-format export remain unfinished.
+- Original `.zoo` imports restore guests with names, appearance, positions and needs, preserve young animals and fence condition, and restore tank filters as working equipment with saved health. Converted native saves no longer depend on the original file remaining at its old path. Shared original-compatible export is described above; exact original save-state parity remains partial.
 - Opening the in-game Game Options menu pauses the zoo. Closing it resumes play only if it was running beforehand; a manually paused zoo stays paused.
 - Dinosaur eating poses such as head-down eating now consume food. Custom entrances can supply the zoo's guest entry path, and custom bins can use their own art and participate in rubbish collection.
 - The Lab preserves its recorded Test Zoo setup before restarting to save an enabled mod, can save a reopened blank map again, reopens saved ground drawings correctly, and selects imported packs by their installed folder.

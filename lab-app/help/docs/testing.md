@@ -26,7 +26,31 @@ Let guests buy from a building or use furniture, and let staff perform their inh
 
 Find the mod in its expected buy category. Confirm its name, image, price and allowed placement. Start from a newly loaded session after changing mods. Reopen a saved map and test again. If the mod replaces an existing item, compare with the mod off to confirm the replacement is scoped correctly.
 
-## Check sharing separately
+## Check saved zoos in both games
+
+In ordinary Play, **Save a zoo...** defaults to **Shared zoo (.zoo)**. This
+stores a compatible original-game world and the engine's own snapshot in one
+file. **Engine-only save (.zt1save)** remains available. Enter a new filename
+without an extension to use the selected format's extension.
+
+Open the shared file in the engine and check custom animals, objects, shows and
+paths with the required mods enabled. Then open a separate copy in the original.
+Unique engine mod items stay in the engine snapshot; the original sees the
+compatible stock world. Custom paths and boundaries may use stock equivalents,
+and elevated engine paths are absent there. The receiving original needs the
+appropriate installed expansions and assets.
+
+**Saving again in the original discards the engine snapshot.** Keep the engine
+copy if you want to retain its custom features. The original resave can still be
+imported by the engine, with the state that the original understands.
+
+Current native saves use version 14; older released engines cannot read them.
+Keep pre-update backups. Original thoughts about named units and habitats are
+mapped, and view conversion covers the original's rotations and zooms. Exact
+task/visit-history continuation and scenario parity still have limits; a
+successful load is not proof that every in-progress action resumed unchanged.
+
+## Check repository sharing separately
 
 **Publish → Check it** validates the local package. **Upload it** sends it for server rules and malware checks. Confirm the listing is live, inspect its cover in the game's repository before download, then download into a clean test setup and enable it. A theme pack should work with its separate components off.
 

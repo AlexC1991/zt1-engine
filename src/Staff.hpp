@@ -226,6 +226,8 @@ public:
   int monthlyWages() const;
   // The food keepers bought since last asked (Zoo Upkeep Cost: a pile of
   // herbivore chow $229, as the original's books)
+  // The food an exhibit's current species needs, including its custom diet.
+  std::string foodFor(int exhibit, const Fences &fences, bool &carnivore) const;
   double takeUpkeep() {
     double u = this->upkeep;
     this->upkeep = 0;
@@ -259,7 +261,6 @@ private:
   void releaseCatch(Member &m);
   // What an exhibit's animals eat: the chow its keeper puts down, and
   // whether they're carnivores (feedc, else feedh)
-  std::string foodFor(int exhibit, const Fences &fences, bool &carnivore) const;
   std::map<std::string, int> chowPrice;
   std::map<int, double> lastVisit; // exhibit -> when a keeper last finished there
   double clock = 0;

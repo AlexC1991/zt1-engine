@@ -17,6 +17,12 @@
 #include "WorldRenderer.hpp"
 #include "ZooReader.hpp"
 
+namespace FrameProfile { extern bool active; void record(const char *name, double elapsed); }
+namespace { bool cullWorldSprites = true; }
+// Reference path for the Lab's pixel comparisons; normal drawing always enables it.
+extern void worldTerrainCulling(bool enabled);
+void worldSpriteCulling(bool enabled) { cullWorldSprites = enabled; worldTerrainCulling(enabled); }
+
 PlacedObjects::~PlacedObjects() { this->clear(); }
 
 void PlacedObjects::clear() {
@@ -395,7 +401,7 @@ void PlacedObjects::load(const ZooReader &reader, ResourceManager *rm) {
     // animals, guests and staff live: SaveGame::loadOriginal)
     static const std::set<std::string> live = {"tankwall", "filter", "food", "animals", "guests", "staff",
                                                "keeper",   "maint", "tour", "helicopter"};
-    if (live.count(obj.className))
+    if (live.count(obj.className) || obj.typeName == "poo" || obj.typeName == "dinopoo" || obj.typeName == "trash")
       continue;
     Object o;
     o.className = obj.className;
@@ -508,6 +514,10 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
                          const WorldMap &map,
                          const std::vector<Fences::Drawable> &fences,
                          const std::function<bool(float x, float y)> &under) {
+  const bool profiling = FrameProfile::active;
+  const Uint64 setupStart = profiling ? SDL_GetPerformanceCounter() : 0;
+  double customMs = 0, spriteMs = 0, clipMs = 0;
+  auto elapsed = [](Uint64 start) { return 1000.0 * (SDL_GetPerformanceCounter() - start) / SDL_GetPerformanceFrequency(); };
   struct Drawn {
     float depth, sx, sy;
     const Object *o;
@@ -665,6 +675,32 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
     drawn.push_back({f.depth, f.sx, f.sy, nullptr, f.art, f.side,
                      f.tinted ? &f.tint : nullptr, f.frame, f.custom ? &f.custom : nullptr,
                      f.clip, f.clipX0, f.clipX1, f.clipY1, f.seamless});
+  // Do not sort or submit art that cannot touch the view. In particular,
+  // off-screen fence halves used to change SDL's clip for every map edge,
+  // flushing the renderer even though no pixels from those pieces were visible.
+  // Keep custom passes unless their explicit clip is off-screen, and keep
+  // unknown art bounds conservatively.
+  // Use the art's full canvas, including tall/airborne frames and mirrored anchors.
+  if (cullWorldSprites) {
+    SDL_Rect viewport;
+    SDL_RenderGetViewport(renderer, &viewport);
+    const float width = static_cast<float>(viewport.w);
+    const float height = static_cast<float>(viewport.h);
+    constexpr float margin = 2.0f; // outward rounding at fractional zoom/odd view sizes
+    drawn.erase(std::remove_if(drawn.begin(), drawn.end(), [&](const Drawn &d) {
+      // A custom tank pass is still bounded by its strip's scissor. Skip an
+      // entirely off-screen strip before invoking its water, contents and ground passes.
+      if (d.clip && (d.clipX1 < -margin || d.clipX0 > width + margin || d.clipY1 < -margin))
+        return true;
+      if (d.custom || !d.art) return false;
+      // An anchor inside the view can be kept without querying its canvas.
+      if (d.sx >= -margin && d.sx <= width + margin && d.sy >= -margin && d.sy <= height + margin)
+        return false;
+      float left, top, right, bottom;
+      if (!d.art->anchoredBounds(d.sx, d.sy, d.side, left, top, right, bottom)) return false;
+      return right < -margin || left > width + margin || bottom < -margin || top > height + margin;
+    }), drawn.end());
+  }
   std::stable_sort(drawn.begin(), drawn.end(),
                    [](const Drawn &a, const Drawn &b) { return a.depth < b.depth; });
 
@@ -680,10 +716,13 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
   SDL_RenderGetClipRect(renderer, &oldClip);
   SDL_RenderSetScale(renderer, sxScale, syScale);
   bool hadClip = SDL_RenderIsClipEnabled(renderer);
+  if (profiling) FrameProfile::record("sprite preparation", elapsed(setupStart));
   auto setDeviceClip = [&](const SDL_Rect *r) {
+    const Uint64 start = profiling ? SDL_GetPerformanceCounter() : 0;
     SDL_RenderSetScale(renderer, 1.0f, 1.0f);
     SDL_RenderSetClipRect(renderer, r);
     SDL_RenderSetScale(renderer, sxScale, syScale);
+    if (profiling) clipMs += elapsed(start);
   };
   for (size_t i = 0; i < drawn.size(); i++) {
     const Drawn &d = drawn[i];
@@ -693,10 +732,12 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
       size_t j = i;
       while (j < drawn.size() && drawn[j].seamless && !drawn[j].clip && !drawn[j].custom && drawn[j].art)
         j++;
+      const Uint64 start = profiling ? SDL_GetPerformanceCounter() : 0;
       drawLayered(renderer, [&] {
         for (size_t k = i; k < j; k++)
           drawn[k].art->drawAnchored(renderer, drawn[k].sx, drawn[k].sy, drawn[k].side, drawn[k].tint, drawn[k].frame);
       });
+      if (profiling) spriteMs += elapsed(start);
       i = j - 1;
       continue;
     }
@@ -716,11 +757,18 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
       }
       setDeviceClip(&r);
     }
+    const Uint64 start = profiling ? SDL_GetPerformanceCounter() : 0;
     if (d.custom)
       (*d.custom)(renderer);
     else if (d.art)
       d.art->drawAnchored(renderer, d.sx, d.sy, d.side, d.tint, d.frame);
+    if (profiling) (d.custom ? customMs : spriteMs) += elapsed(start);
     if (d.clip)
       setDeviceClip(hadClip ? &oldClip : nullptr);
+  }
+  if (profiling) {
+    FrameProfile::record("tank composite", customMs);
+    FrameProfile::record("sprite submission", spriteMs);
+    FrameProfile::record("sprite clip changes", clipMs);
   }
 }
