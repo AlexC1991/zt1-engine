@@ -504,6 +504,8 @@ private:
  public:
     // The path tile the bulldozer would lift ({-1, -1}: none)
     std::pair<int, int> bulldozePathTile() const { return bulldozePath; }
+    // The fence or tank wall piece it would take away (x -1: none)
+    Fences::Edge bulldozeEdge() const { return highlight; }
  private:
     Fences::Edge pressEdge = {false, -1, -1}; // the piece under the press
     int hoverPrice = -1; // -1: none shown

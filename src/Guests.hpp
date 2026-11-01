@@ -90,6 +90,9 @@ public:
     bool sick = false;
     int trashCheck = 0, souvenirCheck = 0;
     bool souvenir = false;    // has one
+    // wants one: set when a souvenir check decides so (10090), cleared at the
+    // next check or when a gift's bought (zoo.exe +0x33c)
+    bool wantsSouvenir = false;
     std::set<int> visited;    // attractions this round (object ids)
     float gawkSeconds = 0;    // how long it's been watching
     int lastThought = 0;      // lang string
@@ -194,6 +197,16 @@ public:
   const Guest *guest(int id) const;
   // Average happiness, 0..100 as the HUD's bar shows it
   int averageHappiness() const;
+  // The guests counted for the advisor (zoo.exe zooRatingUpdate 0x41f881):
+  // those in the zoo; those with hunger, thirst, a restroom need or
+  // tiredness over cUIThreshold (guests.ai, 75); wanting a gift; holding
+  // litter; and their happiness on average (-100..100)
+  struct Census {
+    int guests = 0, hungry = 0, thirsty = 0, bathroom = 0, tired = 0, gift = 0, trash = 0;
+    int happiness = 0;
+  };
+  Census census() const;
+  int uiThreshold = 75;
   // The day's messages ("The entrance fee is a really good value"), taken
   std::vector<int> takeMessages() {
     std::vector<int> m;

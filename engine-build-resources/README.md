@@ -1,36 +1,25 @@
-# Engine Build Resources
+# Engine build resources
 
-This folder contains all the build scripts for the Zoo Tycoon 1 Open Source Engine.
+The player setup that `start.bat` (in the project root) runs on a fresh clone:
 
-## Quick Start
+| Script | What it does |
+|--------|--------------|
+| `start.py` | Finds (or asks for) the Zoo Tycoon folder, then imports its files (step 4) |
+| `step3_build.py` | Builds the engine with CMake into `build/Release/` |
+| `step4_import.py` | Imports the game's files from the player's own install |
+| `step5_setup.py` | Sets up the runtime: fonts, config, folders, button art |
+| `zt1_paths.py` | Where the game and the build live |
 
-Run `BUILD_ENGINE.bat` in the project root folder to run all steps automatically.
+Also here: `notices.py` and `fetch_licenses.py` (third-party notices for the
+installers), `licenses/`, and `RELEASE_README.md` (the readme shipped in the
+portable build).
 
-## Individual Steps
-
-You can run each step individually if needed:
-
-| Script | Description |
-|--------|-------------|
-| `step1_clean.py` | Cleans the build workspace (preserves fonts) |
-| `step2_patch.py` | Applies source code patches for bug fixes |
-| `step3_build.py` | Compiles the engine using CMake |
-| `step4_import.py` | Imports assets from original Zoo Tycoon |
-| `step5_setup.py` | Sets up runtime (fonts, config, folders) |
-| `build_all.py` | Runs all steps in sequence |
+The release tooling (making installers, signing update feeds, publishing) is
+private and gitignored; it exists only on the release machine.
 
 ## Requirements
 
-- Python 3.x
-- CMake
-- Visual Studio (with C++ build tools)
-- Original Zoo Tycoon game files (for step 4)
-
-## Fonts
-
-Place these font files in the `fonts/` folder in the project root:
-- `Aileron-Black.otf`
-- `Aileron-Bold.otf`
-- `Aileron-Regular.otf`
-
-Download from: https://www.fontsquirrel.com/fonts/aileron
+- Python 3, CMake, Visual Studio 2022 C++ build tools
+- The player's own Zoo Tycoon install (for step 4)
+- Fonts in `fonts/`: Aileron Black, Bold and Regular
+  (https://www.fontsquirrel.com/fonts/aileron)

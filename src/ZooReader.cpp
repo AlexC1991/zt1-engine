@@ -1100,6 +1100,15 @@ bool ZooReader::writeOriginal(std::vector<uint8_t> &out,std::string &error) cons
     }
     replace(archive.thoughtsBegin,archive.thoughtsEnd,records);
   }
+  if(writeScenario && version>=51 && archive.scenarioEnd>archive.scenarioBegin) {
+    // (zoo.exe 0x47a6e2: its size, the script's name, then each goal's state
+    // as 0x47a04c writes it)
+    ZooOut s;
+    s.put(uint32_t(8+scenarioName.size()+4*goalStates.size()));
+    s.put(uint32_t(scenarioName.size()));s.b.insert(s.b.end(),scenarioName.begin(),scenarioName.end());
+    s.put(uint32_t(4*goalStates.size()));for(int32_t n:goalStates)s.put(n);
+    replace(archive.scenarioBegin,archive.scenarioEnd,s);
+  }
   if(!w.ok)return fail("A manager replacement is outside the original archive.");
   // Never create a file that our independent reader cannot walk completely.
   AssetBuffer check;check.data=w.b.data();check.size=w.b.size();ZooReader decoded;

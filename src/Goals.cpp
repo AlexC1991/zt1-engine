@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <functional>
 
 #include "IniReader.hpp"
 #include "LangText.hpp"
@@ -22,10 +23,32 @@ int num(IniReader *ini, const std::string &sec, const std::string &key) {
   std::string v = trim(ini->get(sec, key));
   return v.empty() ? 0 : std::atoi(v.c_str());
 }
+// A normal goal's section
+Goals::Goal readGoal(IniReader *ini, const std::string &file, const std::string &sec) {
+  Goals::Goal g;
+  g.name = sec;
+  g.file = file;
+  g.rulea = num(ini, sec, "rulea");
+  g.ruleb = num(ini, sec, "ruleb");
+  g.type = num(ini, sec, "type");
+  g.value = num(ini, sec, "value");
+  g.arga = num(ini, sec, "arga");
+  g.argb = num(ini, sec, "argb");
+  g.sticky = num(ini, sec, "sticky") != 0;
+  g.optional = num(ini, sec, "optional") != 0;
+  g.text = num(ini, sec, "text");
+  g.hidden = num(ini, sec, "hidden") != 0 || !g.text;
+  g.trulea = num(ini, sec, "trulea");
+  g.truleb = num(ini, sec, "truleb");
+  g.targa = num(ini, sec, "targa");
+  g.targb = num(ini, sec, "targb");
+  return g;
+}
 } // namespace
 
 void Goals::clear() {
   this->goals.clear();
+  this->scnPath.clear();
   this->awards.clear();
   this->clock = 0;
 }
@@ -38,6 +61,7 @@ void Goals::load(ResourceManager *rm, const std::string &scnPath) {
   IniReader *scn = rm->getIniReader(scnPath);
   if (!scn)
     return;
+  this->scnPath = scnPath;
   // The map's own goals, then each extra file's
   this->readGoals(scnPath, true);
   for (const std::string &extra : scn->getList("start", "extragoals"))
@@ -66,24 +90,7 @@ void Goals::readGoals(const std::string &file, bool fromList) {
     // (only the normal goal class, rtype 0)
     if (num(ini, sec, "rtype") != 0)
       continue;
-    Goal g;
-    g.name = sec;
-    g.file = file;
-    g.rulea = num(ini, sec, "rulea");
-    g.ruleb = num(ini, sec, "ruleb");
-    g.type = num(ini, sec, "type");
-    g.value = num(ini, sec, "value");
-    g.arga = num(ini, sec, "arga");
-    g.argb = num(ini, sec, "argb");
-    g.sticky = num(ini, sec, "sticky") != 0;
-    g.optional = num(ini, sec, "optional") != 0;
-    g.text = num(ini, sec, "text");
-    g.hidden = num(ini, sec, "hidden") != 0 || !g.text;
-    g.trulea = num(ini, sec, "trulea");
-    g.truleb = num(ini, sec, "truleb");
-    g.targa = num(ini, sec, "targa");
-    g.targb = num(ini, sec, "targb");
-    this->goals.push_back(g);
+    this->goals.push_back(readGoal(ini, file, sec));
   }
   delete ini;
 }
@@ -106,25 +113,30 @@ void Goals::evaluateAll() {
 // zoo.exe 0x4240f5: types 0-2 met when v >= / < / == value; 3-5 failed when
 // so; 6-8 failed when v < / >= / != value, else met. A change to a new
 // state fires the trigger; back to 0 resets quietly. Sticky: once only.
+int Goals::result(const Goal &g) const {
+  if (!this->hooks.measure)
+    return 0;
+  int v = this->hooks.measure(g);
+  switch (g.type) {
+  case 0: return v >= g.value ? 1 : 0;
+  case 1: return v < g.value ? 1 : 0;
+  case 2: return v == g.value ? 1 : 0;
+  case 3: return v >= g.value ? 2 : 0;
+  case 4: return v < g.value ? 2 : 0;
+  case 5: return v == g.value ? 2 : 0;
+  case 6: return v < g.value ? 2 : 1;
+  case 7: return v >= g.value ? 2 : 1;
+  case 8: return v != g.value ? 2 : 1;
+  default: return 0;
+  }
+}
+
 void Goals::evaluate(Goal &g) {
   if (g.sticky && g.state != 0)
     return;
   if (!this->hooks.measure)
     return;
-  int v = this->hooks.measure(g);
-  int result = 0;
-  switch (g.type) {
-  case 0: result = v >= g.value ? 1 : 0; break;
-  case 1: result = v < g.value ? 1 : 0; break;
-  case 2: result = v == g.value ? 1 : 0; break;
-  case 3: result = v >= g.value ? 2 : 0; break;
-  case 4: result = v < g.value ? 2 : 0; break;
-  case 5: result = v == g.value ? 2 : 0; break;
-  case 6: result = v < g.value ? 2 : 1; break;
-  case 7: result = v >= g.value ? 2 : 1; break;
-  case 8: result = v != g.value ? 2 : 1; break;
-  default: break;
-  }
+  int result = this->result(g);
   if (result == 0) {
     g.state = 0;
     return;
@@ -140,6 +152,113 @@ void Goals::restore(const std::vector<int> &states) {
     this->goals[i].state = states[i];
     if (states[i] != 0)
       this->fire(this->goals[i], true);
+  }
+}
+
+std::vector<Goals::Slot> Goals::originalOrder(ResourceManager *rm, const std::string &scnPath) {
+  std::vector<Slot> out;
+  IniReader *scn = rm ? rm->getIniReader(scnPath) : nullptr;
+  if (!scn)
+    return out;
+  Slot scenario;
+  scenario.file = scnPath;
+  out.push_back(scenario);
+  // makeGoal 0x58e066: rtype 1 (0x59364c) and 2 (0x593793) hold child=
+  // goals, each made the same way
+  std::function<void(IniReader *, const std::string &, const std::string &, int)> add =
+      [&](IniReader *ini, const std::string &file, const std::string &sec, int depth) {
+        Slot s;
+        s.file = file;
+        s.name = sec;
+        s.depth = depth;
+        int rtype = num(ini, sec, "rtype");
+        s.goal = rtype == 0;
+        s.composite = rtype == 1 || rtype == 2;
+        if (s.goal)
+          s.rules = readGoal(ini, file, sec);
+        out.push_back(s);
+        if ((rtype == 1 || rtype == 2) && depth < 16)
+          for (const std::string &child : ini->getList(sec, "child"))
+            add(ini, file, trim(child), depth + 1);
+      };
+  auto addFile = [&](IniReader *ini, const std::string &file) {
+    for (const std::string &name : ini->getList("goals", "goal"))
+      add(ini, file, trim(name), 0);
+  };
+  addFile(scn, scnPath);
+  for (const std::string &entry : scn->getList("start", "extragoals")) {
+    std::string extra = lower(trim(entry));
+    size_t dot = extra.rfind('.');
+    if (dot == std::string::npos)
+      continue;
+    std::vector<std::string> found = rm->listResources(extra.substr(0, dot), extra.substr(dot));
+    std::sort(found.begin(), found.end());
+    for (const std::string &file : found) {
+      IniReader *ini = rm->getIniReader(file);
+      if (!ini)
+        continue;
+      addFile(ini, file);
+      delete ini;
+    }
+  }
+  delete scn;
+  return out;
+}
+
+namespace {
+bool sameGoal(const Goals::Goal &g, const Goals::Slot &s) {
+  return lower(g.file) == lower(s.file) && lower(g.name) == lower(s.name);
+}
+} // namespace
+
+namespace {
+// How many states a saved zoo of that version holds of these (zoo.exe
+// scenarioLoad 0x58f97d reads one goal at a time until the block's end, and
+// fails the zoo unless it ends there; before version 86 a composite reads
+// none, 0x5950fd, so only the goals before the first composite can be held)
+size_t heldStates(const std::vector<Goals::Slot> &slots, uint32_t version) {
+  if (version > 0x55)
+    return slots.size();
+  for (size_t i = 0; i < slots.size(); i++)
+    if (slots[i].composite)
+      return i;
+  return slots.size();
+}
+} // namespace
+
+std::vector<int> Goals::originalStates(const std::vector<int> &base, uint32_t version) const {
+  std::vector<Slot> slots = originalOrder(this->rm, this->scnPath);
+  slots.resize(heldStates(slots, version));
+  std::vector<int> out(slots.size(), 0);
+  for (size_t i = 0; i < slots.size(); i++) {
+    if (i < base.size())
+      out[i] = base[i];
+    if (!slots[i].goal)
+      continue;
+    auto own = std::find_if(this->goals.begin(), this->goals.end(),
+                            [&](const Goal &g) { return sameGoal(g, slots[i]); });
+    if (own != this->goals.end())
+      out[i] = own->state;
+    else if (out[i] == 0 && slots[i].depth == 0 && this->hooks.measures && this->hooks.measures(slots[i].rules))
+      out[i] = this->result(slots[i].rules);
+  }
+  return out;
+}
+
+void Goals::restoreOriginal(const std::vector<int> &states, uint32_t version) {
+  std::vector<Slot> slots = originalOrder(this->rm, this->scnPath);
+  slots.resize(heldStates(slots, version));
+  for (size_t i = 0; i < slots.size() && i < states.size(); i++) {
+    if (!slots[i].goal)
+      continue;
+    for (Goal &g : this->goals) {
+      if (!sameGoal(g, slots[i]))
+        continue;
+      // (0x5950ab keeps 0..3)
+      g.state = std::max(0, std::min(3, states[i]));
+      if (g.state != 0)
+        this->fire(g, true);
+    }
   }
 }
 

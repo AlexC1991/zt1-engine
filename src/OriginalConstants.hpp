@@ -40,6 +40,13 @@ struct Economy {
   float zooDooRecycling = 50.0f;       // cZooDooRecyclingAmount (+0x116c)
   float admissionMultiple = 1.0f;      // cAdmissionMultiple (+0x1170)
   float adviceEveryMs = 10000.0f;      // [checks] message: the advice messages' timer (zoo.exe 0x4351a9)
+  // The advisor's shares (zooAdvisories 0x420347): a message when more than
+  // this share of the animals or guests are so
+  float pctSick = 0.3f, pctProtestors = 0.3f;             // cPctSick (+0x70), cPctProtestors (+0x74)
+  float pctHungry = 0.2f, pctThirsty = 0.2f;              // cPctHungry (+0x7c), cPctThirsty (+0x84)
+  float pctBathroom = 0.3f, pctSouvenir = 0.7f;           // cPctBathroom (+0x8c), cPctSouvenir (+0x94)
+  float pctTired = 0.3f, pctTrash = 0.4f;                 // cPctTired (+0xa0), cPctTrash (+0xa8)
+  float highGuestHappy = 80.0f, lowGuestHappy = -20.0f;   // cHigh/cLowAvgGuestHappyThreshold (+0xf4, +0xfc)
 };
 inline Economy &economy() {
   static Economy e;

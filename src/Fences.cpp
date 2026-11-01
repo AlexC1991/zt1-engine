@@ -1748,7 +1748,16 @@ bool Fences::pieceAt(float px, float py, const WorldRenderer &view, const WorldM
     float tx, ty, outD, inD;
     view.worldToScreenF(ox + 0.5f, oy + 0.5f, 0, tx, ty, outD);
     view.worldToScreenF(ix + 0.5f, iy + 0.5f, 0, tx, ty, inD);
-    const float low = static_cast<float>(outD > inD ? x->groundHeight : x->floorHeight);
+    // (a front one from the ground just outside it: where that's higher
+    // than the tank's own, the ground hides the wall's foot - looked for
+    // from the tank's ground, a sunken tank in a dip was picked from the
+    // grass in front of it)
+    float low = static_cast<float>(outD > inD ? x->groundHeight : x->floorHeight);
+    if (outD > inD)
+      if (const MapTile *out = map.getTile(ox, oy))
+        low = std::max(low, static_cast<float>(out->height));
+    if (low >= x->wallTop())
+      continue;
     float s0x, s0y, s1x, s1y, t0x, t0y, t1x, t1y, d0, d1;
     view.worldToScreenF(static_cast<float>(ax), static_cast<float>(ay), low, s0x, s0y, d0);
     view.worldToScreenF(static_cast<float>(bx), static_cast<float>(by), low, s1x, s1y, d1);
@@ -1783,8 +1792,13 @@ bool Fences::pieceAt(float px, float py, const WorldRenderer &view, const WorldM
       this->pieceBelowTop = py - (top + 4.0f);
     }
   }
-  if (any)
-    return true;
+  // (an ordinary fence by the cursor, nearer than the tank's wall, wins:
+  // the tank's always did, so pointing at the next exhibit's fence in front
+  // of a tank picked the tank)
+  const bool tankFound = any;
+  const Edge tankEdge = found;
+  float fenceDepth = -1e30f;
+  any = false;
   for (const auto &kv : this->edges) {
     int ax, ay, bx, by, h0, h1;
     this->edgeGeometry(kv.first, kv.second, map, ax, ay, bx, by, h0, h1);
@@ -1799,9 +1813,16 @@ bool Fences::pieceAt(float px, float py, const WorldRenderer &view, const WorldM
     if (dist < best) {
       best = dist;
       found = kv.first;
+      fenceDepth = d;
       any = true;
     }
   }
+  if (tankFound && (!any || fenceDepth <= nearest)) {
+    found = tankEdge;
+    return true;
+  }
+  if (any)
+    this->pieceBelowTop = 1e9f;
   return any;
 }
 
@@ -2207,8 +2228,9 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
         side = tankSide(view, ts);
         for (const TankPiece &tp : pieces) {
           // (one whose art doesn't reach over the ground outside: with the
-          // inside only, hidden by the ground in front)
-          if (tinted ? tp.glass : tp.height + 1.75f <= ts.outside)
+          // inside only, hidden by the ground in front - but the bulldozer's
+          // red one is the whole piece, its glass too)
+          if (!tinted && tp.height + 1.75f <= ts.outside)
             continue;
           float sx, sy, depth;
           view.worldToScreenF(mx, my, tp.height, sx, sy, depth);
@@ -2218,14 +2240,17 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           float order = depth + (tp.glass ? 0.02f : tp.ladder ? 0.03f : 0.0f) +
                         (tp.height - ex->floorHeight) * ((tp.glass || tp.ladder) ? 0.0001f : 0.001f);
           bool litLadder = tp.ladder && !tinted && this->hoverPlatform == ex->id;
+          // (the bulldozer's: its glass red, as see-through as the glass)
           Drawable d = tp.glass ? Drawable{order, sx, sy, tp.art, CompassDirection::N,
-                                           SDL_Color{255, 255, 255, kGlassAlpha}, true}
+                                           tinted ? SDL_Color{255, 60, 60, 150} : SDL_Color{255, 255, 255, kGlassAlpha}, true}
                                 : Drawable{order, sx, sy, tp.art, tp.ladder ? ladderSide(view, ts) : side,
                                            litLadder ? SDL_Color{255, 255, 80, 255} : tint, tinted || litLadder};
           d.seamless = !tinted;
-          // (the bulldozer's red one too: cut at the ground outside, or its
-          // pieces down to the floor hung under the tank as a red column)
-          if (tp.height >= ts.outside + 0.01f) {
+          // (the bulldozer's red one too: a front wall cut at the ground
+          // outside, or its pieces down to the floor hung under the tank as a
+          // red column; a back wall is seen down to the floor, through the
+          // water - cut there, a sunken glass tank's showed its top rail only)
+          if (tp.height >= ts.outside + 0.01f || (tinted && !ts.front)) {
             out.push_back(d);
             continue;
           }

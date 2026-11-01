@@ -51,6 +51,8 @@ void Guests::load(ResourceManager *rm) {
     delete cfg;
     return;
   }
+  // (what counts as hungry, thirsty... for the lists and the advisor)
+  this->uiThreshold = ai->getInt("characteristics/integers", "cuithreshold", 75);
   std::vector<std::string> keys = {"man", "woman", "girl", "boy"};
   for (const std::string &key : keys) {
     Type t;
@@ -1216,8 +1218,12 @@ void Guests::tick(Guest &g) {
     g.souvenirCheck = 39;
     int h = static_cast<int>((g.happiness + 100) / 2);
     int chance = h >= 71 ? 10 : h >= 31 ? 5 : 0;
+    // (wanting one: anew each check - zoo.exe 0x43af5b clears +0x33c, then
+    // sets it when the roll says so)
+    g.wantsSouvenir = false;
     if (!g.souvenir && g.building < 0 && !g.leaving && chance > 0 &&
         std::uniform_int_distribution<int>(0, 99)(this->rng) < chance) {
+      g.wantsSouvenir = true;
       think(g, 10090);
       if (!seekBuilding(g, "gift", 1000))
         think(g, 10091);
@@ -1448,8 +1454,10 @@ void Guests::update(float seconds, int zooRating, double admission) {
                 {"dTired", g.dTired}, {"bought", !b.item.empty() && !tooDear ? b.item : std::string("nothing")});
         if (!b.item.empty() && !tooDear) {
           bo.sold[b.item]++;
-          if (g.need == "gift")
+          if (g.need == "gift") {
             g.souvenir = true;
+            g.wantsSouvenir = false; // (holdItem 0x42d54e clears +0x33c)
+          }
           g.dHappy += child ? b.itemChild : b.itemAdult;
           g.dHunger += b.itemHunger;
           g.dThirst += b.itemThirst;
@@ -1631,4 +1639,23 @@ int Guests::pick(float px, float py, const WorldRenderer &view, const WorldMap &
     }
   }
   return found;
+}
+
+Guests::Census Guests::census() const {
+  Census c;
+  long happy = 0;
+  for (const Guest &g : this->list) {
+    if (g.x <= -999)
+      continue; // (not in the zoo yet)
+    c.guests++;
+    happy += static_cast<long>(g.happiness);
+    c.hungry += g.hunger > this->uiThreshold ? 1 : 0;
+    c.thirsty += g.thirst > this->uiThreshold ? 1 : 0;
+    c.bathroom += g.bathroom > this->uiThreshold ? 1 : 0;
+    c.tired += g.tired > this->uiThreshold ? 1 : 0;
+    c.gift += g.wantsSouvenir ? 1 : 0;
+    c.trash += g.trash ? 1 : 0;
+  }
+  c.happiness = c.guests ? static_cast<int>(happy / c.guests) : 0;
+  return c;
 }

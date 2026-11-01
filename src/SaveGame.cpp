@@ -5,6 +5,7 @@
 #include "Utils.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cmath>
 #include <cstring>
@@ -2753,6 +2754,23 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
     }
   }
   if(goals)z.awards=goals->awards;
+  // The scenario's block: the script and every goal's state in the
+  // original's order, so the original carries on from the same goals
+  // (an emergency grant already given is not given again)
+  if(goals && !goals->script().empty()) {
+    auto same=[](std::string a,std::string b) {
+      for(auto *s:{&a,&b})std::transform(s->begin(),s->end(),s->begin(),[](unsigned char c){return char(std::tolower(c));});
+      return a==b;
+    };
+    std::vector<int> base;
+    if(same(z.scenarioName,goals->script()))base.assign(z.goalStates.begin(),z.goalStates.end());
+    const std::vector<int> states=goals->originalStates(base,z.version);
+    if(!states.empty()) {
+      z.scenarioName=goals->script();
+      z.goalStates.assign(states.begin(),states.end());
+      z.writeScenario=true;
+    }
+  }
   // The original has rolling 12-month and 20-year tables plus lifetime
   // totals. Apply native changes against the imported monthly baseline,
   // preserving the original split rows and older annual history.

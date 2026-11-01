@@ -26,6 +26,16 @@ void Original::loadEconomy(ResourceManager *rm) {
     num("cBuildingUseCostMax", e.buildingUseCostMax);
     num("cZooDooRecyclingAmount", e.zooDooRecycling);
     num("cAdmissionMultiple", e.admissionMultiple);
+    num("cPctSick", e.pctSick);
+    num("cPctProtestors", e.pctProtestors);
+    num("cPctHungry", e.pctHungry);
+    num("cPctThirsty", e.pctThirsty);
+    num("cPctBathroom", e.pctBathroom);
+    num("cPctSouvenir", e.pctSouvenir);
+    num("cPctTired", e.pctTired);
+    num("cPctTrash", e.pctTrash);
+    num("cHighAvgGuestHappyThreshold", e.highGuestHappy);
+    num("cLowAvgGuestHappyThreshold", e.lowGuestHappy);
     if (std::string v = ini->get("checks", "message"); !v.empty() && std::atof(v.c_str()) > 0)
       e.adviceEveryMs = static_cast<float>(std::atof(v.c_str()));
     delete ini;

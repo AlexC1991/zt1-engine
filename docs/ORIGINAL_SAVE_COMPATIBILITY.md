@@ -202,6 +202,26 @@ type). `make_release.py` runs the zoos on every build and fails on a broken
 rule; an official release also needs the original's verdict for the same
 writer sources (a hash of them is carried in each list and verdict).
 
+## Goal states - 1 November 2026
+
+The scenario block (after the view, read by zoo.exe scenarioLoad `0x58f97d`)
+holds the script's name and one int per goal in the original's goal list:
+the scenario's own goal, the script's `[goals]`, then every file each
+`[start] extragoals=` entry finds by prefix (so `freeform/unlock.scn` brings
+`unlock01`..`unlock20`), with each composite's child goals straight after it.
+A freeform map on a full install has 106 goals and 213 states
+(`python re/lab/goallist.py freeform/sm_aqua.scn --list` models it;
+`Goals::originalOrder` is the engine's copy).
+
+The original fails the zoo as corrupted unless its reading ends exactly at the
+block's end. Before version 86 a composite reads no state (`0x5950fd`), so a
+zoo of version 85 or before can hold only the states of goals before the first
+composite (80 of 213); a base-game map's template is version 70. Shared saves
+write our goal states this way (`Goals::originalStates`), and original zoos are
+restored by the same order. Verified in the original through the Lab: a
+version-70 and a version-105 save made after the emergency grant load, and
+dropping below $1,000 gives no second grant; the control saved before it does.
+
 ## Reference and release gates
 
 SlendyMilky's [follow-up](https://github.com/AlexC1991/zt1-engine/issues/5#issuecomment-6443994223)

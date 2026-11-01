@@ -44,6 +44,8 @@ re/lab/design/
 /_run.*
 /selectWrite-windows-build*.log
 lab-app/_dev_*.py
+# (an agent's scratch files beside the Lab: never part of it)
+lab-app/_*
 
 # Private: how the official client is made - the installer (setup.exe), the
 # release, packing and update-signing tooling, and the mod repository's client
@@ -72,3 +74,6 @@ lab-app/_dev_*.py
 # when it's published)
 /engine-build-resources/NEXT_RELEASE_NOTES.md
 /engine-build-resources/HANDOFF.md
+
+# AI working notes (milestone list, guides): local only
+/.ai/

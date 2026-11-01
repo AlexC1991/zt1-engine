@@ -104,7 +104,7 @@ Each download's own README has the rest.
 The base game's **freeform** mode is the focus, and most of it works as in the original:
 
 - **Menus and screens:** loading screen, main menu, freeform and scenario selection, credits, the in-game HUD and panels, tooltips, messages.
-- **Saving and loading:** original `.zoo` imports, shared `.zoo` saves with a compatible world for the original and full engine state, engine-only `.zt1save` files, the original's file dialogs and Continue Saved Game. Exact original save-state parity remains incomplete. See the [2026.10.30 release notes](docs/RELEASE_NOTES_2026-10-30.md).
+- **Saving and loading:** original `.zoo` imports, shared `.zoo` saves with a compatible world for the original and full engine state, engine-only `.zt1save` files, the original's file dialogs and Continue Saved Game. Exact original save-state parity remains incomplete. See the [release notes](https://github.com/AlexC1991/zt1-engine/releases).
 - **Building:** terraforming, paths, every fence type and gate, exhibits, scenery, foliage, rocks, buildings and shops, shelters and toys; the bulldozer and undo.
 - **Animals:** adopting and selling, the original's behaviours and animations, eating, drinking, sleeping, swimming, exhibit suitability and happiness worked out as `zoo.exe` does, breeding, illness, old age.
 - **Escapes and predators:** jumpers jump, climbers climb, bashers break fences. Loose meat-eaters chase guests and keepers dart and crate them. Predators hunt their prey in exhibits.

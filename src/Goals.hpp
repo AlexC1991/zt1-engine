@@ -1,6 +1,7 @@
 #ifndef GOALS_HPP
 #define GOALS_HPP
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -28,6 +29,8 @@ public:
   struct Hooks {
     // A rule's measure (zoo.exe 0x41d665)
     std::function<int(const Goal &)> measure;
+    // Whether measure knows the goal's rule (rules it doesn't know read 0)
+    std::function<bool(const Goal &)> measures;
     // A popup: its picture and text; pause=1: the game waits on it
     std::function<void(const std::string &image, const std::string &text, bool pause)> popup;
     // A UI element disabled (true) or enabled; true when that changed it
@@ -54,13 +57,43 @@ public:
   // (no popups, no cash: zoo.exe 0x595083)
   void restore(const std::vector<int> &states);
 
+  // The script the goals were loaded from ("" when none)
+  const std::string &script() const { return this->scnPath; }
+  // One saved goal state of the original's list (goalsLoad 0x58de8a): the
+  // scenario's own goal (ctor 0x58e218) first; then each [goals] goal= of
+  // the script, then of every file each [start] extragoals= entry finds
+  // (split at its '.': every resource starting with the part before and
+  // ending with the part after, 0x4b41f2, so freeform/unlock.scn brings
+  // unlock01..unlock20 too); a composite (rtype 1, 2) has its child= goals
+  // straight after it. goal: a normal goal (rtype 0), with its rules.
+  struct Slot {
+    std::string file, name;
+    bool goal = false, composite = false;
+    int depth = 0; // (a composite's child: 1, its children 2...)
+    Goal rules;
+  };
+  static std::vector<Slot> originalOrder(ResourceManager *rm, const std::string &scnPath);
+  // The states an original saved game holds for this script, in that order:
+  // each goal we track has its own; the rest keep base's (the zoo's saved
+  // states, by index as zoo.exe reads them, 0x5950ab), or, for a goal of
+  // the list's own (not a composite's child) still at 0 there whose rule we
+  // measure, what it measures now. A saved zoo of version 85 or before
+  // (version: its own) holds no composite's states: a composite reads
+  // nothing then (0x5950fd), so its states stop at the first composite
+  std::vector<int> originalStates(const std::vector<int> &base, uint32_t version) const;
+  // An original saved game's states put back by the same order (silently,
+  // as restore)
+  void restoreOriginal(const std::vector<int> &states, uint32_t version);
+
 private:
   ResourceManager *rm = nullptr;
+  std::string scnPath;
   std::vector<Goal> goals;
   Hooks hooks;
   float clock = 0;
   void readGoals(const std::string &file, bool fromList);
   void evaluate(Goal &g);
+  int result(const Goal &g) const;
   void fire(const Goal &g, bool quiet);
   void showPopup(const std::string &file, int section);
 };

@@ -2640,6 +2640,36 @@ static void resumeAfterPopup() {
   }
 }
 
+// The advisor's messages for the zoo's counts (zoo.exe zooAdvisories
+// 0x420347): each message's text number and its kind (1 green, 2 red)
+static std::vector<std::pair<int, int>> zooAdvice(const Guests::Census &gc, int animals, int sick) {
+  const Original::Economy &econ = Original::economy();
+  std::vector<std::pair<int, int>> out;
+  if (animals * econ.pctProtestors < sick)
+    out.push_back({10009, 2});
+  if (gc.guests > 10) {
+    if (animals * econ.pctSick < sick)
+      out.push_back({10008, 2});
+    if (gc.guests * econ.pctHungry < gc.hungry)
+      out.push_back({10011, 2});
+    if (gc.guests * econ.pctThirsty < gc.thirsty)
+      out.push_back({10012, 2});
+    if (gc.guests * econ.pctBathroom < gc.bathroom)
+      out.push_back({10013, 2});
+    if (gc.guests * econ.pctSouvenir < gc.gift)
+      out.push_back({10014, 2});
+    if (gc.guests * econ.pctTired < gc.tired)
+      out.push_back({10015, 2});
+    if (gc.guests * econ.pctTrash < gc.trash)
+      out.push_back({10016, 2});
+    if (econ.highGuestHappy <= gc.happiness)
+      out.push_back({10021, 1});
+    if (gc.happiness <= econ.lowGuestHappy)
+      out.push_back({10022, 2});
+  }
+  return out;
+}
+
 // The goal engine's view of the zoo (zoo.exe 0x41d665) and what its
 // triggers do
 static void setupGoals(ResourceManager *rm) {
@@ -2723,6 +2753,11 @@ static void setupGoals(ResourceManager *rm) {
     if (g.rulea == 7 && g.ruleb == 2)
       return months;
     return 0;
+  };
+  h.measures = [](const Goals::Goal &g) {
+    if (g.rulea == 1)
+      return (g.ruleb >= 0 && g.ruleb <= 7) || g.ruleb == 11;
+    return (g.rulea == 2 && g.ruleb == 2) || (g.rulea == 6 && g.ruleb == 0) || (g.rulea == 7 && g.ruleb == 2);
   };
   h.popup = [](const std::string &image, const std::string &text, bool pause) {
     if (!g_hud)
@@ -2953,12 +2988,27 @@ static bool gameLoad(ResourceManager *rm, const std::string &given = "") {
   ZooSim savedBooks; savedBooks.start(g_currentStartingCash, 37);
   Goals savedGoals;
   if (started) Research::get().restart();
-  savedGoals.load(rm, scenario ? mapPath.substr(9) : mapPath);
+  // The goals' script: the map's own; for a map that is an original saved
+  // zoo, the script its scenario block names (gameMgrLoad 0x5948c6)
+  std::string goalsPath = scenario ? mapPath.substr(9) : mapPath;
+  const std::string scenarioScript = started ? next->mapReader().getScenarioName() : std::string();
+  {
+    std::string ext = goalsPath.size() >= 4 ? goalsPath.substr(goalsPath.size() - 4) : "";
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    if (ext != ".scn" && !scenarioScript.empty() && rm->hasResource(scenarioScript))
+      goalsPath = scenarioScript;
+  }
+  savedGoals.load(rm, goalsPath);
   SaveGame::goals = &savedGoals;
   const bool ok = started && (original ? SaveGame::loadOriginal(*next, savedBooks, *savedHud)
                                       : SaveGame::load(path, *next, savedBooks, *savedHud));
   loadedStage("save decoded");
   SaveGame::goals = previousGoals;
+  // An original zoo's goal states, in the original's order (zoo.exe 0x5950ab)
+  if (ok && original && goalsPath == scenarioScript) {
+    const auto &states = next->mapReader().getGoalStates();
+    savedGoals.restoreOriginal(std::vector<int>(states.begin(), states.end()), next->mapReader().getVersion());
+  }
   if (!ok) {
     Research::get().branches() = researchBefore;
     Research::get().tickClock = tickBefore;
@@ -2985,7 +3035,7 @@ static bool gameLoad(ResourceManager *rm, const std::string &given = "") {
   g_nextHud = savedHud.release();
   createHud(rm, g_world, g_currentStartingCash);
   g_currentMapPath = mapPath;
-  startGoals(rm, scenario ? mapPath.substr(9) : mapPath);
+  startGoals(rm, goalsPath);
   g_sim = std::move(savedBooks);
   g_hud->setZooInfo(restoredInfo);
   g_goals.restore(restoredStates);
@@ -3490,6 +3540,9 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         if (goal.name.rfind("lowmoney", 0) == 0)
           goalsReport << "     " << goal.name << " state " << goal.state << " rule " << goal.rulea << "/" << goal.ruleb
                       << " type " << goal.type << " value " << goal.value << "\n";
+      // (shared saves for the original to judge: before the grant, and after)
+      g_sim.setCash(20000);
+      gameSave(outDir + "/goals-control.zoo");
       const double before = 500;
       g_sim.setCash(before);
       g_goals.evaluateAll();
@@ -3510,6 +3563,113 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       g_goals.evaluateAll();
       goalsReport << (g_sim.cash() == 500 ? "PASS" : "FAIL") << " only once: a second time under $1,000 gives $"
                   << std::lround(g_sim.cash() - 500) << "\n";
+      // The goals' states in an original zoo (#68): saved in the original's
+      // order, and an original zoo's states put back, so the grant isn't
+      // given again in either game
+      {
+        const std::string script = g_goals.script();
+        const auto slots = Goals::originalOrder(rm, script);
+        int slot = -1;
+        for (size_t i = 0; i < slots.size(); i++)
+          if (slots[i].name == "lowmoney_donate" && slot < 0)
+            slot = static_cast<int>(i);
+        int donateState = 0;
+        for (const Goals::Goal &goal : g_goals.all())
+          if (goal.name == "lowmoney_donate")
+            donateState = goal.state;
+        const std::string file = outDir + "/goals-original.zoo";
+        std::string error;
+        g_sim.setCash(20000);
+        gameSave(outDir + "/goals-granted.zoo");
+        const bool saved = SaveGame::saveOriginal(file, *g_world, g_sim, *g_hud, error);
+        goalsReport << "     script " << script << ": " << slots.size() << " states, lowmoney_donate at " << slot
+                    << " state " << donateState << (saved ? "" : ", not saved: " + error) << "\n";
+        if (saved && gameLoad(rm, file)) {
+          world = g_world;
+          const ZooReader &zr = g_world->mapReader();
+          const auto &st = zr.getGoalStates();
+          const int written = slot >= 0 && slot < static_cast<int>(st.size()) ? st[slot] : -1;
+          // (before version 86, up to the first composite: 0x5950fd)
+          size_t held = slots.size();
+          if (zr.getVersion() <= 0x55)
+            for (size_t i = 0; i < slots.size(); i++)
+              if (slots[i].composite) {
+                held = i;
+                break;
+              }
+          goalsReport << (zr.getScenarioName() == script && st.size() == held && written == donateState &&
+                                  donateState != 0
+                              ? "PASS"
+                              : "FAIL")
+                      << " the original zoo's scenario block (version " << zr.getVersion() << "): '"
+                      << zr.getScenarioName() << "', " << st.size() << " of " << slots.size()
+                      << " states, lowmoney_donate " << written << "\n";
+          int loaded = -1;
+          for (const Goals::Goal &goal : g_goals.all())
+            if (goal.name == "lowmoney_donate")
+              loaded = goal.state;
+          g_sim.setCash(500);
+          g_goals.evaluateAll();
+          goalsReport << (g_goals.script() == script && loaded == donateState && g_sim.cash() == 500 ? "PASS" : "FAIL")
+                      << " loaded back as an original zoo: goals from " << g_goals.script() << ", lowmoney_donate "
+                      << loaded << ", under $1,000 gives $" << std::lround(g_sim.cash() - 500) << "\n";
+        } else {
+          goalsReport << "FAIL the original zoo saved and loaded back\n";
+        }
+      }
+      // The advisor (zooAdvisories 0x420347): its shares and the 10-guest
+      // floor, at their edges, and the census of real guests
+      {
+        auto has = [](const std::vector<std::pair<int, int>> &v, int id) {
+          for (auto [i, k] : v)
+            if (i == id)
+              return true;
+          return false;
+        };
+        Guests::Census c;
+        c.guests = 20;
+        c.hungry = 5; // (25%: over cPctHungry's 20%)
+        goalsReport << (has(zooAdvice(c, 0, 0), 10011) ? "PASS" : "FAIL") << " advice: 5 hungry guests in 20 (25%)\n";
+        c.hungry = 4; // (20%: not over)
+        goalsReport << (!has(zooAdvice(c, 0, 0), 10011) ? "PASS" : "FAIL") << " advice: none for 4 in 20 (20%)\n";
+        c.guests = 10;
+        c.hungry = 10;
+        goalsReport << (!has(zooAdvice(c, 0, 0), 10011) ? "PASS" : "FAIL") << " advice: none with only 10 guests\n";
+        goalsReport << (has(zooAdvice(c, 10, 4), 10009) && !has(zooAdvice(c, 10, 4), 10008) ? "PASS" : "FAIL")
+                    << " advice: protestors at 4 sick in 10 animals, whatever the guests; sick animals only with more than 10\n";
+        c.guests = 11;
+        c.hungry = 0;
+        c.happiness = 80;
+        goalsReport << (has(zooAdvice(c, 0, 0), 10021) ? "PASS" : "FAIL") << " advice: guests very happy at 80\n";
+        c.happiness = -20;
+        goalsReport << (has(zooAdvice(c, 0, 0), 10022) ? "PASS" : "FAIL") << " advice: guests unhappy at -20\n";
+        c.gift = 8; // (73%: over cPctSouvenir's 70%)
+        c.trash = 5; // (45%: over cPctTrash's 40%)
+        auto v = zooAdvice(c, 0, 0);
+        goalsReport << (has(v, 10014) && has(v, 10016) ? "PASS" : "FAIL") << " advice: gifts wanted, litter in hand\n";
+        // (the census: guests over cUIThreshold counted, the rest not)
+        Guests &gs = world->getGuests();
+        gs.clear();
+        if (!gs.hasEntrance())
+          gs.setEntrance(40, 40); // (the flat test map has none)
+        for (int n = 0; n < 12; n++) {
+          const size_t had = gs.guests().size();
+          gs.admit(0);
+          if (gs.guests().size() == had)
+            break;
+          Guests::Guest &g = const_cast<Guests::Guest &>(gs.guests().back());
+          g.x = 40.5f;
+          g.y = 40.5f;
+          g.hunger = n < 3 ? 80.0f : 10.0f;
+          g.thirst = n < 4 ? 76.0f : 75.0f;
+          g.happiness = 50;
+        }
+        const Guests::Census real = gs.census();
+        goalsReport << (real.guests == 12 && real.hungry == 3 && real.thirsty == 4 && real.happiness == 50 ? "PASS" : "FAIL")
+                    << " census: 12 guests, 3 over 75 hungry, 4 over 75 thirsty (75 itself not), happiness 50 ("
+                    << real.guests << ", " << real.hungry << ", " << real.thirsty << ", " << real.happiness << ")\n";
+        gs.clear();
+      }
       // (the refusal's message, wrapped in the bar as the original's)
       g_hud->showMessage(rm->getString(10002));
       capture("finance_message_bar");
@@ -4679,12 +4839,92 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             world->rotateView(seq[i]);
             capture(("glass_made_" + std::to_string(i)).c_str());
           }
+          // (the bulldozer over the middle of each wall's face: the piece
+          // under it glows red)
+          {
+            const float mid = (gt->groundHeight + gt->wallTop()) * 0.5f;
+            const std::pair<float, float> walls[4] = {
+                {gx + 0.5f, static_cast<float>(gy)}, {gx + 2.0f, gy + 0.5f}, {gx + 0.5f, gy + 2.0f}, {static_cast<float>(gx), gy + 0.5f}};
+            world->setBulldozer(true);
+            for (int w = 0; w < 4; w++) {
+              int sx, sy;
+              world->pointToWindow(walls[w].first, walls[w].second, mid, sx, sy);
+              world->mouseMove(sx, sy);
+              capture(("glass_bulldoze_" + std::to_string(w)).c_str());
+              const Fences::Edge e = world->bulldozeEdge();
+              const Fences::Piece *pc = e.x >= 0 ? fences.at(e) : nullptr;
+              SDL_Log("[PanelShots] glass wall %d at %.1f,%.1f (window %d,%d): picked %s %d,%d tank %d", w, walls[w].first,
+                      walls[w].second, sx, sy, e.x < 0 ? "nothing" : e.alongX ? "x-edge" : "y-edge", e.x, e.y,
+                      pc ? pc->tank : -1);
+            }
+            // (an ordinary fence a tile in front of each of its walls: pointing
+            // at it picks the fence, not the tank behind it - the tank's wall
+            // always won)
+            {
+              const int chain = fences.typeIndex("chainlnk");
+              const Fences::Edge fronts[4] = {{true, gx, gy - 1}, {false, gx + 3, gy}, {true, gx, gy + 3}, {false, gx - 1, gy}};
+              for (int w = 0; w < 4 && chain >= 0; w++) {
+                const Fences::Edge fe = fronts[w];
+                if (fences.at(fe) || !fences.canPlace(fe, world->getMap()))
+                  continue;
+                fences.place(fe, chain, 990 + w, world->getMap());
+                const float ax = fe.alongX ? fe.x + 0.5f : static_cast<float>(fe.x);
+                const float ay = fe.alongX ? static_cast<float>(fe.y) : fe.y + 0.5f;
+                const MapTile *t0 = world->getMap().getTile(fe.x, fe.y);
+                int sx, sy, cx0, cy0;
+                world->pointToWindow(ax, ay, (t0 ? t0->height : 0) + 1.0f, sx, sy);
+                // (one behind the tank is hidden by it there: the tank is right)
+                world->pointToWindow(gx + 1.0f, gy + 1.0f, (t0 ? t0->height : 0) + 1.0f, cx0, cy0);
+                if (sy < cy0) {
+                  fences.remove(fe, world->getMap());
+                  continue;
+                }
+                world->mouseMove(sx, sy);
+                const Fences::Edge e = world->bulldozeEdge();
+                const bool fencePicked = e.x == fe.x && e.y == fe.y && e.alongX == fe.alongX;
+                capture(("glass_fence_in_front_" + std::to_string(w)).c_str());
+                check(("pointing at a fence beside a tank picks the fence (" + std::to_string(fe.x) + "," +
+                       std::to_string(fe.y) + (fe.alongX ? " x" : " y") + "-edge: picked " + std::to_string(e.x) + "," +
+                       std::to_string(e.y) + ")").c_str(),
+                      fencePicked);
+                fences.remove(fe, world->getMap());
+              }
+            }
+            world->setBulldozer(false);
+          }
           int id = gt->id;
           while (fences.canAdjustBase(id, 1))
             fences.adjustBase(id, 1);
           for (int i = 0; i < 4; i++)
             fences.adjustWall(id, 1);
           world->getFences().update(20.0f);
+          // (raised: the bulldozer over the ground just in front of each front
+          // wall - outside the tank, nearer than it - picks nothing of the
+          // tank; a back wall was lit from the path in front)
+          {
+            world->setBulldozer(true);
+            const std::pair<float, float> mids[4] = {
+                {gx + 1.0f, static_cast<float>(gy)}, {gx + 2.0f, gy + 1.0f}, {gx + 1.0f, gy + 2.0f}, {static_cast<float>(gx), gy + 1.0f}};
+            const std::pair<float, float> outward[4] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+            for (int w = 0; w < 4; w++) {
+              const float ox = mids[w].first + outward[w].first * 0.75f, oy = mids[w].second + outward[w].second * 0.75f;
+              const MapTile *t0 = world->getMap().getTile(static_cast<int>(std::floor(ox)), static_cast<int>(std::floor(oy)));
+              int sx, sy, wx0, wy0;
+              world->pointToWindow(ox, oy, t0 ? static_cast<float>(t0->height) : 0.0f, sx, sy);
+              world->pointToWindow(mids[w].first, mids[w].second, t0 ? static_cast<float>(t0->height) : 0.0f, wx0, wy0);
+              if (sy <= wy0)
+                continue; // (a back wall: the ground beyond it is behind the tank)
+              world->mouseMove(sx, sy);
+              const Fences::Edge e = world->bulldozeEdge();
+              const Fences::Piece *pc = e.x >= 0 ? fences.at(e) : nullptr;
+              capture(("glass_up_in_front_" + std::to_string(w)).c_str());
+              check(("the ground in front of a raised tank picks nothing of it (wall " + std::to_string(w) + ": " +
+                     (pc && pc->tank == id ? "picked its " + std::to_string(e.x) + "," + std::to_string(e.y) : std::string("not the tank")) +
+                     ")").c_str(),
+                    !(pc && pc->tank == id));
+            }
+            world->setBulldozer(false);
+          }
           for (int i = 0; i < 8; i++) {
             world->rotateView(seq[i]);
             capture(("glass_up_" + std::to_string(i)).c_str());
@@ -9476,15 +9716,37 @@ int main(int argc, char *argv[]) {
             m.replace(at, 2, b);
           g_hud->postMessage(m);
         }
-        // The money advice, each [checks] message ms (zoo.exe zooAdvisories
-        // 0x420347, the cash rounded): $1-$1,000 "Your zoo is running low on
-        // money." (10018); none "Your zoo has run out of money." (10019);
-        // below none also "Your zoo has no money. Funding has stopped for
-        // all programs." (10020) - advice, in red
+        // The advisor, each [checks] message ms (zoo.exe zooAdvisories
+        // 0x420347), on the zoo's counts (zooRatingUpdate 0x41f881): more
+        // than its share of the animals sick, "Protestors are demonstrating
+        // ..." (10009) - then, with more than 10 guests, the sick animals
+        // (10008); hungry, thirsty, restroom, gift and tired guests
+        // (10011-10015); litter in hand, "...too dirty." (10016) - each in
+        // red; guests on average very happy (10021, green) or not (10022).
+        // Then the money, the cash rounded: $1-$1,000 "Your zoo is running
+        // low on money." (10018); none "Your zoo has run out of money."
+        // (10019); below none also "...Funding has stopped for all
+        // programs." (10020)
         static double adviceMs = 0;
         adviceMs += deltaTime * g_gameSpeed * 1000.0;
-        if (adviceMs > Original::economy().adviceEveryMs && !g_sim.unlimited) {
+        if (adviceMs > Original::economy().adviceEveryMs) {
           adviceMs = 0;
+          const Original::Economy &econ = Original::economy();
+          const Guests::Census gc = g_world->getGuests().census();
+          int animals = 0, sick = 0;
+          for (const Animals::Member &m : g_world->getAnimals().members()) {
+            animals++;
+            sick += m.sick ? 1 : 0;
+          }
+          (void)econ;
+          for (auto [id, kind] : zooAdvice(gc, animals, sick))
+            g_hud->postMessage(resource_manager.getString(id), kind);
+        }
+        // (the money's, not with the infinite money cheat on)
+        static double moneyAdviceMs = 0;
+        moneyAdviceMs += deltaTime * g_gameSpeed * 1000.0;
+        if (moneyAdviceMs > Original::economy().adviceEveryMs && !g_sim.unlimited) {
+          moneyAdviceMs = 0;
           const long cash = std::lround(g_sim.cash());
           if (cash > 0 && cash < 1001)
             g_hud->postMessage(resource_manager.getString(10018), 2);

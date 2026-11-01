@@ -32,10 +32,10 @@ You need Windows 10/11 64-bit, Visual Studio 2022 (the "Desktop development with
 ```bash
 git clone --recurse-submodules https://github.com/AlexC1991/zt1-engine.git
 cd zt1-engine
-BUILD_ENGINE.bat
+start.bat
 ```
 
-`BUILD_ENGINE.bat` offers a full build (the first time: it builds and imports your game files), a quick build that compiles changes and runs, and a verify build that only compiles. The engine ends up in `build/Release/`.
+`start.bat` finds your Zoo Tycoon folder, imports its files, builds the engine into `build/Release/` and starts it (`start.bat --rebuild` forces a clean build). After that, rebuild with CMake; the 64-bit build in `build-x64/` is the one releases and the ZT1 Lab use. [`AGENTS.md`](AGENTS.md) has the full build and test commands.
 
 ### Testing your change
 
@@ -65,7 +65,7 @@ This plays a freeform zoo by itself and checks over 230 behaviours against the o
 1. **Scope, maintenance responsibility, and forks:** Pull requests for bug fixes, gameplay/UI accuracy cited to `zoo.exe` or measured against the original, formula checks, and docs are always welcome. However, I don't merge large subsystems or platform ports (such as Linux or macOS builds) that I would be left responsible for maintaining if the original contributor steps away. If you want to build a Linux, macOS, or custom version, **fork this repo** and own your build — and open an issue with your link so I can add it to the **Community Forks & Related Projects** table in [`README.md`](README.md#community-forks--related-projects) and send people your way (no matter what OS it runs on or how many forks exist).
 2. Fork the repo and make a branch for your change. (This repo is itself a fork of sharkwouter's, so when you open the pull request, check that its base is **AlexC1991/zt1-engine** `main`. GitHub picks the original repo by default.)
 3. Keep each pull request to one thing. Small is good.
-4. **Build and test on Windows first:** make sure `BUILD_ENGINE.bat` compiles with zero errors on Windows and run `--panel-shots`. GitHub Actions workflows on fork PRs wait for maintainer approval before running any jobs, so an untested Windows break won't be caught automatically when you open the PR.
+4. **Build and test on Windows first:** make sure the engine builds with zero errors on Windows and run `--panel-shots`. GitHub Actions workflows on fork PRs wait for maintainer approval before running any jobs, so an untested Windows break won't be caught automatically when you open the PR.
 5. Cite where your rules came from (above), and in the description say what changed, how you checked it against the original, and what you couldn't check.
 
 Someone will review it. Expect questions about where a rule came from: that's how the engine stays faithful.

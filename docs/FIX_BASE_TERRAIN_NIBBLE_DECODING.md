@@ -72,7 +72,6 @@ Scenario maps from `scenario.ztd` should also render with correct base terrain t
 - `src/WorldMap.cpp` - Contains the fix
 - `src/WorldMap.hpp` - Defines baseTerrainId field
 - `src/ZooReader.cpp` - Reads baseTerrainId from .zoo files
-- `docs/ZT1_OPEN_ENGINE.md` - Documents nibble encoding for terrain bytes
 
 ## Technical Details
 

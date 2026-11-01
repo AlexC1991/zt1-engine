@@ -4950,14 +4950,14 @@
    "summary": "Marketing funding's tick: minutes x the level's cost x 1/43200 (a 30-day month's minutes) spent (spendCash) and booked (0x41f368) only if no more than the cash - no money, nothing paid"
   },
   "0x41f881": {
-   "by": "zt1-engine (batty251, earlier sessions)",
-   "confidence": "likely",
+   "by": "Claude",
+   "confidence": "sure",
    "engine": [
     "src/main.cpp:861"
    ],
    "name": "zooRatingUpdate",
-   "provisional": true,
-   "summary": "The zoo rating, every 4 s"
+   "provisional": false,
+   "summary": "The zoo's counts for the rating and the advisor, each entity in the world list: guests (+0x44), hungry (+0x30, guest+0x2b0), thirsty (+0x34, +0x2b8), restroom (+0x38, +0x2c8), tired (+0x2c, energy +0x2c0) - each over cUIThreshold (0x639024, guests.ai 75) - wanting a gift (+0x3c, guest+0x33c), litter in hand (+0x40, +0x26c[4]); animals (+0x20) and sick ones (+0x24, animal+0x3a7); guest happiness on average (+0x60, sum of +0x2a8 / guests)"
   },
   "0x41fcc1": {
    "by": "zt1-engine (batty251, earlier sessions)",
@@ -14984,11 +14984,11 @@
    "summary": "A scenario's [start] settings applied (scenarioStart, resumeScript): its economy file (economy.cfg, [economy]), research, marketing, layouts and ambients, the game manager reset (its slot 4)"
   },
   "0x58f97d": {
-   "by": "batty251 (the scenario manager's class table 0x630d7c read from the running game; its functions read)",
-   "confidence": "likely",
+   "by": "Claude",
+   "confidence": "sure",
    "name": "scenarioLoad",
    "provisional": false,
-   "summary": "The scenario's state read back from a saved zoo (class slot 0x28, crt_fread)"
+   "summary": "A saved zoo's scenario block read: its size (skipped whole unless a scenario's start is pending, +0x30), the script's name and opened (slot 4), then its goal states: each top-level goal's loadState (slot 0x24) in turn while the file is before the block's end, an index past the goals skipped 4 bytes. The zoo fails as corrupted unless the read ends exactly at the block's end and the script started (slot 0x10, 0x58fb34)."
   },
   "0x58fb34": {
    "by": "batty251 (read its code, from the recordings it alone ran in)",
@@ -30958,6 +30958,36 @@
    "by": "Claude",
    "on": "2026-11-01",
    "what": "Global 0x638ff8 = scenarioMgr"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Named 0x41f881 zooRatingUpdate"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Note at 0x420347: Each check is count > total x share (strict): 10009 sick > animals x cPctProtestors always; then only with more than 10 guests: 10008 sick > animals x cPctSick, 10011-10016 hungry/thirsty/restroom/gift/tired/litter > guests x their cPct; 10021 (kind 1) average guest happiness >= cHighAvgGuestHappyThreshold, 10022 <= cLow. Engine: zooAdvice in main.cpp"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Note at 0x43af5b: Each souvenir check first clears +0x33c (wants a gift), then sets it when the roll says so; holdItem of a gift clears it"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Named 0x58f97d scenarioLoad"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Note at 0x5950fd: Composite goal loadState (classes 0x6352cc rtype 2, 0x6352f8 rtype 1): only in a zoo of version 86 or later (cmp 0x55) - before that it reads nothing and resets its children. So an older zoo's block can hold only the states of goals before the first composite; 213 states in a version-70 zoo made the original call it corrupted (verified in the original, 2026-11-01: 80 states load, 213 fail)."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Note at 0x595022: Normal goal (class 0x635510) loadState: one int to +0x40 while before the block's end; 0..3 kept and restored quietly (slot 0x10, 0x595083). Saved by 0x47a7d6. The scenario's own goal (class 0x6354e4) uses 0x5950ab / 0x47a04c at +4."
   }
  ],
  "notes": {
@@ -30969,7 +30999,7 @@
   "0x420347": {
    "by": "Claude",
    "on": "2026-11-01",
-   "text": "Money advice, the cash rounded: 1..1000 posts 10018 (0x58c21a), <=0 10019 (0x48b853), <0 also 10020 - every [checks] message ms (economy.cfg 10000), from zooPeriodicTick"
+   "text": "Each check is count > total x share (strict): 10009 sick > animals x cPctProtestors always; then only with more than 10 guests: 10008 sick > animals x cPctSick, 10011-10016 hungry/thirsty/restroom/gift/tired/litter > guests x their cPct; 10021 (kind 1) average guest happiness >= cHighAvgGuestHappyThreshold, 10022 <= cLow. Engine: zooAdvice in main.cpp"
   },
   "0x42400a": {
    "by": "batty251",
@@ -30980,6 +31010,11 @@
    "by": "batty251",
    "on": "2026-10-12",
    "text": "Part of FUN_00437102 (ZTAnimal's table, slot 0x48): Ghidra made it a function once the class tables were applied (2026-10-12). That function picks a behaviour by name (bSleep, bHatch...) - a sleep ends a rampage here"
+  },
+  "0x43af5b": {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "text": "Each souvenir check first clears +0x33c (wants a gift), then sets it when the roll says so; holdItem of a gift clears it"
   },
   "0x452e13": {
    "by": "batty251",
@@ -31011,10 +31046,15 @@
    "on": "2026-10-14",
    "text": "The path shape loader stores each [Shapes] shape= code's LIST POSITION into the record's +0x14: the bytes at 0x4c25cf are 89 78 14, i.e. 'mov dword ptr [eax+0x14], edi' - checked against the pinned build (2002 Complete Collection zoo.exe, sha256 61fcc6d1..., 2,449,432 bytes), so the value kept is the index in the repeated-key list, not the code itself. Found by StevenGann, address verified here 2026-10-14."
   },
+  "0x595022": {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "text": "Normal goal (class 0x635510) loadState: one int to +0x40 while before the block's end; 0..3 kept and restored quietly (slot 0x10, 0x595083). Saved by 0x47a7d6. The scenario's own goal (class 0x6354e4) uses 0x5950ab / 0x47a04c at +4."
+  },
   "0x5950fd": {
    "by": "Claude",
    "on": "2026-11-01",
-   "text": "Goal states load: the scenario's own state (an int, kept 0..3) then each goal's loadState (slot 0x24) in the goal list's order (+4..+8). A saved zoo's scenario block (gameMgrLoad 0x5948c6) = the script's name, then these ints: Lakeside Valley 213 (212 goals), Medium Beach in sm_aqua's template 206. Composite goals (rtype 1/2, makeGoal 0x58e066) hold child goals, saved after them."
+   "text": "Composite goal loadState (classes 0x6352cc rtype 2, 0x6352f8 rtype 1): only in a zoo of version 86 or later (cmp 0x55) - before that it reads nothing and resets its children. So an older zoo's block can hold only the states of goals before the first composite; 213 states in a version-70 zoo made the original call it corrupted (verified in the original, 2026-11-01: 80 states load, 213 fail)."
   },
   "0x5a3585": {
    "by": "batty251",

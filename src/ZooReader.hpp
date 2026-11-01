@@ -213,6 +213,7 @@ private:
   // from and each of its goals' states, in the script's order
   std::string scenarioName;
   std::vector<int32_t> goalStates;
+  bool writeScenario = false; // (writeOriginal: the block made from these)
   std::vector<uint8_t> original;
   std::vector<ShowProgram> showPrograms;
   uint16_t showProgramCounter = 2000, showInstanceCounter = 1000;
