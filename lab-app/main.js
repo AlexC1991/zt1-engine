@@ -15,9 +15,27 @@ const labUpdates = require('./update.js');
 const modProfiles = require('./mod-profiles.js');
 const { watchEngineOutput } = require('./play-output.js');
 
+// A test release (pack_lab.py --test, its package.json says so): the Lab as
+// it will be released, tried before it's put up - it never updates, and its
+// state is its own (Electron's folder, and zt1-engine-test where the test
+// engine keeps its settings and mods), so it can't take the published Lab's
+// checkout link or settings, nor give it its own
+const TEST_RELEASE = (() => {
+  try {
+    return !!require('./package.json').zt1TestRelease;
+  } catch {
+    return false;
+  }
+})();
+const ENGINE_STATE = TEST_RELEASE ? 'zt1-engine-test' : 'zt1-engine';
+if (TEST_RELEASE) {
+  app.setName('ZT1 Lab (Test)');
+  app.setPath('userData', path.join(app.getPath('appData'), 'ZT1 Lab (Test)'));
+}
+
 // Where everything is: the checkout (if there is one), and what the app
 // carries itself. This file is the only one for that (runtime.js says how).
-const roots = require('./runtime.js')({ appData: app.getPath('userData'), resources: process.resourcesPath });
+const roots = require('./runtime.js')({ appData: app.getPath('userData'), resources: process.resourcesPath, engineFolder: ENGINE_STATE });
 const REPO = roots.repo;      // the engine's checkout, or null: installed alone
 const DATA = roots.data;      // our files: the checkout's re/, else the install's
 const TREE = roots.tree;      // what the app carries: re/, engine/, clangd/, ghidra/
@@ -278,6 +296,7 @@ ipcMain.on('engine:send', (_e, cmd) => {
 // the Lab closes
 const labUpdater = labUpdates.controller({
   app,
+  off: TEST_RELEASE ? 'A test release: it never updates. The published Lab is the one that updates.' : '',
   send: (st) => send('lab:updateState', st),
   spawn: (file, args, opts) => cp.spawn(file, args, opts),
   log: (line) => console.log(line),
@@ -445,7 +464,9 @@ function playRect() {
     height: Math.round(play.area.h),
   });
 }
-ipcMain.handle('play:original', () => {
+// (opts.lastfile: a saved zoo the main menu's Continue Saved Game opens -
+// the hook answers zoo.ini's [user] lastfile with it, writing nothing)
+ipcMain.handle('play:original', (_e, opts = {}) => {
   if (play.proc) return play.kind === 'original' ? { ok: true } : { error: 'Our engine is running in Play: stop it first.' };
   const c = originalConfig();
   if (!fs.existsSync(c.exe)) return { error: `The original isn't at ${c.exe} (re/private/original.json says where it is).` };
@@ -463,6 +484,7 @@ ipcMain.handle('play:original', () => {
   // (drawn at the Play view's size, at least the 800x600 it was made for)
   const r = playRect();
   if (r) args.push('--size', `${Math.max(800, r.width)}x${Math.max(600, r.height)}`);
+  if (opts && typeof opts.lastfile === 'string' && opts.lastfile) args.push('--lastfile', path.resolve(opts.lastfile));
   const proc = cp.spawn(launcher, args, { cwd: path.dirname(launcher), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   play.proc = proc;
   play.kind = 'original';
@@ -2543,7 +2565,7 @@ let engineRelease = null;
 function modsCfgPath() {
   const exe = engineExe();
   return modProfiles.gameConfigPath(exe || path.join(RELEASE, 'zt1-engine.exe'), roots.engineDir || RELEASE,
-    path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'zt1-engine'));
+    path.join(process.env.LOCALAPPDATA || app.getPath('appData'), ENGINE_STATE));
 }
 function modsCfg() {
   return modProfiles.readConfig(modsCfgPath());
@@ -2561,7 +2583,7 @@ function modForTest(folder) {
 function testProfile(mod) {
   const exe = engineExe();
   const gameSettingsFile = modProfiles.gameSettingsPath(exe || path.join(RELEASE, 'zt1-engine.exe'), roots.engineDir || RELEASE,
-    path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'zt1-engine'));
+    path.join(process.env.LOCALAPPDATA || app.getPath('appData'), ENGINE_STATE));
   return mod ? modProfiles.createTestProfile({ configFile: modsCfgPath(), modRoot: modsFolder(), mod, stateDir: PRIVATE, gameSettingsFile }) : null;
 }
 ipcMain.handle('gamemods:testState', () => host.testMod);
@@ -2805,7 +2827,11 @@ function labTool(script, req) {
     const tool = PY && path.join(PY, script);
     if (!tool) return resolve({ ok: false, error: roots.looked(script) });
     const engineDir = roots.engineDir || RELEASE;
-    const proc = cp.spawn(labPython(), ['-I', '-X', 'utf8', tool], { cwd: engineDir, windowsHide: true });
+    // (ZT1_GAME_DIR: the game's folder, as Play finds it - the helpers read
+    // the game's archives there when the engine folder has no copy of them,
+    // as an installed engine hasn't)
+    const env = { ...process.env, ZT1_GAME_DIR: path.dirname(zooExePath()) };
+    const proc = cp.spawn(labPython(), ['-I', '-X', 'utf8', tool], { cwd: engineDir, windowsHide: true, env });
     let out = '', err = '';
     proc.stdout.on('data', (d) => (out += d));
     proc.stderr.on('data', (d) => (err += d));
@@ -2946,6 +2972,27 @@ ipcMain.handle('modkit:copyIn', async (_e, folder, file) => {
 // animal from scratch, its animations linked or drawn. What's drawn is kept
 // as drawn in the mod's .art folder (left out of uploads) and made into the
 // game's art in its content.ztd
+// The everything zoo, judged by the original (re/lab/everything.py): what
+// it saved (everything-<map>-<part>.json, written by the engine's
+// ZT_EVERYTHING_ZOO) against what the original made of it (Play's census,
+// from its memory). Both written beside the save: <name>.census.json and
+// <name>.verdict.json
+ipcMain.handle('everything:check', async (_e, manifest, census) => {
+  if (typeof manifest !== 'string' || !/\.json$/i.test(manifest) || !fs.existsSync(manifest))
+    return { ok: false, error: 'No such everything zoo list: ' + manifest };
+  const base = manifest.replace(/\.json$/i, '');
+  try {
+    fs.writeFileSync(base + '.census.json', JSON.stringify(census, null, 1));
+  } catch (e) {
+    return { ok: false, error: 'Couldn’t write the census: ' + e.message };
+  }
+  const r = await labTool('everything.py', { manifest, census: base + '.census.json' });
+  try {
+    fs.writeFileSync(base + '.verdict.json', JSON.stringify(r, null, 1));
+  } catch {}
+  return r;
+});
+
 ipcMain.handle('animal:do', async (_e, folder, req = {}) => {
   const dir = modPath(folder);
   if (!dir) return { ok: false, error: 'No such mod.' };

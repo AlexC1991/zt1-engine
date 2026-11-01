@@ -687,17 +687,24 @@ bool ZooReader::readExact(const uint8_t *data, size_t size) {
   for (int32_t &vv : view)
     vv = r.i32();
   {
+    archive.scenarioBegin = size_t(r.p - data);
     uint32_t sz = r.u32();
     if (sz > 0 && v >= 51) {
       uint32_t name = r.u32();
+      if (r.ok && name <= r.left)
+        scenarioName.assign(reinterpret_cast<const char *>(r.p), name);
       r.skip(name);
+      while (!scenarioName.empty() && scenarioName.back() == '\0')
+        scenarioName.pop_back();
       uint32_t goals = r.u32();
-      r.skip(goals);
+      for (uint32_t k = 0; k + 4 <= goals && r.ok; k += 4)
+        goalStates.push_back(r.i32());
       if (r.ok && (goals % 4 != 0 || sz != 8 + name + goals))
         return failLate("the scenario's block");
     } else {
       r.skip(sz);
     }
+    archive.scenarioEnd = size_t(r.p - data);
   }
   if (!r.ok)
     return failLate("the view and the scenario's block");

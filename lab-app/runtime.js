@@ -109,7 +109,7 @@ function savedCheckout(statePath) {
   return '';
 }
 
-module.exports = function roots({ appData, resources }) {
+module.exports = function roots({ appData, resources, engineFolder = 'zt1-engine' }) {
   // (the app's own state. Where the Lab keeps what it found for the player -
   //  where zoo.exe is, which checkout, what it recorded - never the knowledge
   //  base. It is zt1-engine's folder when there is one: that is where the
@@ -120,8 +120,9 @@ module.exports = function roots({ appData, resources }) {
   //  so it is not guessed from the app's own path: an installed Lab's appData
   //  is under Roaming, and looking above it would never find the engine's.)
   const LOCAL = process.env.LOCALAPPDATA || '';
-  const engineState = LOCAL ? path.join(LOCAL, 'zt1-engine') : '';
-  const beside = path.join(path.dirname(appData), 'zt1-engine');
+  // (engineFolder: zt1-engine, or a test release's zt1-engine-test)
+  const engineState = LOCAL ? path.join(LOCAL, engineFolder) : '';
+  const beside = path.join(path.dirname(appData), engineFolder);
   // (an installed Lab was told at the wizard which checkout it has, and the
   //  installer puts that - and the engine's own settings - under LocalAppData.
   //  So for a packed build the installer's folder comes first: a stale or

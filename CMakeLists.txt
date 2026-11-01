@@ -28,6 +28,11 @@ endif()
 # the release workflow. A build of one's own is "dev", and never updates
 set(ZT1_VERSION "dev" CACHE STRING "The release's version, e.g. 2026.10.19")
 option(ZT1_OFFICIAL_BUILD "A release made by the release workflow: it may update itself" OFF)
+# A test release (make_release.py --test): the official release in every way
+# but that it never looks for updates, and keeps its settings, saves and mods
+# apart from the published copy's - so a release can be tried, installed,
+# before it's put up
+option(ZT1_TEST_BUILD "A release made to be tried before it's published: it never updates" OFF)
 
 # 3. DISABLE LIBRARY BLOAT & INSTALLS (Fixes NASM and Export errors)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libs" FORCE)
@@ -148,7 +153,7 @@ if(WIN32)
     )
 endif()
 target_compile_definitions(zt1-engine PRIVATE ZT1_VERSION="${ZT1_VERSION}"
-    ZT1_OFFICIAL_BUILD=$<BOOL:${ZT1_OFFICIAL_BUILD}>)
+    ZT1_OFFICIAL_BUILD=$<BOOL:${ZT1_OFFICIAL_BUILD}> ZT1_TEST_BUILD=$<BOOL:${ZT1_TEST_BUILD}>)
 
 # 12. THE ORIGINAL GAME IN THE LAB (src/original/): zoo.exe is 32-bit, so
 # these are built only in a 32-bit tree (build/): zt1-original.exe starts

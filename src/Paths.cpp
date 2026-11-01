@@ -1,5 +1,9 @@
 #include "Paths.hpp"
 
+#ifndef ZT1_TEST_BUILD
+#define ZT1_TEST_BUILD 0
+#endif
+
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -170,10 +174,11 @@ bool setup() {
     return true;
   }
 
-  // Installed
+  // Installed (a test release keeps its settings, saves and mods apart from
+  // the published copy's)
   g_portable = false;
 #ifdef _WIN32
-  fs::path data = localAppData() / "zt1-engine";
+  fs::path data = localAppData() / (ZT1_TEST_BUILD ? "zt1-engine-test" : "zt1-engine");
 #else
   const char *home = std::getenv("HOME");
   fs::path data = fs::path(home ? home : ".") / ".zt1-engine";

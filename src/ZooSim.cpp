@@ -26,6 +26,8 @@ void Original::loadEconomy(ResourceManager *rm) {
     num("cBuildingUseCostMax", e.buildingUseCostMax);
     num("cZooDooRecyclingAmount", e.zooDooRecycling);
     num("cAdmissionMultiple", e.admissionMultiple);
+    if (std::string v = ini->get("checks", "message"); !v.empty() && std::atof(v.c_str()) > 0)
+      e.adviceEveryMs = static_cast<float>(std::atof(v.c_str()));
     delete ini;
   }
   economy() = e;
@@ -61,6 +63,7 @@ void ZooSim::start(double cash, double rating) {
   this->day = 0;
   this->dayCount = 0;
   this->monthly.clear();
+  this->fundingClock = 0;
   this->dirty = true;
 }
 
@@ -68,7 +71,8 @@ void ZooSim::spend(Line line, double amount) {
   if (this->months.empty() || amount == 0)
     return;
   this->months.back().lines[line] -= amount;
-  this->money -= amount;
+  if (!this->unlimited || amount < 0) // (money back still comes back)
+    this->money -= amount;
   this->dirty = true;
 }
 
@@ -87,6 +91,31 @@ void ZooSim::setMonthlyCost(Line line, int key, double perMonth) {
       return;
     }
   this->monthly.push_back({line, key, perMonth, 0});
+}
+
+bool ZooSim::payTick(Line line, int key, double amount) {
+  if (amount <= 0)
+    return true;
+  if (this->months.empty() || !this->canAfford(amount))
+    return false;
+  Monthly *m = nullptr;
+  for (Monthly &each : this->monthly)
+    if (each.line == line && each.key == key)
+      m = &each;
+  if (!m) {
+    this->monthly.push_back({line, key, 0, 0});
+    m = &this->monthly.back();
+  }
+  m->owed += amount;
+  double whole = std::floor(m->owed);
+  if (whole >= 1) {
+    m->owed -= whole;
+    this->months.back().lines[line] -= whole;
+    if (!this->unlimited)
+      this->money -= whole;
+    this->dirty = true;
+  }
+  return true;
 }
 
 void ZooSim::newMonth() {
@@ -108,17 +137,14 @@ void ZooSim::update(double seconds) {
     const int monthDays = daysInMonth(this->month(), this->year());
     double toNextDay = std::floor(this->day) + 1 - this->day;
     double days = std::min(seconds / kSecondsPerDay, toNextDay);
-    for (Monthly &m : this->monthly) {
-      m.owed += m.perMonth * days / monthDays;
-      double whole = std::floor(m.owed);
-      if (whole >= 1) {
-        m.owed -= whole;
-        this->months.back().lines[m.line] -= whole;
-        this->money -= whole;
-      }
+    // Every 3 s a funding tick: a 120th of each monthly cost, if the zoo
+    // has it (zoo.exe 0x41f2ae)
+    this->fundingClock += days * kSecondsPerDay;
+    while (this->fundingClock >= 3.0) {
+      this->fundingClock -= 3.0;
+      for (size_t i = 0; i < this->monthly.size(); i++)
+        this->payTick(this->monthly[i].line, this->monthly[i].key, this->monthly[i].perMonth / 120.0);
     }
-    if (!this->monthly.empty() && days > 0)
-      this->dirty = true;
     this->day += days;
     seconds -= days * kSecondsPerDay;
     this->months.back().rating = this->zooRating;

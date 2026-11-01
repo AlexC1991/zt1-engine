@@ -845,6 +845,9 @@ void World::draw(SDL_Renderer *renderer) {
   };
   fences.redrawGround = [this](SDL_Renderer *r, const std::set<std::pair<int, int>> &tiles) {
     this->worldRenderer.renderTerrainTiles(r, this->worldMap, SpriteDatabase::get(), tiles);
+    // (the bulldozer's path tile among them: red again, not covered)
+    if (tiles.count(this->bulldozePath))
+      this->drawBulldozePath(r);
   };
   {FrameProfile::Scope profile("fence collect");fences.collect(worldRenderer, worldMap, fenceArt);}
   // The bulldozer's piece glows red; the gate tool's green
@@ -1029,8 +1032,7 @@ void World::drawPathPreview(SDL_Renderer *renderer, const std::set<std::pair<int
     }
 }
 
-void World::drawToolOverlay(SDL_Renderer *renderer) {
-  // The bulldozer's path tile: red (measured from the original)
+void World::drawBulldozePath(SDL_Renderer *renderer) {
   if (this->bulldozer && this->bulldozePath.first >= 0) {
     auto [x, y] = this->bulldozePath;
     if (const MapTile *t = this->worldMap.getTile(x, y)) {
@@ -1047,6 +1049,13 @@ void World::drawToolOverlay(SDL_Renderer *renderer) {
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
       SDL_RenderGeometry(renderer, nullptr, v, 4, idx, 6);
     }
+  }
+}
+
+void World::drawToolOverlay(SDL_Renderer *renderer) {
+  // The bulldozer's path tile: red (measured from the original)
+  if (this->bulldozer && this->bulldozePath.first >= 0) {
+    this->drawBulldozePath(renderer);
     return;
   }
   const bool filter = this->filterTool && this->fences.previewFilterX >= 0;
@@ -1843,8 +1852,22 @@ void World::cyclePathMode(int step) {
 }
 
 // What a walkway line builds, then its tiles' prices
-int World::buildLine() {
+int World::buildLine(ToolResult &r) {
   int cost = 0;
+  // (what it'd all cost: more than the zoo has and none of it's built -
+  // zoo.exe 0x4fb08c, 10002)
+  int price = 0;
+  for (const DeckPreview &p : this->deckPreview)
+    if (p.ok)
+      price += p.ground ? (canLayPath(p.x, p.y) ? this->pathCost : 0)
+                        : (!this->walkways.at(p.x, p.y) ? this->pathCost * 2 : 0);
+  if (!this->canAfford(price)) {
+    this->deckPreview.clear();
+    this->pathPreview.clear();
+    Sound::get().play("sounds/noplace");
+    r.messageId = kInsufficientFunds;
+    return 0;
+  }
   if (this->staff.logRoutes)
     for (const DeckPreview &p : this->deckPreview)
       SDL_Log("[Walkway] %d,%d heights %d %d %d %d %s %s", p.x, p.y, p.h[0], p.h[1], p.h[2], p.h[3],
@@ -3590,7 +3613,10 @@ World::ToolResult World::mouseDown(int x, int y) {
   }
   if (this->gateTool) {
     Fences::Edge e;
-    if (this->pickFence(x, y, e) && this->fences.canGate(e)) {
+    if (this->pickFence(x, y, e) && this->fences.canGate(e) && !this->canAfford(this->fences.gateCostOf(e))) {
+      Sound::get().play("sounds/noplace");
+      r.messageId = kInsufficientFunds;
+    } else if (this->pickFence(x, y, e) && this->fences.canGate(e)) {
       r.cost = this->fences.gateCostOf(e);
       if(this->fences.tankOf(e)>=0)this->shows.cancel(this->fences.tankOf(e),"The show platform was moved.");
       this->fences.moveGate(e);
@@ -3632,7 +3658,10 @@ World::ToolResult World::mouseDown(int x, int y) {
             {"y", this->ghostY}, {"facing", this->ghostFacing},
             {"fit", this->ghostFit == Fences::Fit::Ok ? "yes" : this->ghostFit == Fences::Fit::InTheWay ? "something's in the way" : "no"},
             {"message", this->fitMessage}, {"exhibit", ex});
-    if (this->objectGhost && this->ghostFit == Fences::Fit::Ok &&
+    if (this->objectGhost && this->ghostFit == Fences::Fit::Ok && !this->canAfford(this->objectCost)) {
+      Sound::get().play("sounds/noplace");
+      r.messageId = kInsufficientFunds;
+    } else if (this->objectGhost && this->ghostFit == Fences::Fit::Ok &&
         this->placedObjects.add(this->objectTool, this->ghostX, this->ghostY, this->ghostFacing)) {
       r.cost = this->objectCost;
       ZT_STEP("", "Placed; the animals there react", {"cost", r.cost}, {"objects", static_cast<double>(this->placedObjects.objects().size())});
@@ -3669,6 +3698,12 @@ World::ToolResult World::mouseDown(int x, int y) {
     wx=this->animals.previewX;wy=this->animals.previewY;
     int ex = this->fences.exhibitAt(static_cast<int>(std::floor(wx)), static_cast<int>(std::floor(wy)));
     bool fits = this->animals.canPlace(this->animalTool, wx, wy, this->worldMap, this->fences) == Fences::Fit::Ok;
+    if (fits && !this->canAfford(this->animals.types()[this->animalTool].cost)) {
+      Sound::get().play("sounds/noplace");
+      r.messageId = kInsufficientFunds;
+      this->mouseMove(x, y);
+      return r;
+    }
     if (fits)
       this->animals.snapshot(ex, this->worldMap, this->fences);
     int id = this->animals.adopt(this->animalTool, this->animalFemale, wx, wy, this->worldMap, this->fences);
@@ -3703,6 +3738,11 @@ World::ToolResult World::mouseDown(int x, int y) {
   if (this->staffTool >= 0) {
     if (!onMap)
       return r;
+    if (!this->canAfford(this->staff.types()[this->staffTool].salary)) {
+      Sound::get().play("sounds/noplace");
+      r.messageId = kInsufficientFunds;
+      return r;
+    }
     int id = this->staff.hire(this->staffTool, wx, wy, this->worldMap, this->fences);
     ZT_STEP("", id >= 0 ? "Hired" : "Can't go there", {"staff", id}, {"type", this->staff.types()[this->staffTool].key},
             {"x", wx}, {"y", wy});
@@ -3723,7 +3763,10 @@ World::ToolResult World::mouseDown(int x, int y) {
     int fx = this->fences.previewFilterX, fy = this->fences.previewFilterY;
     if (fx < 0)
       return r;
-    if (this->fences.placeFilter(fx, fy, this->worldMap)) {
+    if (this->fences.previewFilterFit == Fences::Fit::Ok && !this->canAfford(this->fences.filterType().cost)) {
+      Sound::get().play("sounds/noplace");
+      r.messageId = kInsufficientFunds;
+    } else if (this->fences.placeFilter(fx, fy, this->worldMap)) {
       r.cost = this->fences.filterType().cost;
     } else if (this->fences.previewFilterFit == Fences::Fit::Outside) {
       // "Filters must be placed adjacent to a completed tank. Only one
@@ -3857,7 +3900,7 @@ World::ToolResult World::mouseUp(int x, int y) {
       this->cancelLine();
       return r;
     }
-    r.cost = this->buildLine();
+    r.cost = this->buildLine(r);
     // Clicked: carry on from its end; dragged: done
     if (this->line.clicked) {
       int ex = this->line.ex, ey = this->line.ey;
@@ -3872,7 +3915,7 @@ World::ToolResult World::mouseUp(int x, int y) {
     this->mouseMove(x, y);
     this->pathDragging = false;
     if (this->smartPlan) {
-      r.cost = this->buildLine();
+      r.cost = this->buildLine(r);
       this->smartPlan = false;
       this->pathLast = {-1, -1};
       return r;
@@ -3881,6 +3924,18 @@ World::ToolResult World::mouseUp(int x, int y) {
   if (this->pathDragging) {
     this->mouseMove(x, y);
     this->pathDragging = false;
+    // (more than the zoo has: none of it laid - zoo.exe 0x4fb08c, 10002)
+    {
+      int price = 0;
+      for (auto &p : this->pathPreview)
+        if (p.second == Fences::Fit::Ok && canLayPath(p.first.first, p.first.second))
+          price += this->pathCost;
+      if (!this->canAfford(price)) {
+        Sound::get().play("sounds/noplace");
+        r.messageId = kInsufficientFunds;
+        this->pathPreview.clear();
+      }
+    }
     for (auto &p : this->pathPreview)
       if (p.second == Fences::Fit::Ok && canLayPath(p.first.first, p.first.second)) {
         UndoStep u{UndoStep::Kind::Path};
@@ -3902,6 +3957,18 @@ World::ToolResult World::mouseUp(int x, int y) {
     return r;
   this->mouseMove(x, y);
   this->dragging = false;
+  // (more than the zoo has: none of it laid - zoo.exe 0x4fb08c, 10002)
+  {
+    int price = 0;
+    for (auto &p : this->fences.preview)
+      if (p.second && this->fences.canPlace(p.first, this->worldMap))
+        price += this->fences.layCost(p.first, this->fenceTool);
+    if (!this->canAfford(price)) {
+      Sound::get().play("sounds/noplace");
+      r.messageId = kInsufficientFunds;
+      this->fences.preview.clear();
+    }
+  }
   for (auto &p : this->fences.preview) {
     if (p.second && this->fences.canPlace(p.first, this->worldMap)) {
       const int cost = this->fences.layCost(p.first, this->fenceTool);

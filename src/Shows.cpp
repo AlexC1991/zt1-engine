@@ -524,11 +524,32 @@ void Shows::actorStep(Show &s,Actor &a,float seconds) {
     if(std::hypot(m->x-object->x,m->y-object->y)>1.1f) {walk({object->x,object->y});return;}
     if(std::any_of(s.actors.begin(),s.actors.end(),[&](const Actor &other){return other.id!=a.id && other.object==object->id;}))return;
     a.object=object->id;m->building=object->id;
+    // The show toys' slot is the toy itself (slotpos 0,0, facing 0;
+    // cUserTeleportsInside): the trick's art draws the toy round its user -
+    // the orca's beach carries the whole stage, which keeps its place
+    // (cHideBuilding 0) - so the user stands exactly on it, facing as it
+    // does. Anywhere in the 1.1 tiles of arriving, the art's stage shows
+    // beside the real one.
+    {
+      m->x=object->x;m->y=object->y;
+      const float angle=static_cast<float>(object->facing)*3.14159265f/4.0f;
+      m->fx=std::sin(angle);m->fy=-std::cos(angle);
+    }
+    // A cHideBuilding toy is drawn into the trick's own art from its first
+    // frame (the orca's ballplay carries the ball, its beach the whole
+    // stage), and that art plays before the set's fEnterBuilding: hidden
+    // from here, else two show for the first step. fExitBuilding, or the
+    // trick's cancel, shows it again.
+    if(auto *used=world->placedObjects.byId(object->id))
+      used->showHidden=animals.infoOf(PlacedObjects::fileOf(*used)).hideBuilding;
   }
   // Roll once when the animal is ready to perform, not on every route tick.
   bool skipped=trick.kind!=3 && m->happiness<=type.skipTrickHappiness &&
     std::uniform_int_distribution<int>(0,99)(animals.rng)<type.skipTrickChance;
-  if(skipped || !animals.set(*m,set)) {a.object=-1;m->building=-1;++a.skipped;++s.tricksSkipped;++a.index;a.elapsed=0;return;}
+  if(skipped || !animals.set(*m,set)) {
+    if(auto *o=world->placedObjects.byId(a.object))o->showHidden=false;
+    a.object=-1;m->building=-1;++a.skipped;++s.tricksSkipped;++a.index;a.elapsed=0;return;
+  }
   m->stack.clear();m->path.clear();m->pathAt=0;m->stepping=false;
   m->showTrick=true;m->showDone=false;m->swimZ=m->swimTo=static_cast<float>(fences.waterLevel(*tank));
   animals.pushSet(*m,set);trainerCue(s,trick.pre);

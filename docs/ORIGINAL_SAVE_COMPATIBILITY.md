@@ -145,6 +145,63 @@ trainer and seven guests from that original resave, with zero missing records.
 `final-checks-43.json` records all six save suites and the repeated activity/show
 checks. `shared-file-validation-45.json` records nine file structure/CRC checks.
 
+## The everything zoo - 1 November 2026
+
+The checks above covered the zoos that happened to be tested. 2026.10.30 then
+shipped a writer whose shared saves the original refused: a player's zoo held
+a show toy, a worn picket fence and update-pack trees, none of which any test
+zoo had. So every type is now tested, every build.
+
+`ZT_EVERYTHING_ZOO=1` with `--panel-shots <out> <map>` (`src/EverythingZoo.cpp`)
+generates, from the game's own registry, a freeform zoo holding every type it
+lists, and saves it shared. `ZT_EVERYTHING_PART=items` (default) holds every
+building, scenery item and path, an exhibit of every fence (one piece worn, one
+broken where the type has the art), a tank of every tank wall (salt and fresh),
+every food, dung, litter, a filter and a show with its toys and program;
+`ZT_EVERYTHING_PART=units` every animal (male, female, young, a dinosaur's egg)
+spaced by its footprint in exhibits and tanks of its kind, every kind of staff
+and guests, on paths. A new type - an update pack, an expansion - is in it
+without anyone adding it. Zoo entrance pieces are left out: they are the map's,
+not bought, and a second entrance inside the zoo has the original drop the
+animals and staff.
+
+Its original part is then checked by the rules the original reads it by, each
+taken from the original's own data: a scenery type's subclass is the registry
+section listing it (`[building]` types are `building/building`: benches, trash
+cans and show toys; the update packs list their trees under `[other]`); fences
+and tank walls go by registry key (`fences/tankwall.ai` is `tankwal1`); no gate
+of a fence type without one; no fence worn or broken without the art; objects at
+the ground height under them; no two entities sharing an id; every stock thing
+placed present. The whole registry is read as the original does, not the buy
+catalog. `everything-<map>-<part>.json` lists what the part holds.
+
+The Lab then judges it in the original: Play Game, `origCheckSave
+<everything-<map>-<part>.json>` starts the original with that zoo as its last
+file (the hook answers `[user] lastfile`, writing nothing), presses Continue
+Saved Game, reads every entity the original made from its memory and compares
+(`re/lab/everything.py`). The original's own additions (ripples, wildlife,
+arriving guests) are listed, not failed, and the mermaid statue in a tank
+becoming a mermaid is the original's own (Marine Mania).
+
+Found and fixed this way, each verified in the original 12.04.00.0009:
+
+| Fault | In the original |
+| --- | --- |
+| Show toys, benches, trash cans saved as `objects` | refused: "Corrupted saved game" |
+| A picket fence worn to life 0 (it has no worn art) | crash drawing it (0x416ee8) |
+| `tankwall` swapped for `tankwal2` | a different wall; original `tankwal1` walls lost on import |
+| Update-pack trees saved under `foliage` | dropped without a word |
+| A gate piece of a fence with no gate | dropped: a hole in the fence |
+| Objects saved at height 0 | not on the ground over a sunk floor |
+
+Large and Medium base-game maps (rebuilt on the Marine Mania template for their
+tanks) and Large and Medium Marine Mania maps pass the rules; the Large map's
+items and units pass the original's census in full (381 animals, every staff
+kind, 30 guests, 1,113 fence pieces, 272 tank walls, every building and scenery
+type). `make_release.py` runs the zoos on every build and fails on a broken
+rule; an official release also needs the original's verdict for the same
+writer sources (a hash of them is carried in each list and verdict).
+
 ## Reference and release gates
 
 SlendyMilky's [follow-up](https://github.com/AlexC1991/zt1-engine/issues/5#issuecomment-6443994223)

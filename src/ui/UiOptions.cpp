@@ -265,7 +265,7 @@ int extraPage(const std::string &name) {
     return -1;
   if (name == "hotkeys" || name == "smartstack" || name == "dragwindows")
     return kControls;
-  if (name == "mods" || name == "modmenu" || name == "updatechecks")
+  if (name == "mods" || name == "modmenu" || name == "updatechecks" || name == "infinitemoney")
     return kMods;
   return kGameplay;
 }
@@ -278,7 +278,10 @@ std::string extraName(const std::string &name) {
       {"mods", "Load mods"},                 {"modmenu", "Mod Menu button"},
       {"updatechecks", "Check for updates"}, {"misnamedart", "Misnamed art"},
       {"optionswindow", "This Options window"}, {"smartstack", "Windows move aside"},
-      {"dragwindows", "Drag any window"},       {"infocloseslists", "Windows close lists"}};
+      {"dragwindows", "Drag any window"},       {"infocloseslists", "Windows close lists"},
+      {"tankgroundback", "Tank ground restored"}, {"nofenceonpath", "No fences on paths"},
+      {"modfilter", "Mods buy filter"},          {"custommaps", "Custom maps"},
+      {"tankclip", "Tank edge clipping"},       {"infinitemoney", "Cheat: infinite money"}};
   auto it = names.find(name);
   return it == names.end() ? name : it->second;
 }
@@ -605,16 +608,28 @@ std::string optionsLayout() {
   next[kControls] = kRowsY + 7 * kRow + 6;
   next[kGameplay] = kRowsY;
   next[kMods] = kRowsY + 40;
-  int count[kPages] = {};
+  // (more than fit above the description box: a second column beside
+  // the first - the Gameplay page's ran down over the box)
+  int total[kPages] = {};
+  for (const Features::Switch &f : Features::all())
+    if (int p = extraPage(f.name); p >= 0)
+      total[p]++;
+  // (the infinite money cheat: beside Load mods, in a column of its own -
+  // the mods list fills the page under the switches)
+  int count[kPages] = {}, row[kPages] = {};
   for (const Features::Switch &f : Features::all()) {
     int p = extraPage(f.name);
     if (p < 0)
       continue;
     int k = count[p]++;
-    int ry = next[p];
-    next[p] += 24;
-    t += tickBox(pageId(p, kSwitchFirst + k), kLabelX, ry + kTickDown, false);
-    t += bodyText(pageId(p, kSwitchTextFirst + k), kLabelX + kTickText, ry + kTextDown, 380);
+    const bool cheat = std::string(f.name) == "infinitemoney";
+    const int r = cheat ? 0 : row[p]++;
+    const int perColumn = std::max(1, (kH - 96 - next[p]) / 24);
+    const bool twoColumns = cheat || total[p] > perColumn;
+    const int column = cheat ? 1 : r / perColumn, ry = next[p] + (r % perColumn) * 24;
+    const int x = kLabelX + column * 214, textW = twoColumns ? 186 : 380;
+    t += tickBox(pageId(p, kSwitchFirst + k), x, ry + kTickDown, false);
+    t += bodyText(pageId(p, kSwitchTextFirst + k), x + kTickText, ry + kTextDown, textW);
     // (Check for updates: Check now - or Install now - at its end)
     if (std::string(f.name) == "updatechecks")
       t += goldButton(pageId(p, kUpdateNow), kW - 146, ry - 2);
@@ -940,15 +955,18 @@ void UiOptions::showUpdates() {
   std::string why;
   bool can = Updater::possible(&why);
   Updater::State st = Updater::state();
-  std::string said = can ? Updater::status() : why;
+  // (the row says it in a line - a longer reason wrapped it into a box of its
+  // own, its words scrolled out of sight; the reason goes in the description)
+  std::string said = can ? Updater::status() : "not in this copy";
   if (UiText *t = dynamic_cast<UiText *>(this->layout->getElementById(pageId(kMods, kSwitchTextFirst + row))))
     t->setText(said.empty() ? std::string("Check for updates") : "Check for updates: " + said);
   this->about[pageId(kMods, kSwitchTextFirst + row)] = this->about[pageId(kMods, kSwitchFirst + row)] =
       can ? "An installed copy looks for a new version 15 s after it starts and every 30 minutes. One found is "
             "downloaded and its signature checked, then you're asked at the main menu (Later: installed when you "
             "close the game)."
-          : "The Game Build zip, a checkout and the Lab's Play don't update themselves: get the new version from the "
-            "releases, or install the game with its setup.exe.";
+          : "This copy doesn't update itself (" + why +
+                "). The Game Build zip, a checkout, a test release and the Lab's Play don't: get the new version from "
+                "the releases, or install the game with its setup.exe.";
   this->hideRow({pageId(kMods, kUpdateNow)}, !can);
   if (UiButton *b = dynamic_cast<UiButton *>(this->layout->getElementById(pageId(kMods, kUpdateNow)))) {
     b->setLabel(st == Updater::State::Ready ? "Install now" : "Check now");

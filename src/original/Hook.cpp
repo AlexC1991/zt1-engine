@@ -53,6 +53,10 @@ namespace {
 // The Lab's window (embedded) and the game's, and the game's size
 HWND g_owner = nullptr, g_game = nullptr;
 int g_gw = 0, g_gh = 0;
+// A saved zoo the main menu's Continue Saved Game opens (ZT1_HOOK_LASTFILE:
+// the Lab's checks of a save in the original - [user] lastfile, read in its
+// place and never written to zoo.ini)
+char g_lastfile[MAX_PATH] = {};
 // Where the Lab's Play view is (pixels in the Lab window's client area),
 // once it's said
 int g_rx = 0, g_ry = 0, g_rw = 0, g_rh = 0;
@@ -117,12 +121,15 @@ bool patchImport(const char *dll, const char *fn, void *hook, void **real) {
 bool ours(LPCSTR app, LPCSTR key) {
   if (!app || !key || _stricmp(app, "user"))
     return false;
-  return !_stricmp(key, "fullscreen") || (g_gw && (!_stricmp(key, "screenwidth") || !_stricmp(key, "screenheight")));
+  return !_stricmp(key, "fullscreen") || (g_gw && (!_stricmp(key, "screenwidth") || !_stricmp(key, "screenheight"))) ||
+         (g_lastfile[0] && !_stricmp(key, "lastfile"));
 }
 // What the Lab says for one of those
 const char *oursValue(LPCSTR key, char *buf, size_t n) {
   if (!_stricmp(key, "fullscreen"))
     return "0";
+  if (!_stricmp(key, "lastfile"))
+    return g_lastfile;
   std::snprintf(buf, n, "%d", !_stricmp(key, "screenwidth") ? g_gw : g_gh);
   return buf;
 }
@@ -867,7 +874,9 @@ bool poke(DWORD at, int32_t value) {
 bool eachRead(DWORD list, const std::vector<DWORD> &offs, std::vector<DWORD> &vals) {
   __try {
     DWORD *p = *reinterpret_cast<DWORD **>(list), *end = *reinterpret_cast<DWORD **>(list + 4);
-    if (end < p || end - p > 2000)
+    // (a zoo's entities: a big zoo has thousands - the everything zoo
+    // 2,794 - so the cap only stops a pointer pair that isn't a list)
+    if (end < p || end - p > 200000)
       return false;
     for (; p != end; p++) {
       DWORD obj = *p;
@@ -1149,8 +1158,20 @@ void command(const char *line) {
       reply("dialog none");
     } else if (!std::strncmp(arg, "text ", 5)) {
       HWND edit = GetDlgItem(d, 1152); // (the old-style file dialog's name box)
+      // (the Explorer-style one keeps it inside a combo box, id 1148: the
+      // first Edit at any depth)
       if (!edit)
-        edit = FindWindowExA(d, nullptr, "Edit", nullptr);
+        EnumChildWindows(
+            d,
+            [](HWND h, LPARAM l) -> BOOL {
+              char cls[16] = {};
+              GetClassNameA(h, cls, sizeof cls);
+              if (_stricmp(cls, "Edit"))
+                return TRUE;
+              *reinterpret_cast<HWND *>(l) = h;
+              return FALSE;
+            },
+            reinterpret_cast<LPARAM>(&edit));
       if (edit)
         SendMessageA(edit, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(arg + 5));
       reply(edit ? "dialog text %s" : "dialog no-text-box", arg + 5);
@@ -1416,6 +1437,8 @@ void start() {
       say("per-monitor DPI: %s", dpi(reinterpret_cast<HANDLE>(-4)) ? "on" : "not set"); // (DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
     InitializeCriticalSection(&g_shotLock);
     g_shotDone = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (GetEnvironmentVariableA("ZT1_HOOK_LASTFILE", g_lastfile, sizeof g_lastfile))
+      say("Continue Saved Game opens %s", g_lastfile);
     if (GetEnvironmentVariableA("ZT1_HOOK_SIZE", v, sizeof v) && std::sscanf(v, "%dx%d", &g_gw, &g_gh) == 2)
       say("drawing at %dx%d", g_gw, g_gh);
     else

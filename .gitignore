@@ -52,6 +52,8 @@ lab-app/_dev_*.py
 /installer/*
 !/installer/.gitkeep
 /engine-build-resources/make_release.py
+# (the everything zoo's saves, reports and the original's verdicts on them)
+/engine-build-resources/everything/
 /engine-build-resources/publish_release.py
 /engine-build-resources/coderook_release.py
 /engine-build-resources/pack_lab.py

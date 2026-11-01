@@ -32,7 +32,10 @@ const LIVE = {
   // (animals' and guests' happiness, -100..100: +0x2a8 in both, as
   // zooRatingUpdate 0x41f881 reads it - a new guest's is 50)
   happy: ['Animals', 'Guests'],
-  names: {}, // (type -> [codename, kind], read once each)
+  // (type -> [codename, kind], read once each - per run of the original:
+  // its types are at other addresses each time it starts, so a name kept
+  // from the last run mislabels a census - cleared as Play original starts)
+  names: {},
   timer: null,
   last: null,
 };
@@ -313,6 +316,48 @@ Object.assign(ACTIONS, {
   // The original's state now (live): its date, cash, map, every entity
   // counted by class and type
   origLive: async () => (await liveRead()) || { error: 'Nothing to read: is a zoo open in the original?' },
+  // A shared save judged by the original (arg: an everything zoo's list,
+  // everything-<map>-<part>.json, its .zoo beside it): the original started
+  // with that zoo as its last one, past its films, Continue Saved Game
+  // pressed (the menu's middle, 94 down), the census taken once it has
+  // settled, and compared with what was saved (re/lab/everything.py) - the
+  // census, the verdict and pictures written beside the list
+  origCheckSave: async (arg) => {
+    const manifest = String(arg || '').trim();
+    if (!/\.json$/i.test(manifest)) return { error: 'origCheckSave "<everything-<map>-<part>.json>"' };
+    const base = manifest.replace(/\.json$/i, '');
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    if (S.play.running) {
+      await ACTIONS.playStop();
+      for (let i = 0; i < 60 && S.play.running; i++) await sleep(250);
+    }
+    LIVE.names = {};
+    await ACTIONS.playOriginal(base + '.zoo');
+    if (!S.play.running) return { error: 'The original didn’t start.' };
+    await sleep(18000);
+    // (its films skipped: clicks away from the menu's buttons)
+    lab.playCmd('click 300 300');
+    await sleep(3000);
+    lab.playCmd('click 300 300');
+    await sleep(4000);
+    const menu = await lab.playShot(base + '.menu.png');
+    if (!menu || menu.error) return { error: 'No picture of the original’s menu: ' + ((menu && menu.error) || '') };
+    lab.playCmd(`click ${Math.round(menu.width / 2)} ${Math.round(menu.height / 2) + 94}`);
+    // Loaded once the census settles (guests still walk in: a few at most)
+    let census = null, last = -100;
+    for (let i = 0; i < 60 && !census; i++) {
+      await sleep(2000);
+      const l = await liveRead();
+      if (l && l.entities > 0) {
+        if (Math.abs(l.entities - last) <= 3) census = l;
+        last = l.entities;
+      }
+    }
+    if (!census) return { error: 'The zoo didn’t load in the original: no census (see ' + base + '.menu.png).' };
+    await lab.playShot(base + '.loaded.png');
+    const r = await lab.everythingCheck(manifest, census);
+    return { ...r, census: base + '.census.json', verdict: base + '.verdict.json', picture: base + '.loaded.png' };
+  },
   // What's in its zoo, by class and type
   origCensus: async () => {
     const l = await liveRead();

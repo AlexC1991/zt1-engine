@@ -54,7 +54,8 @@ contextBridge.exposeInMainWorld('lab', {
   origFind: (line) => ipcRenderer.invoke('orig:find', line),
   origWrites: (clear) => ipcRenderer.invoke('orig:writes', clear),
   onPlayExit: (fn) => on('play:exit', (_e, m) => fn(m)),
-  playOriginal: () => ipcRenderer.invoke('play:original'),
+  playOriginal: (opts) => ipcRenderer.invoke('play:original', opts || {}),
+  everythingCheck: (manifest, census) => ipcRenderer.invoke('everything:check', manifest, census),
   // Ghidra
   ghidra: (p) => ipcRenderer.invoke('ghidra:get', p),
   ghidraStatus: () => ipcRenderer.invoke('ghidra:status'),

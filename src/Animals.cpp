@@ -2402,6 +2402,19 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
     }
     Fences::Drawable d{depth, sx, sy, a, side, SDL_Color{255, 255, 110, 255}, lit};
     d.frame = f;
+    // (on the surface pass: what leaves the water isn't cut to the tank -
+    // leaps, flips, spins, dives, sprays and splashes, a breach or a blow,
+    // ring, hoop and ball tricks, tail walks, a frenzy, the stage's beach
+    // tricks and the sea lion's horn and wave toys; swimming, waving as it
+    // swims, resting and eating stay inside)
+    if (this->onlySurface) {
+      static const char *leaves[] = {"jump", "flip", "flop", "spin", "dive", "spit", "splash", "blowhole", "breach",
+                                     "beach", "tail_walk", "ring", "dunk", "hoop", "ball", "frenzy", "horn", "exit"};
+      const std::string &n = m.anim;
+      for (const char *w : leaves)
+        d.airborne = d.airborne || n.find(w) != std::string::npos;
+      d.airborne = d.airborne || n == "wave";
+    }
     // A big one (its footprint - cFootprintX across, cFootprintY along the
     // way it faces, in half tiles - over a tile): drawn in strips a quarter
     // tile wide, each sorted at the front of its footprint in that strip,
@@ -2535,8 +2548,10 @@ void Animals::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, cons
   // (a big one comes as strips, for sorting against the fences outside a
   // tank: in one it's drawn once - each strip drawn whole, a whale shark
   // was drawn ten times over itself, its see-through edges darkened)
-  // Submerged artwork stays inside the glass. The separate surface layer
-  // includes heads, splashes and airborne tricks and may rise above the rim.
+  // Submerged artwork stays inside the glass, and so does a swimmer's surface
+  // layer (its back and head). Only surface art that leaves the water - leaps,
+  // sprays, splashes and show tricks (Drawable::airborne) - may rise past the
+  // rim.
 //
 // A body is drawn as its art, which is far bigger than the tile its centre
 // stands on - a whale shark's four tiles of fish hang off its anchor on both
@@ -2561,7 +2576,9 @@ void Animals::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, cons
 // water, so that is the shape the animals are clipped to.
 if(!prepared.maskReady) {
 std::vector<std::pair<float, float>> rimPts, floorPts;
-if (Features::tankClip && fencesRef && !surface) {
+// (the surface pass too: a swimmer's back and head by a wall stay inside
+// it - only what leaves the water, Drawable::airborne, isn't cut)
+if (Features::tankClip && fencesRef) {
   const Fences::Exhibit *ex = fencesRef->exhibit(tank);
   if (ex && ex->tank && !ex->tiles.empty()) {
     // (the water's surface and the floor it stands on, both measured from the
@@ -2715,7 +2732,12 @@ std::vector<SDL_Rect> strips;
   if (strips.empty()) {
     // No intersection with an active tank mask means nothing is visible.
     // Drawing everything here would bypass the glass clip at its edges.
-    if (!hullTank.empty()) return;
+    if (!hullTank.empty()) {
+      for (Fences::Drawable &d : out)
+        if (d.art && d.airborne)
+          d.art->drawAnchored(renderer, d.sx, d.sy, d.side, d.tinted ? &d.tint : nullptr, d.frame);
+      return;
+    }
     std::vector<const Fences::Drawable *> drawn;
     for (Fences::Drawable &d : out) {
       if (!d.art) continue;
@@ -2742,7 +2764,7 @@ std::vector<SDL_Rect> strips;
     auto &d=out[i];const auto &box=bounds[i];
     const float right=box.x+box.w,bottom=box.y+box.h;
     SDL_RenderSetScale(renderer,1,1);
-    if(fastTankSprites && inside(box.x,box.y) && inside(right,box.y) && inside(right,bottom) && inside(box.x,bottom)) {
+    if(d.airborne || (fastTankSprites && inside(box.x,box.y) && inside(right,box.y) && inside(right,bottom) && inside(box.x,bottom))) {
       SDL_RenderSetClipRect(renderer,hadClip?&oldClip:nullptr);
       SDL_RenderSetScale(renderer,sxScale,syScale);
       d.art->drawAnchored(renderer,d.sx,d.sy,d.side,d.tinted?&d.tint:nullptr,d.frame);

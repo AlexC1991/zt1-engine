@@ -650,7 +650,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
   g_hud->terraformCommand = [world, rm](bool accept) {
     TerrainTool &tt = world->getTerrainTool();
     float c = tt.cost();
-    if (accept && c > 0 && c <= g_sim.cash()) {
+    if (accept && c > 0 && g_sim.canAfford(c)) {
       g_sim.spend(ZooSim::Construction, tt.accept());
       updateHudClock(rm);
     } else if (!accept) {
@@ -884,7 +884,7 @@ static void handleToolResult(const World::ToolResult &r, ResourceManager *rm) {
 static void settleTerrain(ResourceManager *rm) {
   TerrainTool &tt = g_world->getTerrainTool();
   float c = tt.cost();
-  if (c > 0 && c > g_sim.cash()) {
+  if (!g_sim.canAfford(c)) {
     tt.undo();
     g_hud->showMessage(rm->getString(3363));
   } else if (int charge = tt.accept(); charge > 0) {
@@ -1217,7 +1217,7 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
                             terraform.mode);
     if (tt.isActive()) {
       float c = tt.cost();
-      g_hud->setTerraformCost(c <= g_sim.cash() ? c : -c);
+      g_hud->setTerraformCost(g_sim.canAfford(c) ? c : -c);
     }
     std::string sound = tt.takeSound();
     if (!sound.empty())
@@ -1338,8 +1338,10 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
       else
         g_world->mouseMove(in.x, in.y);
     } else if (in.event == InputEvent::LEFT_CLICK && !overUi) {
+      g_world->cash = g_sim.unlimited ? 1e300 : g_sim.cash();
       handleToolResult(g_world->mouseDown(in.x, in.y), rm);
     } else if (in.event == InputEvent::LEFT_RELEASE) {
+      g_world->cash = g_sim.unlimited ? 1e300 : g_sim.cash();
       handleToolResult(g_world->mouseUp(in.x, in.y), rm);
     } else if (in.event == InputEvent::RIGHT_CLICK) {
       g_world->cancelTool();
@@ -2338,7 +2340,7 @@ static void hookMainMenu(UiLayout *layout, ResourceManager *rm) {
   if (UiText *v = dynamic_cast<UiText *>(layout->getElementById(7119))) {
     std::string label = rm->getString(1526);
     if (size_t p = label.find("%s"); p != std::string::npos)
-      label.replace(p, 2, Updater::version());
+      label.replace(p, 2, std::string(Updater::version()) + (Updater::testBuild() ? " (test)" : ""));
     v->setText(label);
     SDL_Log("[Menu] version label: \"%s\"", label.c_str());
   } else {
@@ -3272,6 +3274,9 @@ static int runMapRenderCheck(SDL_Renderer *renderer, ResourceManager *rm,
 }
 
 int runShowChecks(World &,UiGameScreen &,ZooSim &,const std::string &,const std::string &,const std::function<void(const char*)> &);
+int runEverythingZoo(World &,UiGameScreen &,ZooSim &,ResourceManager *,const std::string &,const std::string &);
+int runShowAllChecks(World &,UiGameScreen &,ZooSim &,ResourceManager *,const std::string &);
+int runFinanceChecks(World &,UiGameScreen &,ZooSim &,ResourceManager *,const std::string &);
 
 // --panel-shots <outDir> [mapStem]: start a freeform game (default Death
 // Mountain), open every toolbar panel and buy tab in turn and save each
@@ -3394,6 +3399,9 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       world->draw(renderer);
       drawHud(renderer, rm);
       drawToolCost(renderer, rm);
+      // (the Options window over it, as the game's loop draws it)
+      if (g_hud->optionsOpen())
+        drawOptions(renderer, rm, g_hud->options);
       if (frame < 2)
         SDL_RenderPresent(renderer);
     }
@@ -3409,6 +3417,114 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     SDL_RenderPresent(renderer);
     note(name);
   };
+  // ZT_EVERYTHING_ZOO=1: every type in the registry placed, saved shared,
+  // and its original part checked (src/EverythingZoo.cpp)
+  // ZT_SHOW_ALL=1: every show species, trick, toy and schedule
+  // (src/ShowAllChecks.cpp)
+  // ZT_FINANCE_CHECKS=1: funding paid only when affordable, purchases
+  // refused without the money (src/FinanceChecks.cpp)
+  // ZT_ACTIVITY_CHECKS=1: the Lab's "activitycheck" fixture (tank clipping,
+  // marine activity), its report in <out>/activity-checks.txt
+  if (std::getenv("ZT_ACTIVITY_CHECKS")) {
+    extern std::string runActivityPolishChecks(World &, ResourceManager *, bool);
+    const std::string result = runActivityPolishChecks(*world, rm, false);
+    std::ofstream(outDir + "/activity-checks.txt") << result;
+    if(timings)std::fclose(timings);return result.find("FAIL ") == std::string::npos ? 0 : 1;
+  }
+  // ZT_MODMENU_CHECK=1: the Mod Menu as the player's mods folder fills it -
+  // its rows, a picture, and the first mod switched on through it (then put
+  // back as it was)
+  if (std::getenv("ZT_MODMENU_CHECK")) {
+    std::ofstream report(outDir + "/modmenu-checks.txt");
+    UiLayout *layout = ModMenu::open(rm, getLayoutPath(rm, "scenario.lyt"));
+    UiListBox *list = layout ? dynamic_cast<UiListBox *>(layout->getElementById(50002)) : nullptr;
+    const auto mods = Mods::list();
+    report << "mods in the folder: " << mods.size() << "\n";
+    for (const auto &m : mods)
+      report << "     " << m.folder << " (" << m.name << ") " << (m.enabled ? "on" : "off") << "\n";
+    report << "rows in the list: " << (list ? static_cast<int>(list->getItemCount()) : -1) << "\n";
+    auto shot = [&](const char *name) {
+      SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+      SDL_RenderClear(renderer);
+      drawLayoutCentered(renderer, layout, rm);
+      int w = 0, h = 0;
+      SDL_GetRendererOutputSize(renderer, &w, &h);
+      if (SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)) {
+        if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, s->pixels, s->pitch) == 0)
+          SDL_SaveBMP(s, (outDir + "/" + name + ".bmp").c_str());
+        SDL_FreeSurface(s);
+      }
+      SDL_RenderPresent(renderer);
+    };
+    shot("modmenu_list");
+    if (list && !mods.empty()) {
+      const bool was = mods[0].enabled;
+      list->setSelectedIndex(1); // (the first mod: the cheat's row is above it)
+      ModMenu::selectionChanged(layout, rm);
+      ModMenu::toggle(layout, rm);
+      bool now = false;
+      for (const auto &m : Mods::list())
+        if (m.folder == mods[0].folder)
+          now = m.enabled;
+      report << (now != was ? "PASS" : "FAIL") << " the menu switches " << mods[0].folder << " " << (was ? "off" : "on")
+             << "\n";
+      shot("modmenu_toggled");
+      ModMenu::toggle(layout, rm); // (back as it was)
+      for (const auto &m : Mods::list())
+        if (m.folder == mods[0].folder)
+          report << "     put back: " << (m.enabled ? "on" : "off") << "\n";
+    }
+    delete layout;
+    if(timings)std::fclose(timings);return 0;
+  }
+  if (std::getenv("ZT_FINANCE_CHECKS")) {
+    // The emergency funding drive (freeform/donation.scn lowmoney_donate,
+    // once): under $1,000 the goals' next check gives $10,000 and its popup
+    {
+      std::ofstream goalsReport(outDir + "/finance-goals.txt");
+      // (the map's goals, as a game started from the menu has them)
+      if (g_goals.all().empty())
+        startGoals(rm, g_currentMapPath);
+      goalsReport << "     map " << g_currentMapPath << ", " << g_goals.all().size() << " goals\n";
+      for (const Goals::Goal &goal : g_goals.all())
+        if (goal.name.rfind("lowmoney", 0) == 0)
+          goalsReport << "     " << goal.name << " state " << goal.state << " rule " << goal.rulea << "/" << goal.ruleb
+                      << " type " << goal.type << " value " << goal.value << "\n";
+      const double before = 500;
+      g_sim.setCash(before);
+      g_goals.evaluateAll();
+      const bool popup = g_hud->hasDialog();
+      const double after = g_sim.cash();
+      capture("finance_lowmoney_popup");
+      goalsReport << (after - before == 10000 && popup ? "PASS" : "FAIL") << " under $1,000: $"
+                  << std::lround(after - before) << " given, popup " << (popup ? "shown" : "not shown") << "\n";
+      {
+        // (read and dismissed, as a player would: Enter)
+        std::vector<Input> enterKey(1);
+        enterKey[0].type = InputType::BUTTON;
+        enterKey[0].event = InputEvent::KEY_DOWN;
+        enterKey[0].key = SDLK_RETURN;
+        g_hud->handleInputs(enterKey);
+      }
+      g_sim.setCash(500);
+      g_goals.evaluateAll();
+      goalsReport << (g_sim.cash() == 500 ? "PASS" : "FAIL") << " only once: a second time under $1,000 gives $"
+                  << std::lround(g_sim.cash() - 500) << "\n";
+      // (the refusal's message, wrapped in the bar as the original's)
+      g_hud->showMessage(rm->getString(10002));
+      capture("finance_message_bar");
+    }
+    int result=runFinanceChecks(*world,*g_hud,g_sim,rm,outDir);
+    if(timings)std::fclose(timings);return result;
+  }
+  if (std::getenv("ZT_SHOW_ALL")) {
+    int result=runShowAllChecks(*world,*g_hud,g_sim,rm,outDir);
+    if(timings)std::fclose(timings);return result;
+  }
+  if (std::getenv("ZT_EVERYTHING_ZOO")) {
+    int result=runEverythingZoo(*world,*g_hud,g_sim,rm,outDir,g_currentMapPath);
+    if(timings)std::fclose(timings);return result;
+  }
   if (std::getenv("ZT_SHOW_CHECKS")) {
     int result=runShowChecks(*world,*g_hud,g_sim,outDir,g_currentMapPath,capture);
     if(timings)std::fclose(timings);return result;
@@ -3510,6 +3626,59 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       return 1;
     world->getAnimals().takeMessages();
     g_hud->showPanel(0, "");
+    // (its goals: each one's state as saved, the cash, and then the goals
+    // checked once - what a player's zoo would do next)
+    SDL_Log("[ViewSave] map %s cash %.0f goals %zu", g_currentMapPath.c_str(), g_sim.cash(), g_goals.all().size());
+    for (const Goals::Goal &goal : g_goals.all())
+      SDL_Log("[ViewSave] goal %s (%s) state %d", goal.name.c_str(), goal.file.c_str(), goal.state);
+    g_goals.evaluateAll();
+    SDL_Log("[ViewSave] after one check: cash %.0f", g_sim.cash());
+    for (const ZooSim::Month &m : g_sim.history())
+      SDL_Log("[ViewSave] month %d/%d donations %.0f total %.0f", m.month + 1, m.year, m.lines[ZooSim::Donations], m.total());
+    // ZT_VIEW_TERRAIN=<type>: a 2 x 2 patch inside the zoo painted with that
+    // ground, Accept pressed, and what it cost and kept
+    if (const char *paint = std::getenv("ZT_VIEW_TERRAIN")) {
+      const int type = std::atoi(paint);
+      WorldMap &wm = world->getMap();
+      Fences &fz = world->getFences();
+      TerrainTool &tt = world->getTerrainTool();
+      world->setTerrainTool(true, true, type, 2, 0);
+      int px = -1, py = -1;
+      for (int y = 2; y < wm.getHeight() - 3 && px < 0; y++)
+        for (int x = 2; x < wm.getWidth() - 3 && px < 0; x++) {
+          bool clear = true;
+          for (int dy = 0; dy < 2; dy++)
+            for (int dx = 0; dx < 2; dx++) {
+              const MapTile *t = wm.getTile(x + dx, y + dy);
+              clear = clear && t && fz.insideZoo(x + dx, y + dy) && fz.exhibitAt(x + dx, y + dy) < 0 &&
+                      !wm.isPath(x + dx, y + dy) && t->terrainType != type;
+            }
+          if (clear)
+            px = x, py = y;
+        }
+      if (px < 0) {
+        SDL_Log("[ViewSave] terrain: no clear 2 x 2 inside the zoo");
+      } else {
+        const double cashBefore = g_sim.cash();
+        tt.press(px, py, 0, 0);
+        tt.release();
+        const float price = tt.cost();
+        SDL_Log("[ViewSave] terrain: painted %d,%d with %d, price %.0f, cash %.0f", px, py, type, price, cashBefore);
+        if (g_hud->terraformCommand)
+          g_hud->terraformCommand(true);
+        const MapTile *t = wm.getTile(px, py);
+        SDL_Log("[ViewSave] terrain: after Accept cash %.0f (paid %.0f), tile now %d, still pending %.0f", g_sim.cash(),
+                cashBefore - g_sim.cash(), t ? t->terrainType : -1, tt.cost());
+      }
+    }
+    {
+      const ZooReader &zr = world->mapReader();
+      std::string states;
+      for (int32_t st : zr.getGoalStates())
+        states += " " + std::to_string(st);
+      SDL_Log("[ViewSave] original scenario block: '%s', %zu goal states:%s", zr.getScenarioName().c_str(), zr.getGoalStates().size(),
+              states.c_str());
+    }
     for (const Fences::Exhibit &e : world->getFences().exhibits())
       SDL_Log("[ViewSave] exhibit %d '%s' tank %d tiles %zu wallSub %d floor %d ground %d water %.2f", e.id,
               e.name.c_str(), static_cast<int>(e.tank), e.tiles.size(), e.wallSub, e.floorHeight, e.groundHeight,
@@ -3683,6 +3852,14 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     bool opened = g_hud->optionsOpen() && !g_hud->isPanelOpen(5);
     capture("options_window_game");
     check("the Options window opens in place of the Game Options panel", opened);
+    // (its Gameplay page: every switch above the description box)
+    if (g_hud->options) {
+      g_hud->options->showPage(7);
+      capture("options_window_gameplay");
+      g_hud->options->showPage(UiOptions::kModsPage);
+      capture("options_window_mods");
+      g_hud->options->showPage(0);
+    }
     float before = RenderSettings::uiScaleSetting;
     UiOptions *o = g_hud->options;
     std::vector<Input> esc(1);
@@ -3843,6 +4020,104 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     world->getFences().update(10.0f);
     note(("tank cost $" + std::to_string(std::lround(before - g_sim.cash()))).c_str());
     capture("fence_tank");
+    // The bulldozer over a path tile beside the tank, on each side: its red
+    // shows (the tank redraws the ground round it, which once covered it)
+    {
+      const std::pair<int, int> beside[4] = {{tx, ty - 1}, {tx + 2, ty}, {tx, ty + 2}, {tx - 1, ty}};
+      WorldMap &wm = world->getMap();
+      for (auto [px, py] : beside)
+        wm.setPath(px, py, "path");
+      world->centreOn(tx + 1.0f, ty + 1.0f);
+      // (how much of a tile's diamond turned red: red over green up by 40)
+      auto capturePixels = [&](const char *name) {
+        capture(name);
+        std::vector<int> redness;
+        if (SDL_Surface *s = SDL_LoadBMP((outDir + "/" + name + ".bmp").c_str())) {
+          if (SDL_Surface *c = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0)) {
+            redness.resize(static_cast<size_t>(c->w) * c->h);
+            for (int y = 0; y < c->h; y++)
+              for (int x = 0; x < c->w; x++) {
+                const Uint32 p = static_cast<Uint32 *>(c->pixels)[y * (c->pitch / 4) + x];
+                redness[static_cast<size_t>(y) * c->w + x] =
+                    static_cast<int>((p >> 16) & 0xff) - static_cast<int>((p >> 8) & 0xff);
+              }
+            SDL_FreeSurface(c);
+          }
+          SDL_FreeSurface(s);
+        }
+        return redness;
+      };
+      int outW = 0, outH = 0;
+      SDL_GetRendererOutputSize(renderer, &outW, &outH);
+      // (each tile at its middle and toward its far side, away from the
+      // tank: the wall's own face covers the near half of one behind the
+      // tank, as its art does, and there it's the wall that's picked - one
+      // of the two must pick the path, and its red must show)
+      const std::pair<float, float> away[4] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+      for (int side = 0; side < 4; side++) {
+        auto [px, py] = beside[side];
+        // (no path laid there - a slope, the edge of a cliff: nothing to pick)
+        if (!wm.isPath(px, py)) {
+          note(("no path could be laid at " + std::to_string(px) + "," + std::to_string(py)).c_str());
+          continue;
+        }
+        const MapTile *tile = wm.getTile(px, py);
+        const float h = tile ? static_cast<float>(tile->height) : 0;
+        // (one below a raised tank: its wall runs down the cliff over it, and
+        // the wall may be what's under the cursor there)
+        const Fences::Exhibit *raised = fences.exhibit(fences.exhibitAt(tx, ty));
+        const bool underWall = raised && h < raised->groundHeight;
+        // (the tile's diamond on screen)
+        int cx[4], cy[4];
+        const float ox[4] = {0, 1, 1, 0}, oy[4] = {0, 0, 1, 1};
+        for (int k = 0; k < 4; k++)
+          world->pointToWindow(px + ox[k], py + oy[k], h, cx[k], cy[k]);
+        auto inDiamond = [&](int x, int y) {
+          bool neg = false, pos = false;
+          for (int k = 0; k < 4; k++) {
+            const int a = k, b = (k + 1) % 4;
+            const long cr = static_cast<long>(cx[b] - cx[a]) * (y - cy[a]) - static_cast<long>(cy[b] - cy[a]) * (x - cx[a]);
+            neg = neg || cr < 0;
+            pos = pos || cr > 0;
+          }
+          return !(neg && pos);
+        };
+        std::string seen;
+        bool picked = false;
+        int shown = 0;
+        for (int far = 0; far < 2 && !picked; far++) {
+          int sx, sy;
+          world->pointToWindow(px + 0.5f + away[side].first * 0.3f * far, py + 0.5f + away[side].second * 0.3f * far,
+                               h, sx, sy);
+          world->setBulldozer(false);
+          world->mouseMove(sx, sy);
+          const std::vector<int> plain = capturePixels("bulldoze_path_plain");
+          world->setBulldozer(true);
+          world->mouseMove(sx, sy);
+          picked = world->bulldozePathTile() == std::make_pair(px, py);
+          seen += std::string(far ? ", far side: " : " middle: ") + (picked ? "the path" : "not the path");
+          if (!picked)
+            continue;
+          const std::string name = "bulldoze_path_by_tank_" + std::to_string(side);
+          const std::vector<int> lit = capturePixels(name.c_str());
+          if (lit.size() == plain.size() && lit.size() == static_cast<size_t>(outW) * outH)
+            for (int y = 0; y < outH; y++)
+              for (int x = 0; x < outW; x++)
+                if (inDiamond(x, y) && lit[static_cast<size_t>(y) * outW + x] > plain[static_cast<size_t>(y) * outW + x] + 40)
+                  shown++;
+        }
+        if (!picked && underWall)
+          note(("the path at " + std::to_string(px) + "," + std::to_string(py) +
+                " lies under the raised tank's wall, which is picked").c_str());
+        else
+          check(("the bulldozer picks a path tile beside the tank and its red shows (" + std::to_string(px) + "," +
+                 std::to_string(py) + seen + "; " + std::to_string(shown) + " pixels red)").c_str(),
+                picked && shown > 30);
+      }
+      world->setBulldozer(false);
+      for (auto [px, py] : beside)
+        wm.setPath(px, py, "");
+    }
     // ZT_TANK_LAB=<typeA>,<typeB>: two 4x4 tanks side by side (sharing a
     // wall) on clear ground, from all four sides, then quit (for comparing
     // tanks with the original quickly)
@@ -7071,7 +7346,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           if (cur) {
             br->fundingLevel = static_cast<int>(br->funding.size()) - 1;
             cur->progress = std::max(0.0f, cur->cost - 0.01f);
-            Research::Tick rt = rs.advance(3.0f, 1e9);
+            Research::Tick rt = rs.advance(3.0f, [](int, double) { return true; });
             for (ResearchProgram *pp : rt.completed)
               finished = finished || pp == cur;
           }
@@ -8494,7 +8769,8 @@ int main(int argc, char *argv[]) {
   if (!Paths::setup())
     return 1;
   Config config(Paths::configFile());
-  SDL_Log("ZT1-Engine %s%s", Updater::version(), Updater::official() ? "" : " (a build of one's own)");
+  SDL_Log("ZT1-Engine %s%s", Updater::version(),
+          Updater::testBuild() ? " (test release: no updates)" : Updater::official() ? "" : " (a build of one's own)");
   for (int i = 1; i < argc; i++)
     if (std::string(argv[i]) == "--check-update")
       return Updater::checkNowCli(i + 1 < argc && std::string(argv[i + 1]) == "--install");
@@ -9176,13 +9452,15 @@ int main(int argc, char *argv[]) {
       }
       g_world->update(g_console.isOpen() || UiText::isEditing() || dialogUp ? noKeys : state, deltaTime * g_gameSpeed);
       // The clock runs while the game isn't paused
+      g_sim.unlimited = Features::infiniteMoney; // (the Mod Menu's cheat)
       if (!g_world->isPaused()) {
         g_sim.update(deltaTime * g_gameSpeed);
         g_goals.update(deltaTime * g_gameSpeed);
         // Research: programs finished, their effects, and the news
         // ("Research & Conservation: %r is now available.", 23020; "%s: All
         // selected programs have been completed.", 23021)
-        Research::Tick rt = Research::get().advance(deltaTime * g_gameSpeed, g_sim.cash());
+        Research::Tick rt = Research::get().advance(
+            deltaTime * g_gameSpeed, [](int branch, double amount) { return g_sim.payTick(ZooSim::Research, branch, amount); });
         for (ResearchProgram *p : rt.completed) {
           applyResearch(*p);
           std::string m = resource_manager.getString(23020);
@@ -9197,6 +9475,23 @@ int main(int argc, char *argv[]) {
           if (at != std::string::npos)
             m.replace(at, 2, b);
           g_hud->postMessage(m);
+        }
+        // The money advice, each [checks] message ms (zoo.exe zooAdvisories
+        // 0x420347, the cash rounded): $1-$1,000 "Your zoo is running low on
+        // money." (10018); none "Your zoo has run out of money." (10019);
+        // below none also "Your zoo has no money. Funding has stopped for
+        // all programs." (10020) - advice, in red
+        static double adviceMs = 0;
+        adviceMs += deltaTime * g_gameSpeed * 1000.0;
+        if (adviceMs > Original::economy().adviceEveryMs && !g_sim.unlimited) {
+          adviceMs = 0;
+          const long cash = std::lround(g_sim.cash());
+          if (cash > 0 && cash < 1001)
+            g_hud->postMessage(resource_manager.getString(10018), 2);
+          if (cash <= 0)
+            g_hud->postMessage(resource_manager.getString(10019), 2);
+          if (cash < 0)
+            g_hud->postMessage(resource_manager.getString(10020), 2);
         }
       }
       resumeAfterPopup();

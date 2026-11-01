@@ -55,9 +55,9 @@ static std::string extrasLabel(const std::string &name) {
 static std::vector<Features::Switch *> extrasOrder() {
   std::vector<Features::Switch *> out;
   for (Features::Switch &f : Features::all())
-    if (f.name == "optionswindow")
+    if (std::string(f.name) == "optionswindow")
       out.insert(out.begin(), &f);
-    else
+    else if (std::string(f.name) != "infinitemoney") // (the cheat: the Mod Menu's and the Options window's)
       out.push_back(&f);
   return out;
 }
@@ -1208,17 +1208,12 @@ void UiGameScreen::setSim(ZooSim *sim) {
   this->chargeFunding();
 }
 
-// Research, conservation and marketing funding: a level's cost is per
-// month, spread over the month's days (see ZooSim)
+// Marketing funding: a level's cost is per month, paid by the tick (see
+// ZooSim). (Research and conservation pay theirs from the research tick,
+// only while a program's being worked on - Research::advance)
 void UiGameScreen::chargeFunding() {
   if (!this->sim)
     return;
-  Research &research = Research::get();
-  for (int b = 0; b < (int)research.branches().size(); b++) {
-    ResearchBranch &branch = research.branches()[b];
-    double perMonth = branch.funding.empty() ? 0 : branch.funding[branch.fundingLevel].cost;
-    this->sim->setMonthlyCost(ZooSim::Research, b, perMonth);
-  }
   double marketing = this->marketing.empty() ? 0 : this->marketing[this->marketingLevel].cost;
   this->sim->setMonthlyCost(ZooSim::Marketing, 0, marketing);
 }
@@ -2212,13 +2207,45 @@ void UiGameScreen::drawMessage(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   where.x -= (r.x + r.w / 2) - (layout_rect->x + layout_rect->w / 2);
   this->messageBar->draw(renderer, &where);
   SDL_Rect bar = this->messageBar->getLastRect();
-  SDL_Texture *t = this->resource_manager->getStringTexture(renderer, 7002, text, color, 7003);
-  if (!t)
-    return;
-  int w = 0, h = 0;
-  this->resource_manager->getTextSize(t, &w, &h);
-  SDL_Rect dst = {bar.x + (bar.w - w) / 2, bar.y + (bar.h - h) / 2, w, h};
-  SDL_RenderCopy(renderer, t, nullptr, &dst);
+  // A message too long for the bar wraps onto more lines, each centred,
+  // 25 px in from its ends (gamescrn.lyt [MessageText] xborder; as the
+  // original: "Only show toys and animals that can do tricks can be / placed
+  // in show tanks." on two lines in the bar)
+  const int room = std::max(1, bar.w - 2 * 25);
+  auto width = [&](const std::string &s) {
+    int w = 0, h = 0;
+    if (SDL_Texture *t = this->resource_manager->getStringTexture(renderer, 7002, s, color, 7003))
+      this->resource_manager->getTextSize(t, &w, &h);
+    return w;
+  };
+  std::vector<std::string> lines;
+  {
+    std::istringstream words(text);
+    std::string word, line;
+    while (words >> word) {
+      const std::string candidate = line.empty() ? word : line + " " + word;
+      if (!line.empty() && width(candidate) > room) {
+        lines.push_back(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    if (!line.empty())
+      lines.push_back(line);
+  }
+  const int lineH = this->resource_manager->getFontLineHeight(7002, 7003);
+  int y = bar.y + (bar.h - lineH * static_cast<int>(lines.size())) / 2;
+  for (const std::string &line : lines) {
+    SDL_Texture *t = this->resource_manager->getStringTexture(renderer, 7002, line, color, 7003);
+    if (!t)
+      continue;
+    int w = 0, h = 0;
+    this->resource_manager->getTextSize(t, &w, &h);
+    SDL_Rect dst = {bar.x + (bar.w - w) / 2, y, w, h};
+    SDL_RenderCopy(renderer, t, nullptr, &dst);
+    y += lineH;
+  }
 }
 
 // The filter list drops down over its button (xpac.lyt's x/y are in the
@@ -2623,6 +2650,15 @@ void UiGameScreen::askConfirm(const std::string &message, std::function<void()> 
   IniReader *ini = this->resource_manager->getIniReader("ui/confirm.lyt");
   if (!ini)
     return;
+  // Two buttons, Yes and No: each at its altx / alty, the pair centred under
+  // the message (the original's: its x / y are the four-button row's)
+  for (const char *b : {"yes", "no"}) {
+    std::string ax = ini->get(b, "altx"), ay = ini->get(b, "alty");
+    if (!ax.empty())
+      ini->set(b, "x", ax);
+    if (!ay.empty())
+      ini->set(b, "y", ay);
+  }
   this->dialog.layout = new UiLayout(ini, this->resource_manager);
   this->dialog.yes = yes;
   UiLayout *d = this->dialog.layout;
@@ -2715,6 +2751,11 @@ void UiGameScreen::setupExhibits() {
           return;
         bool salt = id == 4869;
         int cost = this->fences->fillCost(this->shownExhibit, salt);
+        // (more than the zoo has: 10002, nothing done - zoo.exe 0x6115f2)
+        if (this->sim && !this->sim->canAfford(cost)) {
+          this->showMessage(this->resource_manager->getString(10002));
+          return;
+        }
         this->fences->fillExhibit(this->shownExhibit, salt);
         if (this->sim && cost > 0)
           this->sim->spend(ZooSim::Construction, cost);
@@ -2738,6 +2779,12 @@ void UiGameScreen::setupExhibits() {
         // shows $363 and takes $364, as the original)
         int cost = s.wall ? static_cast<int>(std::lround(this->fences->wallStepCost(id)))
                           : this->fences->baseStepCost(id);
+        // (more than the zoo has: 10002, nothing done - zoo.exe 0x4691cd
+        // the wall, 0x46937e the base)
+        if (this->sim && !this->sim->canAfford(cost)) {
+          this->showMessage(this->resource_manager->getString(10002));
+          return;
+        }
         if (s.wall)
           this->fences->adjustWall(id, s.step);
         else
@@ -2895,11 +2942,25 @@ void UiGameScreen::setupStaffPanels() {
       b->onClick = ask(StaffRequest::PickUp);
     if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3606)))
       b->onClick = [this] {
-        if (this->staffRequest && this->shownStaff >= 0)
-          this->staffRequest(StaffRequest::Fire, this->shownStaff);
-        this->shownStaff = -1;
-        this->setPanelOpen(17, false);
-        this->staffListCount = -1;
+        // (asked first, as the original: "Are you sure you want to fire
+        // %s?" and the monthly salary - lang 155)
+        const Staff::Member *m = this->staff ? this->staff->member(this->shownStaff) : nullptr;
+        if (!m)
+          return;
+        const int id = m->id;
+        std::string ask = this->resource_manager->getString(155);
+        if (size_t at = ask.find("%s"); at != std::string::npos)
+          ask.replace(at, 2, m->name);
+        ask += formatPrice(this->staff->types()[m->type].salary);
+        this->askConfirm(ask, [this, id] {
+          if (this->staffRequest)
+            this->staffRequest(StaffRequest::Fire, id);
+          if (this->shownStaff == id) {
+            this->shownStaff = -1;
+            this->setPanelOpen(17, false);
+          }
+          this->staffListCount = -1;
+        });
       };
     if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3578)))
       b->onClick = ask(StaffRequest::Assign);

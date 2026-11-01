@@ -138,20 +138,24 @@ bool Research::canResearch(const ResearchProgram &program) const {
   }
 }
 
-Research::Tick Research::advance(float seconds, double cash) {
+Research::Tick Research::advance(float seconds, const std::function<bool(int branch, double amount)> &pay) {
   Tick t;
   this->tickClock += seconds;
   while (this->tickClock >= 3.0f) {
     this->tickClock -= 3.0f;
-    for (ResearchBranch &b : this->list) {
+    for (int i = 0; i < static_cast<int>(this->list.size()); i++) {
+      ResearchBranch &b = this->list[i];
       if (b.funding.empty())
         continue;
       const ResearchFunding &f = b.funding[std::clamp(b.fundingLevel, 0, static_cast<int>(b.funding.size()) - 1)];
+      // (nothing being researched: nothing paid - zoo.exe 0x41f1ba skips the
+      // branch with no program)
       ResearchProgram *p = this->current(b);
       if (!p || f.work <= 0)
         continue;
-      // (the tick's share of a month's cost: none paid, no progress)
-      if (cash < f.cost / 120.0)
+      // (the tick's share of a month's cost, if the zoo has it - spendCash
+      // only when it's no more than the cash: none paid, no progress)
+      if (!pay(i, f.cost / 120.0))
         continue;
       p->progress += f.work / 120.0f;
       if (p->progress < p->cost)

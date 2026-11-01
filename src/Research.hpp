@@ -2,6 +2,7 @@
 #define RESEARCH_HPP
 
 #include <algorithm>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -96,13 +97,15 @@ public:
   void pick(ResearchBranch &branch);
   // The research tick (zoo.exe 0x41f1ba): every 3 s of play each branch's
   // program gains its funding's work / 120 (the work a month); done at its
-  // cost, the next one picked. Not while the zoo can't pay for the tick.
+  // cost, the next one picked. The tick's share of the month's cost is paid
+  // only while a program's being worked on, and only if the zoo has it: pay
+  // (branch, dollars) says whether it was paid - no money, no progress.
   // completed: each program finished; finishedBranch: a branch with none left
   struct Tick {
     std::vector<ResearchProgram *> completed;
     std::vector<std::string> finishedBranches;
   };
-  Tick advance(float seconds, double cash);
+  Tick advance(float seconds, const std::function<bool(int branch, double amount)> &pay);
   // An animal house's programs (research effect 1: its collections, the
   // free one from the start): those researched for a building of that
   // cNameID, by upkeep, cheapest first (zoo.exe 0x58ff14). effectVal: upkeep

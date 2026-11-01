@@ -36,6 +36,9 @@ struct Release {
 // This build's version ("2026.10.19"; "dev" for a build of one's own)
 const char *version();
 bool official();
+// A test release (ZT1_TEST_BUILD): made to be tried before it's published -
+// it never updates, and keeps its own settings, saves and mods
+bool testBuild();
 
 // Whether this copy can update itself (an official install); why not
 bool possible(std::string *why);

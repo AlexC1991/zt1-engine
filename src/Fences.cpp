@@ -165,6 +165,7 @@ void Fences::loadTypes(ResourceManager *rm) {
     FenceType t;
     t.file = item.file;
     t.key = fileStem(item.file);
+    t.savedKey = item.registryKey.empty() ? t.key : item.registryKey;
     t.name = item.name;
     t.cost = item.cost;
     t.height = item.height;
@@ -193,6 +194,7 @@ void Fences::loadTypes(ResourceManager *rm) {
       t.art[s][1] = artOf(subs[s], "idle30p");
       t.art[s][2] = artOf(subs[s], "idle30n");
     }
+    t.hasGate = t.art[1][0] != nullptr;
     if (!t.art[1][0]) // no gate art: the fence's own
       for (int i = 0; i < 3; i++)
         t.art[1][i] = t.art[0][i];
@@ -241,6 +243,13 @@ void Fences::loadTypes(ResourceManager *rm) {
     t.broke[0] = artOf("f", "broke");
     t.broke[1] = artOf("f", "broke30p");
     t.broke[2] = artOf("f", "broke30n");
+    // A fence with no worn or broken art (the white picket fence: plain
+    // [Animations], idle only) never wears in the original: zoo.exe picks
+    // a worn or broken fence's art by its life (0x416ee8) and, without it,
+    // crashes loading the zoo. Real saves only ever have such fences at
+    // full life.
+    if (!t.det[0] && !t.broke[0])
+      t.indestructible = true;
     delete ai;
     if (t.art[0][0])
       this->typeList.push_back(t);
@@ -335,6 +344,10 @@ const FenceType *Fences::portalType(const Edge &edge) const {
 int Fences::typeIndex(const std::string &key) const {
   for (size_t i = 0; i < this->typeList.size(); i++)
     if (this->typeList[i].key == key)
+      return static_cast<int>(i);
+  // (or by the name an original saved zoo gives it: tankwal1)
+  for (size_t i = 0; i < this->typeList.size(); i++)
+    if (this->typeList[i].savedKey == key)
       return static_cast<int>(i);
   return -1;
 }
@@ -1362,7 +1375,8 @@ void Fences::update(float seconds) {
   for (auto &kv : this->edges) {
     Piece &p = kv.second;
     const FenceType &t = this->typeList[p.type];
-    if (p.life < 0)
+    // (one that never wears is whole - also one an earlier build wore down)
+    if (p.life < 0 || t.indestructible)
       p.life = static_cast<float>(t.life);
     if (t.indestructible || p.tank >= 0 || t.decayDelta <= 0)
       continue;
@@ -1746,6 +1760,21 @@ bool Fences::pieceAt(float px, float py, const WorldRenderer &view, const WorldM
     float top = t0y + (t1y - t0y) * f - 4.0f, bottom = s0y + (s1y - s0y) * f;
     if (py < top || py > bottom)
       continue;
+    // (a back wall - seen from inside, from the floor up: its face below
+    // the ground's line only through the tank itself. On screen that depth
+    // reaches down past the tank, over the ground and paths in front and
+    // beside it, which then couldn't be picked)
+    if (outD <= inD) {
+      float g0x, g0y, g1x, g1y, gd;
+      view.worldToScreenF(static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(x->groundHeight), g0x, g0y, gd);
+      view.worldToScreenF(static_cast<float>(bx), static_cast<float>(by), static_cast<float>(x->groundHeight), g1x, g1y, gd);
+      if (py > g0y + (g1y - g0y) * f) {
+        float rx, ry;
+        view.screenToWorldAt(px, py, static_cast<float>(x->groundHeight), rx, ry);
+        if (!x->tiles.count({static_cast<int>(std::floor(rx)), static_cast<int>(std::floor(ry))}))
+          continue;
+      }
+    }
     float depth = (d0 + d1) * 0.5f;
     if (depth > nearest) {
       nearest = depth;
@@ -1759,11 +1788,11 @@ bool Fences::pieceAt(float px, float py, const WorldRenderer &view, const WorldM
   for (const auto &kv : this->edges) {
     int ax, ay, bx, by, h0, h1;
     this->edgeGeometry(kv.first, kv.second, map, ax, ay, bx, by, h0, h1);
-    float h = (h0 + h1) * 0.5f + 1.0f; // about half way up a fence
+    // (a tank's walls only on their face, above: near one's top is the
+    // ground behind it, a path there to be picked)
     if (kv.second.tank >= 0)
-      for (const Exhibit &x : this->exhibitList)
-        if (x.id == kv.second.tank)
-          h = x.wallTop() - 0.25f;
+      continue;
+    float h = (h0 + h1) * 0.5f + 1.0f; // about half way up a fence
     float sx, sy, d;
     view.worldToScreenF((ax + bx) * 0.5f, (ay + by) * 0.5f, h, sx, sy, d);
     float dist = (sx - px) * (sx - px) + (sy - py) * (sy - py);
@@ -2194,7 +2223,9 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
                                 : Drawable{order, sx, sy, tp.art, tp.ladder ? ladderSide(view, ts) : side,
                                            litLadder ? SDL_Color{255, 255, 80, 255} : tint, tinted || litLadder};
           d.seamless = !tinted;
-          if (tinted || tp.height >= ts.outside + 0.01f) {
+          // (the bulldozer's red one too: cut at the ground outside, or its
+          // pieces down to the floor hung under the tank as a red column)
+          if (tp.height >= ts.outside + 0.01f) {
             out.push_back(d);
             continue;
           }

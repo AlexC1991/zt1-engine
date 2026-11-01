@@ -12,7 +12,9 @@
 #include "ModImport.hpp"
 #include "ModRepo.hpp"
 #include "Mods.hpp"
+#include "Features.hpp"
 #include "ResourceManager.hpp"
+#include "Settings.hpp"
 #include "ui/UiAction.hpp"
 #include "ui/UiButton.hpp"
 #include "ui/UiImage.hpp"
@@ -200,6 +202,9 @@ bool g_loadedKnown = false;
 
 std::vector<Mods::Mod> g_mods;
 
+// The cheats, listed above your mods (switched like one): each a row
+constexpr int kCheatRows = 1; // Infinite money (Features::infiniteMoney)
+
 template <class T> T *el(UiLayout *l, int id) { return l ? dynamic_cast<T *>(l->getElementById(id)) : nullptr; }
 
 void setText(UiLayout *l, int id, const std::string &s) {
@@ -360,10 +365,11 @@ void refresh(UiLayout *layout, ResourceManager *rm) {
   g_mods = Mods::list();
   if (list) {
     list->clear();
+    list->addItem(std::string(Features::infiniteMoney ? "[On]  " : "[Off]  ") + "Cheat: infinite money", "*infinitemoney");
     for (const Mods::Mod &m : g_mods)
       list->addItem((m.enabled ? "[On]  " : "[Off]  ") + m.name, m.folder);
-    if (!g_mods.empty())
-      list->setSelectedIndex(keep >= 0 && keep < static_cast<int>(g_mods.size()) ? keep : 0);
+    const int rows = kCheatRows + static_cast<int>(g_mods.size());
+    list->setSelectedIndex(keep >= 0 && keep < rows ? keep : g_mods.empty() ? 0 : kCheatRows);
   }
   setText(layout, kFolderText, "Folder: " + shortPath(Mods::folder(), 34));
   if (g_mods.empty()) {
@@ -381,6 +387,25 @@ void selectionChanged(UiLayout *layout, ResourceManager *rm) {
     return repositorySelection(layout);
   UiListBox *list = el<UiListBox>(layout, kList);
   int i = list ? list->getSelectedIndex() : -1;
+  if (i == 0) {
+    // (the cheat: no picture, its own words)
+    if (UiImage *art = el<UiImage>(layout, kArt))
+      art->setHidden(true);
+    if (UiButton *b = el<UiButton>(layout, kToggle))
+      b->setDisabled(false);
+    std::string about = std::string("Cheat: infinite money\n\n") + (Features::infiniteMoney ? "Switched on" : "Switched off") +
+                        "\n\nBuy anything, whatever your cash: spending still shows in the zoo's finances, but your cash "
+                        "never goes down, and research, conservation and marketing are always paid for. Not part of the "
+                        "original game. It works straight away, in the game you're playing too.";
+    if (g_mods.empty())
+      about += "\n\nNo mods in this folder yet: put one in the mods folder, or choose another folder.";
+    setText(layout, kAbout, about);
+    setLabel(layout, kToggle, Features::infiniteMoney ? "Disable" : "Enable");
+    setDetails(layout, "It changes", {"Purchases: never refused for lack of money", "Cash: never goes down",
+                                      "Funding: always paid"});
+    return;
+  }
+  i -= kCheatRows;
   if (i < 0 || i >= static_cast<int>(g_mods.size()))
     return;
   const Mods::Mod &m = g_mods[i];
@@ -431,6 +456,13 @@ void toggle(UiLayout *layout, ResourceManager *rm) {
   }
   UiListBox *list = el<UiListBox>(layout, kList);
   int i = list ? list->getSelectedIndex() : -1;
+  if (i == 0) {
+    Features::infiniteMoney = !Features::infiniteMoney;
+    Settings::saveExtra("infinitemoney", Features::infiniteMoney); // (Game Options' switch too)
+    refresh(layout, rm);
+    return;
+  }
+  i -= kCheatRows;
   if (i < 0 || i >= static_cast<int>(g_mods.size()))
     return;
   Mods::setEnabled(g_mods[i].folder, !g_mods[i].enabled);
@@ -475,7 +507,7 @@ void addMod(UiLayout *layout, ResourceManager *rm) {
     if (UiListBox *list = el<UiListBox>(layout, kList))
       for (int i = 0; i < static_cast<int>(g_mods.size()); i++)
         if (g_mods[i].folder == r.folder) {
-          list->setSelectedIndex(i);
+          list->setSelectedIndex(kCheatRows + i);
           selectionChanged(layout, rm);
         }
   if (UiText *t = el<UiText>(layout, kAbout))

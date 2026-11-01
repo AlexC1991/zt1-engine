@@ -290,22 +290,29 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
       return w;
     };
     const std::string &text = this->cached_lines.front();
-    if (width(text) > dest_rect.w) {
+    if (width(text) > dest_rect.w || text.find('\n') != std::string::npos) {
+      // (each of its own lines - the game's texts break some, "...sell
+      // %s?\nRefund: " - wrapped in turn)
       std::vector<std::string> lines;
-      std::string current;
-      std::istringstream words(text);
-      std::string word;
-      while (words >> word) {
-        std::string candidate = current.empty() ? word : current + " " + word;
-        if (!current.empty() && width(candidate) > dest_rect.w) {
-          lines.push_back(current);
-          current = word;
-        } else {
-          current = candidate;
+      std::istringstream paragraphs(text);
+      std::string paragraph;
+      while (std::getline(paragraphs, paragraph)) {
+        if (!paragraph.empty() && paragraph.back() == '\r')
+          paragraph.pop_back();
+        std::string current;
+        std::istringstream words(paragraph);
+        std::string word;
+        while (words >> word) {
+          std::string candidate = current.empty() ? word : current + " " + word;
+          if (!current.empty() && width(candidate) > dest_rect.w) {
+            lines.push_back(current);
+            current = word;
+          } else {
+            current = candidate;
+          }
         }
-      }
-      if (!current.empty())
         lines.push_back(current);
+      }
 
       std::vector<std::string> colorValues = ini_reader->getList(name, "forecolor");
       SDL_Color color = {255, 228, 173, 255};

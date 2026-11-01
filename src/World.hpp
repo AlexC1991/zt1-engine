@@ -91,6 +91,8 @@ public:
     // Fences and exhibits
     Fences& getFences() { return fences; }
     const PlacedObjects& getObjects() const { return placedObjects; }
+    // The map's (or imported save's) own original archive, as read
+    const ZooReader &mapReader() const { return zooReader; }
     PlacedObjects &objectsMutable() { return placedObjects; }
     // The fence being laid (a type index into getFences().types(); -1: none)
     void setFenceTool(int type);
@@ -281,6 +283,16 @@ public:
     const std::string &bulldozeName() const { return bulldozeTip; }
     // What the cursor's tool would cost there, and where (for its label)
     int hoverCost() const { return hoverPrice; }
+    // The zoo's cash, for what can be bought (the game sets it before each
+    // click; unlimited until then)
+    double cash = 1e300;
+    // A purchase the zoo can afford (zoo.exe 0x4fb08c): anything free, else
+    // no more than the cash - so with none (or less) nothing can be bought.
+    // Refused: 10002 "This purchase cannot be made at this time due to
+    // insufficient funds." (0x48b843, the tank buttons 0x4691cd / 0x46937e,
+    // filling a tank 0x6115f2)
+    bool canAfford(double cost) const { return cost <= 0 || cost <= this->cash; }
+    static constexpr int kInsufficientFunds = 10002;
     // While dragging the original shows the price as money going out
     bool isDraggingFence() const { return dragging && dragMoved; }
     // The current date, for exhibits made
@@ -428,7 +440,7 @@ private:
     void aimLine(int x, int y);
     void startLine(int tx, int ty, bool fromDeck);
     int lineStartLevel(int dir) const;
-    int buildLine();
+    int buildLine(ToolResult &r);
     Walkways walkways;
     // A raised drag's tiles: each a deck (its corner heights) or a ground
     // path tile, and whether it can be built
@@ -486,6 +498,13 @@ private:
     int hoverTileX = -1, hoverTileY = -1;
     Fences::Fit hoverTileFit = Fences::Fit::Outside;
     void drawToolOverlay(SDL_Renderer *renderer);
+    // The bulldozer's path tile, red (again after a tank redraws the ground
+    // round it, which would cover it)
+    void drawBulldozePath(SDL_Renderer *renderer);
+ public:
+    // The path tile the bulldozer would lift ({-1, -1}: none)
+    std::pair<int, int> bulldozePathTile() const { return bulldozePath; }
+ private:
     Fences::Edge pressEdge = {false, -1, -1}; // the piece under the press
     int hoverPrice = -1; // -1: none shown
     Fences::Edge highlight = {false, -1, -1};

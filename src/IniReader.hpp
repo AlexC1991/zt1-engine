@@ -19,6 +19,8 @@ public:
   std::vector<int> getIntList(const std::string &section, const std::string &key, const std::vector<int> &default_value = {});
 
   std::map<std::string, std::string> getSection(const std::string &section);
+  // A key set (a layout's element moved to its alternative place)
+  void set(const std::string &section, const std::string &key, const std::string &value);
   std::vector<std::string> getSections();
 
   bool isList(const std::string &section, const std::string &key);

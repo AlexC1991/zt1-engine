@@ -1987,14 +1987,17 @@ const ACTIONS = {
     const z = (S.eng.build.release || {}).zip;
     if (z) lab.reveal(z);
   },
-  playOriginal: async () => {
+  // (arg: a saved zoo for the main menu's Continue Saved Game to open)
+  playOriginal: async (arg) => {
     if (S.play.running) return;
     // (the Play view's size first: the original's drawn at it)
     if (S.tab !== 'play') setTab('play');
     S.play.running = true;
     S.play.kind = 'original';
     renderPlay();
-    const r = await lab.playOriginal();
+    // (a new run of the original: its types at new addresses)
+    if (typeof LIVE !== 'undefined') LIVE.names = {};
+    const r = await lab.playOriginal(typeof arg === 'string' && arg ? { lastfile: arg } : {});
     if (r && r.error) {
       S.play.running = false;
       renderPlay();

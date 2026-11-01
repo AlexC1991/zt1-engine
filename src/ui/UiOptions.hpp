@@ -78,6 +78,8 @@ public:
   void close() { this->closeAsked = true; }
   bool isOpen() const { return this->layout != nullptr; }
   int shownPage() const { return page; }
+  // Another page shown (as its sidebar button)
+  void showPage(int p) { if (layout) setPage(p); }
   int modListStart() const { return modStart; }
   void setModListStart(int start) { modStart = start; if (layout) showMods(); }
   void refreshModSwitches() { if (layout) { wire(); showMods(); } }

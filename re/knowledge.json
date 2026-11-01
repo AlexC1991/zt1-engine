@@ -4942,6 +4942,13 @@
    "provisional": true,
    "summary": "Research: every 3 s each branch's program gains its funding's work / 120"
   },
+  "0x41f2ae": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "marketingTick",
+   "provisional": false,
+   "summary": "Marketing funding's tick: minutes x the level's cost x 1/43200 (a 30-day month's minutes) spent (spendCash) and booked (0x41f368) only if no more than the cash - no money, nothing paid"
+  },
   "0x41f881": {
    "by": "zt1-engine (batty251, earlier sessions)",
    "confidence": "likely",
@@ -7850,6 +7857,13 @@
    "name": "tankModBuy",
    "provisional": false,
    "summary": "A tank change bought (Tank Modification's buttons): refused with 10002 \"This purchase cannot be made at this time due to insufficient funds.\""
+  },
+  "0x46937e": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "tankBaseBuy",
+   "provisional": false,
+   "summary": "Tank Modification's Adjust Base: cost 0x63e454 - refused with 10002 unless canAfford (cost <= 0 or <= cash); then 0x458c6a, booked, spent"
   },
   "0x46954b": {
    "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
@@ -12886,6 +12900,14 @@
    "source": "gx/gxlledither.cpp",
    "summary": "In the original's gx/gxlledither.cpp (its own text gives the path); not named yet"
   },
+  "0x4fb08c": {
+   "by": "Claude",
+   "class": "ZTGameMgr",
+   "confidence": "sure",
+   "name": "canAfford",
+   "provisional": false,
+   "summary": "Whether the cash (this, ZTGameMgr+0xc) covers a cost: false only if the cost is above 0.0 and above the cash - so at or below no money nothing costing anything can be bought. Placement (0x433b34) and tank filling (0x6115f2) ask it; refused: 10002"
+  },
   "0x4fc160": {
    "by": "batty251 (the debug overlay's text; class slots 0x48, 0x64, 0x10c read)",
    "class": "ZTAmbientAnimal",
@@ -16705,6 +16727,13 @@
    "provisional": false,
    "summary": "ZTStaffType's create (its table's slot 0x5c): a new object of its class / Confirmed: class slot 0x5c of ZTStaffType - creates its object (the object's constructor stores its class table)"
   },
+  "0x6115f2": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "tankFillBuy",
+   "provisional": false,
+   "summary": "A tank filled (salt: param <1 the cost 0x63e464, fresh 0x63e468): canAfford, else 10002 insufficient funds; then filled, booked, spent"
+  },
   "0x611764": {
    "by": "batty251 (read the object classes' table slots)",
    "class": "ZTBuilding",
@@ -16818,6 +16847,13 @@
    "name": "eggHatched",
    "provisional": false,
    "summary": "An egg hatched: 10322 \"Congratulations! %s has hatched\""
+  },
+  "0x613e4a": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "foundationDonation",
+   "provisional": false,
+   "summary": "A private foundation's donation (from zooPeriodicTick when cash < cLoanAvailable and chancePercent(cDonationChance)): a random amount cDonationLow..cDonationHigh, 15002 'A private foundation has donated %s'; out of donations 15003 'No foundations willing...'. cDonationChance is 0 everywhere but scenario 2, so freeform never has it - there are no loans"
   },
   "0x6151b3": {
    "by": "batty251 (confirmed 2026-10-12: the type tables' fixed slots)",
@@ -17931,10 +17967,10 @@
    "summary": "The zoo's list of maintenance work waiting: each entry's first value is its job number (7 trash pile, 9 trash can, 0x10 fence...) - Task78_MaintFindWork picks from it"
   },
   "0x638ff8": {
-   "by": "batty251 (the original's own class names, in its text)",
+   "by": "Claude",
    "kind": "other",
    "name": "scenarioMgr",
-   "summary": "The scenario manager (ZTScenarioMgr, likely - its class table 0x630d7c): scenarioOpen, scenarioStart, goalsCheckTick, scenarioComplete"
+   "summary": "The scenario manager (ZTScenarioMgr): its goal list at +0x34..+0x38 (106 goals live in lab-show-zoo)"
   },
   "0x639000": {
    "by": "batty251",
@@ -30872,9 +30908,69 @@
    "by": "batty251",
    "on": "2026-10-28",
    "what": "Lead q11 at 0x5a3585: Who inserts the show tank and the home tank into animal+0x15c? It must happen before Task85 is made, or the animal can never be sent."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Named 0x4fb08c canAfford"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Named 0x41f2ae marketingTick"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Named 0x6115f2 tankFillBuy"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Named 0x46937e tankBaseBuy"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Named 0x613e4a foundationDonation"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Note at 0x420347: Money advice, the cash rounded: 1..1000 posts 10018 (0x58c21a), <=0 10019 (0x48b853), <0 also 10020 - every [checks] message ms (economy.cfg 10000), from zooPeriodicTick"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Note at 0x41f1ba: Pays only when the branch has a category and program being worked on, and the tick's cost (minutes x cost / 43200) is no more than the cash; unpaid ticks make no progress. Engine: Research::advance + ZooSim::payTick"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Note at 0x5950fd: Goal states load: the scenario's own state (an int, kept 0..3) then each goal's loadState (slot 0x24) in the goal list's order (+4..+8). A saved zoo's scenario block (gameMgrLoad 0x5948c6) = the script's name, then these ints: Lakeside Valley 213 (212 goals), Medium Beach in sm_aqua's template 206. Composite goals (rtype 1/2, makeGoal 0x58e066) hold child goals, saved after them."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Note at 0x49c6d7: The message's colour: kind % 3 into the bar's colours (+0x430): 0 white, 1 green, 2 red - tankModBuy's 10002 is kind 5, red. Text too long for the bar wraps onto two lines (seen: 'Only show toys and animals that can do tricks can be / placed in show tanks.')"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "what": "Global 0x638ff8 = scenarioMgr"
   }
  ],
  "notes": {
+  "0x41f1ba": {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "text": "Pays only when the branch has a category and program being worked on, and the tick's cost (minutes x cost / 43200) is no more than the cash; unpaid ticks make no progress. Engine: Research::advance + ZooSim::payTick"
+  },
+  "0x420347": {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "text": "Money advice, the cash rounded: 1..1000 posts 10018 (0x58c21a), <=0 10019 (0x48b853), <0 also 10020 - every [checks] message ms (economy.cfg 10000), from zooPeriodicTick"
+  },
   "0x42400a": {
    "by": "batty251",
    "on": "2026-10-12",
@@ -30896,9 +30992,9 @@
    "text": "Our engine's Animals::refund (src/Animals.cpp:892) gives cost * happiness / 100; the original's is ((happiness+100)*0.005 + (hits - cMinHits)/cMaxHits) * cost * 0.4, halved again with +0x3a7 set. Not changed yet."
   },
   "0x49c6d7": {
-   "by": "batty251",
-   "on": "2026-10-12",
-   "text": "Ran only when a placement was refused (a zebra outside an exhibit: 'Animals can only be placed in exhibits') and in no other recording; uses ui/sharedui/mescros - likely the red message's own code. Chain: 0x49ccc3 -> 0x49cd46 -> 0x49c96e / 0x49c6d7 -> 0x41176c -> 0x411797 (the Lab's recorder, 'Only what ran in no other recording')"
+   "by": "Claude",
+   "on": "2026-11-01",
+   "text": "The message's colour: kind % 3 into the bar's colours (+0x430): 0 white, 1 green, 2 red - tankModBuy's 10002 is kind 5, red. Text too long for the bar wraps onto two lines (seen: 'Only show toys and animals that can do tricks can be / placed in show tanks.')"
   },
   "0x4b659e": {
    "by": "batty251",
@@ -30914,6 +31010,11 @@
    "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
    "on": "2026-10-14",
    "text": "The path shape loader stores each [Shapes] shape= code's LIST POSITION into the record's +0x14: the bytes at 0x4c25cf are 89 78 14, i.e. 'mov dword ptr [eax+0x14], edi' - checked against the pinned build (2002 Complete Collection zoo.exe, sha256 61fcc6d1..., 2,449,432 bytes), so the value kept is the index in the repeated-key list, not the code itself. Found by StevenGann, address verified here 2026-10-14."
+  },
+  "0x5950fd": {
+   "by": "Claude",
+   "on": "2026-11-01",
+   "text": "Goal states load: the scenario's own state (an int, kept 0..3) then each goal's loadState (slot 0x24) in the goal list's order (+4..+8). A saved zoo's scenario block (gameMgrLoad 0x5948c6) = the script's name, then these ints: Lakeside Valley 213 (212 goals), Medium Beach in sm_aqua's template 206. Composite goals (rtype 1/2, makeGoal 0x58e066) hold child goals, saved after them."
   },
   "0x5a3585": {
    "by": "batty251",

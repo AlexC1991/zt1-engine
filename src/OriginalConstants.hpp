@@ -39,6 +39,7 @@ struct Economy {
   float buildingUseCostMax = 100.0f;   // cBuildingUseCostMax (+0x1168)
   float zooDooRecycling = 50.0f;       // cZooDooRecyclingAmount (+0x116c)
   float admissionMultiple = 1.0f;      // cAdmissionMultiple (+0x1170)
+  float adviceEveryMs = 10000.0f;      // [checks] message: the advice messages' timer (zoo.exe 0x4351a9)
 };
 inline Economy &economy() {
   static Economy e;

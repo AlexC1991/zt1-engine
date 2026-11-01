@@ -1,6 +1,7 @@
 #include "SaveGame.hpp"
 #include "Goals.hpp"
 #include "Features.hpp"
+#include "ItemCatalog.hpp"
 #include "Utils.hpp"
 
 #include <algorithm>
@@ -2372,12 +2373,27 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
              record.subClass==object.subClass && record.typeName==object.typeName;
     });
     if(transient)continue; // ripples/waves have no persistent record in zoo.exe
-    auto o=source(object.className,object.id);
+    // zoo.exe names a scenery type by the registry section that lists it,
+    // not its folder: [building] (bldg.cfg, bldg06.cfg: benches, trash cans,
+    // show toys ...) is a building, saved as building/building with the
+    // building section; the update packs list their trees and flowers under
+    // [other] (scener17.cfg: scenery/foliage/asitree.ai is objects/other).
+    // Under any other name the original finds no type: it refuses a building
+    // as a corrupted save and silently drops scenery (verified in the Lab's
+    // original 12.04.00.0009: a show tank's orca ball and stage, Asian trees).
+    const CatalogItem *listed=ItemCatalog::get().find(PlacedObjects::fileOf(object));
+    const std::string section=listed?listed->registrySection:"";
+    const bool building=object.className=="building" || section=="building";
+    auto o=source(building?"building":object.className,object.id);
     if(o.className.empty()){error="An object has no original entity class.";return false;}
-    o.subClass=object.subClass;o.typeName=object.typeName;
+    o.subClass=building?"building":section.empty()?object.subClass:section;o.typeName=object.typeName;
     o.id=identity(object.id,!o.payload.empty());objectIds[object.id]=o.id;
     o.name=object.label.empty()?object.name:object.label;
-    position(o,object.x,object.y,object.z);o.direction=object.facing;
+    // (at the ground under it, as it's drawn - PlacedObjects keeps no height
+    // of its own, 0 - and as the original saves its own: a tank's toys and
+    // rocks on its sunk floor, boats on the lake bed. One at 0 above a sunk
+    // floor the original may drop: the mermaid statue, census-verified)
+    position(o,object.x,object.y,ground(object.x,object.y));o.direction=object.facing;
     o.colours.clear();for(int n:object.colours)o.colours.push_back(uint8_t(n));
     if(o.className=="building") {
       auto &post=o.suffixOverride;
@@ -2415,13 +2431,13 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
   for(const auto &[edge,p]:world.fences.edges) {
     if(p.type<0 || p.type>=int(world.fences.typeList.size()))continue;
     const FenceType *baseType=&world.fences.typeList[p.type];
-    if(!originalAsset(baseType->file)||baseType->key=="tankwall") {
+    if(!originalAsset(baseType->file)) {
       const std::string preferred=baseType->tank?(baseType->showFence?"tankwal3":"tankwal2"):
                                   baseType->zooWall?"zoowall":"chainlnk";
       const FenceType *fallback=nullptr;
       for(const auto &candidate:world.fences.typeList)
         if(candidate.tank==baseType->tank&&candidate.zooWall==baseType->zooWall&&
-           candidate.showFence==baseType->showFence&&candidate.key!="tankwall"&&originalAsset(candidate.file)) {
+           candidate.showFence==baseType->showFence&&originalAsset(candidate.file)) {
           if(!fallback||candidate.key==preferred)fallback=&candidate;
           if(candidate.key==preferred)break;
         }
@@ -2455,10 +2471,18 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
       const int facing=base.tank&&(aTank||bTank)?
         (edge.alongX?(oy==ay?4:0):(ox==ax?2:6)):p.facing;
       const float x=edge.x+(edge.alongX?.5f:0),y=edge.y+(edge.alongX?0:.5f);
-      auto o=make(type.tank?"tankwall":"fences",type.key,p.gate&&owners.size()==1?"g":"f",
+      // (by the original's own name for it: fences/tankwall.ai is tankwal1 in
+      // its saved zoos - "tankwall" there names no type and was once swapped
+      // for tankwal2, changing the wall)
+      // (a gate only as a g of a type that has one: zoo.exe has no g of the
+      // white picket or the theme walls and drops it, a hole in the fence -
+      // verified by the everything zoo's census in the Lab's original)
+      auto o=make(type.tank?"tankwall":"fences",type.savedKey,p.gate&&owners.size()==1&&type.hasGate?"g":"f",
                   x,y,ground(ox+.5f,oy+.5f));
       if(facing==2)--o.x;if(facing==4)--o.y;
-      const float life=std::max(0.f,p.life<0?float(type.life):p.life);
+      // (a fence that never wears is whole: zoo.exe has no worn or broken
+      // art for it and crashes loading one)
+      const float life=std::max(0.f,p.life<0||type.indestructible?float(type.life):p.life);
       o.direction=facing;o.hasCondition=true;o.life=uint32_t(std::ceil(life));
       o.strength=life>0?type.strength:0;
       for(const auto &record:old)if(record.className==o.className&&record.subClass==o.subClass &&

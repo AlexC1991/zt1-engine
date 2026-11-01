@@ -60,6 +60,10 @@ std::vector<int> IniReader::getIntList(const std::string &key, const std::string
   return list;
 }
 
+void IniReader::set(const std::string &section, const std::string &key, const std::string &value) {
+  this->content[Utils::string_to_lower(section)][Utils::string_to_lower(key)] = value;
+}
+
 std::map<std::string, std::string> IniReader::getSection(const std::string &section) {
   if (!this->content.contains(section)) return {};
   return this->content[section];

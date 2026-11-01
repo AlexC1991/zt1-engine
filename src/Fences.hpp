@@ -45,6 +45,9 @@ class ZooReader;
 // ============================================================================
 struct FenceType {
   std::string key;  // registry key and the map's subclass: chainlnk, atltank
+  // the original's registry key where it isn't the file's name: saved zoos
+  // name fences/tankwall.ai tankwal1 (twall01.cfg)
+  std::string savedKey;
   std::string file; // fences/chainlnk.ai
   std::string name;
   int cost = 0, gateCost = 0;
@@ -55,6 +58,9 @@ struct FenceType {
   bool zooWall = false; // the zoo's own walls (not an exhibit's)
   // [f|g][flat, rising, falling]
   Animation *art[2][3] = {{nullptr, nullptr, nullptr}, {nullptr, nullptr, nullptr}};
+  // Its own g subtype (gate art): the white picket, hedges, the theme packs'
+  // walls have none - the original has no "g" of them, and drops a saved one
+  bool hasGate = true;
   // Tank pieces (f only): [left end, middle, right end, single column] x
   // [bottom, middle, top], and the low ones for a one-unit wall
   Animation *tankArt[4][3] = {};
@@ -474,6 +480,10 @@ public:
     bool lowBehind = true;
     // A strip of a big animal (Animals::collect): where it stands
     bool animalStrip = false;
+    // A tank animal's above-water art that leaves the water - a leap, a
+    // spray, a show trick (the stage, the ball): not cut to the tank's
+    // outline like the rest of its surface art
+    bool airborne = false;
     float wx = 0, wy = 0;
     // A tank wall's piece: drawn with the pieces next to it in one picture,
     // enlarged together (drawLayered: piece by piece, a line at each)

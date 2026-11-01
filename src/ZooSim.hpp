@@ -15,10 +15,13 @@
 //   have their real lengths and the date tooltip reads "Date: Fri. Jun 22"
 //   (lang strings 1030 "Date: %s", 22013 "ddd'.' MMM d"). The HUD shows
 //   "Jun, Year 1" (22012 "MMM',' 'Year' y"), months from 22101-22112.
-// - Funding (research, conservation, marketing) is a monthly cost spread
-//   over the month's days, charged in whole dollars: research at $400 a
-//   month for 26 seconds in April cost $28, marketing at $200 for 2 seconds
-//   in February $1.
+// - Funding (research, conservation, marketing) is a monthly cost paid by
+//   the tick: every 3 s of play a 120th of it (zoo.exe researchTick
+//   0x41f1ba, the marketing tick 0x41f2ae), charged here in whole dollars as
+//   it adds up (research at $400 a month for 26 seconds in April cost $28,
+//   marketing at $200 for 2 seconds in February $1). A tick's paid only if
+//   the zoo has it - with no money nothing's paid, so funding never takes
+//   the cash below zero.
 // - The Income / Expenses page shows the last four months, oldest on the
 //   left, this month on the right; money spent shows in red with a minus.
 //   Net income is this month's total. The graphs show one point a month.
@@ -63,11 +66,20 @@ public:
       this->dirty = true;
     }
   }
-  // A monthly cost (research, conservation, marketing funding), spread
-  // over the month's days as they pass
+  // A monthly cost paid by the tick as the clock runs (marketing funding)
   void setMonthlyCost(Line line, int key, double perMonth);
+  // A funding tick's cost paid, if the zoo has it (zoo.exe 0x41f1ba,
+  // 0x41f2ae: spendCash only when the amount's no more than the cash);
+  // false: not paid
+  bool payTick(Line line, int key, double amount);
 
   double cash() const { return this->money; }
+  // The infinite money cheat (Features::infiniteMoney): costs are booked as
+  // ever but the cash isn't taken down, and anything can be bought
+  bool unlimited = false;
+  // A purchase the zoo can afford (zoo.exe 0x4fb08c): free, or no more than
+  // the cash
+  bool canAfford(double cost) const { return this->unlimited || cost <= 0 || cost <= this->money; }
   // (dev console) the money set outright, off the books
   void setCash(double amount) {
     this->money = amount;
@@ -109,6 +121,7 @@ private:
     double owed = 0; // charged in whole dollars as it adds up
   };
   std::vector<Monthly> monthly;
+  double fundingClock = 0; // seconds to the next funding tick (every 3 s)
   bool dirty = true;
   void newMonth();
 };

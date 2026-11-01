@@ -122,7 +122,8 @@ function matches(file, m) {
 // Restart to update. Not pressed, it installs quietly when the Lab closes.
 // ZT1_LAB_UPDATE_TEST=1 looks, verifies and downloads - even in a checkout -
 // but never installs.
-function controller({ app, send, spawn, log = () => {} }) {
+// (off: why this Lab never updates - a test release - else '')
+function controller({ app, send, spawn, log = () => {}, off = '' }) {
   const TEST = !!process.env.ZT1_LAB_UPDATE_TEST;
   const pendingDir = path.join(process.env.LOCALAPPDATA || app.getPath('temp'), 'zt1-lab-updater', 'pending');
   const st = { state: 'idle', message: '', version: null, file: null, manifest: null, installing: false };
@@ -134,7 +135,7 @@ function controller({ app, send, spawn, log = () => {} }) {
     log(`[update] ${message}`);
     send(publicState());
   }
-  const why = () => (TEST || app.isPackaged ? '' : 'Updates come with the installed Lab.');
+  const why = () => off || (TEST || app.isPackaged ? '' : 'Updates come with the installed Lab.');
   function schedule(ms) {
     clearTimeout(timer);
     timer = setTimeout(() => check(false), ms);

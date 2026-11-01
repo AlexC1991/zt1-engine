@@ -187,6 +187,9 @@ public:
     std::vector<float> total;
   };
   const Books &getBooks() const { return books; }
+  // The scenario it was started from and its goals' states (gameMgrLoad)
+  const std::string &getScenarioName() const { return scenarioName; }
+  const std::vector<int32_t> &getGoalStates() const { return goalStates; }
   // How many entity records decoded to exactly their size, of how many
   int decodedCount() const { return decoded; }
   // Where the exact read stopped, when it did ("" when it didn't)
@@ -204,7 +207,12 @@ private:
     size_t researchBegin = 0, researchEnd = 0, awardsBegin = 0, awardsEnd = 0;
     size_t eventsBegin = 0, eventsEnd = 0, thoughtsBegin = 0, thoughtsEnd = 0;
     size_t marketing = 0;
+    size_t scenarioBegin = 0, scenarioEnd = 0; // (its size word to its end)
   } archive;
+  // The scenario's block (gameMgrLoad 0x5948c6): the script it was started
+  // from and each of its goals' states, in the script's order
+  std::string scenarioName;
+  std::vector<int32_t> goalStates;
   std::vector<uint8_t> original;
   std::vector<ShowProgram> showPrograms;
   uint16_t showProgramCounter = 2000, showInstanceCounter = 1000;

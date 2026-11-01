@@ -39,6 +39,9 @@ struct CatalogItem {
   std::string type;  // [Global] Type, e.g. elephant
   int registryIndex = 0;
   std::string registrySection; // e.g. animals, building, fences, tankwall
+  // its name in the registry, which saved zoos use (usually the file's own
+  // name; fences/tankwall.ai is tankwal1 there)
+  std::string registryKey;
   std::set<std::string> members;
   std::string icon;  // animation shown in the buy panels (the male's)
   // [Icon]'s icons, one per facing (objects: SE, SW, NW, NE), which the buy

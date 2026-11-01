@@ -134,7 +134,9 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   for(const auto &o:world.getObjects().objects())if(o.typeName=="gstand")stand=o.id;
   if(auto *o=world.objectsMutable().byId(stand)) {
     auto doors=gs.doorTiles(*o);check("grandstand has door",!doors.empty());
-    for(auto [x,y]:doors){map.setPath(x,y,"road");for(int k=0;k<4;k++)map.setPath(x,y+k,"road");}
+    // (a stock path: "road" is no path of the game's, and a zoo laid with it
+    // can't be saved - the check of saving mid-show needs one that can)
+    for(auto [x,y]:doors){map.setPath(x,y,"path");for(int k=0;k<4;k++)map.setPath(x,y+k,"path");}
     if(!doors.empty())for(int n=0;n<4;n++) {
       gs.admit(0);auto &g=guests.back();g.x=doors[0].first+0.5f;g.y=doors[0].second+0.5f;g.state=Guests::State::Walking;
       g.hunger=g.thirst=g.bathroom=g.tired=0;g.leaving=false;
@@ -151,6 +153,14 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
     run(1);auto *s=shows.show(tank);if(!s)break;
     if(s->phase==Shows::Phase::Performing) {
       if(!sawPerformance){sawPerformance=true;capture("show_performing");}
+      // (ZT_SHOW_FRAMES=1: a picture each second of the performance, to see
+      // the performers against the tank's walls)
+      if(std::getenv("ZT_SHOW_FRAMES")){
+        hud.setPanelOpen(30,false);
+        if(const auto *m=a.member(one))world.centreOn(m->x,m->y);
+        char n[32];std::snprintf(n,sizeof n,"show_frame_%03d",sec);capture(n);
+        for(const auto &m:a.members())report<<"     "<<n<<" animal "<<m.id<<" anim "<<m.anim<<" trick "<<m.showTrick
+          <<" exhibit "<<m.exhibit<<" at "<<m.x<<","<<m.y<<" swimZ "<<m.swimZ<<"\n";}
       for(const auto &g:guests)if(g.showTank==tank && g.showSeat>=0){seated=true;inShow++;}
       if(!saved) {
         saved=SaveGame::save(out+"/active-show.zt1save",world,sim,hud,mapPath);
@@ -196,17 +206,47 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   st.moveTo(specialist,54.5f,24.5f);
   int beforeBall=s->completed,doneBall=s->tricksDone;
   bool ballStarted=shows.start(tank,why);check("ball show starts",ballStarted);
-  bool sawBall=false,hiddenBall=false;
+  bool sawBall=false,hiddenBall=false,doubledBall=false;
   if(ballStarted)for(int i=0;i<170;i++) {
     run(1);
-    for(const auto &m:a.members())if(m.showTrick && m.anim.find("ball")!=std::string::npos)sawBall=true;
-    for(const auto &o:world.getObjects().objects())if(o.typeName=="orcaball" && o.showHidden)hiddenBall=true;
+    bool ballHidden=false;
+    for(const auto &o:world.getObjects().objects())if(o.typeName=="orcaball" && o.showHidden)hiddenBall=ballHidden=true;
+    // (the ballplay art carries the ball: the placed one shown with it is two)
+    for(const auto &m:a.members())if(m.showTrick && m.anim.find("ball")!=std::string::npos) {
+      sawBall=true;if(!ballHidden)doubledBall=true;
+    }
     if(s->completed>beforeBall && s->phase==Shows::Phase::Waiting)break;
   }
   check("orca ball behavior animates",sawBall);
+  check("only one orca ball shows while the trick's art carries it",sawBall && !doubledBall);
   check("orca ball show completes for both animals",s->completed==beforeBall+1 && s->tricksDone==doneBall+2);
   bool visible=true;for(const auto &o:world.getObjects().objects())if(o.typeName=="orcaball" && o.showHidden)visible=false;
   check("show object restored after use",visible);
+  // The stage stays shown (cHideBuilding 0) and the orca's beach art draws
+  // a whole stage round the orca: one stage only if the orca is exactly on
+  // it, facing as it does (slotpos 0,0)
+  while(shows.remove(tank,0)){}
+  check("stage placed",world.objectsMutable().add("scenery/toys/stage.ai",45.5f,26.5f,0));
+  world.reindex();check("stage trick becomes available",shows.add(tank,"beach"));
+  st.moveTo(specialist,54.5f,24.5f);
+  const int beforeStage=s->completed;
+  bool stageStarted=shows.start(tank,why);check("stage show starts",stageStarted);
+  bool sawStage=false,offStage=false;
+  const PlacedObjects::Object *stageObject=nullptr;
+  for(const auto &o:world.getObjects().objects())if(o.typeName=="stage")stageObject=&o;
+  if(stageStarted && stageObject)for(int i=0;i<200;i++) {
+    run(1);
+    for(const auto &m:a.members()) {
+      if(!m.showTrick || (m.anim.find("beach")==std::string::npos && m.anim.find("bech")==std::string::npos))continue;
+      sawStage=true;
+      const float angle=static_cast<float>(stageObject->facing)*3.14159265f/4.0f;
+      if(std::hypot(m.x-stageObject->x,m.y-stageObject->y)>0.01f ||
+         std::hypot(m.fx-std::sin(angle),m.fy+std::cos(angle))>0.01f)offStage=true;
+    }
+    if(s->completed>beforeStage && s->phase==Shows::Phase::Waiting)break;
+  }
+  check("orca beach behavior animates",sawStage);
+  check("one stage shows: the orca is exactly on it while its art carries a stage",sawStage && !offStage);
   for(const char *file:{"animals/dolphin.ai","animals/sealion.ai","animals/seaotter.ai","animals/gwshark.ai","animals/jellyfsh.ai"}) {
     while(shows.remove(tank,0)){}
     a.clear();st.moveTo(specialist,54.5f,24.5f);

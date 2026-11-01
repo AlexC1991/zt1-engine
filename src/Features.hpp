@@ -35,6 +35,11 @@ inline bool infoClosesLists = false; // an information window closes the bottom 
 inline bool smartStack = true;   // windows that would cover one another are placed beside it (off: where the original puts them)
 inline bool dragWindows = true;  // every window can be dragged by its title and keeps its place (off: only those the original lets you drag)
 inline bool tankClip = true;     // a tank animal's art is cut off at the water's edge (off: as the original, its body drawn on over the wall)
+// A cheat, switched in the Mod Menu or Game Options > Mods & Updates (the
+// same switch): spending's still on the books, but the cash never goes down
+// and anything can be bought (ZooSim::unlimited). Saved as Extras
+// infinitemoney
+inline bool infiniteMoney = false;
 
 inline std::vector<Switch> &all() {
   static std::vector<Switch> list = {
@@ -58,6 +63,7 @@ inline std::vector<Switch> &all() {
       {"smartstack", "a window opening where it would cover another open window goes beside it instead - above it, or to its left (off: where the original puts it, over the other)", &smartStack},
       {"dragwindows", "every window can be dragged by its title bar and stays where you leave it, next time too (off: only the windows the original lets you drag - Zoo Status, Recommendations, plaques, messages - and only until the game closes)", &dragWindows},
       {"tankclip", "a tank animal is drawn only as far as the water goes: its art is cut off at the glass, so a big fish turning by a wall no longer shows its head and tail over it, out across the ground (off: its whole sprite, as the original drew it)", &tankClip},
+      {"infinitemoney", "a cheat: buy anything whatever your cash - spending still shows in the zoo's finances, but your cash never goes down, and research, conservation and marketing are always paid for (off: the zoo's money, as the original)", &infiniteMoney},
       {"optionswindow", "Game Options opens as a window with every setting - graphics, sound, controls, gameplay - and the main menu has it too (off: the original's side panel, and no main menu entry)", &optionsWindow},
   };
   return list;

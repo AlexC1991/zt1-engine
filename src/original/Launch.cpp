@@ -2,7 +2,7 @@
 // (zt1-hook.dll, Hook.cpp) loaded into it before any of its own code runs -
 // the way OpenZT loads its DLL. The Lab's Play original runs it:
 //   zt1-original.exe --zoo <zoo.exe> [--embed <Lab window>] [--size <w>x<h>]
-//                    [--log <file>]
+//                    [--log <file>] [--lastfile <saved zoo>]
 // zoo.exe gets this program's stdin (the Lab's commands, read by the hook)
 // and what's asked is passed to the hook in the environment (ZT1_HOOK_*).
 // 32-bit, like zoo.exe: LoadLibraryA is at the same address in both.
@@ -29,6 +29,8 @@ int main(int argc, char **argv) {
       SetEnvironmentVariableA("ZT1_HOOK_SIZE", argv[i + 1]);
     else if (!std::strcmp(argv[i], "--log"))
       SetEnvironmentVariableA("ZT1_HOOK_LOG", argv[i + 1]);
+    else if (!std::strcmp(argv[i], "--lastfile"))
+      SetEnvironmentVariableA("ZT1_HOOK_LASTFILE", argv[i + 1]);
   }
   // (the hook: next to this program)
   char self[MAX_PATH];

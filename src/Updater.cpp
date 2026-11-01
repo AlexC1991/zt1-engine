@@ -34,6 +34,9 @@
 #ifndef ZT1_OFFICIAL_BUILD
 #define ZT1_OFFICIAL_BUILD 0
 #endif
+#ifndef ZT1_TEST_BUILD
+#define ZT1_TEST_BUILD 0
+#endif
 
 namespace fs = std::filesystem;
 
@@ -499,10 +502,15 @@ namespace Updater {
 
 const char *version() { return ZT1_VERSION; }
 bool official() { return ZT1_OFFICIAL_BUILD != 0; }
+bool testBuild() { return ZT1_TEST_BUILD != 0; }
 
 bool possible(std::string *why) {
   std::string w;
-  if (!official())
+  // (a test release never updates: it's tried before the release is put up,
+  // and the published copy is the one that updates)
+  if (testBuild())
+    w = "none in a test build: the published release is the one that updates";
+  else if (!official())
     w = "none in a build of your own";
   else if (Paths::portable())
     w = "none in a portable copy";
@@ -626,6 +634,12 @@ void atExit() {
 
 int checkNowCli(bool installIt) {
 #ifdef _WIN32
+  // (a test release never reaches the real feeds - only a feed named for
+  // trying the updater out, ZT1_UPDATE_FEED)
+  if (testBuild() && !std::getenv("ZT1_UPDATE_FEED")) {
+    SDL_Log("[Updater] a test release: no update feeds (ZT1_UPDATE_FEED names one to try)");
+    return 3;
+  }
   Release r;
   if (!lookUp(r)) {
     SDL_Log("[Updater] no feed answered");

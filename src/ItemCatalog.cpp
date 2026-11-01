@@ -99,7 +99,7 @@ void ItemCatalog::load(ResourceManager *rm, bool force) {
       configs.push_back(name);
   std::unordered_map<std::string, std::string> configText = rm->readResources(configs);
   std::vector<std::string> files;
-  std::map<std::string, std::string> fileSection;
+  std::map<std::string, std::string> fileSection, fileKey;
   // An entity's subtypes can be given by the registry ([<key>/subtypes],
   // e.g. the tank walls' f and g) instead of its own [Global]; the first is
   // its default
@@ -117,6 +117,7 @@ void ItemCatalog::load(ResourceManager *rm, bool force) {
             seen.insert(path).second) {
           files.push_back(path);
           fileSection[path] = section;
+          fileKey[path] = Utils::string_to_lower(kv.first);
           const auto &subs = registry.lines[kv.first + "/subtypes"];
           if (!subs.empty())
             fileSubtype[path] = subs.front();
@@ -191,6 +192,7 @@ void ItemCatalog::load(ResourceManager *rm, bool force) {
     item.file = file;
     item.registryIndex = index++;
     item.registrySection = fileSection[file];
+    item.registryKey = fileKey[file];
     item.type = ai.get("global", "type");
     for (const std::string &m : ai.lines["member"])
       item.members.insert(m);

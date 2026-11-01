@@ -37,6 +37,11 @@ import zipfile
 
 def archives(engine_dir):
     """The game's archives in the engine's order: the first one wins."""
+    # (an installed engine has no copy of the game beside it: then the game's
+    # own folder, which the Lab passes as ZT1_GAME_DIR - where Play finds it)
+    game = os.environ.get('ZT1_GAME_DIR', '')
+    if not os.path.isfile(os.path.join(engine_dir, 'zoo.ini')) and game and os.path.isfile(os.path.join(game, 'zoo.ini')):
+        engine_dir = game
     ini = configparser.ConfigParser(strict=False, interpolation=None)
     ini.read(os.path.join(engine_dir, 'zoo.ini'), encoding='latin1')
     paths = [p for p in ini.get('resource', 'path', fallback='').split(';') if p.strip()]
