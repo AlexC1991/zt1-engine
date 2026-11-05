@@ -12,6 +12,7 @@ const net = require('net');
 const http = require('http');
 const cp = require('child_process');
 const labUpdates = require('./update.js');
+const updateHandoff = require('./update-helper-launch.js');
 const modProfiles = require('./mod-profiles.js');
 const { watchEngineOutput } = require('./play-output.js');
 
@@ -153,7 +154,9 @@ function send(channel, data) {
 }
 
 // ------------------------------------------------------------- Lab engine
-const host = { proc: null, sock: null, buf: Buffer.alloc(0), pieces: [], have: 0, frame: null, status: 'starting', starting: false, testMod: null };
+const host = { proc: null, sock: null, buf: Buffer.alloc(0), pieces: [], have: 0, frame: null, state: null, status: 'starting', starting: false, testMod: null };
+let updateHandoffActive = false;
+let updateGuardWait = null;
 const modReasonWaits = new Map();
 let modReasonId = 0;
 function hostModReason(folder) {
@@ -283,42 +286,88 @@ function onHostData(d) {
       if (done) done(msg.reason || '');
     }
     else if (msg.t === 'frame') host.frame = msg;
-    else send('engine:msg', msg);
+    else {
+      if (msg.t === 'console' && msg.request === updateGuardWait?.request) updateGuardWait.acknowledged = true;
+      if (msg.t === 'state') host.state = msg;
+      if (msg.t === 'state' && updateGuardWait?.acknowledged) updateGuardWait.finish();
+      send('engine:msg', msg);
+    }
   }
 }
 
 ipcMain.on('engine:send', (_e, cmd) => {
+  if (updateHandoffActive) return;
   if (host.sock) host.sock.write(JSON.stringify(cmd) + '\n');
 });
-// The Lab's own updates (update.js controller): looked for on a timer,
-// downloaded and checked in the background; the header's button installs
-// one that's ready (the Lab closes and starts again), else it goes in when
-// the Lab closes
+// The Lab's own updates: the labelled header control opens progress details.
+// Installation is explicit, after a native helper window is visibly ready.
 const labUpdater = labUpdates.controller({
   app,
   off: TEST_RELEASE ? 'A test release: it never updates. The published Lab is the one that updates.' : '',
   send: (st) => send('lab:updateState', st),
   spawn: (file, args, opts) => cp.spawn(file, args, opts),
+  launchHelper: request => updateHandoff.launch(request, {
+    candidates: [
+      roots.engineDir && path.join(roots.engineDir, 'zt1-update-helper.exe'),
+      path.join(TREE, 'engine', 'zt1-update-helper.exe'),
+      BUILD64 && path.join(BUILD64, 'Release', 'zt1-update-helper.exe'),
+      path.join(RELEASE, 'zt1-update-helper.exe'),
+    ],
+    spawn: (file, args, opts) => cp.spawn(file, args, opts),
+  }),
   log: (line) => console.log(line),
 });
 ipcMain.handle('lab:update', () => labUpdater.check(true));
 ipcMain.handle('lab:updateState', () => labUpdater.state());
-ipcMain.handle('lab:updateInstall', () => {
-  const r = labUpdater.install(true);
-  if (r.ok) setTimeout(() => app.quit(), 300);
-  return r;
-});
-app.on('will-quit', () => {
-  if (labUpdater.ready()) labUpdater.install(false);
+function updateWorkReason() {
+  if (play.proc) return 'Close the game in Play before restarting the Lab.';
+  if (engineBuild || engineRelease || host.state?.build === 'building') return 'A build is running.';
+  if (host.state?.live && /hd[_ -]?(?:art|batch)|hd.*batch/i.test(host.state.script || '')) return 'HD generation is running.';
+  if (host.sock && !host.state) return 'Waiting for the Lab engine to report its active work.';
+  return '';
+}
+function refreshUpdateWork() {
+  if (!host.sock) return Promise.resolve();
+  // The existing no-op console request is an ordered barrier: its reply and
+  // then a state frame must follow any build/run already sent on this socket.
+  return new Promise((resolve, reject) => {
+    const request = `update-guard-${Date.now()}`;
+    const timer = setTimeout(() => {
+      updateGuardWait = null;
+      reject(new Error('The Lab engine did not confirm it was safe to restart. The Lab stays open.'));
+    }, 8000);
+    updateGuardWait = {request,acknowledged:false,finish:() => { clearTimeout(timer); updateGuardWait = null; resolve(); }};
+    host.sock.write(JSON.stringify({cmd:'console',line:'',request}) + '\n');
+  });
+}
+ipcMain.handle('lab:updateInstall', async () => {
+  if (updateHandoffActive) return {ok:false,message:'The updater is already starting.'};
+  const reason = updateWorkReason();
+  if (reason) return {ok:false,message:reason};
+  // No new Play/build/script may start between the guard and helper readiness.
+  updateHandoffActive = true;
+  try {
+    await refreshUpdateWork();
+    const active = updateWorkReason();
+    if (active) { updateHandoffActive = false; return {ok:false,message:active}; }
+    const r = await labUpdater.install(true);
+    if (r.ok) setTimeout(() => app.quit(), 300);
+    else updateHandoffActive = false;
+    return r;
+  } catch (e) {
+    updateHandoffActive = false;
+    return {ok:false,message:e.message};
+  }
 });
 ipcMain.handle('engine:start', () => {
+  if (updateHandoffActive) return {error:'The updater is starting.'};
   if (!host.sock) startHost();
   // (a reloaded page asks again: told how things are, and the engine's
   // list of scripts and a frame come again)
   else host.sock.write('{"cmd":"scripts"}\n');
   return host.status;
 });
-ipcMain.handle('engine:restart', () => restartHost());
+ipcMain.handle('engine:restart', () => updateHandoffActive ? {error:'The updater is starting.'} : restartHost());
 
 // The engine stopped and started again. The old one is waited for - gone,
 // not just asked to go - before the new one starts: connecting in that gap
@@ -381,6 +430,7 @@ async function labOpenFileDialog(options) {
 }
 
 ipcMain.handle('play:start', (_e, testFolder) => {
+  if (updateHandoffActive) return {error:'The updater is starting.'};
   if (play.proc) return { error: 'Stop the running game before starting another Play session.' };
   let testMod = null, profile = null;
   try {
@@ -467,6 +517,7 @@ function playRect() {
 // (opts.lastfile: a saved zoo the main menu's Continue Saved Game opens -
 // the hook answers zoo.ini's [user] lastfile with it, writing nothing)
 ipcMain.handle('play:original', (_e, opts = {}) => {
+  if (updateHandoffActive) return {error:'The updater is starting.'};
   if (play.proc) return play.kind === 'original' ? { ok: true } : { error: 'Our engine is running in Play: stop it first.' };
   const c = originalConfig();
   if (!fs.existsSync(c.exe)) return { error: `The original isn't at ${c.exe} (re/private/original.json says where it is).` };
@@ -2459,6 +2510,7 @@ const MSBUILD_CANDIDATES = [
 ];
 let engineBuild = null;
 ipcMain.handle('engine:build', () => {
+  if (updateHandoffActive) return {error:'The updater is starting.'};
   if (engineBuild) return { error: 'Already building.' };
   // (building is the checkout's: there's nothing to build without one)
   if (!REPO) return { error: NO_CHECKOUT };
@@ -3382,6 +3434,7 @@ ipcMain.handle('anim:tool', (_e, req) => {
 });
 
 ipcMain.handle('engine:release', (_e, opts = {}) => {
+  if (updateHandoffActive) return {error:'The updater is starting.'};
   if (!REPO) return { error: NO_CHECKOUT };
   if (engineRelease || engineBuild) return { error: 'Already building.' };
   // (the release tooling is private: only the release machine has it)
@@ -3656,6 +3709,10 @@ function createWindow() {
   // (no menu bar at all: Alt would otherwise bring up File/Edit/View and
   // take the keyboard)
   win.removeMenu();
+  win.webContents.once('did-finish-load', () => {
+    const pending = path.join(process.env.LOCALAPPDATA || app.getPath('temp'), 'zt1-lab-updater', 'pending');
+    updateHandoff.acknowledge(process.argv, app.getVersion(), pending);
+  });
   // (the keys the menu gave: reload the page, the developer tools)
   win.webContents.on('before-input-event', (e, input) => {
     if (input.type !== 'keyDown') return;

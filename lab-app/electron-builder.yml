@@ -31,6 +31,7 @@ files:
   - mod-profiles.js
   - play-output.js
   - update.js
+  - update-helper-launch.js
   - sync.js
   - icon.png
   - renderer/**

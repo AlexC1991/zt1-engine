@@ -2265,35 +2265,74 @@ const ACTIONS = {
   // A line to the game in Play (src/Embed.hpp): "click <x> <y>" at its
   // window's pixels, for testing menus without the mouse
   playCmd: (line) => lab.playCmd(String(line || '')),
-  // The header's update button: Check updates, or - one downloaded and
-  // checked - Restart to update
+  // The stable header label opens its compact menu. Progress is shown only
+  // there, so the toolbar never repeats a second Downloading label.
   checkLabUpdate: async () => {
-    if (LAB_UPDATE.state === 'ready') {
-      const r = await lab.labUpdateInstall();
-      if (!r.ok) toast(esc(r.message), 6000);
-      return;
-    }
-    const st = await lab.checkLabUpdate();
-    showLabUpdate(st);
-    if (st.state !== 'downloading' && st.state !== 'checking') toast(esc(st.message), 5000);
+    LAB_UPDATE_OPEN = !LAB_UPDATE_OPEN;
+    showLabUpdate();
+    if (LAB_UPDATE_OPEN && LAB_UPDATE.state === 'idle') await ACTIONS.runLabUpdateCheck();
   },
+  closeLabUpdate: () => { LAB_UPDATE_OPEN = false; showLabUpdate(); },
+  runLabUpdateCheck: async () => {
+    LAB_UPDATE_OPEN = true;
+    try { showLabUpdate(await lab.checkLabUpdate()); }
+    catch (e) { showLabUpdate({ ...LAB_UPDATE, state:'error', message:e.message }); }
+  },
+  restartLabUpdate: async () => {
+    if (LAB_UPDATE_INSTALLING || LAB_UPDATE.state !== 'ready') return;
+    if (labUpdateBusyReason()) { LAB_UPDATE_QUEUED = true; showLabUpdate(); return; }
+    LAB_UPDATE_QUEUED = false; LAB_UPDATE_INSTALLING = true; showLabUpdate();
+    try {
+      const result = await lab.labUpdateInstall();
+      if (!result?.ok) { LAB_UPDATE_INSTALLING = false; toast(esc(result?.message || 'The update did not start.'), 6000); showLabUpdate(); }
+    } catch (e) { LAB_UPDATE_INSTALLING = false; toast(esc(e.message), 6000); showLabUpdate(); }
+  },
+  cancelLabUpdateRestart: () => { LAB_UPDATE_QUEUED = false; showLabUpdate(); },
 };
 
-// The Lab's update state (main.js labUpdater), on the header's button
+// ours: explicit restart and visible feedback. A hidden menu still receives
+// state, while queued restarts wait for the live HD supervisor/Play/builds.
 let LAB_UPDATE = { state: 'idle', message: '' };
+let LAB_UPDATE_OPEN = false, LAB_UPDATE_QUEUED = false, LAB_UPDATE_INSTALLING = false;
+function labUpdateBusyReason() {
+  const work = LabUpdateView.busyReason(S);
+  if (work) return work;
+  if (typeof CodeEditor !== 'undefined' && S.eng.opened.some(file => CodeEditor.isDirty(file))) return 'Save your code changes before restarting.';
+  return '';
+}
 function showLabUpdate(st) {
   LAB_UPDATE = st || LAB_UPDATE;
-  const b = $('lab-update-btn');
-  if (!b) return;
-  const s = LAB_UPDATE.state;
-  b.textContent = s === 'checking' ? 'Checking…' : s === 'downloading' ? 'Downloading update…' : s === 'ready' ? 'Restart to update' : 'Check updates';
-  b.classList.toggle('disabled', s === 'checking' || s === 'downloading');
-  b.classList.toggle('primary', s === 'ready');
-  b.classList.toggle('ghost', s !== 'ready');
+  // A helper hand-off lasts only a moment. Keep new edits/jobs from starting
+  // after the dirty-work guard has run and before the native helper takes over.
+  document.body.inert = LAB_UPDATE_INSTALLING;
+  const b = $('lab-update-btn'), menu = $('lab-update-menu');
+  if (!b || !menu) return;
+  b.textContent = 'Check updates';
+  b.classList.toggle('update-ready', LAB_UPDATE.state === 'ready');
+  b.setAttribute('aria-expanded', String(LAB_UPDATE_OPEN));
   b.title = LAB_UPDATE.message || 'Check for a signed ZT1 Lab update';
+  menu.classList.toggle('hidden', !LAB_UPDATE_OPEN);
+  if (!LAB_UPDATE_OPEN) return;
+  const active = document.activeElement?.dataset?.act;
+  const details = menu.querySelector('details')?.open;
+  const visible = LAB_UPDATE_INSTALLING ? { ...LAB_UPDATE, state:'installing', message:'Opening the updater window before the Lab closes…' } : LAB_UPDATE;
+  menu.innerHTML = LabUpdateView.menu(visible, {queued:LAB_UPDATE_QUEUED,reason:labUpdateBusyReason(),details});
+  if (active) menu.querySelector(`[data-act="${active}"]`)?.focus({preventScroll:true});
 }
 lab.onLabUpdate((st) => showLabUpdate(st));
 lab.labUpdateState().then(showLabUpdate);
+setInterval(() => {
+  if (!LAB_UPDATE_QUEUED || LAB_UPDATE_INSTALLING) return;
+  if (LAB_UPDATE.state !== 'ready') { LAB_UPDATE_QUEUED = false; showLabUpdate(); return; }
+  if (!labUpdateBusyReason()) ACTIONS.restartLabUpdate();
+  else if (LAB_UPDATE_OPEN) showLabUpdate();
+}, 1000);
+document.addEventListener('click', e => {
+  if (LAB_UPDATE_OPEN && !e.target.closest('#lab-update-menu, #lab-update-btn')) { LAB_UPDATE_OPEN = false; showLabUpdate(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && LAB_UPDATE_OPEN) { LAB_UPDATE_OPEN = false; showLabUpdate(); $('lab-update-btn')?.focus(); e.stopPropagation(); }
+});
 
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');

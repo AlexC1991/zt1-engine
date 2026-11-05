@@ -21,8 +21,9 @@
     <div class="pill" id="engine-pill"><div class="dot"></div><span>Engine</span></div>
     <div class="pill" id="ghidra-pill"><div class="dot"></div><span>Ghidra</span></div>
     <div class="pill clickable" id="share-pill" data-act="shareOpen"><div class="dot"></div><span>Sharing</span></div>
-    <div class="btn ghost small" data-act="checkLabUpdate" id="lab-update-btn" title="Check for a signed ZT1 Lab update">Check updates</div>
+    <button type="button" class="btn ghost small" data-act="checkLabUpdate" id="lab-update-btn" aria-expanded="false" aria-controls="lab-update-menu" title="Check for a signed ZT1 Lab update">Check updates</button>
   </header>
+  <section id="lab-update-menu" class="lab-update-menu hidden" aria-labelledby="lab-update-title"></section>
 
   <!-- Scene: the lab zoo live, the mods, what's watched -->
   <section class="view" id="v-scene">
@@ -79,6 +80,7 @@
 <script src="code.js"></script>
 <script src="icons.js"></script>
 <script src="editor.js"></script>
+<script src="update-view.js"></script>
 <script src="app.js"></script>
 <script src="help/library.js"></script>
 <script src="help.js"></script>
