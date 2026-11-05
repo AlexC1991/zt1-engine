@@ -1,0 +1,9 @@
+resource,part,classification,treatment,evidence,limits
+scenery/other/lightho.ai,Lighthouse,confirmed_projector,Existing rotating cone retained,Native lantern; four-view native fixture and regression checks,"Range, power and sweep are optional night design parameters."
+scenery/other/streetlt.ai,Street light,confirmed_projector,Stationary downward cone; cached obstruction and angular falloff,Native four-view lens centroid fit within one pixel; six-fixture scene,No atmospheric haze shaft; ordinary 96-light budget; not a moving-projector slot.
+scenery/building/asitheat.ai,Animatronic Theater planters,rejected_source,Remove erroneous Glass regions and floor source; retain facade windows,Enlarged native four-view pot and foliage inspection,Purple rims and green foliage are not floodlight lenses.
+scenery/other/lamp.ai,Lantern,diffuse_fixture,Retain existing diffuse light,Native enclosed lantern glass,Not a directional spotlight.
+native traffic signals,Signal lenses,emissive_material,Retain separate red/green masks,Native signal lenses,No invented searchlight or road simulation.
+native vehicles,Parked cars and utility vehicles,unconfirmed_powered_state,No new beam,Native parked lens details and 172-archive name/definition search,Visible headlight lenses alone do not establish a powered animation or searchlight.
+native show equipment,Buoys and trick-area markers,rejected_source,No emission,Native candidate overview/detail inspection,Round white objects and cones do not establish lamp fittings.
+native building openings,Facade windows and signs,outward_window_light,Retain existing outward illumination,Mapped native window/sign regions,Not a narrow spotlight or rotating beam.
