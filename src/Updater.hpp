@@ -2,22 +2,22 @@
 #define UPDATER_HPP
 
 #include <string>
+#include <cstdint>
 
-// ours: updates for installed, official builds, the way VoxAI Coder does
-// them. The feed is CodeRook's zt1-engine release (zt1-update.yml), else
+// addition: visible updates for installed, official builds. The feed is
+// CodeRook's zt1-engine release (zt1-update.yml), else
 // GitHub's latest (latest.yml). Either carries an ECDSA P-256 signature over
 // the app, version, installer name, size and SHA-512, verified against the key
-// pinned here before anything is downloaded. Looked at 15 s after start, every
-// 30 min (5 after a look that failed) and on Check now (Game Options › Mods &
-// Updates). A newer release downloads in the background into the data
-// folder's updates\ and its size and SHA-512 are checked; only then is the
-// player asked, at the main menu: Update now (it closes, installs, starts
-// again), Skip this version, or Later (installed quietly when the game
-// closes). The installer is checked again just before it runs.
+// pinned here before anything is downloaded. Checked at startup and on
+// Check now (Game Options > Updates). A newer release is offered first;
+// accepting it downloads into the data folder's updates\ with real byte
+// progress, then checks its size and SHA-512. Explicit installation opens
+// the separate updater helper before the game closes. Later never installs
+// at exit. The helper rechecks the installer and confirms the new app opens.
 //
 // Only official builds (made by the release tooling, ZT1_OFFICIAL_BUILD)
 // ever update: a copy someone built themselves keeps their own code. The
-// "updatechecks" switch (Features.hpp) turns the timed looks off (Check now
+// "updatechecks" switch (Features.hpp) turns startup checks off (Check now
 // still looks). Never in a portable copy (the checkout, the Lab's Play, the
 // Game Build zip): nothing there was installed. ZT1_UPDATE_FEED (a folder URL
 // ending in /) takes the feeds' place, for trying an update out.
@@ -42,15 +42,27 @@ bool testBuild();
 
 // Whether this copy can update itself (an official install); why not
 bool possible(std::string *why);
-// The looking thread: 15 s after start, every 30 min (5 after a failure);
-// a newer signed release is downloaded and checked in the background
+// The worker checks at startup when enabled. Available releases wait for
+// explicit downloadNow(); network/disk work never blocks the rendering loop.
 void start();
 // Look now (Game Options' Check now), even with Check for updates off
 void checkNow();
-enum class State { Off, Idle, Checking, Downloading, Ready, UpToDate, Failed };
+enum class State { Off, Idle, Checking, Available, Downloading, Verifying, Ready, Installing, UpToDate, Failed };
+// addition: one coherent view for the compact update panel. Progress comes
+// from bytes actually written; verification/installation have no percentage.
+struct Snapshot {
+  State state = State::Off;
+  Release release;
+  uint64_t downloadedBytes = 0, totalBytes = 0;
+  double bytesPerSecond = 0, secondsRemaining = -1;
+  std::string status;
+};
+Snapshot snapshot();
+// Download only after the player accepts the signed release offer.
+bool downloadNow();
 State state();
 std::string status();
-// A downloaded, checked release to offer, once (Check now offers it again)
+// An available or downloaded release to offer once (Check now offers again).
 bool takeOffer(Release &out);
 // The player said not to be asked about this one again
 void skip(const Release &r);
@@ -58,8 +70,11 @@ void skip(const Release &r);
 bool installNow(std::string &why);
 // The installer was started: the game should close now
 bool installing();
-// The game closing with an update ready (Later): installed quietly
+// Kept for existing shutdown callers; closing/Later never installs.
 void atExit();
+// The new app acknowledges the helper only after its first ready frame.
+// Accepts only a nonce-named acknowledgement inside our update directory.
+void acknowledgeLaunch(int argc, char **argv);
 // zt1-engine.exe --check-update [--install]: for trying the updater out
 int checkNowCli(bool installIt);
 

@@ -499,15 +499,21 @@ void WorldRenderer::addToBucket(int layer, int order, SDL_Texture *texture,
                                 const SDL_Vertex &a, const SDL_Vertex &b,
                                 const SDL_Vertex &c) {
   Bucket *bucket = nullptr;
-  for (Bucket &bk : buckets) {
+  for (size_t i = 0; i < bucketsUsed; i++) {
+    Bucket &bk = buckets[i];
     if (bk.layer == layer && bk.order == order && bk.texture == texture) {
       bucket = &bk;
       break;
     }
   }
   if (!bucket) {
-    buckets.push_back({layer, order, texture, {}});
-    bucket = &buckets.back();
+    if (bucketsUsed == buckets.size())
+      buckets.push_back({});
+    bucket = &buckets[bucketsUsed++];
+    bucket->layer = layer;
+    bucket->order = order;
+    bucket->texture = texture;
+    bucket->vertices.clear();
   }
   bucket->vertices.push_back(a);
   bucket->vertices.push_back(b);
@@ -515,18 +521,19 @@ void WorldRenderer::addToBucket(int layer, int order, SDL_Texture *texture,
 }
 
 void WorldRenderer::flushBuckets(SDL_Renderer *renderer) {
-  std::sort(buckets.begin(), buckets.end(),
+  std::sort(buckets.begin(), buckets.begin() + bucketsUsed,
             [](const Bucket &a, const Bucket &b) {
               if (a.layer != b.layer)
                 return a.layer < b.layer;
               return a.order < b.order;
             });
-  for (Bucket &bk : buckets) {
+  for (size_t b = 0; b < bucketsUsed; b++) {
+    const Bucket &bk = buckets[b];
     for (size_t i = 0; i + 2 < bk.vertices.size(); i += 3)
       addTriangle(renderer, bk.texture, bk.vertices[i], bk.vertices[i + 1],
                   bk.vertices[i + 2]);
   }
-  buckets.clear();
+  bucketsUsed = 0;
 }
 
 // ============================================================================
@@ -713,7 +720,7 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
   batchVertices.clear();
   batchIndices.clear();
   batchTexture = nullptr;
-  buckets.clear();
+  bucketsUsed = 0;
 
   // Untextured triangles (debug colours) blend with the draw blend mode
   SDL_BlendMode previousBlend;
@@ -809,7 +816,7 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
       const MapTile *tile = vt.tile;
       if (!tile)
         continue;
-      if (onlyTiles && !onlyTiles->count({vt.x, vt.y}))
+      if (onlyTiles && !std::binary_search(onlyTiles->begin(), onlyTiles->end(), std::make_pair(vt.x, vt.y)))
         continue;
 
       const int *h = vt.h;
@@ -1038,6 +1045,13 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
 void WorldRenderer::renderTerrainTiles(SDL_Renderer *renderer, const WorldMap &map,
                                        SpriteDatabase &spriteDB,
                                        const std::set<std::pair<int, int>> &tiles) {
+  const std::vector<std::pair<int, int>> sorted(tiles.begin(), tiles.end());
+  this->renderTerrainTiles(renderer, map, spriteDB, sorted);
+}
+
+void WorldRenderer::renderTerrainTiles(SDL_Renderer *renderer, const WorldMap &map,
+                                       SpriteDatabase &spriteDB,
+                                       const std::vector<std::pair<int, int>> &tiles) {
   if (tiles.empty())
     return;
   this->onlyTiles = &tiles;

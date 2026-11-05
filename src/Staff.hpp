@@ -237,6 +237,8 @@ public:
   Animation *art(const Member &m, const std::string &name) const;
   Animation *preview(int type) const;
   Animation *baseArt(const Member &m) const;
+  int baseFrame(const Member &m,Animation *art=nullptr) const;
+  int helicopterFrame(const Member &m,Animation *) const;
 
   int selected = -1, hovered = -1, carried = -1;
   // (debug) every route planned goes to the log

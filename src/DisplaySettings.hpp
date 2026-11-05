@@ -89,6 +89,18 @@ extern std::function<void(int size)> onCursorSize;
 bool edgeScroll();
 void setEdgeScroll(bool on);
 
+// ours: the renderer asked of SDL as the game starts, before the window.
+// Direct3D 11 draws the same pictures as OpenGL, faster (measured on the
+// busy benchmark zoo, no frame limit: 79 -> 125 fps, 256 check pictures
+// identical); OpenGL is needed by the shader passes - brightness, the
+// colour filter, the Stylized look, shader mods, the GPU lighting - so it's
+// used when one of those is on as the game starts. zoo.ini [user]
+// renderer = auto (the default), opengl or direct3d11.
+const char *startupRenderer();
+// Picked automatically and not OpenGL: a setting that needs OpenGL, turned
+// on now, works from the next time the game starts
+bool openGlNextStart();
+
 } // namespace Display
 
 #endif // DISPLAY_SETTINGS_HPP

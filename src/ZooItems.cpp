@@ -160,6 +160,26 @@ void ZooItems::collect(const WorldRenderer &view, const WorldMap &map,
     bool inTank = this->tankAt && this->tankAt(i.x, i.y) >= 0;
     if (this->onlyTank != -2 ? (!inTank || this->tankAt(i.x, i.y) != this->onlyTank) : inTank)
       continue;
+    Animation *a=this->artOf(i);
+    if (!a)
+      continue;
+    const MapTile *t = map.getTile(static_cast<int>(std::floor(i.x)), static_cast<int>(std::floor(i.y)));
+    float h = t ? static_cast<float>(t->height) : 0;
+    float sx, sy, depth;
+    view.worldToScreenF(i.x, i.y, h, sx, sy, depth);
+    // ours: single-view native litter has no southern frame; keep it visible
+    // using its provided northern frame instead of submitting an empty view.
+    const auto side=a->lightingFrame(CompassDirection::SE,0).surface?CompassDirection::SE:CompassDirection::NE;
+    Fences::Drawable d{depth - 0.01f, sx, sy, a, side, white, false};
+    // (its frames play, as the original's do: each item from its own start)
+    uint32_t ms = a->frameTimeMs() ? a->frameTimeMs() : 100;
+    d.frame = static_cast<int>((this->clock + i.id * 0.37f) * 1000.0f / ms);
+    out.push_back(d);
+  }
+}
+
+// ours: share the original food-stage art resolution with optional render passes.
+Animation *ZooItems::artOf(const Item &i)const {
     Animation *a = nullptr;
     switch (i.kind) {
     case Kind::Food: {
@@ -193,16 +213,5 @@ void ZooItems::collect(const WorldRenderer &view, const WorldMap &map,
       a = this->art("items/trash/trash");
       break;
     }
-    if (!a)
-      continue;
-    const MapTile *t = map.getTile(static_cast<int>(std::floor(i.x)), static_cast<int>(std::floor(i.y)));
-    float h = t ? static_cast<float>(t->height) : 0;
-    float sx, sy, depth;
-    view.worldToScreenF(i.x, i.y, h, sx, sy, depth);
-    Fences::Drawable d{depth - 0.01f, sx, sy, a, CompassDirection::SE, white, false};
-    // (its frames play, as the original's do: each item from its own start)
-    uint32_t ms = a->frameTimeMs() ? a->frameTimeMs() : 100;
-    d.frame = static_cast<int>((this->clock + i.id * 0.37f) * 1000.0f / ms);
-    out.push_back(d);
-  }
+  return a;
 }

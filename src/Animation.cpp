@@ -8,10 +8,32 @@
 #include "HdArt.hpp"
 #include "ShaderMods.hpp"
 #include "RenderSettings.hpp"
+#include "Features.hpp"
 #include <SDL2/SDL.h>
 #include <assert.h>
 #include <cstdio>
 #include <cstdlib> // for abs
+
+// addition: a shadow-free copy may be magnified or replaced by HD art. Use
+// the original palette mask, so upscaling cannot bring the old shadow back.
+// addition: retain source palette indices as compact runs. RGB black may
+// also be genuine pigment; cUsesRealShadows/cHasShadowImages selects that
+// policy for species with separate shadow artwork in their original .ai.
+static std::vector<uint64_t> compressShadow(const std::vector<Uint8> &mask) {
+  std::vector<uint64_t> runs;
+  for(size_t i=0;i<mask.size();) {
+    if(!mask[i]){++i;continue;}const size_t start=i;while(i<mask.size() && mask[i])++i;
+    runs.push_back(uint64_t(start)<<32 | uint32_t(i-start));
+  }
+  return runs;
+}
+static void removePaletteShadow(SDL_Surface *target,const SDL_Surface *original,const std::vector<Uint8> &mask) {
+  if(!target || !original || mask.empty() || target->format->BytesPerPixel!=4)return;
+  for(int y=0;y<target->h;++y)for(int x=0;x<target->w;++x) {
+    const int ox=x*original->w/target->w,oy=y*original->h/target->h;
+    if(mask[size_t(oy)*original->w+ox])reinterpret_cast<Uint32*>(static_cast<Uint8*>(target->pixels)+y*target->pitch)[x]=0;
+  }
+}
 
 Animation::Animation(std::unordered_map<std::string, AnimationData *> *data)
     : current_frame(0), last_direction(CompassDirection::S),
@@ -45,6 +67,12 @@ Animation::Animation(Animation &&other) noexcept { *this = std::move(other); }
 
 Animation &Animation::operator=(Animation &&other) noexcept {
   if (this != &other) {
+    releaseLighting();
+    for (AnchorMemo &m : this->anchorMemo)
+      m = AnchorMemo{};
+    textures_lit=std::move(other.textures_lit);textures_lit_hi=std::move(other.textures_lit_hi);
+    emissions=std::move(other.emissions);paletteShadows=other.paletteShadows;blackIsBody=other.blackIsBody;shadowRuns=std::move(other.shadowRuns);
+    other.textures_lit.clear();other.textures_lit_hi.clear();other.emissions.clear();
     for (auto surface_list : this->surfaces) {
       for (SDL_Surface *surface : surface_list.second) {
         if (surface)
@@ -91,6 +119,7 @@ Animation &Animation::operator=(Animation &&other) noexcept {
 }
 
 Animation::~Animation() {
+  releaseLighting();
   if (onRelease) onRelease();
   for (auto surface_list : this->surfaces) {
     for (SDL_Surface *surface : surface_list.second) {
@@ -192,15 +221,36 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
   }
 }
 
+// ours: convertCompassDirectionToExistingAnimationString over anchor_points
+// and the point it finds, once per direction (nullptr: none - renderer_flip
+// left as it leaves it)
+const Animation::AnchorMemo *Animation::anchorFor(CompassDirection direction) {
+  const int di = static_cast<int>(direction);
+  if (di < 0 || di >= 10) {
+    std::string key = convertCompassDirectionToExistingAnimationString(direction, this->anchor_points);
+    if (key.empty())
+      return nullptr;
+    static AnchorMemo once;
+    once = {1, this->renderer_flip, this->anchor_points[key]};
+    return &once;
+  }
+  AnchorMemo &m = this->anchorMemo[di];
+  if (!m.state) {
+    std::string key = convertCompassDirectionToExistingAnimationString(direction, this->anchor_points);
+    m = key.empty() ? AnchorMemo{-1, SDL_FLIP_NONE, {}} : AnchorMemo{1, this->renderer_flip, this->anchor_points[key]};
+  }
+  this->renderer_flip = m.flip;
+  return m.state > 0 ? &m : nullptr;
+}
+
 bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
                              CompassDirection direction, const SDL_Color *tint,
                              int frame) {
   if (!renderer)
     return false;
   // (sets renderer_flip when a mirrored direction stands in)
-  std::string key =
-      convertCompassDirectionToExistingAnimationString(direction, this->anchor_points);
-  if (key.empty())
+  const AnchorMemo *anchor = this->anchorFor(direction);
+  if (!anchor)
     return false;
   SDL_RendererFlip flip = this->renderer_flip;
   bool hi = this->usesHi();
@@ -216,7 +266,7 @@ bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
     return false;
   int w = 0, h = 0;
   ArtScaler::querySize(texture, &w, &h);
-  SDL_Point a = this->anchor_points[key];
+  SDL_Point a = anchor->anchor;
   float ax = flip == SDL_FLIP_HORIZONTAL ? static_cast<float>(w - a.x) : a.x;
   SDL_FRect dest = {x - ax, y - a.y, static_cast<float>(w), static_cast<float>(h)};
   if (RenderSettings::snapEdges) {
@@ -237,15 +287,34 @@ bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
     SDL_SetTextureColorMod(texture, 255, 255, 255);
     SDL_SetTextureAlphaMod(texture, 255);
   }
+  if(RenderSettings::relightWorld && Features::dayNightLighting && RenderSettings::fluorescence)
+    RenderSettings::fluorescence(renderer,this,x,y,direction,int(index));
   return true;
+}
+
+Animation::LightingFrame Animation::lightingFrame(CompassDirection side,int frame) {
+  const auto key=convertCompassDirectionToExistingAnimationString(side,surfaces);
+  const auto found=surfaces.find(key);
+  if(found==surfaces.end() || found->second.empty())return {};
+    const size_t index=std::max(0,frame)%found->second.size();
+  const auto masks=shadowRuns.find(key);const std::vector<uint64_t> *mask=!blackIsBody && masks!=shadowRuns.end() && index<masks->second.size()?&masks->second[index]:nullptr;
+  return {found->second[index],anchor_points[key],renderer_flip==SDL_FLIP_HORIZONTAL,mask};
 }
 
 bool Animation::drawMapped(SDL_Renderer *renderer, CompassDirection direction, int frame, const SDL_FPoint dst[4],
                            const SDL_FPoint uv[4], SDL_Color tint) {
+  return drawMapped(renderer,direction,frame,dst,uv,tint,false);
+}
+
+std::string Animation::lightingDirection(CompassDirection side) {
+  return convertCompassDirectionToExistingAnimationString(side,surfaces);
+}
+
+bool Animation::drawMapped(SDL_Renderer *renderer, CompassDirection direction, int frame, const SDL_FPoint dst[4],
+                           const SDL_FPoint uv[4], SDL_Color tint, bool anchoredMirror) {
   if (!renderer)
     return false;
-  std::string key = convertCompassDirectionToExistingAnimationString(direction, this->anchor_points);
-  if (key.empty())
+  if (!this->anchorFor(direction))
     return false;
   bool hi = this->usesHi();
   std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, hi);
@@ -259,9 +328,42 @@ bool Animation::drawMapped(SDL_Renderer *renderer, CompassDirection direction, i
   SDL_Vertex v[4];
   for (int i = 0; i < 4; i++)
     v[i] = {dst[i], tint, uv[i]};
+  // addition: silhouette shadows follow the same missing-direction mirror as
+  // drawAnchored. Existing mapped water art keeps its own supplied UVs.
+  if (anchoredMirror && this->renderer_flip == SDL_FLIP_HORIZONTAL)
+    for (auto &vertex : v) vertex.tex_coord.x = 1.0f - vertex.tex_coord.x;
   const int idx[6] = {0, 1, 2, 0, 2, 3};
   SDL_RenderGeometry(renderer, texture, v, 4, idx, 6);
   return true;
+}
+
+bool Animation::drawCastShadow(SDL_Renderer *renderer, CompassDirection direction, int frame,
+                               const std::function<SDL_FPoint(float across, float up)> &place, Uint8 alpha,
+                               Uint8 tipAlpha) {
+  if (!renderer)
+    return false;
+  const AnchorMemo *anchor = this->anchorFor(direction);
+  if (!anchor)
+    return false;
+  const SDL_RendererFlip flip = this->renderer_flip;
+  std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, this->usesHi());
+  if (!frames || frames->empty())
+    return false;
+  SDL_Texture *texture = (*frames)[frame >= 0 ? static_cast<size_t>(frame) % frames->size() : 0];
+  if (!texture)
+    return false;
+  int w = 0, h = 0;
+  ArtScaler::querySize(texture, &w, &h);
+  const float ax = flip == SDL_FLIP_HORIZONTAL ? static_cast<float>(w - anchor->anchor.x) : anchor->anchor.x;
+  const float left = -ax, top = static_cast<float>(anchor->anchor.y), right = left + w, bottom = top - h;
+  auto cast = [&](float across, float up) { return place(across, up); };
+  const SDL_Color black{0, 0, 0, alpha}, tip{0, 0, 0, tipAlpha};
+  const float u0 = flip == SDL_FLIP_HORIZONTAL ? 1.0f : 0.0f, u1 = 1.0f - u0;
+  SDL_Vertex v[4] = {{cast(left, top), tip, {u0, 0}}, {cast(right, top), tip, {u1, 0}},
+                     {cast(right, bottom), black, {u1, 1}}, {cast(left, bottom), black, {u0, 1}}};
+  const int idx[6] = {0, 1, 2, 0, 2, 3};
+  RenderSettings::applyArtScaleMode(texture);
+  return SDL_RenderGeometry(renderer, texture, v, 4, idx, 6) == 0;
 }
 
 bool Animation::hitTestAnchored(float px,float py,float x,float y,CompassDirection direction,int frame) {
@@ -276,16 +378,23 @@ bool Animation::hitTestAnchored(float px,float py,float x,float y,CompassDirecti
   if(sx<0 || sy<0 || sx>=source->w || sy>=source->h)return false;
   if(mirrored)sx=source->w-1-sx;
   Uint32 pixel=0;std::memcpy(&pixel,static_cast<Uint8*>(source->pixels)+sy*source->pitch+sx*source->format->BytesPerPixel,source->format->BytesPerPixel);
-  Uint8 r,g,b,a;SDL_GetRGBA(pixel,source->format,&r,&g,&b,&a);return a>=32;
+  Uint8 r,g,b,a;SDL_GetRGBA(pixel,source->format,&r,&g,&b,&a);
+  if(Features::dayNightLighting && world_art && !blackIsBody && paletteShadows) {
+    auto masks=shadowRuns.find(key);if(masks!=shadowRuns.end() && size_t(index)<masks->second.size()) {
+      const uint32_t at=uint32_t(sy*source->w+sx);
+      for(uint64_t run:masks->second[index]){const uint32_t start=uint32_t(run>>32),count=uint32_t(run);if(start>at)break;if(at-start<count)return false;}
+    }
+  }
+  return a>=32;
 }
 
 bool Animation::anchoredBounds(float x, float y, CompassDirection direction, float &left, float &top,
                                float &right, float &bottom) {
-  std::string key = convertCompassDirectionToExistingAnimationString(direction, this->anchor_points);
-  if (key.empty())
+  const AnchorMemo *anchor = this->anchorFor(direction);
+  if (!anchor)
     return false;
   SDL_RendererFlip flip = this->renderer_flip;
-  SDL_Point a = this->anchor_points[key];
+  SDL_Point a = anchor->anchor;
   int w = 0, h = 0;
   this->queryTexture(direction, &w, &h);
   if (w <= 0 || h <= 0)
@@ -319,22 +428,40 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
         if (t)
           SDL_DestroyTexture(t);
     this->textures_hi.clear();
+    for(auto &[key,frames]:textures_lit_hi)for(auto *t:frames)SDL_DestroyTexture(t);
+    textures_lit_hi.clear();
     this->hi_generation = HdArt::generation() * 100000 + Shaders::generation();
+    ++this->textureGen;
   }
-  auto &set = hi ? this->textures_hi : this->textures;
+  const bool relight=this->world_art && !blackIsBody && RenderSettings::relightWorld && Features::dayNightLighting && paletteShadows;
+  auto &set = relight ? (hi?textures_lit_hi:textures_lit) : (hi?this->textures_hi:this->textures);
+  // (what the lookups below found last time, while no set has changed)
+  const int di = static_cast<int>(direction);
+  FramesMemo *memo = di >= 0 && di < 10 ? &this->framesMemo[(relight ? 2 : 0) + (hi ? 1 : 0)][di] : nullptr;
+  if (memo && memo->gen == this->textureGen && memo->frames) {
+    if (memo->setsFlip)
+      this->renderer_flip = memo->flip;
+    return memo->frames;
+  }
   // The art's own frames for this direction (or button state) when it has
   // them - even if another one was made first - else the nearest it has
   std::string exact = convertCompassDirectionToString(direction);
   std::string direction_string;
-  if (set.count(exact) && !set[exact].empty())
+  if (set.count(exact) && !set[exact].empty()) {
+    if (memo)
+      *memo = {this->textureGen, false, SDL_FLIP_NONE, &set[exact]};
     return &set[exact];
+  }
   if (this->surfaces.count(exact) && !this->surfaces[exact].empty())
     direction_string = exact;
   else {
     direction_string =
         convertCompassDirectionToExistingAnimationString(direction, set);
-    if (!direction_string.empty() && !set[direction_string].empty())
+    if (!direction_string.empty() && !set[direction_string].empty()) {
+      if (memo)
+        *memo = {this->textureGen, true, this->renderer_flip, &set[direction_string]};
       return &set[direction_string];
+    }
     direction_string = convertCompassDirectionToExistingAnimationString(
         direction, this->surfaces);
   }
@@ -344,6 +471,7 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
 
   std::vector<SDL_Texture *> &frames = set[direction_string];
   frames.clear();
+  ++this->textureGen;
   bool magnified = this->upscale || hi;
   int index = 0;
   for (SDL_Surface *surface : source->second) {
@@ -351,6 +479,25 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
     if (!surface) {
       frames.push_back(nullptr);
       continue;
+    }
+    // addition: remove only retained source shadow indices in the optional
+    // world-art cache. Keep the original cache and real black body pigment
+    // intact; an RGB colour alone does not identify a shadow.
+    SDL_Surface *clean=nullptr;
+    SDL_Surface *original=surface;std::vector<Uint8> shadowMask;
+    if(relight) {
+      shadowMask.assign(size_t(surface->w)*surface->h,0);
+      auto masks=shadowRuns.find(direction_string);
+      if(masks!=shadowRuns.end() && size_t(frame)<masks->second.size())for(uint64_t run:masks->second[frame]) {
+        const size_t start=size_t(run>>32),count=uint32_t(run);if(start+count<=shadowMask.size())std::fill_n(shadowMask.begin()+start,count,Uint8(1));
+      }
+    }
+    if(relight) {
+      clean=SDL_ConvertSurfaceFormat(surface,SDL_PIXELFORMAT_RGBA32,0);
+      if(clean) {
+        removePaletteShadow(clean,original,shadowMask);
+        surface=clean;
+      }
     }
     SDL_Texture *t = nullptr;
     // A shader mod's art shader at work (zoomed-in map art; not a tank's
@@ -371,6 +518,7 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
       if (!big)
         big = ArtScaler::upscaleSurface(surface, 4);
       if (big) {
+        if(relight)removePaletteShadow(big,original,shadowMask);
         // (what it is, for the shader: 1 a fence's thin lines, 2 an object,
         // 0 an animal or a person)
         const int kind = this->hd_dir.rfind("fences/", 0) == 0    ? 1
@@ -386,6 +534,7 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
       if (SDL_Surface *hd = ArtScaler::loadHdSurface(hdPath)) {
         if (!this->recoloured.empty())
           hd = HdArt::recolour(hd, surface, this->recoloured, direction_string, frame);
+        if(relight)removePaletteShadow(hd,original,shadowMask);
         t = ArtScaler::createHdTexture(renderer, hd, surface->w, surface->h,
                                        hdPath);
         SDL_FreeSurface(hd);
@@ -403,6 +552,7 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
     if (!t)
       SDL_Log("Warning: Failed to create texture: %s", SDL_GetError());
     frames.push_back(t);
+    if(clean)SDL_FreeSurface(clean);
     if (!this->world_art)
       SDL_FreeSurface(surface);
   }
@@ -586,6 +736,9 @@ void Animation::loadSurfaces(std::string direction_string,
                              AnimationData *data) {
   if (data == nullptr || data->frame_count == 0)
     return;
+  const bool reservedBlack=data->pallet && data->pallet->color_count>1 && (data->pallet->colors[1]&0xFFFFFF)==0;
+  if(reservedBlack)paletteShadows=true;
+  for(uint32_t i=0;i<data->frame_count;++i)paletteShadows=paletteShadows||data->frames[i].is_shadow;
   this->frame_time_in_ms = data->frame_time_in_ms;
   this->has_background = data->has_background;
   this->frame_count = std::max(this->frame_count, static_cast<int>(data->frame_count));
@@ -610,6 +763,7 @@ void Animation::loadSurfaces(std::string direction_string,
   calculateOffset(data, &offset_x, &offset_y);
 
   this->surfaces[direction_string] = std::vector<SDL_Surface *>();
+  shadowRuns[direction_string].clear();
 
   // A building with a background frame (zoo.exe's FATZ flag): every frame
   // is the background with that frame drawn over it, each placed by its
@@ -634,7 +788,7 @@ void Animation::loadSurfaces(std::string direction_string,
     const SDL_Point anchor = {-minX, -minY};
     this->anchor_points[direction_string] = anchor;
     this->anchor_offsets[direction_string] = {W / 2 - anchor.x, H / 2 - anchor.y};
-    auto paint = [&](SDL_Surface *s, const AnimationFrameData &f) {
+    auto paint = [&](SDL_Surface *s, const AnimationFrameData &f,std::vector<Uint8> &mask) {
       if (!f.lines)
         return;
       const int left = anchor.x - f.offset_y, top = anchor.y - f.offset_x;
@@ -658,18 +812,20 @@ void Animation::loadSurfaces(std::string direction_string,
               color = data->pallet->colors[ins.colors[p]] | 0xFF000000;
             }
             pixels[yy * pitch + x] = color;
+            mask[size_t(yy)*W+x]=f.is_shadow || (reservedBlack && ins.colors && ins.colors[p]==1);
           }
         }
       }
     };
     for (int i = 0; i < count; i++) {
+      std::vector<Uint8> mask(size_t(W)*H);
       SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, W, H, 0, SDL_PIXELFORMAT_RGBA32);
       if (s) {
         SDL_FillRect(s, NULL, 0x00000000);
-        paint(s, data->frames[count]);
-        paint(s, data->frames[i]);
+        paint(s, data->frames[count],mask);
+        paint(s, data->frames[i],mask);
       }
-      this->surfaces[direction_string].push_back(s);
+      this->surfaces[direction_string].push_back(s);shadowRuns[direction_string].push_back(compressShadow(mask));
     }
     AniFile::freeAnimationData(data);
     return;
@@ -702,9 +858,10 @@ void Animation::loadSurfaces(std::string direction_string,
     SDL_Surface *new_surface = SDL_CreateRGBSurfaceWithFormat(
         0, data->width, data->height, 0, SDL_PIXELFORMAT_RGBA32);
     if (!new_surface) {
-      this->surfaces[direction_string].push_back(nullptr);
+      this->surfaces[direction_string].push_back(nullptr);shadowRuns[direction_string].push_back({});
       continue;
     }
+    std::vector<Uint8> mask(size_t(data->width)*data->height);
     SDL_FillRect(new_surface, NULL, 0x00000000);
     this->surfaces[direction_string].push_back(new_surface);
 
@@ -777,10 +934,13 @@ void Animation::loadSurfaces(std::string direction_string,
           if (y_final >= 0 && y_final < data->height && x_final >= 0 &&
               x_final < data->width) {
             pixels[y_final * pitch + x_final] = color;
+            const auto *codes=data->frames[i].lines[y].instructions[instruction].colors;
+            mask[size_t(y_final)*data->width+x_final]=data->frames[i].is_shadow || (reservedBlack && codes && codes[p]==1);
           }
         }
       }
     }
+    shadowRuns[direction_string].push_back(compressShadow(mask));
   }
   if (data)
     AniFile::freeAnimationData(data);

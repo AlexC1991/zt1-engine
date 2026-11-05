@@ -4,6 +4,9 @@
 #include <cmath>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <SDL_image.h>
 
 #include "../Animation.hpp"
 #include "../CompassDirection.hpp"
@@ -189,24 +192,26 @@ void UiScaleControl::update(SDL_Renderer *renderer, float originX, float originY
 // ============================================================================
 namespace {
 // Pages, down the left
-// (the last, a mod's own settings, has no tab: Mods & Updates' Settings
-// buttons open it, its Back goes back)
-enum Page { kGame, kDisplay, kGraphics, kSound, kControls, kAccess, kShaders, kGameplay, kMods, kModSet, kPages };
-const int kTabs = kModSet;
-static_assert(kMods == UiOptions::kModsPage, "the Mods & Updates page's number");
+// (a mod's own settings has no tab: Mods' Settings buttons open it, its
+// Back goes back. Updates is appended so the existing page IDs stay put.)
+enum Page { kGame, kDisplay, kGraphics, kSound, kControls, kAccess, kShaders, kGameplay, kMods, kModSet, kUpdates, kPages };
+const int kTabPages[] = {kGame, kDisplay, kGraphics, kSound, kControls, kAccess, kShaders, kGameplay, kMods, kUpdates};
+static_assert(kMods == UiOptions::kModsPage, "the Mods page's number");
+static_assert(kUpdates == UiOptions::kUpdatesPage, "the Updates page's number");
 const char *kPageNames[kPages] = {"Game",          "Display", "Graphics", "Sound",          "Controls",
-                                  "Accessibility", "Shaders", "Gameplay", "Mods & Updates", "Mod settings"};
+                                  "Accessibility", "Shaders", "Gameplay", "Mods", "Mod settings", "Updates"};
 const char *kPageAbout[kPages] = {
     "Load or save your zoo, or leave it.",
     "The game's window: windowed or full screen, its resolution, frame rate and brightness.",
-    "How big the interface is drawn, and how the art looks drawn bigger.",
+    "Interface size, art upscaling, and optional day and night lighting.",
     "How loud the game and the menu music are.",
     "Scrolling the map, tool tips, hotkeys and which Game Options you get.",
     "Colour-blind filters and a bigger mouse pointer.",
     "Shaders your mods bring - a toon look, colour grading... Each on or off, and its settings.",
     "The engine's additions to how the game plays. Off, each does what the original game does.",
-    "Your mods, each on or off, and whether the game looks for updates.",
+    "Your mods, each on or off, and their settings.",
     "This mod's own settings (its mod.json). Each works the moment it's changed.",
+    "Check for a new version at startup, check now, or install an update when you're ready.",
 };
 // Element ids: the frame's, the tabs', then each page's own (9200 + 100 a page)
 enum : int {
@@ -242,10 +247,11 @@ enum : int {
 // kShaderFirst + 3i; the shown one's settings a label and slider each, from
 // kSettingFirst + 2j, three across)
 enum : int { kShaderFirst = 1, kShaderRows = 3, kSettingFirst = 20, kSettingRows = 12, kShadersNone = 50 };
-// (Mods & Updates: each mod a tick box and its name, kModFirst + 2i, + 1,
+// (Mods: each mod a tick box and its name, kModFirst + 2i, + 1,
 // and its Settings button when it has some, kModSettingsFirst + i)
-enum : int { kModMenu = 1, kModMenuText, kModsTitle, kModsNote, kModPrev, kModNext, kModPageText, kUpdateNow = 12, kModFirst = 20, kModRows = 5, kModSettingsFirst = 80 };
-// (Mods & Updates' Check for updates row: which of the page's switches it is)
+enum : int { kModMenu = 1, kModMenuText, kModsTitle, kModsNote, kModPrev, kModNext, kModPageText, kModFirst = 20, kModRows = 5, kModSettingsFirst = 80 };
+enum : int { kUpdateNow = 12, kUpdateStatus }; // Updates
+// (Updates' startup check row: which of the page's switches it is)
 int updatesRow();
 // (a mod's settings page: Back, its name and what it is; each setting from
 // kMsFirst + 4j - its words, its slider, a toggle's tick box and words -
@@ -261,22 +267,28 @@ bool g_makingInGame = true;
 // Which page each extra is on (any other: Gameplay). This window's own
 // switch is Controls' Game Options row, not a tick box of its own
 int extraPage(const std::string &name) {
+  if (name == "daynight")
+    return kGraphics;
   if (name == "optionswindow")
     return -1;
   if (name == "hotkeys" || name == "smartstack" || name == "dragwindows")
     return kControls;
-  if (name == "mods" || name == "modmenu" || name == "updatechecks" || name == "infinitemoney")
+  if (name == "updatechecks")
+    return kUpdates;
+  if (name == "mods" || name == "modmenu" || name == "infinitemoney")
     return kMods;
   return kGameplay;
 }
 std::string extraName(const std::string &name) {
   static const std::map<std::string, std::string> names = {
+      {"daynight", "Day/night cycle"}, {"gametime", "Display game time"},
+      {"fastforward", "Game speed"},
       {"allunlocked", "All items unlocked"}, {"fencemodes", "Fence drag modes"},
       {"staffpaths", "Staff keep to paths"}, {"smoothroutes", "Smooth walking"},
       {"maptooltips", "Map hints"},          {"elevatedpaths", "Raised walkways"},
       {"pathmodes", "Path drag modes"},      {"hotkeys", "Extra hotkeys"},
       {"mods", "Load mods"},                 {"modmenu", "Mod Menu button"},
-      {"updatechecks", "Check for updates"}, {"misnamedart", "Misnamed art"},
+      {"updatechecks", "Check for updates at startup"}, {"misnamedart", "Misnamed art"},
       {"optionswindow", "This Options window"}, {"smartstack", "Windows move aside"},
       {"dragwindows", "Drag any window"},       {"infocloseslists", "Windows close lists"},
       {"tankgroundback", "Tank ground restored"}, {"nofenceonpath", "No fences on paths"},
@@ -317,6 +329,9 @@ std::string aboutText(std::string s) {
 // form, with what "off" means, is Features.hpp's for the dev console)
 std::string extraAbout(const Features::Switch &f) {
   static const std::map<std::string, std::string> about = {
+      {"daynight", "A twelve-minute day: sunrise, sunset, lights at dusk and scenery shadows. Pauses with the zoo. Off: constant daylight."},
+      {"gametime", "Show a 24-hour clock beside the date. Runs and pauses with the zoo, with or without the day/night cycle. Off: show only the original date."},
+      {"fastforward", "Add a speed button beside Pause/Play for 1x, 2x and 5x. Off: original controls and normal speed."},
       {"allunlocked", "Freeform: every item from the start. Off: released month by month."},
       {"fencemodes", "Fence drags in a line, box or grid; Tab changes. Off: follows the mouse."},
       {"staffpaths", "Staff walk the paths and wait on them. Off: they roam open ground."},
@@ -327,7 +342,7 @@ std::string extraAbout(const Features::Switch &f) {
       {"hotkeys", "Esc and right-click put tools away, Ctrl+Z undoes, Q / E turn, Alt+Enter or F11 full screen."},
       {"mods", "Mods switched on in the Mod Menu load over the game's files."},
       {"modmenu", "The Mod Menu button above. Off: no Mod Menu, as the original."},
-      {"updatechecks", "An installed copy looks for a new release at start and asks first."},
+      {"updatechecks", "Check for a new version whenever this installed copy starts. Off: use Check now to look manually."},
       {"misnamedart", "Marine Mania art the game's files misname is found and shown."},
       {"optionswindow", "This window, also on the main menu. Off: the original side panel."}};
   auto it = about.find(f.name);
@@ -406,11 +421,13 @@ std::string optionsLayout() {
                                 "backcolor=45\r\nborder=1\r\ntransparent=1\r\nshadowtext=1\r\nlayer=2\r\njustify=center");
   // The pages, down the left
   std::vector<int> tabs;
-  for (int p = 0, row = 0; p < kTabs; p++) {
+  int tabRow = 0;
+  for (int p : kTabPages) {
     int id = kTabFirst + p;
     tabs.push_back(id);
     // (no zoo open: no Game page, the rest closed up)
-    std::string b = goldButton(id, 34, 40 + (p == kGame && !g_makingInGame ? 0 : row++) * 34);
+    int y = p == kUpdates ? kH - 99 : 40 + (p == kGame && !g_makingInGame ? 0 : tabRow++) * 34;
+    std::string b = goldButton(id, 34, y);
     t += b.substr(0, b.size() - 2) + "state=4096\r\n\r\n";
   }
   t += radioSet(kTabSet, tabs);
@@ -561,7 +578,7 @@ std::string optionsLayout() {
     t += slider(id + 1, sx, sy + 13, 132);
   }
 
-  // Mods & Updates: the Mod Menu (it was Get New Zoo Tycoon Items' on the
+  // Mods: the Mod Menu (it was Get New Zoo Tycoon Items' on the
   // main menu) and what it's for; the switches; then the mods themselves,
   // each on or off right here
   t += goldButton(pageId(kMods, kModMenu), kLabelX, kRowsY + 2);
@@ -589,6 +606,10 @@ std::string optionsLayout() {
                 modPagerY + kTextDown, modPageTextW, "fitfont", true);
   modPageButton(pageId(kMods, kModNext), modPagerX + modPagerW - modArrowW, modPagerY);
 
+  // Updates: status below the startup checkbox and manual check button,
+  // rather than appending a changing message to the checkbox's label.
+  t += bodyText(pageId(kUpdates, kUpdateStatus), kLabelX, kRowsY + 43, kW - 222, "52");
+
   // A mod's settings: Back and its name, then its settings three across - a
   // slider under its words, or a tick box beside them
   t += goldButton(pageId(kModSet, kMsBack), kLabelX, kRowsY + 2);
@@ -605,9 +626,11 @@ std::string optionsLayout() {
 
   // The extras, each on its page, below that page's other rows (24 apart)
   int next[kPages] = {};
+  next[kGraphics] = 270;
   next[kControls] = kRowsY + 7 * kRow + 6;
   next[kGameplay] = kRowsY;
   next[kMods] = kRowsY + 40;
+  next[kUpdates] = kRowsY;
   // (more than fit above the description box: a second column beside
   // the first - the Gameplay page's ran down over the box)
   int total[kPages] = {};
@@ -627,7 +650,9 @@ std::string optionsLayout() {
     const int perColumn = std::max(1, (kH - 96 - next[p]) / 24);
     const bool twoColumns = cheat || total[p] > perColumn;
     const int column = cheat ? 1 : r / perColumn, ry = next[p] + (r % perColumn) * 24;
-    const int x = kLabelX + column * 214, textW = twoColumns ? 186 : 380;
+    const int x = kLabelX + column * 214;
+    const int textW = std::string(f.name) == "updatechecks" ? kW - 146 - x - kTickText - 12
+                                                          : twoColumns ? 186 : 380;
     t += tickBox(pageId(p, kSwitchFirst + k), x, ry + kTickDown, false);
     t += bodyText(pageId(p, kSwitchTextFirst + k), x + kTickText, ry + kTextDown, textW);
     // (Check for updates: Check now - or Install now - at its end)
@@ -640,7 +665,7 @@ std::string optionsLayout() {
 int updatesRow() {
   int k = 0;
   for (const Features::Switch &f : Features::all()) {
-    if (extraPage(f.name) != kMods)
+    if (extraPage(f.name) != kUpdates)
       continue;
     if (std::string(f.name) == "updatechecks")
       return k;
@@ -658,6 +683,127 @@ UiOptions::UiOptions(ResourceManager *rm) : rm(rm) {
 }
 
 UiOptions::~UiOptions() { delete this->layout; }
+
+// ours: focused native UI checks; no update check or installation is requested.
+// The HUD and fast-forward check modes also exercise feature persistence in
+// their private ZT1_CONFIG_PATH. Normal updater captures leave settings alone.
+int UiOptions::updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const std::string &out) {
+  std::ofstream log(out + "/options-checks.txt");
+  int failed = 0;
+  auto check = [&](bool ok, const std::string &name) {
+    log << (ok ? "PASS " : "FAIL ") << name << '\n';
+    if (!ok) ++failed;
+  };
+  bool wasDrag = Features::dragWindows;
+  Features::dragWindows = false; // deterministic centring, without saving it
+  SDL_Rect screen{0, 0, 800, 600};
+  for (bool inGame : {false, true}) {
+    UiOptions options(rm);
+    options.open(inGame, kMods);
+    check(options.layout != nullptr, "options opens");
+    if (!options.layout) continue;
+    for (int page : {kMods, kUpdates, kGameplay, kGraphics}) {
+      options.showPage(page);
+      SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); SDL_RenderClear(renderer);
+      options.draw(renderer, &screen);
+      auto *tabs = options.layout;
+      auto *mods = dynamic_cast<UiButton *>(tabs->getElementById(kTabFirst + kMods));
+      auto *updates = dynamic_cast<UiButton *>(tabs->getElementById(kTabFirst + kUpdates));
+      auto *done = tabs->getElementById(kDone);
+      auto *title = dynamic_cast<UiText *>(tabs->getElementById(kPageTitle));
+      check(mods && updates && done && title, "separate Mods, Updates and Done controls");
+      check(tabs->getElementById(kTabFirst + kModSet) == nullptr, "Mod settings has no public tab");
+      if (mods && updates && done) {
+        auto m = mods->getLastRect(), u = updates->getLastRect(), d = done->getLastRect();
+        auto *ini = tabs->getIniReader();
+        check(u.y >= m.y + m.h && d.y >= u.y + u.h &&
+              ini->getInt(done->getName(), "y") - ini->getInt(updates->getName(), "y") == 34,
+              "Updates directly above Done, below Mods");
+        // Native selected art has a different trimmed offset from normal art.
+        // The configured row stays fixed while the actual hit areas stay apart.
+        check(ini->getInt(mods->getName(), "y") == (inGame ? 312 : 278), "Mods keeps its existing slot");
+      }
+      check(title && title->getText() == kPageNames[page], "page title");
+      auto *updateState = tabs->getElementById(pageId(kUpdates, kUpdateStatus));
+      check(updateState && updateState->isHidden() == (page != kUpdates), "update status only on Updates");
+      const int row = updatesRow();
+      auto *toggle = tabs->getElementById(pageId(kUpdates, kSwitchFirst + row));
+      check(toggle && toggle->isHidden() == (page != kUpdates), "startup toggle only on Updates");
+      if (page == kGameplay) {
+        int index = 0;
+        auto *description = tabs->getElementById(kAbout);
+        for (const auto &f : Features::all()) {
+          if (extraPage(f.name) != kGameplay) continue;
+          auto *box = tabs->getElementById(pageId(kGameplay, kSwitchFirst + index));
+          auto *words = tabs->getElementById(pageId(kGameplay, kSwitchTextFirst + index++));
+          bool fits = box && words && description && !box->isHidden() && !words->isHidden();
+          if (fits) {
+            auto r = box->getLastRect(), text = words->getLastRect();
+            const auto frame = options.lastRect;
+            fits = r.w > 0 && r.h > 0 && text.w > 0 && text.h > 0 &&
+                   r.x >= frame.x && text.x >= r.x + r.w &&
+                   text.x + text.w <= frame.x + frame.w &&
+                   std::max(r.y + r.h, text.y + text.h) <= description->getLastRect().y;
+          }
+          check(fits, std::string(f.name) + " Gameplay row fits without clipping");
+        }
+      }
+      for(const std::string name : {"gametime", "daynight", "fastforward"}) {
+        const int owner=extraPage(name);
+        int index=0;Features::Switch *feature=nullptr;
+        for(auto &f:Features::all())if(extraPage(f.name)==owner) {
+          if(name==f.name){feature=&f;break;}
+          ++index;
+        }
+        auto *box=dynamic_cast<UiButton*>(tabs->getElementById(pageId(owner,kSwitchFirst+index)));
+        auto *words=dynamic_cast<UiText*>(tabs->getElementById(pageId(owner,kSwitchTextFirst+index)));
+        check(feature && box && words && box->isHidden()==(page!=owner) && words->isHidden()==(page!=owner),
+              name+" switch appears only on its own page");
+        if(page==owner && box && words && feature) {
+          const char *label = name == "gametime" ? "Display game time" :
+                              name == "daynight" ? "Day/night cycle" : "Game speed";
+          check(words->getText()==label,name+" has its player-facing label");
+          if (name == "fastforward")
+            check(owner == kGameplay, "fastforward belongs on Gameplay");
+          auto r=box->getLastRect(),text=words->getLastRect();
+          auto *description=tabs->getElementById(kAbout);
+          check(r.w>0 && r.h>0 && text.x>=r.x+r.w && description && text.y+text.h<=description->getLastRect().y,
+                name+" label and switch fit above the description");
+          if((std::getenv("ZT_HUD_CLOCK_CHECKS") || std::getenv("ZT_FAST_FORWARD_CHECKS")) &&
+             std::getenv("ZT1_CONFIG_PATH")) {
+            const bool saved=*feature->value;
+            bool *other=name=="gametime"?&Features::dayNightLighting:&Features::showGameTime;
+            const bool otherValue=*other;
+            const bool lightingValue=Features::dayNightLighting;
+            *feature->value=false;box->setToggledOn(false);
+            for(bool on:{true,false}) {
+              Input input{};input.type=InputType::POSITIONED;input.event=InputEvent::LEFT_CLICK;
+              input.x=r.x+r.w/2;input.y=r.y+r.h/2;input.position={input.x,input.y};
+              std::vector<Input> inputs{input};options.handleInputs(inputs);
+              check(*feature->value==on && *other==otherValue &&
+                    (name!="fastforward" || Features::dayNightLighting==lightingValue),
+                    name+" toggle is independent");
+              check(Settings::getInt("Extras",name,-1)==int(on),name+" choice is saved");
+              *feature->value=!on;Settings::loadExtras();Features::dragWindows=false;
+              check(*feature->value==on,name+" choice survives settings reload");
+            }
+            *feature->value=saved;Settings::saveExtra(name,saved);box->setToggledOn(saved);
+          }
+        }
+      }
+      SDL_Surface *image = SDL_CreateRGBSurfaceWithFormat(0, 800, 600, 32, SDL_PIXELFORMAT_ARGB8888);
+      const char *shotName=page==kGameplay?"gameplay":page==kGraphics?"graphics":page==kMods?"mods":"updates";
+      std::string file = out + "/options-" + (inGame ? "zoo-" : "menu-") + shotName + ".png";
+      bool saved = image && SDL_RenderReadPixels(renderer, &screen, SDL_PIXELFORMAT_ARGB8888, image->pixels, image->pitch) == 0 &&
+                   IMG_SavePNG(image, file.c_str()) == 0;
+      if (image) SDL_FreeSurface(image);
+      check(saved, "capture " + file);
+      SDL_RenderPresent(renderer);
+    }
+  }
+  Features::dragWindows = wasDrag;
+  return failed ? 1 : 0;
+}
 
 void UiOptions::open(bool inGame, int page) {
   if (this->layout)
@@ -720,7 +866,7 @@ void UiOptions::showResolutions() {
   };
 }
 
-// Mods & Updates' list: each mod in the mods folder, on or off (the first
+// Mods' list: each mod in the mods folder, on or off (the first
 // few; the Mod Menu has them all), and what a change needs
 void UiOptions::showMods() {
   UiLayout *L = this->layout;
@@ -819,7 +965,7 @@ void UiOptions::showModSettings() {
       this->setPage(kMods);
     };
   }
-  this->about[pageId(kModSet, kMsBack)] = "Back to Mods & Updates.";
+  this->about[pageId(kModSet, kMsBack)] = "Back to Mods.";
   text(pageId(kModSet, kMsName), mod.name + (mod.enabled ? "" : "  (switched off)"));
   this->about[pageId(kModSet, kMsName)] = aboutText(mod.about.empty() ? "A mod in " + mod.folder + "." : mod.about);
   text(pageId(kModSet, kMsNone), mod.settings.empty() ? "This mod has no settings." : "");
@@ -892,7 +1038,7 @@ void UiOptions::showShaders() {
   const int n = std::min(static_cast<int>(list.size()), static_cast<int>(kShaderRows));
   this->shaderShown = std::clamp(this->shaderShown, 0, std::max(0, n - 1));
   text(pageId(kShaders, kShadersNone),
-       n ? "" : aboutText("No shader mods are on. A mod with a shaders folder brings them: switch it on in Mods & Updates."));
+       n ? "" : aboutText("No shader mods are on. A mod with a shaders folder brings them: switch it on in Mods."));
   this->hideRow({pageId(kShaders, kShadersNone)}, n > 0);
   for (int i = 0; i < kShaderRows; i++) {
     int id = pageId(kShaders, kShaderFirst + 3 * i);
@@ -901,7 +1047,9 @@ void UiOptions::showShaders() {
       continue;
     const Shaders::Shader &s = list[i];
     std::string key = s.key;
-    text(id + 1, s.name + (s.failed ? "  (didn't compile)" : "") + (i == this->shaderShown && n > 1 ? "  <" : ""));
+    text(id + 1, s.name + (s.failed ? "  (didn't compile)" : "") +
+                     (s.on && Display::openGlNextStart() ? "  (from the next start)" : "") +
+                     (i == this->shaderShown && n > 1 ? "  <" : ""));
     this->about[id] = this->about[id + 1] = aboutText(s.about.empty() ? s.name + ", from " + s.mod + "." : s.about);
     if (UiButton *b = dynamic_cast<UiButton *>(L->getElementById(id))) {
       b->setToggledOn(s.on);
@@ -946,7 +1094,7 @@ void UiOptions::showShaders() {
   }
 }
 
-// Mods & Updates' Check for updates row: what the updater is doing, and the
+// Updates' startup check row: what the updater is doing, and the
 // button for it
 void UiOptions::showUpdates() {
   int row = updatesRow();
@@ -955,28 +1103,32 @@ void UiOptions::showUpdates() {
   std::string why;
   bool can = Updater::possible(&why);
   Updater::State st = Updater::state();
-  // (the row says it in a line - a longer reason wrapped it into a box of its
-  // own, its words scrolled out of sight; the reason goes in the description)
-  std::string said = can ? Updater::status() : "not in this copy";
-  if (UiText *t = dynamic_cast<UiText *>(this->layout->getElementById(pageId(kMods, kSwitchTextFirst + row))))
-    t->setText(said.empty() ? std::string("Check for updates") : "Check for updates: " + said);
-  this->about[pageId(kMods, kSwitchTextFirst + row)] = this->about[pageId(kMods, kSwitchFirst + row)] =
-      can ? "An installed copy looks for a new version 15 s after it starts and every 30 minutes. One found is "
-            "downloaded and its signature checked, then you're asked at the main menu (Later: installed when you "
-            "close the game)."
+  const bool offered = st == Updater::State::Available || st == Updater::State::Ready;
+  const bool working = st == Updater::State::Checking || st == Updater::State::Downloading ||
+                       st == Updater::State::Verifying || st == Updater::State::Installing;
+  // The switch keeps a stable label; changing status has its own line below.
+  std::string said = can ? Updater::status() : "Updates aren't available in this copy.";
+  if (can && offered && this->inGame)
+    said += "\nReturn to the main menu to review and install this update.";
+  if (UiText *t = dynamic_cast<UiText *>(this->layout->getElementById(pageId(kUpdates, kUpdateStatus))))
+    t->setText(said);
+  this->about[pageId(kUpdates, kSwitchTextFirst + row)] = this->about[pageId(kUpdates, kSwitchFirst + row)] =
+      can ? "Check for a new version whenever this installed copy starts. Turn this off to use Check now only. "
+            "A downloaded update is installed only when you choose to update."
           : "This copy doesn't update itself (" + why +
                 "). The Game Build zip, a checkout, a test release and the Lab's Play don't: get the new version from "
                 "the releases, or install the game with its setup.exe.";
-  this->hideRow({pageId(kMods, kUpdateNow)}, !can);
-  if (UiButton *b = dynamic_cast<UiButton *>(this->layout->getElementById(pageId(kMods, kUpdateNow)))) {
-    b->setLabel(st == Updater::State::Ready ? "Install now" : "Check now");
-    b->setDisabled(st == Updater::State::Checking || st == Updater::State::Downloading);
+  this->about[pageId(kUpdates, kUpdateStatus)] = can ? said : "This copy doesn't update itself (" + why + ").";
+  this->hideRow({pageId(kUpdates, kUpdateNow)}, !can);
+  if (UiButton *b = dynamic_cast<UiButton *>(this->layout->getElementById(pageId(kUpdates, kUpdateNow)))) {
+    b->setLabel(offered ? "Review update" : "Check now");
+    b->setDisabled(working || (offered && this->inGame));
   }
 }
 
 void UiOptions::tick(SDL_Renderer *renderer) {
   UiLayout *L = this->layout;
-  if (this->page == kMods)
+  if (this->page == kUpdates)
     this->showUpdates();
   // Resolution: the size dragged to, used once it's let go; and the list
   // again after the window mode changed (Alt+Enter too)
@@ -1021,7 +1173,11 @@ void UiOptions::tick(SDL_Renderer *renderer) {
     else if (HdArt::active() && mapBigger)
       note = "An HD art mod is on: zoomed in, the map's art is its own redrawn art (the menus as picked here).";
     else if ((a == Display::Art::Fsr || a == Display::Art::Stylized) && !GpuFsr::available())
-      note = "FSR on the graphics card needs OpenGL, which isn't available here: the art was upscaled as it loaded.";
+      note = !Display::openGlNextStart()
+                 ? "FSR on the graphics card needs OpenGL, which isn't available here: the art was upscaled as it loaded."
+             : a == Display::Art::Stylized
+                 ? "The Stylized look needs OpenGL: the game switches to it the next time it starts."
+                 : "The game draws with Direct3D 11, which is faster: the art was upscaled by FSR as it loaded.";
     else if (ui <= 1.001f && !mapBigger)
       note = std::string("Nothing is drawn bigger right now (Interface Size 1x") + (this->inGame ? ", the map at 1x" : "") +
              "), so every choice looks the same. Raise Interface Size" + (this->inGame ? " or zoom in" : "") +
@@ -1056,7 +1212,7 @@ void UiOptions::setPage(int page) {
     for (int k = 1; k < 100; k++)
       if (UiElement *e = this->layout->getElementById(pageId(p, k)))
         e->setHidden(p != page || this->hiddenIds.count(pageId(p, k)));
-  // (a mod's settings: under Mods & Updates' tab, titled with the mod)
+  // (a mod's settings: under Mods' tab, titled with the mod)
   if (UiButton *tab = dynamic_cast<UiButton *>(this->layout->getElementById(kTabFirst + (page == kModSet ? kMods : page))))
     tab->choose();
   if (UiText *title = dynamic_cast<UiText *>(this->layout->getElementById(kPageTitle))) {
@@ -1085,7 +1241,7 @@ void UiOptions::wire() {
   };
 
   // The frame
-  for (int p = 0; p < kTabs; p++)
+  for (int p : kTabPages)
     if (UiButton *b = button(kTabFirst + p)) {
       b->setLabel(kPageNames[p]);
       b->setHidden(p == kGame && !this->inGame); // (no zoo: nothing to save)
@@ -1123,7 +1279,7 @@ void UiOptions::wire() {
     }
   };
 
-  // Mods & Updates: the mods, each on or off here (they load when the game
+  // Mods: the mods, each on or off here (they load when the game
   // next starts), and the Mod Menu for each one's details and art (a screen
   // of the main menu's, coming back here: greyed in a zoo)
   if (UiButton *b = button(pageId(kMods, kModMenu))) {
@@ -1143,22 +1299,23 @@ void UiOptions::wire() {
                         : "Each mod's name, author, what it changes and pictures of it; a different mods folder.");
   this->showMods();
   this->showShaders();
-  // Check now: looks for an update at once (even with Check for updates
-  // off); with one downloaded and checked, Install now (the game closes, the
-  // installer runs and starts it again)
-  if (UiButton *b = button(pageId(kMods, kUpdateNow))) {
+  // Check now works with startup checks off. Reviewing an available or ready
+  // update uses the main-menu prompt; this page never closes an unsaved zoo.
+  if (UiButton *b = button(pageId(kUpdates, kUpdateNow))) {
     b->onClick = [this] {
-      if (Updater::state() == Updater::State::Ready) {
-        std::string why;
-        if (!Updater::installNow(why))
-          SDL_Log("[Updater] %s", why.c_str());
+      Updater::State st = Updater::state();
+      if (st == Updater::State::Available || st == Updater::State::Ready) {
+        if (!this->inGame && this->onUpdate) {
+          this->onUpdate();
+          this->close();
+        }
       } else {
         Updater::checkNow();
       }
     };
-    this->about[pageId(kMods, kUpdateNow)] =
-        "Looks for a new version now. One found is downloaded and checked first; then Install now closes the game, "
-        "updates it and starts it again.";
+    this->about[pageId(kUpdates, kUpdateNow)] =
+        "Checks now even with startup checks off. Review update opens the update prompt at the main menu. "
+        "Leave the zoo normally before installing so your changes can be saved.";
   }
   this->showUpdates();
 
@@ -1228,8 +1385,10 @@ void UiOptions::wire() {
       };
     }
     describe({pageId(kDisplay, kBrightLabel), pageId(kDisplay, kBrightBar)},
-             GpuFsr::available() ? "Lightens or darkens the whole picture: 100% is as the game draws it."
-                                 : "Needs OpenGL on your graphics card, which isn't available here.");
+             GpuFsr::available()        ? "Lightens or darkens the whole picture: 100% is as the game draws it."
+             : Display::openGlNextStart() ? "Lightens or darkens the whole picture. Changed, it works from the next time "
+                                            "the game starts (it needs OpenGL)."
+                                          : "Needs OpenGL on your graphics card, which isn't available here.");
   }
   onOff(kDisplay, kFps, "Show the frame rate (F3)", g_showDiagnostics, [](bool on) { g_showDiagnostics = on; });
   describe({pageId(kDisplay, kFps), pageId(kDisplay, kFps + 1)},
@@ -1377,8 +1536,10 @@ void UiOptions::wire() {
   choices(kAccess, {kFilterOff, kFilterP, kFilterD, kFilterT}, {"Off", "Protanopia", "Deuteranopia", "Tritanopia"},
           static_cast<int>(Display::filter()), [](int i) { Display::setFilter(static_cast<Display::Filter>(i)); });
   describe({pageId(kAccess, kFilterLabel), pageId(kAccess, kFilterOff), pageId(kAccess, kFilterOff + 1)},
-           GpuFsr::available() ? "Moves colours you may not tell apart into ones you can. Off: as the game draws them."
-                               : "Needs OpenGL on your graphics card, which isn't available here.");
+           GpuFsr::available()        ? "Moves colours you may not tell apart into ones you can. Off: as the game draws them."
+           : Display::openGlNextStart() ? "Moves colours you may not tell apart into ones you can. Picked, it works "
+                                          "from the next time the game starts (it needs OpenGL)."
+                                        : "Needs OpenGL on your graphics card, which isn't available here.");
   describe({pageId(kAccess, kFilterP), pageId(kAccess, kFilterP + 1)},
            "Protanopia: reds look dark and close to greens. Red-green differences move into blue and brightness.");
   describe({pageId(kAccess, kFilterD), pageId(kAccess, kFilterD + 1)},
@@ -1426,7 +1587,7 @@ void UiOptions::wire() {
     }
     describe({pageId(p, kSwitchFirst + k), pageId(p, kSwitchTextFirst + k)}, extraAbout(f));
   }
-  // (Mods & Updates' switches - Load mods among them: HD art mods follow it
+  // (Mods' switches - Load mods among them: HD art mods follow it
   // at once, and the list says so)
   for (int k = 0; k < count[kMods]; k++)
     if (UiButton *b = button(pageId(kMods, kSwitchFirst + k))) {

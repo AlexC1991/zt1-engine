@@ -2,6 +2,9 @@
 #define RENDER_SETTINGS_HPP
 
 #include <SDL2/SDL.h>
+#include <functional>
+#include "CompassDirection.hpp"
+class Animation;
 
 #include "ArtScaler.hpp"
 
@@ -9,6 +12,12 @@
 // (nearest) by default; menus scaled by a non-whole factor switch to linear
 // while they draw so the painted art scales smoothly.
 namespace RenderSettings {
+
+// addition: only the map pass relights palette shadows. The same animal art
+// used in an information panel keeps its original appearance.
+inline bool relightWorld = false;
+// addition: the tissue pass shares native sprite ordering and tank clips.
+inline std::function<void(SDL_Renderer*,Animation*,float,float,CompassDirection,int)> fluorescence;
 
 inline SDL_ScaleMode artScaleMode = SDL_ScaleModeNearest;
 
@@ -78,14 +87,29 @@ inline UiPass uiPass = UiPass::All;
 inline bool drawsUiArt() { return uiPass != UiPass::Text; }
 inline bool drawsUiText() { return uiPass != UiPass::Art; }
 
+// ours: a texture's scale mode, changed safely while drawing. SDL's OpenGL
+// renderer applies it at once - to draws of the texture still waiting in its
+// batch too - binding the texture behind its own record of what is bound (a
+// later draw could then use the wrong texture). Only when it changes; the
+// waiting draws of it sent first, and the record cleared after.
+inline void setScaleMode(SDL_Texture *texture, SDL_ScaleMode want) {
+  SDL_ScaleMode have;
+  if (!texture || (SDL_GetTextureScaleMode(texture, &have) == 0 && have == want))
+    return;
+  const bool gl = SDL_GL_BindTexture(texture, nullptr, nullptr) == 0;
+  SDL_SetTextureScaleMode(texture, want);
+  if (gl)
+    SDL_GL_UnbindTexture(texture);
+}
+
 inline void applyArtScaleMode(SDL_Texture *texture) {
   if (!texture)
     return;
   // Upscaled art already holds the detail; linear finishes the last bit of
   // scaling to the window smoothly
-  SDL_SetTextureScaleMode(texture, ArtScaler::scaleOf(texture) > 1
-                                       ? SDL_ScaleModeLinear
-                                       : artScaleMode);
+  // (only when it changes: asked for every sprite, every frame, SDL bound
+  // the texture and set its filter again each time)
+  setScaleMode(texture, ArtScaler::scaleOf(texture) > 1 ? SDL_ScaleModeLinear : artScaleMode);
 }
 
 } // namespace RenderSettings

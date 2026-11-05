@@ -2,6 +2,7 @@
 #include "../Shows.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <set>
 #include <sstream>
@@ -30,6 +31,8 @@
 #include "UiStatusImage.hpp"
 #include "UiText.hpp"
 #include "WindowLock.hpp"
+#include "UiSpeedControlArt.hpp"
+#include <SDL_image.h>
 
 // addition: the Game Options' Extras tab. The original's gameopts.lyt has an
 // About tab button with its action left out (";action=3 ;target=903"): it's
@@ -46,6 +49,7 @@ static std::string extrasLabel(const std::string &name) {
       {"mods", "Load mods"},             {"modmenu", "Mod menu"},
       {"updatechecks", "Update checks"}, {"misnamedart", "Misnamed art"},
       {"optionswindow", "New Options"},   {"smartstack", "Windows aside"},
+      {"fastforward", "Game speed"},
       {"dragwindows", "Drag windows"},   {"infocloseslists", "Info closes lists"}};
   auto it = labels.find(name);
   return it == labels.end() ? name : it->second;
@@ -57,7 +61,8 @@ static std::vector<Features::Switch *> extrasOrder() {
   for (Features::Switch &f : Features::all())
     if (std::string(f.name) == "optionswindow")
       out.insert(out.begin(), &f);
-    else if (std::string(f.name) != "infinitemoney") // (the cheat: the Mod Menu's and the Options window's)
+    else if (std::string(f.name) != "infinitemoney" && std::string(f.name) != "daynight" &&
+             std::string(f.name) != "gametime") // The lighting/clock additions use the Options window; the cheat uses Mods.
       out.push_back(&f);
   return out;
 }
@@ -201,6 +206,18 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   }
   int mainLayer = mainReader->getInt("layoutinfo", "layer", 2);
   this->hud = new UiLayout(mainReader, resource_manager);
+  // addition: borrow the complete native Date text role, including localized
+  // font IDs and colours. Only the optional wider box has new geometry.
+  if (auto *date = dynamic_cast<UiText *>(this->hud->getElementById(1030))) {
+    char empty = 0;
+    this->dateTimeIni = std::make_unique<IniReader>(&empty, 0);
+    for (const auto &[key, value] : mainReader->getSection(date->getName()))
+      this->dateTimeIni->set("date", key, value);
+    this->dateTimeIni->set("date", "x", "0");
+    this->dateTimeIni->set("date", "y", "0");
+    this->dateTimeIni->set("date", "dy", "fitfont");
+    this->dateTimeText = std::make_unique<UiText>(this->dateTimeIni.get(), resource_manager, "date");
+  }
   this->entries.push_back({this->hud, this->hud->getId(), mainLayer, false, true});
 
   // The HUD's panel buttons, and so the panels this screen needs
@@ -1465,6 +1482,9 @@ void UiGameScreen::refreshZooStatus() {
 }
 
 UiGameScreen::~UiGameScreen() {
+  if (this->speedArtwork) SDL_DestroyTexture(this->speedArtwork);
+  for (SDL_Texture *face : this->speedNativeFaces)
+    if (face) SDL_DestroyTexture(face);
   delete this->options;
   for (Entry &e : this->entries)
     delete e.layout;
@@ -1477,6 +1497,7 @@ UiGameScreen::~UiGameScreen() {
 }
 
 UiElement *UiGameScreen::getElementById(int id) {
+  if (id == 1030 && (!this->dateTime.empty() || Features::fastForward) && this->dateTimeText) return this->dateTimeText.get();
   for (Entry &e : this->entries)
     if (UiElement *found = e.layout->getElementById(id))
       return found;
@@ -1485,6 +1506,8 @@ UiElement *UiGameScreen::getElementById(int id) {
 
 bool UiGameScreen::isOverPanel(int x, int y) const {
   SDL_Point p = {x, y};
+  if ((!this->dateTime.empty() || Features::fastForward) && SDL_PointInRect(&p, &this->dateTimeWell)) return true;
+  if (Features::fastForward && SDL_PointInRect(&p, &this->speedRect)) return true;
   for (const Entry &e : this->entries)
     if (e.panel && e.open && SDL_PointInRect(&p, &e.rect))
       return true;
@@ -1927,6 +1950,353 @@ void UiGameScreen::placePanels(SDL_Renderer *renderer, SDL_Rect *screen) {
   }
 }
 
+// addition: approved session-only 1/2/5 speed selector. The game owns the clock.
+void UiGameScreen::setGameSpeed(int speed) {
+  this->selectedSpeed = Features::fastForward && (speed == 2 || speed == 5) ? speed : 1;
+  if (!Features::fastForward) this->speedDown = false;
+}
+
+SDL_Rect UiGameScreen::speedButtonRect() const {
+  return Features::fastForward ? this->speedRect : SDL_Rect{};
+}
+
+// addition: measured placement of the approved 1448x1086 artwork in the
+// original 800x600 HUD coordinates.
+static SDL_FRect speedArtworkRect(const SDL_Rect &pause) {
+  constexpr float referenceScale = 800.0f / 1448.0f;
+  return {pause.x + 304*referenceScale - 171,
+          pause.y + 1020*referenceScale - 566,
+          UiSpeedControlArt::frameWidth*referenceScale,
+          UiSpeedControlArt::frameHeight*referenceScale};
+}
+
+// addition: fit the original red or blue face to the approved bronze lobe.
+// The bronze-to-olive boundary supplies the coverage. At the shared waist
+// the color feathers into the speed control's bronze face.
+static SDL_Texture *makeSpeedTransportFace(SDL_Renderer *renderer, SDL_Surface *nativeFace) {
+  SDL_RWops *bytes = SDL_RWFromConstMem(UiSpeedControlArt::png, sizeof(UiSpeedControlArt::png));
+  SDL_Surface *atlas = bytes ? IMG_Load_RW(bytes, 1) : nullptr;
+  if (!atlas) return nullptr;
+  SDL_Surface *face = SDL_ConvertSurfaceFormat(atlas, SDL_PIXELFORMAT_RGBA32, 0);
+  SDL_FreeSurface(atlas);
+  if (!face) return nullptr;
+
+  constexpr int width = UiSpeedControlArt::frameWidth;
+  constexpr int height = UiSpeedControlArt::frameHeight;
+  // Measured in the selected artwork: left face center and the neck before
+  // the speed arrows. Ease the color across that neck to avoid a visible seam.
+  constexpr float centerX = 35.5f, centerY = 34.5f, waistStart = 48, waistEnd = 65;
+  // Sample inside the original colored face, before its separate olive rim.
+  constexpr float nativeRadius = 11.0f;
+  SDL_Rect frame{width, 0, width, height};
+  for (int y = 0; y < height; ++y) {
+    auto *row = reinterpret_cast<Uint32 *>(static_cast<Uint8 *>(face->pixels) + y * face->pitch);
+    for (int x = 0; x < width; ++x) {
+      Uint32 &pixel = row[frame.x + x];
+      Uint8 r, g, b, a;
+      SDL_GetRGBA(pixel, face->format, &r, &g, &b, &a);
+      // The lit lower edge is still bronze where red and green nearly match.
+      // Its stronger red-to-blue contrast distinguishes it from the olive rim.
+      const float warmth = std::max((int(r) - int(g)) / 14.0f, (int(r) - int(b) - 28) / 36.0f);
+      const float bronze = std::clamp(warmth, 0.0f, 1.0f);
+      const float blend = std::clamp((waistEnd - (x + 0.5f)) / (waistEnd - waistStart), 0.0f, 1.0f);
+      const float waist = blend * blend * (3.0f - 2.0f * blend);
+      const Uint8 alpha = static_cast<Uint8>(a * bronze * waist);
+      if (!alpha) {
+        pixel = 0;
+        continue;
+      }
+
+      float dx = (x + 0.5f - centerX) / 2.0f;
+      float dy = (y + 0.5f - centerY) / 2.0f;
+      const float radius = std::hypot(dx, dy);
+      if (radius > nativeRadius) {
+        dx *= nativeRadius / radius;
+        dy *= nativeRadius / radius;
+      }
+      const int sx = std::clamp(int((16.5f + dx) * nativeFace->w / 32), 0, nativeFace->w - 1);
+      const int sy = std::clamp(int((15.5f + dy) * nativeFace->h / 32), 0, nativeFace->h - 1);
+      const auto *sample = static_cast<const Uint8 *>(nativeFace->pixels) + sy * nativeFace->pitch + sx * nativeFace->format->BytesPerPixel;
+      Uint32 color = 0;
+      std::memcpy(&color, sample, nativeFace->format->BytesPerPixel);
+      SDL_GetRGB(color, nativeFace->format, &r, &g, &b);
+      pixel = SDL_MapRGBA(face->format, r, g, b, alpha);
+    }
+  }
+
+  SDL_Surface *overlay = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Texture *texture = nullptr;
+  if (overlay) {
+    SDL_SetSurfaceBlendMode(face, SDL_BLENDMODE_NONE);
+    if (SDL_BlitSurface(face, &frame, overlay, nullptr) == 0)
+      texture = SDL_CreateTextureFromSurface(renderer, overlay);
+    SDL_FreeSurface(overlay);
+  }
+  SDL_FreeSurface(face);
+  return texture;
+}
+
+// addition: import the selected component itself, retaining its face, rim and symbols.
+void UiGameScreen::drawSpeedControl(SDL_Renderer *renderer, const SDL_Rect &pause) {
+  if (pause.w <= 0 || pause.h <= 0) return;
+  const SDL_FRect joined = speedArtworkRect(pause);
+  this->speedRect = {pause.x + pause.w - 2, pause.y + 4, 22, pause.h - 8};
+  if (!RenderSettings::drawsUiArt()) return;
+  if (!this->speedArtwork) {
+    SDL_RWops *bytes = SDL_RWFromConstMem(UiSpeedControlArt::png, sizeof(UiSpeedControlArt::png));
+    if (bytes) this->speedArtwork = IMG_LoadTexture_RW(renderer, bytes, 1);
+  }
+  SDL_Point pointer{this->mouseX,this->mouseY};
+  const bool hover = SDL_PointInRect(&pointer,&this->speedRect);
+  const int frame = this->selectedSpeed == 5 ? 2 : this->selectedSpeed == 2 ? 1 : 0;
+  const SDL_Rect source{frame*UiSpeedControlArt::frameWidth,0,
+                        UiSpeedControlArt::frameWidth,UiSpeedControlArt::frameHeight};
+  if (this->speedArtwork) {
+    SDL_SetTextureBlendMode(this->speedArtwork,SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(this->speedArtwork,SDL_ScaleModeLinear);
+    SDL_SetTextureColorMod(this->speedArtwork,255,255,255);
+    SDL_RenderCopyF(renderer,this->speedArtwork,&source,&joined);
+    if (hover || this->speedDown) {
+      SDL_Rect previous{};
+      const bool clipped = SDL_RenderIsClipEnabled(renderer) == SDL_TRUE;
+      SDL_RenderGetClipRect(renderer,&previous);
+      SDL_Rect clip = this->speedRect;
+      if (clipped) SDL_IntersectRect(&previous,&this->speedRect,&clip);
+      SDL_RenderSetClipRect(renderer,&clip);
+      const Uint8 shade = this->speedDown ? 190 : 255;
+      SDL_SetTextureColorMod(this->speedArtwork,shade,this->speedDown ? 180 : 242,this->speedDown ? 150 : 195);
+      SDL_RenderCopyF(renderer,this->speedArtwork,&source,&joined);
+      SDL_RenderSetClipRect(renderer,clipped ? &previous : nullptr);
+      SDL_SetTextureColorMod(this->speedArtwork,255,255,255);
+    }
+  }
+  // All rates reuse the same selected face and sampled fixed-size symbol.
+}
+
+void UiGameScreen::setDateTime(const std::string &calendar, const std::string &time) {
+  if (!this->hud) return;
+  this->dateTime = time;
+  if (time.empty()) this->dateTimeWell = {};
+  if (auto *date = dynamic_cast<UiText *>(this->hud->getElementById(1030))) {
+    date->setText(calendar);
+    date->setHidden((!time.empty() || Features::fastForward) && this->dateTimeText != nullptr);
+  }
+  const std::string label = time.empty() ? calendar : calendar + "   " + time;
+  if (this->dateTimeText && this->dateTimeText->getText() != label) this->dateTimeText->setMessage(label);
+}
+
+// addition: extend the native date recess horizontally for the visual clock.
+// ui/main.lyt supplies the text role and positions; backgnd3/backgnd4 supply
+// the recessed edges. Only the middle stretches, leaving the round control alone.
+void UiGameScreen::drawDateTime(SDL_Renderer *renderer) {
+  this->dateTimeWell = {};
+  this->speedRect = {};
+  if ((this->dateTime.empty() && !Features::fastForward) || !this->dateTimeText) return;
+  auto *money = dynamic_cast<UiText *>(this->hud->getElementById(1016));
+  auto *moneyBackground = this->hud->getElementById(1037);
+  auto drawOriginalMoney = [&] {
+    if (money && moneyBackground && !money->isHidden()) {
+      SDL_Rect parent = moneyBackground->getLastRect();
+      money->draw(renderer,&parent);
+    }
+  };
+  auto *pause = this->hud->getElementById(1071);
+  auto *play = this->hud->getElementById(1072);
+  UiElement *shown = pause && !pause->isHidden() ? pause : play;
+  auto *background = this->hud->getElementById(1035);
+  auto *nativeDate = this->hud->getElementById(1030);
+  if (!shown || shown->isHidden() || !background || !nativeDate || !pause) {
+    drawOriginalMoney();
+    return;
+  }
+  auto *ini = this->hud->getIniReader();
+  const SDL_Rect back = background->getLastRect();
+  Animation *art = this->resource_manager->getAnimation("ui/main/backgnd3/backgnd3");
+  int width = 0, height = 0;
+  if (art) art->queryTexture(CompassDirection::N, &width, &height);
+  const int left = ini->getInt(pause->getName(), "x") + ini->getInt(nativeDate->getName(), "x");
+  const int originalWidth = ini->getInt(nativeDate->getName(), "dx");
+  const int textTop = ini->getInt(pause->getName(), "y") + ini->getInt(nativeDate->getName(), "y");
+  // measured: native backgnd3's upper recessed edge starts at the Date box
+  // top (before its 2 px text border), not 3 px below it. Its bottom is
+  // 5 px above the background's bottom. Keep the complete
+  // 12 px corner/shoulder at each end: the curved upper lip extends beyond
+  // the innermost 4 px and must not be stretched into the straight middle.
+  constexpr int endcap = 12, moneyTextInset = 4, trailingPadding = 4, wellGap = 6;
+  const SDL_Rect source{left, textTop, originalWidth, height - 5 - textTop};
+  if (left < 0 || source.x + source.w > width || source.h <= 0) {
+    drawOriginalMoney();
+    return;
+  }
+  int labelWidth = 0, labelHeight = 0;
+  if (SDL_Texture *text = this->resource_manager->getStringTexture(renderer,
+          ini->getInt(nativeDate->getName(), "font"), this->dateTimeText->getText(),
+          SDL_Color{255, 255, 255, 255}, ini->getInt(nativeDate->getName(), "fontsize")))
+    this->resource_manager->getTextSize(text, &labelWidth, &labelHeight);
+  int calendarWidth = 0, calendarHeight = 0;
+  if (auto *calendar = dynamic_cast<UiText *>(nativeDate))
+    if (SDL_Texture *text = this->resource_manager->getStringTexture(renderer,
+            ini->getInt(nativeDate->getName(), "font"), calendar->getText(),
+            SDL_Color{255, 255, 255, 255}, ini->getInt(nativeDate->getName(), "fontsize")))
+      this->resource_manager->getTextSize(text, &calendarWidth, &calendarHeight);
+  const int border = ini->getInt(nativeDate->getName(), "border", 0);
+  const int leading = std::max(0, (originalWidth - 2 * border - calendarWidth) / 2);
+  SDL_Rect well{back.x + left, back.y + source.y,
+                std::max(originalWidth, labelWidth + leading + 2 * border + trailingPadding), source.h};
+  // addition: the approved smaller attached speed face adds 20 native pixels.
+  // The well starts underneath its rim; only its straight middle stretches.
+  constexpr int speedWidth = 20;
+  if (Features::fastForward) well.x += speedWidth;
+  this->dateTimeWell = well;
+
+  auto region = [&](Animation *image, int imageWidth, int imageHeight, const SDL_Rect &src, const SDL_Rect &dst) {
+    if (!image || imageWidth <= 0 || imageHeight <= 0 || !RenderSettings::drawsUiArt()) return;
+    const SDL_FPoint dest[]{{float(dst.x),float(dst.y)},{float(dst.x+dst.w),float(dst.y)},
+                           {float(dst.x+dst.w),float(dst.y+dst.h)},{float(dst.x),float(dst.y+dst.h)}};
+    const SDL_FPoint uv[]{{float(src.x)/imageWidth,float(src.y)/imageHeight},
+                         {float(src.x+src.w)/imageWidth,float(src.y)/imageHeight},
+                         {float(src.x+src.w)/imageWidth,float(src.y+src.h)/imageHeight},
+                         {float(src.x)/imageWidth,float(src.y+src.h)/imageHeight}};
+    image->drawMapped(renderer,CompassDirection::N,0,dest,uv,{255,255,255,255});
+  };
+  auto recess = [&](Animation *image, int imageWidth, int imageHeight, const SDL_Rect &src, const SDL_Rect &dst) {
+    const int sourceX[]{src.x,src.x+endcap,src.x+src.w-endcap,src.x+src.w};
+    const int targetX[]{dst.x,dst.x+endcap,dst.x+dst.w-endcap,dst.x+dst.w};
+    for (int x = 0; x < 3; ++x)
+      region(image,imageWidth,imageHeight,{sourceX[x],src.y,sourceX[x+1]-sourceX[x],src.h},
+             {targetX[x],dst.y,targetX[x+1]-targetX[x],dst.h});
+  };
+
+  SDL_Rect moneyWell{};
+  SDL_Rect moneyBack{};
+  int statusShift = 0;
+  if (money && moneyBackground) {
+    moneyBack = moneyBackground->getLastRect();
+    // measured: backgnd4's money recess encloses Money with 17 px on the
+    // left and 6 on the right; retain its native right edge and baseline.
+    const SDL_Rect moneySource{ini->getInt(money->getName(), "x") - 17,
+                              ini->getInt(money->getName(), "y") - 1,
+                              ini->getInt(money->getName(), "dx") + 23, source.h};
+    const SDL_Rect originalMoney{moneyBack.x + moneySource.x,moneyBack.y + moneySource.y,moneySource.w,moneySource.h};
+    const int speedShift = Features::fastForward ? speedWidth : 0;
+    const int overlap = std::max(0, well.x + well.w + wellGap - originalMoney.x - speedShift);
+    if (overlap > 0 && overlap < originalMoney.w - 2 * endcap) {
+      Animation *moneyArt = this->resource_manager->getAnimation("ui/main/backgnd4/backgnd4");
+      Animation *filler = this->resource_manager->getAnimation("ui/main/bg3/bg3");
+      int mw = 0, mh = 0, fw = 0, fh = 0;
+      if (moneyArt) moneyArt->queryTexture(CompassDirection::N,&mw,&mh);
+      if (filler) filler->queryTexture(CompassDirection::N,&fw,&fh);
+      if (mw > 0 && mh > 0 && fw > 0 && fh >= mh - moneySource.y) {
+        // Repaint the old well and text with the native plain bar, aligned
+        // at its bottom as Filler3 is, then put back only the narrower well.
+        region(filler,fw,fh,{0,fh-mh+moneySource.y,fw,moneySource.h},originalMoney);
+        if (speedShift > 0) {
+          statusShift = speedShift;
+          // addition: borrow the extra width from the Zoo Status meter,
+          // retaining Money's clock-only width and every control to its right.
+          if (auto *meter = this->hud->getElementById(1080)) {
+            const SDL_Rect oldMeter = meter->getLastRect();
+            const SDL_Rect clear{originalMoney.x, moneyBack.y,
+                                 oldMeter.x+oldMeter.w-originalMoney.x, mh};
+            region(filler,fw,fh,{0,fh-mh,fw,mh},clear);
+          }
+        }
+        moneyWell = {originalMoney.x+overlap+speedShift,originalMoney.y,originalMoney.w-overlap,originalMoney.h};
+        recess(moneyArt,mw,mh,moneySource,moneyWell);
+      }
+    }
+  }
+  if (Features::fastForward) {
+    // addition: cover the vacated date lip with the player's native plain bar.
+    Animation *filler = this->resource_manager->getAnimation("ui/main/bg3/bg3");
+    int fw = 0, fh = 0;
+    if (filler) filler->queryTexture(CompassDirection::N, &fw, &fh);
+    if (fw > 0 && fh >= source.h + 5)
+      region(filler,fw,fh,{0,fh-source.h-5,fw,source.h},
+             {back.x+left,back.y+source.y,speedWidth,source.h});
+  }
+  recess(art,width,height,source,well);
+  // The round button stays in front, with exactly its original hit rectangle.
+  SDL_Rect buttonParent = back;
+  if (Features::fastForward) {
+    // addition: retain the native element's rectangle and input, but the
+    // approved shared component replaces its normal face and rim. The native
+    // element continues to own its original hit rectangle and Pause action.
+    const auto pass = RenderSettings::uiPass;
+    RenderSettings::uiPass = RenderSettings::UiPass::Text;
+    shown->draw(renderer,&buttonParent);
+    RenderSettings::uiPass = pass;
+    this->drawSpeedControl(renderer, shown->getLastRect());
+    if (RenderSettings::drawsUiArt()) {
+      SDL_Rect face = shown->getLastRect();
+      auto *nativeButton = dynamic_cast<UiButton *>(shown);
+      Animation *native = nativeButton ? this->resource_manager->getAnimation(nativeButton->getAnimationPath()) : nullptr;
+      SDL_Point pointer{this->mouseX,this->mouseY};
+      const bool hover = SDL_PointInRect(&pointer,&face) && !SDL_PointInRect(&pointer,&this->speedRect);
+      const int key = (shown == play ? 2 : 0) + (hover ? 1 : 0);
+      // Each state is fitted to the shared artwork once and cached.
+      if (native && (shown == play || hover) && !this->speedNativeFaces[key]) {
+        SDL_Surface *sourceFace = native->frameSurface(hover ? "H" : "N",0);
+        if (!sourceFace) sourceFace = native->frameSurface("N",0);
+        if (sourceFace)
+          this->speedNativeFaces[key] = makeSpeedTransportFace(renderer, sourceFace);
+      }
+      if (SDL_Texture *texture = this->speedNativeFaces[key]; texture && (shown == play || hover)) {
+        SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(texture,SDL_ScaleModeLinear);
+        const SDL_FRect joined = speedArtworkRect(face);
+        SDL_RenderCopyF(renderer,texture,nullptr,&joined);
+      }
+    }
+  } else {
+    shown->draw(renderer,&buttonParent);
+  }
+  this->dateTimeIni->set("date", "justify", "left");
+  this->dateTimeIni->set("date", "x", std::to_string(leading));
+  this->dateTimeIni->set("date", "dx", std::to_string(well.w - leading));
+  SDL_Rect textBox{well.x,back.y + textTop,well.w,well.h};
+  this->dateTimeText->draw(renderer,&textBox);
+  if (moneyWell.w > 0 && !money->isHidden()) {
+    const std::string section = money->getName();
+    const std::string x = ini->get(section,"x"), dx = ini->get(section,"dx"), justify = ini->get(section,"justify");
+    ini->set(section,"x",std::to_string(moneyWell.x-moneyBack.x+moneyTextInset));
+    ini->set(section,"dx",std::to_string(moneyWell.w-2*moneyTextInset));
+    ini->set(section,"justify","center");
+    money->draw(renderer,&moneyBack);
+    ini->set(section,"x",x);
+    ini->set(section,"dx",dx);
+    ini->set(section,"justify",justify);
+  } else {
+    drawOriginalMoney();
+  }
+  if (statusShift > 0)
+    if (auto *statusButton = this->hud->getElementById(1014)) {
+      SDL_Rect parent = moneyBack;
+      parent.x += statusShift;
+      statusButton->draw(renderer,&parent);
+      SDL_Rect button = statusButton->getLastRect();
+      auto *meter = this->hud->getElementById(1080);
+      auto *value = this->hud->getElementById(1015);
+      if (meter && value) {
+        const std::string valueWidth = ini->get(value->getName(),"dx");
+        Animation *meterArt = this->resource_manager->getAnimation("ui/main/progbck/progbck");
+        int mw = 0, mh = 0;
+        if (meterArt) meterArt->queryTexture(CompassDirection::N,&mw,&mh);
+        ini->set(value->getName(),"dx",std::to_string(std::max(1,std::atoi(valueWidth.c_str())-statusShift)));
+        // Draw from the native texture without inserting a missing dx key
+        // into its layout: restoring that key as empty changes native sizing.
+        const SDL_Rect meterBox{button.x+ini->getInt(meter->getName(),"x"),
+                                 button.y+ini->getInt(meter->getName(),"y"),
+                                 std::max(1,mw-statusShift),mh};
+        region(meterArt,mw,mh,{0,0,mw,mh},meterBox);
+        value->draw(renderer,&button);
+        // The circular button overlaps the left end of its meter natively.
+        statusButton->draw(renderer,&parent);
+        ini->set(value->getName(),"dx",valueWidth);
+      }
+    }
+}
+
 void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   // The gate button, live: enabled the moment there's an exhibit (the first
   // one finished with the panel open left it greyed until it was opened
@@ -1944,7 +2314,27 @@ void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     if (!e.open)
       continue;
     if (!e.panel) {
+      // addition: the optional clock owns Money's single draw, including in
+      // a separate text pass where repainting its old position cannot erase it.
+      UiElement *money = e.layout == this->hud && (!this->dateTime.empty() || Features::fastForward) && this->dateTimeText
+                             ? this->hud->getElementById(1016) : nullptr;
+      const bool moneyHidden = money && money->isHidden();
+      if (money) money->setHidden(true);
+      // addition: date visibility is recomputed from the switch each draw,
+      // including after disabling the feature without a calendar tick.
+      if (e.layout == this->hud)
+        if (auto *date = this->hud->getElementById(1030))
+          date->setHidden((!this->dateTime.empty() || Features::fastForward) && this->dateTimeText != nullptr);
+      UiElement *pause = e.layout == this->hud && Features::fastForward ? this->hud->getElementById(1071) : nullptr;
+      UiElement *play = e.layout == this->hud && Features::fastForward ? this->hud->getElementById(1072) : nullptr;
+      const bool pauseHidden = pause && pause->isHidden(), playHidden = play && play->isHidden();
+      if (pause) pause->setHidden(true);
+      if (play) play->setHidden(true);
       e.layout->draw(renderer, layout_rect);
+      if (pause) pause->setHidden(pauseHidden);
+      if (play) play->setHidden(playHidden);
+      if (money) money->setHidden(moneyHidden);
+      if (e.layout == this->hud) this->drawDateTime(renderer);
       continue;
     }
     SDL_Rect r = e.rect;
@@ -1996,6 +2386,13 @@ std::string UiGameScreen::tooltipText() const {
   if (this->dialog.layout || this->mouseX < 0)
     return "";
   SDL_Point p = {this->mouseX, this->mouseY};
+  bool speedCovered = false;
+  for (const Entry &e : this->entries)
+    if (e.panel && e.open && SDL_PointInRect(&p,&e.rect)) speedCovered = true;
+  if (Features::fastForward && SDL_PointInRect(&p, &this->speedRect) &&
+      !speedCovered && !this->optionsOpen() && !this->filter.open)
+    return "Game speed: " + std::to_string(this->selectedSpeed) + "x. Click for " +
+           std::to_string(this->selectedSpeed == 1 ? 2 : this->selectedSpeed == 2 ? 5 : 1) + "x.";
   for (const Entry &e : this->entries)
     if (e.open && e.lockRect.w > 0 && SDL_PointInRect(&p, &e.lockRect))
       return e.locked ? "Locked: this window stays where it is. Click to let it be dragged again."
@@ -2317,6 +2714,45 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
       break;
     }
     return UiAction::NONE;
+  }
+
+  // addition: consume the speed control's pointer events before native HUD
+  // controls, dragging and map placement see them. Release remains captured
+  // outside the button, so a press cannot finish as a placement or another click.
+  if (!Features::fastForward) {
+    this->speedDown = false;
+    this->speedRect = {};
+    this->selectedSpeed = 1;
+  } else {
+    for (Input &in : inputs) {
+      if (in.type != InputType::POSITIONED) continue;
+      const bool over = SDL_PointInRect(&in.position,&this->speedRect);
+      const bool captured = this->speedDown;
+      bool covered = false;
+      for (const Entry &e : this->entries)
+        if (e.panel && e.open && SDL_PointInRect(&in.position,&e.rect)) covered = true;
+      if (over && !covered && in.event == InputEvent::LEFT_CLICK) {
+        this->speedDown = true;
+        this->selectedSpeed = this->selectedSpeed == 1 ? 2 : this->selectedSpeed == 2 ? 5 : 1;
+        if (UiButton::clickSound) UiButton::clickSound();
+        if (this->onGameSpeed) this->onGameSpeed(this->selectedSpeed);
+      }
+      if (in.event == InputEvent::LEFT_RELEASE) this->speedDown = false;
+      if ((over && !covered) || (captured && (in.event == InputEvent::LEFT_RELEASE ||
+          in.event == InputEvent::CURSOR_MOVE || in.event == InputEvent::MOUSE_MOVE))) {
+        // addition: consumed events must still clear native hover selection.
+        // A neutral move cannot click, drag or alter the real pointer/tooltip.
+        Input outside{};
+        outside.type = InputType::POSITIONED;
+        outside.event = InputEvent::CURSOR_MOVE;
+        outside.position = {-1,-1};
+        outside.x = outside.y = -1;
+        std::vector<Input> neutral{outside};
+        this->hud->handleInputs(neutral);
+        in.type = InputType::NONE;
+        in.event = InputEvent::NONE;
+      }
+    }
   }
 
   // A window dragged by its title (or the original's handle): it follows

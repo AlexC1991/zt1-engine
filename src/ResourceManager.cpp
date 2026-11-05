@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "ArtScaler.hpp"
+#include "HdArt.hpp"
 #include "Expansion.hpp"
 #include "Mods.hpp"
 #include "Utils.hpp"
@@ -31,6 +32,7 @@ ResourceManager::ResourceManager(Config *config) : config(config) {
 
 ResourceManager::~ResourceManager() {
   clearAnimations();
+  HdArt::setResources(nullptr);
   Mix_HaltMusic();
   if (this->intro_music != nullptr) {
     Mix_FreeMusic(this->intro_music);
@@ -438,6 +440,9 @@ std::string ResourceManager::gameTextWithoutMods(const std::string &file) {
   const std::string text(static_cast<const char*>(data),size);std::free(data);return text;
 }
 void ResourceManager::clearAnimations() {
+  // addition: the HD recolour cache also owns registered animations. Drop
+  // those references before inventory cleanup can delete their art.
+  HdArt::setResources(this);
   while (!ownedAnimations.empty()) {
     Animation *animation = *ownedAnimations.begin();
     ownedAnimations.erase(animation);
@@ -916,6 +921,17 @@ Animation *ResourceManager::withArtOptions(Animation *a, const std::string &name
     a->setArtOptions(true, dir);
   else {
     a->setWorldArt(dir);
+    // addition: the original Marine Mania types declare separate real
+    // shadow art. Palette entry 1 in those body images is real pigment.
+    if(lower.rfind("animals/",0)==0 || lower.rfind("staff/",0)==0 || lower.rfind("guests/",0)==0) {
+      const auto slash=lower.find('/',lower.find('/')+1);
+      if(slash!=std::string::npos) {
+        const auto definition=lower.substr(0,slash)+".ai";
+        if(hasResource(definition))if(auto *ai=getIniReader(definition)) {
+          a->setBlackIsBody(ai->getInt("characteristics/integers","cusesrealshadows",0)!=0 || ai->getInt("characteristics/integers","chasshadowimages",0)!=0);delete ai;
+        }
+      }
+    }
     // (loaded in a recoloured palette: its HD art, made from its own, is
     // recoloured to match)
     if (PalletManager::overriding())
@@ -1110,4 +1126,7 @@ std::string ResourceManager::getString(uint32_t id) {
   if (string_map.count(id))
     return string_map[id];
   return "";
+}
+size_t ResourceManager::lightingTextureBytes()const {
+  size_t bytes=0;for(const auto *art:ownedAnimations)if(art)bytes+=art->lightingTextureBytes();return bytes;
 }

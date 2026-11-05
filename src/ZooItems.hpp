@@ -32,6 +32,7 @@ public:
   };
 
   void load(ResourceManager *rm);
+  Animation *artOf(const Item &)const;
   void clear() { this->list.clear(); }
   const std::vector<Item> &items() const { return this->list; }
   const Item *item(int id) const;

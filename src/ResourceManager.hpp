@@ -25,6 +25,7 @@ class ResourceManager {
 public:
   ResourceManager(Config *config);
   ~ResourceManager();
+  size_t lightingTextureBytes()const;
   // Live mod refresh discards world/HUD consumers before releasing their art.
 
   void load_all(std::atomic<float> *progress, std::atomic<bool> *is_done);

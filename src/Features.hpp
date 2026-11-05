@@ -24,7 +24,7 @@ inline bool pathModes = true;     // path drags bend once, Tab cycles (off: foll
 inline bool hotkeys = true;       // Esc / right-click put the bulldozer away, Ctrl+Z undoes (off: the button only)
 inline bool mods = true;          // mods switched on in the mods folder are loaded (off: the original's files only)
 inline bool modMenu = true;       // the main menu's Get New Zoo Tycoon Items opens the Mod Menu (off: as the original)
-inline bool updateChecks = true;  // an installed official build looks for a newer release at start (off: never; Updater.hpp)
+inline bool updateChecks = true;  // startup checks in an official install (off: manual checks only; Updater.hpp)
 inline bool misnamedArt = true;   // art the original ships under a misspelt name is used (off: those animations stay missing)
 inline bool optionsWindow = true; // Game Options as a window with every setting, also on the main menu (off: the original side panel)
 inline bool tankGroundBack = true; // a tank taken away leaves the ground as it was (off: the sunken hole stays, as the original)
@@ -35,14 +35,25 @@ inline bool infoClosesLists = false; // an information window closes the bottom 
 inline bool smartStack = true;   // windows that would cover one another are placed beside it (off: where the original puts them)
 inline bool dragWindows = true;  // every window can be dragged by its title and keeps its place (off: only those the original lets you drag)
 inline bool tankClip = true;     // a tank animal's art is cut off at the water's edge (off: as the original, its body drawn on over the wall)
-// A cheat, switched in the Mod Menu or Game Options > Mods & Updates (the
+// A cheat, switched in the Mod Menu or Game Options > Mods (the
 // same switch): spending's still on the books, but the cash never goes down
 // and anything can be bought (ZooSim::unlimited). Saved as Extras
 // infinitemoney
 inline bool infiniteMoney = false;
 
+// addition: visual day/night cycle, lamp pools and directional ground shadows.
+// Off by default: the original game's constant daylight, with no lighting pass.
+inline bool dayNightLighting = false;
+// addition: the optional 24-hour HUD clock is independent of scene lighting.
+inline bool showGameTime = false;
+// addition: attached 1x/2x/5x HUD control; off restores the original controls.
+inline bool fastForward = false;
+
 inline std::vector<Switch> &all() {
   static std::vector<Switch> list = {
+      {"daynight", "a twelve-minute day and night cycle, lights at dusk and directional scenery shadows; visual only (off: the original's constant daylight)", &dayNightLighting},
+      {"gametime", "show a 24-hour clock beside the date; runs and pauses with the zoo, independently of day/night lighting (off: the original date only)", &showGameTime},
+      {"fastforward", "an attached speed button cycles normal, double and five-times speed without changing pause (off: original controls and normal speed)", &fastForward},
       {"allunlocked", "freeform items all available from the start (off: released month by month)", &allUnlocked},
       {"fencemodes", "fence drag modes, Tab to cycle (off: the fence follows the mouse)", &fenceModes},
       {"staffpaths", "staff take paths and idle on them (off: wander open ground)", &staffPaths},
@@ -52,8 +63,8 @@ inline std::vector<Switch> &all() {
       {"pathmodes", "path and walkway drags bend once, Tab to cycle (off: the path follows the mouse)", &pathModes},
       {"hotkeys", "Esc or right-click puts the bulldozer away, Ctrl+Z undoes, Q / E turn an object being placed, Alt+Enter or F11 switches full screen (off: their buttons only)", &hotkeys},
       {"mods", "mods switched on in the mods folder are loaded over the game's files (off: the original's files only)", &mods},
-      {"modmenu", "the Mod Menu - your mods on or off, their folder - from Game Options' Mods & Updates (with the original options panel: the main menu's Get New Zoo Tycoon Items) (off: none, as the original, whose download service is gone)", &modMenu},
-      {"updatechecks", "an installed official build looks for a newer release when it starts, and asks before updating (off: never looks)", &updateChecks},
+      {"modmenu", "the Mod Menu - your mods on or off, their folder - from Game Options' Mods (with the original options panel: the main menu's Get New Zoo Tycoon Items) (off: none, as the original, whose download service is gone)", &modMenu},
+      {"updatechecks", "an installed official build checks for updates when it starts, and asks before downloading (off: Check now still works in Game Options > Updates)", &updateChecks},
       {"misnamedart", "Marine Mania art the game's files name wrongly (its own art, shipped under a misspelt name: the hammerhead's thrash, the marlin's, shadows) is found and shown (off: missing, as the original)", &misnamedArt},
       {"tankgroundback", "a tank taken away puts its ground back as it was before it sank - heights and terrain (off: the sunken hole stays, as the original)", &tankGroundBack},
       {"nofenceonpath", "fences and tank walls can't be built across a path (off: they can be, as the original - a tank then asks to clear the path before it fills)", &noFenceOnPath},

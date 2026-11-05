@@ -9,6 +9,7 @@
 #include "GpuFsr.hpp"
 #include "RenderSettings.hpp"
 #include "Settings.hpp"
+#include "ShaderMods.hpp"
 #include "Window.hpp"
 #include "World.hpp"
 
@@ -258,5 +259,31 @@ void setEdgeScroll(bool on) {
   World::kEdgeScrollOn = on;
   Settings::setInt("user", "edgescroll", on ? 1 : 0);
 }
+
+// ------------------------------------------------------------------ renderer
+namespace {
+bool g_autoDirect3d = false;
+}
+const char *startupRenderer() {
+#ifdef _WIN32
+  const std::string pick = Settings::get("user", "renderer", "auto");
+  if (pick == "opengl" || pick == "direct3d11")
+    return pick == "opengl" ? "opengl" : "direct3d11";
+  // (what needs OpenGL's shaders, as saved)
+  const float bright = static_cast<float>(std::atof(Settings::get("user", "brightness", "1").c_str()));
+  bool needs = std::fabs(bright - 1.0f) > 0.001f || Settings::get("user", "colorfilter", "off") != "off" ||
+               parseArt(Settings::get("user", "artupscale", "fsr")) == Art::Stylized ||
+               SDL_getenv("ZT_LIGHTING_GPU") != nullptr;
+  for (const Shaders::Shader &s : Shaders::all())
+    needs = needs || s.on;
+  if (needs)
+    return "opengl";
+  g_autoDirect3d = true;
+  return "direct3d11";
+#else
+  return "opengl";
+#endif
+}
+bool openGlNextStart() { return g_autoDirect3d && !GpuFsr::available(); }
 
 } // namespace Display

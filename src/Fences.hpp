@@ -89,6 +89,7 @@ struct FenceType {
 void drawLayered(SDL_Renderer *renderer, const std::function<void()> &draw);
 
 class Fences {
+  friend class DayNightLighting; // addition: reads the same native wall/platform geometry, never changes it.
   friend class SaveGame; // (saving and loading a game)
 public:
   // An edge of the tile grid: along x at line y (horizontal) or along y at
@@ -519,7 +520,7 @@ public:
   Edge hoverGate{false, -1, -1};
   // Draws some tiles' ground again (the world's terrain), over a tank's
   // inside where the ground in front of it hides the pit
-  std::function<void(SDL_Renderer *, const std::set<std::pair<int, int>> &)> redrawGround;
+  std::function<void(SDL_Renderer *, const std::vector<std::pair<int, int>> &)> redrawGround; // (sorted)
   int selectedTank = -1;
   Animation *selectArrow = nullptr;
 
@@ -531,6 +532,9 @@ public:
 private:
   std::vector<FenceType> typeList;
   std::map<Edge, Piece> edges;
+  // ours: the shared wall's portal location depends on topology, not the
+  // animation tick. Filling, water height and show classification stay live.
+  mutable std::map<std::pair<int,int>, Edge> sharedPortalCache;
   FilterType filterKind;
   std::map<std::string, FilterType> filterKinds;
   std::string selectedFilter = "scenery/other/filter1.ai";

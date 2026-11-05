@@ -1,5 +1,6 @@
 #include "DiagnosticUtilityData.hpp"
 #include "DisplaySettings.hpp"
+#include "GpuTankLayer.hpp"
 #include "Embed.hpp"
 #include "GpuFsr.hpp"
 #include "ShaderMods.hpp"
@@ -220,6 +221,7 @@ void Window::present() {
 }
 
 Window::~Window() {
+    GpuTankLayer::releasePool(this->renderer);
     SDL_DestroyRenderer(this->renderer);
     SDL_DestroyWindow(this->window);
     SDL_FreeCursor(this->default_cursor);

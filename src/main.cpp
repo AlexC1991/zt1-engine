@@ -35,6 +35,9 @@
 #include "SpriteManager.hpp"
 #include "DevConsole.hpp"
 #include "Features.hpp"
+#include "GameSpeedClock.hpp"
+#include "GameBenchmark.hpp"
+#include "SampleProfiler.hpp"
 #include "ModMenu.hpp"
 #include "DisplaySettings.hpp"
 #include "HdArt.hpp"
@@ -63,6 +66,7 @@
 #include "ui/UiListBox.hpp"
 #include "ui/UiButton.hpp"
 #include "ui/UiOptions.hpp"
+#include "ui/UiUpdate.hpp"
 #include "ui/UiGameScreen.hpp"
 #include "ui/UiMiniMap.hpp"
 #include "ui/UiStatusImage.hpp"
@@ -409,7 +413,7 @@ static void drawUiScaled(SDL_Renderer *renderer, ResourceManager *rm,
       lw = w;
       lh = h;
       if (layer) {
-        SDL_SetTextureScaleMode(layer, SDL_ScaleModeLinear);
+        RenderSettings::setScaleMode(layer, SDL_ScaleModeLinear);
         // (drawn over clear black, its colours already carry their alpha)
         SDL_SetTextureBlendMode(layer, SDL_ComposeCustomBlendMode(
                                            SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD,
@@ -482,7 +486,21 @@ static UiGameScreen *g_hud = nullptr;
 static ZooSim g_sim; // the game clock and the zoo's books
 namespace FrameProfile {void start();void begin();void end();void phase(const char *name);}
 static DevConsole g_console;    // ` or F10: commands to set up test states
-static float g_gameSpeed = 1.0f; // (dev console) the game's speed
+static float g_gameSpeed = 1.0f; // addition: HUD speed control and developer override
+static GameSpeedClock g_speedClock;
+static bool g_resetSimulationFrame=false;
+static bool g_speedControlWasEnabled=Features::fastForward;
+
+// addition: disabling the optional control immediately returns the zoo to
+// normal speed. Developer speed commands remain available while it is off.
+static void syncGameSpeedControl() {
+  if (g_speedControlWasEnabled && !Features::fastForward) {
+    g_gameSpeed=1;
+    g_speedClock.clearPending();
+  }
+  g_speedControlWasEnabled=Features::fastForward;
+  if (g_hud) g_hud->setGameSpeed(static_cast<int>(g_gameSpeed));
+}
 
 static std::string formatMoney(int amount) {
   std::string digits = std::to_string(amount < 0 ? -amount : amount);
@@ -493,12 +511,20 @@ static std::string formatMoney(int amount) {
 
 // The HUD's date ("Apr, Year 1": lang string 22012's MMM',' 'Year' y) and
 // money (green, red when below zero)
+static void updateHudDate(ResourceManager *rm) {
+  if (!g_hud) return;
+  // addition: use the exact hour prepared for this frame's sky, including
+  // developer previews. The original calendar remains untouched.
+  std::string time;
+  if (Features::showGameTime && g_world)
+    time = DayNightLighting::formatTime(Features::dayNightLighting
+        ? g_world->getLighting().displayedHour() : DayNightLighting::hourAt(g_world->getClock()));
+  g_hud->setDateTime(rm->getString(22101 + g_sim.month()) + ", Year " + std::to_string(g_sim.year()), time);
+}
 static void updateHudClock(ResourceManager *rm) {
   if (!g_hud)
     return;
-  if (UiText *date = dynamic_cast<UiText *>(g_hud->getElementById(1030)))
-    date->setText(rm->getString(22101 + g_sim.month()) + ", Year " +
-                  std::to_string(g_sim.year()));
+  updateHudDate(rm);
   if (UiText *money = dynamic_cast<UiText *>(g_hud->getElementById(1016))) {
     long cash = std::lround(std::floor(g_sim.cash()));
     money->setText(formatMoney(static_cast<int>(cash)));
@@ -551,6 +577,16 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
   g_hud = g_nextHud ? g_nextHud
                     : new UiGameScreen(rm, "ui/main.lyt", "ui/gamescrn.lyt");
   g_nextHud = nullptr;
+
+  // addition: each zoo starts at normal speed; changing rate never unpauses.
+  g_gameSpeed=1;
+  g_speedClock.reset();
+  g_hud->setGameSpeed(1);
+  g_hud->onGameSpeed=[](int speed) {
+    if (!Features::fastForward || (speed!=1 && speed!=2 && speed!=5)) return;
+    g_gameSpeed=static_cast<float>(speed);
+    g_speedClock.clearPending();
+  };
 
   // Undo starts visible but greyed out (nothing to undo yet); the Scenario
   // button is greyed out in freeform games
@@ -741,6 +777,7 @@ static SDL_Rect gameViewRect(SDL_Renderer *renderer) {
 static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
   if (!g_hud)
     return;
+  updateHudDate(rm);
   UiTransform t = getUiTransform(renderer);
   if (g_widescreen) {
     SDL_Rect rect = hudLayoutRect(renderer, t);
@@ -1386,6 +1423,15 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
     extern std::string runBuildingPolishChecks(World &, ResourceManager *, bool);
     return runBuildingPolishChecks(*g_world, rm, w[0] == "polishdemo");
   }
+  // addition: developer preview of the visual clock; never saved to settings.
+  if (!w.empty() && w[0] == "lighting" && g_world) {
+    if(w.size()!=2)return "lighting <hour 0-24> | lighting auto";
+    if(w[1]=="auto") { g_world->getLighting().previewHour=-1; return "Lighting follows zoo time."; }
+    char *end=nullptr;double hour=std::strtod(w[1].c_str(),&end);
+    if(!end || *end || !std::isfinite(hour) || hour<0 || hour>24)return "Choose an hour from 0 to 24, or auto.";
+    Features::dayNightLighting=true;g_world->getLighting().previewHour=hour;
+    return "Lighting preview: "+w[1]+":00. Use lighting auto to resume the cycle.";
+  }
   if (!w.empty() && (w[0] == "activitycheck" || w[0] == "activitydemo")) {
     if (g_hud) return "Run this fixture in the Lab Test Zoo, not a player zoo.";
     extern std::string runActivityPolishChecks(World &, ResourceManager *, bool);
@@ -1541,7 +1587,7 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
            "shows [tank] [species|tricks|add|script|run|cancel]  marine shows\n"
            "awareness                       animal body clearance, destinations and feeding\n"
            "staff | assign <staff#> <ex>     list staff / put one on an exhibit\n"
-           "money <n> | day [n] | month [n] | speed <x>\n"
+           "money <n> | day [n] | month [n] | speed <x> | speedstatus\n"
            "paths [on|off]                   path debug overlay (and routes to the log)\n"
            "features | set <name> on|off     our additions on/off (off = original)\n"
            "raise|lower <x> <y> [n]          a grid corner up/down (makes ramps)\n"
@@ -2112,9 +2158,16 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
   }
   if (c == "speed") {
     g_gameSpeed = std::clamp(num(1, 1), 0.1f, 20.0f);
+    g_speedClock.clearPending();
+    if (g_hud) g_hud->setGameSpeed(static_cast<int>(g_gameSpeed));
     char b[64];
     std::snprintf(b, sizeof b, "Game speed x%.1f", g_gameSpeed);
     return b;
+  }
+  if(c=="speedstatus") {
+    std::ostringstream out;out<<"Requested "<<g_gameSpeed<<"x; pending "<<g_speedClock.pending()
+      <<" game seconds; discarded catch-up "<<g_speedClock.discarded()<<" game seconds.";
+    return out.str();
   }
   return "Unknown command '" + c + "' - try 'help'.";
 }
@@ -2273,7 +2326,7 @@ static constexpr int kMainMenuOptions = 7117;
 // that entry's online service is gone, and the Mod Menu it opened for now is
 // to come back elsewhere
 static std::string mainMenuWithOptions(ResourceManager *rm) {
-  std::string t = rm->getGameText("ui/startup.lyt");
+  std::string t = UiUpdate::withStatus(rm->getGameText("ui/startup.lyt"));
   if (!Features::optionsWindow)
     return t;
   size_t s = t.find("[ZooItems]");
@@ -3031,6 +3084,7 @@ static bool gameLoad(ResourceManager *rm, const std::string &given = "") {
   destroyHud();
   delete g_world;
   g_world = next.release();
+  g_gameSpeed=1;g_speedClock.reset();g_resetSimulationFrame=true;
   delete g_nextHud;
   g_nextHud = savedHud.release();
   createHud(rm, g_world, g_currentStartingCash);
@@ -3461,12 +3515,37 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
     if (s && SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
                                   s->pixels, s->pitch) == 0)
-      SDL_SaveBMP(s, (outDir + "/" + name + ".bmp").c_str());
+      if (std::getenv("ZT_HUD_CLOCK_CHECKS") || std::getenv("ZT_SPEED_HUD_CHECKS")) IMG_SavePNG(s, (outDir + "/" + name + ".png").c_str());
+      else SDL_SaveBMP(s, (outDir + "/" + name + ".bmp").c_str());
     if (s)
       SDL_FreeSurface(s);
     SDL_RenderPresent(renderer);
     note(name);
   };
+  if (std::getenv("ZT_SPEED_HUD_CHECKS")) {
+    SDL_HideWindow(SDL_RenderGetWindow(renderer));
+    extern int runSpeedHudChecks(World &,UiGameScreen &,ResourceManager *,SDL_Renderer *,const std::string &,bool &,
+        const std::function<void(const char*)> &,const std::function<void(bool)> &,const std::function<float()> &);
+    const int result=runSpeedHudChecks(*world,*g_hud,rm,renderer,outDir,g_widescreen,capture,
+        [&](bool paused){setGamePaused(paused);},[]{syncGameSpeedControl();return g_gameSpeed;});
+    if(timings)std::fclose(timings);
+    return result;
+  }
+  if (std::getenv("ZT_SPEED_CHECKS")) {
+    extern int runFastForwardChecks(ResourceManager *,SDL_Renderer *,const std::string &);
+    const int result=runFastForwardChecks(rm,renderer,outDir);
+    if(timings)std::fclose(timings);
+    return result;
+  }
+  if (std::getenv("ZT_HUD_CLOCK_CHECKS")) {
+    SDL_HideWindow(SDL_RenderGetWindow(renderer));
+    extern int runHudClockChecks(World &,UiGameScreen &,ResourceManager *,SDL_Renderer *,const std::string &,
+                                bool &,const std::function<void(const char*)> &,const std::function<void(bool)> &);
+    const int result = runHudClockChecks(*world,*g_hud,rm,renderer,outDir,g_widescreen,capture,
+                                        [&](bool paused) { setGamePaused(paused); });
+    if (timings) std::fclose(timings);
+    return result;
+  }
   // ZT_EVERYTHING_ZOO=1: every type in the registry placed, saved shared,
   // and its original part checked (src/EverythingZoo.cpp)
   // ZT_SHOW_ALL=1: every show species, trick, toy and schedule
@@ -3675,6 +3754,45 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       capture("finance_message_bar");
     }
     int result=runFinanceChecks(*world,*g_hud,g_sim,rm,outDir);
+    if(timings)std::fclose(timings);return result;
+  }
+  if (std::getenv("ZT_LIGHTING_GALLERY")) {
+    // ours: every building's shadows and night lights, to look over (LightingGallery.cpp)
+    extern int runLightingGallery(World &,ResourceManager *,SDL_Renderer *,const std::string &);
+    const int result=runLightingGallery(*world,rm,renderer,outDir);
+    if(timings)std::fclose(timings);return result;
+  }
+  if (std::getenv("ZT_LIGHTING_BENCH")) {
+    extern int runLightingBenchmarks(World &,ResourceManager *,SDL_Renderer *,const std::string &,const std::function<void()> &);
+    const int result=runLightingBenchmarks(*world,rm,renderer,outDir,[&]{
+      world->setView(gameViewRect(renderer),getUiTransform(renderer).scale);world->draw(renderer);drawHud(renderer,rm);
+    });
+    if(timings)std::fclose(timings);return result;
+  }
+  if (std::getenv("ZT_LIGHTING_CHECKS")) {
+    extern int runLightingChecks(World &,ResourceManager *,SDL_Renderer *,const std::string &,const std::function<void(const char*)> &,const SDL_Rect &);
+    const int result=runLightingChecks(*world,rm,renderer,outDir,capture,gameViewRect(renderer));
+    Features::dayNightLighting=true;world->getLighting().previewHour=0;
+    g_hud->options->open(true,2);capture("lighting_graphics_option");
+    g_hud->options->close();world->getLighting().previewHour=-1;Features::dayNightLighting=false;
+    if(!result && std::getenv("ZT_LIGHTING_VIDEO")) {
+      extern int runLightingVideo(World &,ResourceManager *,SDL_Renderer *,const std::function<void()> &,const std::function<void(bool)> &);
+      auto showOptions=[&](bool open) {
+        if(open)g_hud->options->open(true,2);
+        else { g_hud->options->close();std::vector<Input> none;g_hud->options->handleInputs(none); }
+      };
+      const int video=runLightingVideo(*world,rm,renderer,[&] {
+        world->setView(gameViewRect(renderer),getUiTransform(renderer).scale);world->draw(renderer);drawHud(renderer,rm);
+        if(g_hud->optionsOpen())drawOptions(renderer,rm,g_hud->options);
+      },showOptions);
+      if(timings)std::fclose(timings);return video;
+    }
+    if(!result && std::getenv("ZT_SHADOW_CHECKS")) {
+      std::vector<Input> noInput;g_hud->options->handleInputs(noInput);
+      extern int runLightingShadowChecks(World &,ResourceManager *,SDL_Renderer *,const std::string &,const std::function<void(const char*)> &);
+      const int shadow=runLightingShadowChecks(*world,rm,renderer,outDir,capture);
+      if(timings)std::fclose(timings);return shadow;
+    }
     if(timings)std::fclose(timings);return result;
   }
   if (std::getenv("ZT_SHOW_ALL")) {
@@ -3988,9 +4106,12 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     // Features' order)
     int at = 1;
     for (const Features::Switch &f : Features::all()) {
-      if (std::string(f.name) == "hotkeys")
+      const std::string name = f.name;
+      if (name == "hotkeys")
         break;
-      if (std::string(f.name) != "optionswindow")
+      // (as UiGameScreen's extrasOrder: the cheat and the lighting and clock
+      // switches live in the Options window only)
+      if (name != "optionswindow" && name != "infinitemoney" && name != "daynight" && name != "gametime")
         at++;
     }
     bool was = Features::hotkeys;
@@ -4018,6 +4139,10 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       capture("options_window_gameplay");
       g_hud->options->showPage(UiOptions::kModsPage);
       capture("options_window_mods");
+      check("Mods keeps its existing page ID", g_hud->options->shownPage() == UiOptions::kModsPage);
+      g_hud->options->showPage(UiOptions::kUpdatesPage);
+      capture("options_window_updates");
+      check("Updates opens separately above Done", g_hud->options->shownPage() == UiOptions::kUpdatesPage);
       g_hud->options->showPage(0);
     }
     float before = RenderSettings::uiScaleSetting;
@@ -9014,8 +9139,6 @@ int main(int argc, char *argv[]) {
   for (int i = 1; i < argc; i++)
     if (std::string(argv[i]) == "--check-update")
       return Updater::checkNowCli(i + 1 < argc && std::string(argv[i + 1]) == "--install");
-  if (!labHost)
-    Updater::start();
   RenderSettings::uiScaleSetting = config.getUiScale();
   g_widescreen = config.getWidescreen();
   g_timedUnlocks = config.getTimedUnlocks();
@@ -9023,6 +9146,16 @@ int main(int argc, char *argv[]) {
   // The extras switched on or off in the Game Options (zoo.ini [Extras]),
   // and its volumes and scrolling at work
   Settings::loadExtras();
+  // addition: startup checks respect the saved switch before the worker starts.
+  bool updaterDiagnostic = false;
+  for (int i = 1; i < argc; ++i)
+    if (std::string(argv[i]) == "--update-ui-checks") updaterDiagnostic = true;
+  if (!labHost && !updaterDiagnostic)
+    Updater::start();
+  // ours: resources own renderer textures and must be destroyed before
+  // the window. Keep construction timing (including headless CLI modes),
+  // but declare its owner first so reverse destruction order is correct.
+  std::unique_ptr<Window> windowLifetime;
   ResourceManager resource_manager(&config);
   // (HD art for recoloured art finds the art in its own palette here)
   HdArt::setResources(&resource_manager);
@@ -9051,11 +9184,18 @@ int main(int argc, char *argv[]) {
 
   // FSR runs on the GPU, which needs SDL's OpenGL renderer (shaders). If
   // that is not available the art is upscaled once when it loads instead.
-  // (always asked for: FSR, and the colour-blind filter and brightness, can
-  // be switched on at any time in the Game Options)
-  SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
-  Window window("ZT1-Engine", config.getScreenWidth(), config.getScreenHeight(),
-                60.0f);
+  // ours: OpenGL when a setting that needs its shaders is on as the game
+  // starts, otherwise Direct3D 11 - the same pictures, faster
+  // (Display::startupRenderer). The Lab's engine stays on OpenGL.
+  // (SDL_RENDER_DRIVER set in the environment still wins: the checks)
+  SDL_SetHint(SDL_HINT_RENDER_DRIVER, labHost ? "opengl" : Display::startupRenderer());
+  // ours: and its draws batched. Named by the hint, SDL turns batching off,
+  // and every sprite, tile and shadow went to the driver as a draw of its
+  // own (half of each frame spent there). Our own OpenGL passes (FSR, the
+  // lighting) send SDL's batch first (SDL_RenderFlush) as batching needs.
+  SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");
+  windowLifetime=std::make_unique<Window>("ZT1-Engine",config.getScreenWidth(),config.getScreenHeight(),60.0f);
+  Window &window=*windowLifetime;
   // The Display, Graphics and Accessibility settings at work (frame rate,
   // vsync, colours, the art's look)
   Display::init(window.window, window.renderer);
@@ -9080,7 +9220,7 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++)
       for (const char *special :
            {"--lab-host", "--lab", "--panel-shots", "--render-maps", "--check-update", "--hd-export", "--hd-finish",
-            "--hd-survey"})
+            "--hd-survey", "--hd-index", "--update-ui-checks"})
         if (std::string(argv[i]) == special)
           ordinary = false;
     if (ordinary)
@@ -9111,14 +9251,23 @@ int main(int argc, char *argv[]) {
   loadCursors(Display::cursorSize());
   Display::onCursorSize = loadCursors;
 
+  // addition: offline HD jobs must not repeatedly take desktop focus.
+  for(int a=1;a<argc;++a)if(std::string(argv[a]).starts_with("--hd-")){SDL_HideWindow(window.window);break;}
   LoadScreen::run(&window, &config, &resource_manager);
   Mods::markApplied();
+  for (int i = 1; i + 1 < argc; ++i)
+    if (std::string(argv[i]) == "--update-ui-checks") {
+      SDL_HideWindow(window.window);
+      return UiUpdate::checks(window.renderer, &resource_manager, argv[i + 1]);
+    }
   // The Lab's HD art mod (HdArt.hpp): the map art's frames written out
   // (--hd-export <folder> [prefix...]), or upscaled ones tidied into the mod
   // (--hd-finish <frames> <upscaled> <mod's hd folder>)
   for (int i = 1; i < argc; i++) {
+    if (std::string(argv[i]) == "--hd-index" && i+1<argc) {extern int hdWriteIndex(ResourceManager *,const std::string &);return hdWriteIndex(&resource_manager,argv[i+1]);}
     if (std::string(argv[i]) == "--hd-export" && i + 1 < argc) {
       std::vector<std::string> prefixes(argv + i + 2, argv + argc);
+      extern void hdSetExportRenderer(SDL_Renderer *);hdSetExportRenderer(window.renderer);
       return HdArt::exportFrames(&resource_manager, argv[i + 1], prefixes) >= 0 ? 0 : 1;
     }
     if (std::string(argv[i]) == "--hd-survey") {
@@ -9187,6 +9336,8 @@ int main(int argc, char *argv[]) {
   UiLayout *layout = new UiLayout(lyt_reader, &resource_manager);
   hookMainMenu(layout, &resource_manager);
   g_currentState = LayoutState::MAIN_MENU;
+  UiUpdate updateUi(&resource_manager);
+  g_menuOptions->onUpdate = [&updateUi] { updateUi.open(); };
 
   // ZT1 Lab: the live view for what's found in zoo.exe (--lab [map]); for
   // the Lab app, the same driven over a local connection (--lab-host [port])
@@ -9227,6 +9378,17 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  // ours: opt-in long benchmarks use this same Play loop and presentation.
+  GameBenchmark gameBenchmark;
+  if (std::getenv("ZT_GAME_BENCH_OUT")) {
+    ItemCatalog::get().load(&resource_manager);Research::get().load(&resource_manager);
+    if (!gameBenchmark.start(*g_world,&resource_manager,window.renderer)) return 1;
+    createHud(&resource_manager,g_world,1000000);
+    g_currentState=LayoutState::GAME_LOOP;
+    g_gameSpeed=static_cast<float>(gameBenchmark.rate());
+    syncGameSpeedControl();
+  }
+  SampleProfiler::startFromEnvironment(); // ours: off unless asked for
   InputManager input_manager;
   std::vector<Input> inputs;
 
@@ -9248,11 +9410,14 @@ int main(int argc, char *argv[]) {
         applyModSelection(&resource_manager, layout, lyt_reader);
         modSelection = Mods::selectionKey();
         lastFrameTime = SDL_GetTicks();
+        g_speedClock.clearPending();
         continue;
       }
     }
     // The menus have music, a game has none (the world's ambience instead)
     if (g_currentState != lastState) {
+      g_speedClock.reset();g_gameSpeed=1;
+      lastFrameTime=SDL_GetTicks();
       if (g_currentState == LayoutState::GAME_LOOP)
         resource_manager.fadeMenuMusic();
       else if (lastState == LayoutState::GAME_LOOP) {
@@ -9275,6 +9440,7 @@ int main(int argc, char *argv[]) {
       SDL_PumpEvents();
       SDL_Delay(50);
       lastFrameTime = SDL_GetTicks();
+      g_speedClock.clearPending();
       continue;
     }
     if (heldHidden) {
@@ -9282,6 +9448,7 @@ int main(int argc, char *argv[]) {
       Mix_ResumeMusic();
       heldHidden = false;
       lastFrameTime = SDL_GetTicks();
+      g_speedClock.clearPending();
     }
     // Calculate delta time
     Uint32 currentTime = SDL_GetTicks();
@@ -9291,39 +9458,7 @@ int main(int argc, char *argv[]) {
     // Game Options' Install now started the installer: close for it
     if (Updater::installing())
       running = 0;
-    // A newer release, downloaded and checked in the background
-    // (Updater.hpp): asked once, at the main menu (never in a zoo)
-    if (g_currentState == LayoutState::MAIN_MENU) {
-      Updater::Release update;
-      if (Updater::takeOffer(update)) {
-        std::string text = "ZT1-Engine " + update.version + " is out (you have " + Updater::version() +
-                           ").\n\nIt's downloaded and checked. Update now closes the game, installs it and "
-                           "starts it again; Later installs it when you next close the game. Your saved zoos, mods "
-                           "and settings are kept.";
-        const SDL_MessageBoxButtonData buttons[] = {
-            {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Update now"},
-            {0, 2, "Skip this version"},
-            {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Later"},
-        };
-        const SDL_MessageBoxData box = {SDL_MESSAGEBOX_INFORMATION, window.window, "Update available",
-                                        text.c_str(), 3, buttons, nullptr};
-        int chosen = 0;
-        SDL_ShowMessageBox(&box, &chosen);
-        if (chosen == 2)
-          Updater::skip(update);
-        if (chosen == 1) {
-          std::string why;
-          if (Updater::installNow(why))
-            running = 0;
-          else
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "Update failed",
-                                     (why + "\n\nYou can download it from GitHub or CodeRook instead.").c_str(),
-                                     window.window);
-        }
-        lastFrameTime = SDL_GetTicks();
-      }
-    }
-
+    if(gameBenchmark.enabled())gameBenchmark.beforeFrame(*g_world);
     FrameProfile::begin();
     window.clear();FrameProfile::phase("clear");
     inputs = input_manager.getInputs();FrameProfile::phase("input collection");
@@ -9411,7 +9546,12 @@ int main(int argc, char *argv[]) {
         g_world->cycleFenceMode((SDL_GetModState() & KMOD_SHIFT) ? -1 : 1);
     }
 
-    if (layout && g_menuOptions && g_menuOptions->isOpen()) {
+    std::vector<Input> updateInputs = inputs;
+    mapInputsToLayout(updateInputs, getUiTransform(window.renderer));
+    if (g_currentState == LayoutState::MAIN_MENU && layout &&
+        !(g_menuOptions && g_menuOptions->isOpen()) && updateUi.handleInputs(updateInputs, layout)) {
+      action = (UiAction)9999;
+    } else if (layout && g_menuOptions && g_menuOptions->isOpen()) {
       // (the Options window over the main menu takes every input)
       std::vector<Input> layoutInputs = inputs;
       mapInputsToLayout(layoutInputs, optionsTransform(window.renderer));
@@ -9689,18 +9829,28 @@ int main(int argc, char *argv[]) {
         g_dialogPaused = false;
         if (!g_popupPaused)
           setGamePaused(false);
+        // ours: native dialogs can block the thread. Their elapsed time is
+        // menu time, never a simulation catch-up interval on dismissal.
+        g_speedClock.clearPending();deltaTime=0;lastFrameTime=SDL_GetTicks();
       }
-      g_world->update(g_console.isOpen() || UiText::isEditing() || dialogUp ? noKeys : state, deltaTime * g_gameSpeed);
+      if(g_resetSimulationFrame) {
+        g_resetSimulationFrame=false;g_speedClock.clearPending();deltaTime=0;lastFrameTime=SDL_GetTicks();
+      }
+      bool controlsSent=false;
+      const Uint8 *frameKeys=g_console.isOpen() || UiText::isEditing() || dialogUp?noKeys:state;
+      auto advanceGame=[&](float simulationSeconds,float inputSeconds) {
+      g_world->update(controlsSent?noKeys:frameKeys,simulationSeconds,inputSeconds);
+      controlsSent=true;
       // The clock runs while the game isn't paused
       g_sim.unlimited = Features::infiniteMoney; // (the Mod Menu's cheat)
-      if (!g_world->isPaused()) {
-        g_sim.update(deltaTime * g_gameSpeed);
-        g_goals.update(deltaTime * g_gameSpeed);
+      if (!g_world->isPaused() && simulationSeconds>0) {
+        g_sim.update(simulationSeconds);
+        g_goals.update(simulationSeconds);
         // Research: programs finished, their effects, and the news
         // ("Research & Conservation: %r is now available.", 23020; "%s: All
         // selected programs have been completed.", 23021)
         Research::Tick rt = Research::get().advance(
-            deltaTime * g_gameSpeed, [](int branch, double amount) { return g_sim.payTick(ZooSim::Research, branch, amount); });
+            simulationSeconds, [](int branch, double amount) { return g_sim.payTick(ZooSim::Research, branch, amount); });
         for (ResearchProgram *p : rt.completed) {
           applyResearch(*p);
           std::string m = resource_manager.getString(23020);
@@ -9728,7 +9878,7 @@ int main(int argc, char *argv[]) {
         // (10019); below none also "...Funding has stopped for all
         // programs." (10020)
         static double adviceMs = 0;
-        adviceMs += deltaTime * g_gameSpeed * 1000.0;
+        adviceMs += simulationSeconds * 1000.0;
         if (adviceMs > Original::economy().adviceEveryMs) {
           adviceMs = 0;
           const Original::Economy &econ = Original::economy();
@@ -9744,7 +9894,7 @@ int main(int argc, char *argv[]) {
         }
         // (the money's, not with the infinite money cheat on)
         static double moneyAdviceMs = 0;
-        moneyAdviceMs += deltaTime * g_gameSpeed * 1000.0;
+        moneyAdviceMs += simulationSeconds * 1000.0;
         if (moneyAdviceMs > Original::economy().adviceEveryMs && !g_sim.unlimited) {
           moneyAdviceMs = 0;
           const long cash = std::lround(g_sim.cash());
@@ -9830,6 +9980,12 @@ int main(int argc, char *argv[]) {
           g_hud->setZooInfo(info);
         }
       }
+      return !g_world->isPaused();
+      };
+      if(gameBenchmark.enabled())gameBenchmark.beforeSimulation();
+      syncGameSpeedControl();
+      g_speedClock.advance(deltaTime,g_gameSpeed,g_world->isPaused(),advanceGame);
+      if(gameBenchmark.enabled())gameBenchmark.afterSimulation();
       // SDL_Log("MainLoop: Post-Update");
 
       FrameProfile::phase("simulation");
@@ -9860,20 +10016,44 @@ int main(int argc, char *argv[]) {
       }
       // SDL_Log("MainLoop: Post-Draw");
     } else if (layout) {
+      // addition: read Later/Escape/quit and navigation before the updater may
+      // hand off an accepted download. Never start it over a zoo or on exit.
+      if (g_currentState == LayoutState::MAIN_MENU) {
+        if (running) updateUi.tick();
+        else updateUi.dismiss();
+        updateUi.prepareFooter(layout);
+      } else updateUi.dismiss();
       drawLayoutCentered(window.renderer, layout, &resource_manager);
       drawOptions(window.renderer, &resource_manager, g_menuOptions); // (over the menu)
+      if (g_currentState == LayoutState::MAIN_MENU && !(g_menuOptions && g_menuOptions->isOpen())) {
+        UiTransform t = getUiTransform(window.renderer);
+        drawUiScaled(window.renderer, &resource_manager, t, [&](SDL_Renderer *r) {
+          SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
+                               static_cast<int>(std::lround(t.offsetY / t.scale)), UI_LAYOUT_W, UI_LAYOUT_H};
+          SDL_RenderSetViewport(r, &viewport);
+          updateUi.draw(r, layout);
+          SDL_RenderSetViewport(r, nullptr);
+        });
+      }
     }
 
     FrameProfile::phase("rendering");
+    if(gameBenchmark.enabled())gameBenchmark.beforePresent(*g_world,window.renderer);
     window.present();FrameProfile::phase("present");
+    if(gameBenchmark.enabled() && gameBenchmark.afterPresent(*g_world,g_speedClock.pending(),g_speedClock.discarded()))running=0;
+    // ours: confirm to the external updater only after a new ready menu frame.
+    static bool updateAcknowledged = false;
+    if (!updateAcknowledged && g_currentState == LayoutState::MAIN_MENU) {
+      Updater::acknowledgeLaunch(argc, argv);
+      updateAcknowledged = true;
+    }
     FrameProfile::end();
 
     // Check if it's time for periodic memory dump
     // ZT_MEMORY_DUMP_CHECK();
   }
 
-  // An update downloaded and checked, waiting (Later): installed as the game
-  // closes
+  // Later is an explicit deferral, not permission to install on exit.
   Updater::atExit();
 
   // Write final memory report before cleanup

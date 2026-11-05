@@ -18,6 +18,7 @@
 #include "Walkways.hpp"
 #include "ZooReader.hpp"
 #include "Shows.hpp"
+#include "DayNightLighting.hpp"
 #include <SDL2/SDL.h>
 #include <map>
 #include <string>
@@ -59,7 +60,9 @@ public:
     void openEntrance(const PlacedObjects::Object &o);
 
     // Update world state (simulation)
-    void update(const Uint8* state, float deltaTime);
+    // inputSeconds<0 preserves existing callers; accelerated Play supplies
+    // independent real time, once per display frame (0 on later substeps).
+    void update(const Uint8* state, float deltaTime, float inputSeconds = -1);
 
     // Render world (isometric terrain + entities)
     void draw(SDL_Renderer* renderer);
@@ -87,6 +90,7 @@ public:
     void setPaused(bool p) { paused = p; }
     bool isPaused() const { return paused; }
     double getClock() const { return clock; } // seconds of play
+    DayNightLighting &getLighting() { return lighting; }
 
     // Fences and exhibits
     Fences& getFences() { return fences; }
@@ -400,6 +404,9 @@ private:
     int animalTool = -1;
     bool animalFemale = false;
     double clock = 0;               // seconds of play (not paused)
+    DayNightLighting lighting;      // addition: resources owned by this zoo
+    std::vector<int> frameTanks;    // ours: each tile's tank (-1 none) while a frame is drawn
+    int frameTankAt(float x, float y) const;
     ZooItems items;                 // Food, dung, litter lying about
     WorldIndex index;               // Where everything is
     float reindexIn = 0;

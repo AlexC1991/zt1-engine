@@ -2382,7 +2382,7 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
     // Its shadow on the tank's floor under it, on its frame (zoo.exe
     // setupShadow 0x43f81c: "shadow%s", at the ground under the unit, the
     // shadow palette at 0.25)
-    if (this->onlyTank != -2 && !this->onlySurface && !m.boxed)
+    if (!Features::dayNightLighting && this->onlyTank != -2 && !this->onlySurface && !m.boxed)
       if (Animation *sh = this->shadowArt(m, a)) {
         float fx, fy, fd;
         view.worldToScreenF(m.x, m.y, groundAt(map, m.x, m.y), fx, fy, fd);

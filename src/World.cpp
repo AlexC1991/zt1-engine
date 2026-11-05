@@ -47,7 +47,7 @@ struct Scope {
 void end(){
   if(!active || !frameStart)return;
   const double elapsed=ms(frameStart);
-  if(elapsed>33.333 && slowLogged++<8){std::ostringstream row;row<<"slow="<<elapsed<<"ms";for(const auto &[name,value]:frameCosts)if(value>0.2)row<<" "<<name<<"="<<value<<"ms";SDL_Log("[FrameProfile] %s",row.str().c_str());}
+  if(elapsed>(std::getenv("ZT_SLOW_MS")?std::atof(std::getenv("ZT_SLOW_MS")):33.333) && slowLogged++<(std::getenv("ZT_SLOW_MS")?60:8)){std::ostringstream row;row<<"slow="<<elapsed<<"ms";for(const auto &[name,value]:frameCosts)if(value>0.2)row<<" "<<name<<"="<<value<<"ms";SDL_Log("[FrameProfile] %s",row.str().c_str());}
   frames.push_back(elapsed);
   if(frames.size()<240)return;
   active=false;std::sort(frames.begin(),frames.end());
@@ -449,13 +449,13 @@ bool World::loadFreeform(const std::string &path) {
   return true;
 }
 
-void World::update(const Uint8 *state, float deltaTime) {
+void World::update(const Uint8 *state, float deltaTime, float inputSeconds) {
   FrameProfile::Scope profile("world update");
   // Sync mouse wheel zoom (modified by InputManager) with camera
   Camera &cam = worldRenderer.getCamera();
   cam.zoom = g_ZoomLevel;
 
-  handleCameraInput(state, deltaTime);
+  handleCameraInput(state, inputSeconds<0?deltaTime:inputSeconds);
   handleDebugInput(state);
   if (this->tracked >= 0) {
     if (this->staff.member(this->tracked))
@@ -487,7 +487,7 @@ void World::update(const Uint8 *state, float deltaTime) {
       return true;
     };
   // Update entities (simulation)
-  if (!paused) {
+  if (!paused && (deltaTime>0 || inputSeconds<0)) {
     entityManager.update(deltaTime);
     fences.update(deltaTime);
     ambient.update(deltaTime, worldMap);
@@ -719,12 +719,37 @@ bool World::shrinkTarget(SDL_Renderer *renderer, int level, int w, int h) {
   l.h = h;
   if (!l.tex)
     return false;
-  SDL_SetTextureScaleMode(l.tex, SDL_ScaleModeLinear);
+  RenderSettings::setScaleMode(l.tex, SDL_ScaleModeLinear);
   return true;
+}
+
+// ours: what placedObjects.tankAt answers, from a table made once a frame
+// (the lighting's ground passes asked it for every quarter tile on the
+// screen, once for the map and again for each tank, every frame)
+int World::frameTankAt(float x, float y) const {
+  const int tx = static_cast<int>(std::floor(x)), ty = static_cast<int>(std::floor(y));
+  const int w = worldMap.getWidth(), h = worldMap.getHeight();
+  if (tx < 0 || ty < 0 || tx >= w || ty >= h || frameTanks.size() != size_t(w) * h)
+    return placedObjects.tankAt ? placedObjects.tankAt(x, y) : -1;
+  return frameTanks[size_t(ty) * w + tx];
 }
 
 void World::draw(SDL_Renderer *renderer) {
   FrameProfile::Scope profile("world draw");
+  {
+    // (as Fences::exhibitAt: the first named exhibit holding the tile; a
+    // tank's id if it is one)
+    const int w = worldMap.getWidth(), h = worldMap.getHeight();
+    frameTanks.assign(size_t(w) * h, -2);
+    for (const Fences::Exhibit &ex : fences.exhibits())
+      if (ex.named)
+        for (auto [x, y] : ex.tiles)
+          if (x >= 0 && y >= 0 && x < w && y < h && frameTanks[size_t(y) * w + x] == -2)
+            frameTanks[size_t(y) * w + x] = ex.tank ? ex.id : -1;
+    for (int &t : frameTanks)
+      if (t == -2)
+        t = -1;
+  }
   beginTankAnimalFrame(true);
   // Clear screen (the bars beside a centred view stay black)
   SDL_RenderSetViewport(renderer, nullptr);
@@ -799,12 +824,23 @@ void World::draw(SDL_Renderer *renderer) {
     RenderSettings::artScaleMode = RenderSettings::lookFor(zoom);
 
   // Render terrain layer
+  RenderSettings::relightWorld=Features::dayNightLighting;
   {FrameProfile::Scope profile("terrain");worldRenderer.renderTerrain(renderer, worldMap, SpriteDatabase::get());}
+  // addition: ground shadows belong below scenery, water and animals.
+  // Disabled means no collection, raycasts, allocations or extra draw calls.
+  if (Features::dayNightLighting) {
+    FrameProfile::Scope profile("lighting shadows");
+    {FrameProfile::Scope phase("lighting prepare");lighting.prepare(*this,resourceManager, placedObjects, worldMap, worldRenderer, clock, view.w, view.h,renderer);}
+    {FrameProfile::Scope phase("lighting actors");lighting.collectActors(*this);}
+    RenderSettings::fluorescence=[this](SDL_Renderer *r,Animation *a,float x,float y,CompassDirection side,int f){lighting.drawFluorescence(r,a,x,y,side,f);};
+    {FrameProfile::Scope phase("lighting sun");lighting.updateSun(worldMap,worldRenderer);}
+    {FrameProfile::Scope phase("lighting ground");lighting.drawShadows(renderer,worldRenderer,worldMap,[this](float x,float y){return !placedObjects.tankAt || frameTankAt(x,y)<0;});}
+  }
 
   // Tank water, then the map's objects: entrance, fences, rocks, trees
   {FrameProfile::Scope profile("tank water");fences.drawWater(renderer, worldRenderer, worldMap);}
   this->drawToolOverlay(renderer);
-  ambient.drawShadows(renderer, worldRenderer, worldMap);
+  if(!Features::dayNightLighting)ambient.drawShadows(renderer, worldRenderer, worldMap);
   std::vector<Fences::Drawable> fenceArt;
   fences.collectPlatformStaff = [this](int tank,float depth,std::vector<Fences::Drawable> &out) {
     for(const auto &m:staff.members()) {
@@ -824,6 +860,8 @@ void World::draw(SDL_Renderer *renderer) {
                                      const TankFlags &f = this->tankFlagsOf(file);
                                      return f.surface;
                                    });
+    if(!surface && Features::dayNightLighting)
+      lighting.drawShadows(r,worldRenderer,worldMap,[this,tank](float x,float y){return placedObjects.tankAt && frameTankAt(x,y)==tank;});
     if (!surface)
       this->items.drawInTank(r, this->worldRenderer, this->worldMap, tank);
     // (animals in both: under the water, and a surface move's part above it)
@@ -843,10 +881,10 @@ void World::draw(SDL_Renderer *renderer) {
     // (marine specialists in its water too)
     this->staff.drawInTank(r, this->worldRenderer, this->worldMap, tank, surface);
   };
-  fences.redrawGround = [this](SDL_Renderer *r, const std::set<std::pair<int, int>> &tiles) {
+  fences.redrawGround = [this](SDL_Renderer *r, const std::vector<std::pair<int, int>> &tiles) {
     this->worldRenderer.renderTerrainTiles(r, this->worldMap, SpriteDatabase::get(), tiles);
     // (the bulldozer's path tile among them: red again, not covered)
-    if (tiles.count(this->bulldozePath))
+    if (std::binary_search(tiles.begin(), tiles.end(), this->bulldozePath))
       this->drawBulldozePath(r);
   };
   {FrameProfile::Scope profile("fence collect");fences.collect(worldRenderer, worldMap, fenceArt);}
@@ -874,6 +912,7 @@ void World::draw(SDL_Renderer *renderer) {
   staff.collect(worldRenderer, worldMap, fenceArt, &deckArt);
   animals.collect(worldRenderer, worldMap, fenceArt);
   guests.collect(worldRenderer, worldMap, fenceArt);
+
   if (this->objectGhost && !this->objectTool.empty() &&
       (this->placedObjects.tankAt(this->ghostX,this->ghostY)<0 || this->objectPreview.onWater || this->objectPreview.underIdle))
     if (Animation *a = this->objectPreview.art) {
@@ -983,7 +1022,16 @@ void World::draw(SDL_Renderer *renderer) {
   // Reset
   SDL_RenderSetScale(renderer, 1.0f, 1.0f);
   SDL_RenderSetViewport(renderer, nullptr);
+  // addition: after the world's FSR/shrink resolve, before the HUD. Lighting
+  // uses the world viewport rather than tinting the whole window or its UI.
+  if (Features::dayNightLighting) {
+    FrameProfile::Scope profile("lighting composite");
+    lighting.composite(renderer, worldRenderer, worldMap, view);
+    lighting.drawEmission(renderer,worldRenderer,view);
+  }
   RenderSettings::worldZoomedIn = false;
+  RenderSettings::relightWorld=false;
+  RenderSettings::fluorescence={};
   RenderSettings::artScaleMode = lookWas;
   cam.zoom = userZoom;
   beginTankAnimalFrame(false);

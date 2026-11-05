@@ -9,6 +9,8 @@
 #include <iterator>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <cmath>
 #include <mutex>
 #include <sstream>
 #include <thread>
@@ -57,6 +59,8 @@ const Feed kFeeds[] = {
 };
 
 std::mutex g_lock;
+uint64_t g_downloaded = 0, g_total = 0;
+double g_speed = 0;
 
 // "2026.10.19" against "2026.10.5": number by number
 bool newer(const std::string &a, const std::string &b) {
@@ -110,14 +114,17 @@ constexpr char kUpdatePublicKeyHex[] =
 #ifdef _WIN32
 std::wstring widen(const std::string &s) {
   int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-  std::wstring w(n > 0 ? n - 1 : 0, L'\0');
-  if (n > 0)
+  std::wstring w(n > 0 ? n : 0, L'\0');
+  if (n > 0) {
     MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
+    w.pop_back();
+  }
   return w;
 }
 
 // A GET over HTTPS (redirects followed), into memory or a file
-bool httpGet(const std::string &url, std::string *body, const fs::path *file, std::string &why) {
+bool httpGet(const std::string &url, std::string *body, const fs::path *file, std::string &why,
+             uint64_t expected = 0, const std::function<void(uint64_t)> &progress = {}) {
   std::wstring wurl = widen(url);
   URL_COMPONENTS u = {sizeof(u)};
   wchar_t host[256] = {}, path[2048] = {};
@@ -127,6 +134,13 @@ bool httpGet(const std::string &url, std::string *body, const fs::path *file, st
   u.dwUrlPathLength = 2048;
   if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &u)) {
     why = "a bad address";
+    return false;
+  }
+  const std::wstring server(host, u.dwHostNameLength);
+  const bool localTest = u.nScheme == INTERNET_SCHEME_HTTP &&
+                        (server == L"127.0.0.1" || server == L"localhost");
+  if (u.nScheme != INTERNET_SCHEME_HTTPS && !localTest) {
+    why = "update downloads require HTTPS";
     return false;
   }
   std::wstring agent = widen(std::string("ZT1-Engine/") + Updater::version());
@@ -142,6 +156,10 @@ bool httpGet(const std::string &url, std::string *body, const fs::path *file, st
   HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", path, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                        u.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0)
                   : nullptr;
+  if (r) {
+    DWORD redirects = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
+    WinHttpSetOption(r, WINHTTP_OPTION_REDIRECT_POLICY, &redirects, sizeof(redirects));
+  }
   if (r && WinHttpSendRequest(r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
       WinHttpReceiveResponse(r, nullptr)) {
     DWORD status = 0, len = sizeof(status);
@@ -154,15 +172,28 @@ bool httpGet(const std::string &url, std::string *body, const fs::path *file, st
       ok = !file || out.good();
       std::vector<char> buf(64 * 1024);
       DWORD got = 0;
-      while (ok && WinHttpReadData(r, buf.data(), static_cast<DWORD>(buf.size()), &got) && got > 0) {
-        if (file)
-          out.write(buf.data(), got);
-        else if (body->size() < 1024 * 1024)
-          body->append(buf.data(), got);
+      uint64_t bytes = 0;
+      while (ok) {
+        if (!WinHttpReadData(r, buf.data(), static_cast<DWORD>(buf.size()), &got)) {
+          why = "the connection ended before the download finished";
+          ok = false;
+          break;
+        }
+        if (!got) break;
+        bytes += got;
+        if ((expected && bytes > expected) || (!file && bytes > 1024 * 1024)) {
+          why = "the response was larger than its permitted size";
+          ok = false;
+          break;
+        }
+        if (file) out.write(buf.data(), got);
+        else body->append(buf.data(), got);
+        ok = !file || out.good();
+        if (ok && progress) progress(bytes);
       }
-      ok = ok && (!file || out.good());
+      ok = ok && (!file || out.good()) && (!expected || bytes == expected);
       if (!ok)
-        why = "couldn't save the download";
+        why = why.empty() ? "couldn't save the complete download" : why;
     } else {
       why = "the server answered " + std::to_string(status);
     }
@@ -308,6 +339,8 @@ bool lookUp(Updater::Release &out) {
                      std::all_of(out.size.begin(), out.size.end(), [](char c) { return c >= '0' && c <= '9'; });
     if (validSize && out.size.size() > 1 && out.size.front() == '0')
       validSize = false;
+    if (validSize)
+      validSize = std::stoull(out.size) > 0 && std::stoull(out.size) <= 2ULL * 1024 * 1024 * 1024;
     const std::string signedFields = app + "\n" + out.version + "\n" + out.file + "\n" + out.size + "\n" + out.sha512;
     if (validVersion && app == "zt1-engine" && out.file == expected && validHash && validSize &&
         verifyUpdateSignature(signedFields, out.signature))
@@ -324,11 +357,11 @@ bool lookUp(Updater::Release &out) {
 // --- Looking, downloading, offering (Updater.hpp)
 // The looking thread sleeps on this between looks; Check now wakes it
 std::condition_variable g_wake;
-bool g_wakeNow = false, g_manual = false, g_started = false;
+bool g_wakeNow = false, g_manual = false, g_started = false, g_downloadRequested = false;
 Updater::State g_state = Updater::State::Off;
 std::string g_status;
 // The newer release downloaded and checked, waiting to be installed
-bool g_ready = false, g_offered = false, g_installing = false;
+bool g_ready = false, g_available = false, g_offered = false, g_installing = false;
 Updater::Release g_readyRelease;
 fs::path g_readyFile;
 
@@ -368,16 +401,29 @@ bool fetch(const Updater::Release &r, fs::path &out, std::string &why) {
   }
   fs::path part = target;
   part += ".part";
-  if (!httpGet(r.url, nullptr, &part, why)) {
+  const uint64_t total = std::stoull(r.size);
+  const auto began = std::chrono::steady_clock::now();
+  if (!httpGet(r.url, nullptr, &part, why, total, [&](uint64_t bytes) {
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+        std::lock_guard<std::mutex> lock(g_lock);
+        g_downloaded = bytes;
+        g_total = total;
+        g_speed = elapsed >= 0.25 ? bytes / elapsed : 0;
+      })) {
     fs::remove(part, ec);
     why = "the download failed: " + why;
     return false;
   }
+  setState(Updater::State::Verifying, "Verifying download");
   if (!matches(part, r)) {
     fs::remove(part, ec);
     why = "the download didn't match its signed size and SHA-512, so it was thrown away";
     return false;
   }
+  // Windows rename does not replace a stale/corrupted cached installer.
+  // Remove it only after the newly downloaded part passed verification.
+  fs::remove(target, ec);
+  ec.clear();
   fs::rename(part, target, ec);
   if (ec) {
     why = "couldn't keep the download";
@@ -404,94 +450,145 @@ void tidyPending() {
   }
 }
 
-// One look: the feed, and a newer release downloaded and checked. False: it
-// couldn't be done (looked again sooner)
+// addition: a trusted release is offered before downloading. The player
+// explicitly chooses Download/Update now; merely checking never installs.
 bool lookOnce() {
   bool manual;
   {
-    std::lock_guard<std::mutex> g(g_lock);
+    std::lock_guard<std::mutex> lock(g_lock);
     manual = g_manual;
     g_manual = false;
   }
-  setState(Updater::State::Checking, "looking...");
-  Updater::Release r;
-  if (!lookUp(r)) {
-    setState(Updater::State::Failed, "couldn't reach the servers (again in 5 min)");
+  setState(Updater::State::Checking, "Checking for Updates");
+  Updater::Release release;
+  if (!lookUp(release)) {
+    setState(Updater::State::Failed, "Could not check for updates. Check your connection and try again.");
     return false;
   }
-  if (!newer(r.version, ZT1_VERSION)) {
-    setState(Updater::State::UpToDate, std::string(ZT1_VERSION) + " is the newest");
+  if (!newer(release.version, ZT1_VERSION)) {
+    setState(Updater::State::UpToDate, "All updated");
     return true;
   }
-  if (!manual && skipped() == r.version) {
-    setState(Updater::State::UpToDate, r.version + " is out (skipped)");
+  if (!manual && skipped() == release.version) {
+    setState(Updater::State::Idle, "Update skipped");
     return true;
   }
+  // A cached installer is still validated before being offered as ready.
+  const fs::path cached = pendingDir() / fs::path(release.file).filename();
+  const bool ready = matches(cached, release);
+  std::lock_guard<std::mutex> lock(g_lock);
+  const bool changed = g_readyRelease.version != release.version;
+  g_readyRelease = release;
+  g_readyFile = ready ? cached : fs::path{};
+  g_available = true;
+  g_ready = ready;
+  if (changed || manual) g_offered = false;
+  g_downloaded = ready ? std::stoull(release.size) : 0;
+  g_total = std::stoull(release.size);
+  g_speed = 0;
+  g_state = ready ? Updater::State::Ready : Updater::State::Available;
+  g_status = ready ? "Ready to update" : "Update available";
+  return true;
+}
+
+bool downloadSelected() {
+  Updater::Release release;
   {
-    std::lock_guard<std::mutex> g(g_lock);
-    if (g_ready && g_readyRelease.version == r.version) {
-      g_state = Updater::State::Ready;
-      if (manual)
-        g_offered = false; // (Check now: asked again)
-      return true;
-    }
+    std::lock_guard<std::mutex> lock(g_lock);
+    g_downloadRequested = false;
+    release = g_readyRelease;
   }
-  setState(Updater::State::Downloading, "downloading " + r.version + "...");
+  setState(Updater::State::Downloading, "Downloading update");
   fs::path file;
   std::string why;
-  if (!fetch(r, file, why)) {
-    setState(Updater::State::Failed, r.version + ": " + why);
+  if (!fetch(release, file, why)) {
+    setState(Updater::State::Failed, why);
     return false;
   }
-  std::lock_guard<std::mutex> g(g_lock);
+  std::lock_guard<std::mutex> lock(g_lock);
   g_ready = true;
-  g_offered = false;
-  g_readyRelease = r;
   g_readyFile = file;
+  g_downloaded = g_total;
+  g_speed = 0;
   g_state = Updater::State::Ready;
-  g_status = r.version + " is ready to install";
-  SDL_Log("[Updater] %s (from %s)", g_status.c_str(), r.from.c_str());
+  g_status = "Ready to update";
   return true;
 }
 
-// An installer, checked again first, run silently (relaunch: the game
-// starts again after)
-bool runInstaller(const fs::path &setup, const Updater::Release &r, bool relaunch, std::string &why) {
-  if (!matches(setup, r)) {
-    why = "The update on disk no longer matches its signed size and SHA-512, so it wasn't run.";
+// addition: a small separate updater stays visible after this app exits.
+// It is copied outside the installation, so replacement cannot lock it.
+std::wstring quoted(const std::wstring &value) {
+  std::wstring result = L"\"";
+  size_t slashes = 0;
+  for (wchar_t c : value) {
+    if (c == L'\\') { ++slashes; continue; }
+    if (c == L'\"') result.append(slashes * 2 + 1, L'\\');
+    else result.append(slashes, L'\\');
+    slashes = 0;
+    result += c;
+  }
+  result.append(slashes * 2, L'\\');
+  return result + L"\"";
+}
+
+bool runInstaller(const fs::path &setup, const Updater::Release &release, bool relaunch, std::string &why) {
+  (void)relaunch; // explicit updates always reopen through the helper.
+  if (!matches(setup, release)) {
+    why = "The update no longer matches its signed size and SHA-512. It was not run.";
     return false;
   }
-  std::wstring cmd = L"\"" + setup.wstring() + L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS";
-  if (relaunch)
-    cmd += L" /RELAUNCH";
-  STARTUPINFOW si = {sizeof(si)};
-  PROCESS_INFORMATION pi = {};
-  if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
-    why = "Couldn't start the installer.";
-    return false;
+  const fs::path helperSource = fs::path(Paths::appDir()) / "zt1-update-helper.exe";
+  const fs::path helper = pendingDir() / ("zt1-update-helper-" + std::to_string(GetCurrentProcessId()) + ".exe");
+  std::error_code error;
+  fs::copy_file(helperSource, helper, fs::copy_options::overwrite_existing, error);
+  if (error) { why = "The update helper is missing or could not be prepared. Please reinstall the application."; return false; }
+  wchar_t executable[32768]{};
+  if (!GetModuleFileNameW(nullptr, executable, 32768)) { why = "Could not locate the game executable."; return false; }
+  const std::wstring eventName = L"Local\\ZT1Update-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
+  HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, eventName.c_str());
+  if (!ready) { why = "Could not create the update hand-off."; return false; }
+  std::wstring command = quoted(helper.wstring()) + L" --app game --parent " + std::to_wstring(GetCurrentProcessId()) +
+      L" --installer " + quoted(fs::absolute(setup).wstring()) + L" --size " + widen(release.size) +
+      L" --sha512 " + quoted(widen(release.sha512)) + L" --launch " + quoted(executable) +
+      L" --version " + quoted(widen(release.version)) + L" --ready-event " + quoted(eventName);
+  STARTUPINFOW startup{sizeof(startup)};
+  PROCESS_INFORMATION process{};
+  const bool launched = CreateProcessW(helper.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr,
+                                      pendingDir().c_str(), &startup, &process) != FALSE;
+  bool visible = false;
+  if (launched) {
+    HANDLE waits[]{ready, process.hProcess};
+    visible = WaitForMultipleObjects(2, waits, FALSE, 10000) == WAIT_OBJECT_0;
+    if (!visible) {
+      // A failed hand-off must not leave a helper waiting to install when
+      // the player later exits for an unrelated reason.
+      TerminateProcess(process.hProcess, 1);
+      WaitForSingleObject(process.hProcess, 5000);
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
   }
-  CloseHandle(pi.hThread);
-  CloseHandle(pi.hProcess);
+  CloseHandle(ready);
+  if (!visible) { why = "The updater window did not open. The game remains running; try again."; return false; }
   return true;
 }
 
-// The looking thread: 15 s after start, then every 30 minutes (5 after one
-// that failed), and whenever Check now asks. With Check for updates off it
-// only looks when asked
+// addition: check at startup and when asked. Later means later: no
+// background timer downloads or silent exit-time installation.
 void loop() {
-  std::unique_lock<std::mutex> lk(g_lock);
-  g_wake.wait_for(lk, std::chrono::seconds(15), [] { return g_wakeNow; });
+  std::unique_lock<std::mutex> lock(g_lock);
+  bool first = true;
   for (;;) {
+    if (!first) g_wake.wait(lock, [] { return g_wakeNow; });
+    const bool download = g_downloadRequested;
+    const bool check = g_manual || (first && Features::updateChecks);
+    first = false;
     g_wakeNow = false;
-    bool look = Features::updateChecks || g_manual;
-    lk.unlock();
-    bool ok = true;
-    if (look)
-      ok = lookOnce();
-    else
-      setState(Updater::State::Off, "off (Check now still looks)");
-    lk.lock();
-    g_wake.wait_for(lk, ok ? std::chrono::minutes(30) : std::chrono::minutes(5), [] { return g_wakeNow; });
+    lock.unlock();
+    if (download) downloadSelected();
+    else if (check) lookOnce();
+    else setState(Updater::State::Off, "Startup checks are off. Check now still works.");
+    lock.lock();
   }
 }
 #endif
@@ -533,8 +630,8 @@ void start() {
     g_started = true;
   }
   tidyPending();
-  setState(Features::updateChecks ? State::Idle : State::Off,
-           Features::updateChecks ? "looks shortly" : "off (Check now still looks)");
+  setState(Features::updateChecks ? State::Checking : State::Off,
+           Features::updateChecks ? "Checking for Updates" : "Startup checks are off. Check now still works.");
   std::thread(loop).detach();
 #else
   setState(State::Off, "Windows only");
@@ -546,6 +643,7 @@ void checkNow() {
     return;
   start();
   std::lock_guard<std::mutex> g(g_lock);
+  if (g_state == State::Downloading || g_state == State::Verifying || g_installing) return;
   g_manual = true;
   g_wakeNow = true;
   g_wake.notify_all();
@@ -563,7 +661,8 @@ std::string status() {
 
 bool takeOffer(Release &out) {
   std::lock_guard<std::mutex> g(g_lock);
-  if (!g_ready || g_offered || g_installing)
+  if ((!g_available && !g_ready) || g_offered || g_installing ||
+      (g_state != State::Available && g_state != State::Ready))
     return false;
   g_offered = true;
   out = g_readyRelease;
@@ -576,9 +675,10 @@ void skip(const Release &r) {
     out << r.version << "\n";
   }
   std::lock_guard<std::mutex> g(g_lock);
-  if (g_ready && g_readyRelease.version == r.version) {
-    g_ready = false; // (not installed on quit either)
-    g_state = State::UpToDate;
+  if ((g_ready || g_available) && g_readyRelease.version == r.version) {
+    g_ready = false;
+    g_available = false;
+    g_state = State::Idle;
     g_status = r.version + " skipped";
   }
 }
@@ -600,6 +700,8 @@ bool installNow(std::string &why) {
     return false;
   std::lock_guard<std::mutex> g(g_lock);
   g_installing = true;
+  g_state = State::Installing;
+  g_status = "Updating";
   return true;
 #else
   why = "Updates are Windows only.";
@@ -613,22 +715,56 @@ bool installing() {
 }
 
 void atExit() {
+  // addition: never install because the player chose Later or closed a game.
+}
+
+Snapshot snapshot() {
+  std::lock_guard<std::mutex> lock(g_lock);
+  Snapshot value;
+  value.state = g_state;
+  value.release = g_readyRelease;
+  value.downloadedBytes = g_downloaded;
+  value.totalBytes = g_total;
+  value.bytesPerSecond = g_speed;
+  value.secondsRemaining = g_speed > 0 && g_total >= g_downloaded ? (g_total - g_downloaded) / g_speed : -1;
+  value.status = g_status;
+  return value;
+}
+
+bool downloadNow() {
+  if (!possible(nullptr)) return false;
+  std::lock_guard<std::mutex> lock(g_lock);
+  if (!g_available || g_installing || g_downloadRequested ||
+      (g_state != State::Available && g_state != State::Failed)) return false;
+  g_downloadRequested = true;
+  g_downloaded = 0;
+  g_speed = 0;
+  g_state = State::Downloading;
+  g_status = "Downloading update";
+  g_wakeNow = true;
+  g_wake.notify_all();
+  return true;
+}
+
+void acknowledgeLaunch(int argc, char **argv) {
 #ifdef _WIN32
-  Release r;
-  fs::path file;
-  {
-    std::lock_guard<std::mutex> g(g_lock);
-    if (!g_ready || g_installing || !Features::updateChecks)
-      return;
-    r = g_readyRelease;
-    file = g_readyFile;
-    g_installing = true;
+  std::string name, token;
+  for (int i = 1; i + 1 < argc; ++i) {
+    if (std::string(argv[i]) == "--update-ack") name = argv[++i];
+    else if (std::string(argv[i]) == "--update-token") token = argv[++i];
   }
-  std::string why;
-  if (runInstaller(file, r, false, why))
-    SDL_Log("[Updater] installing %s as the game closes", r.version.c_str());
-  else
-    SDL_Log("[Updater] %s", why.c_str());
+  if (name.empty() || token.size() != 32 || !std::all_of(token.begin(), token.end(), [](char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })) return;
+  std::error_code error;
+  const fs::path ack = fs::weakly_canonical(fs::u8path(name), error);
+  if (error) return;
+  const fs::path root = fs::weakly_canonical(pendingDir(), error);
+  if (error || ack.parent_path() != root || ack.filename() != fs::path("launch-" + token + ".ack")) return;
+  const fs::path temp = ack.wstring() + L".tmp";
+  { std::ofstream out(temp, std::ios::binary | std::ios::trunc); out << token << "\n" << version() << "\n"; if (!out.good()) return; }
+  fs::rename(temp, ack, error);
+#else
+  (void)argc; (void)argv;
 #endif
 }
 

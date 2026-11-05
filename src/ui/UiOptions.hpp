@@ -61,7 +61,7 @@ private:
 // left, a page on the right - stretched from its edges to 640 x 440): the
 // pages listed down the left - Game (in a zoo only: Load, Save, Main Menu,
 // Exit), Display, Graphics, Sound, Controls, Accessibility, Gameplay (the
-// extras), Mods & Updates - and each page's settings on the right, what the
+// extras), Mods, Updates - and each page's settings on the right, what the
 // one under the mouse does written underneath. Choices and on/offs are the
 // game's own tick boxes. Opened from the in-game disk button and the main
 // menu's Game Options. Every setting is zoo.ini's (DisplaySettings.hpp's
@@ -71,8 +71,10 @@ public:
   explicit UiOptions(ResourceManager *rm);
   ~UiOptions();
 
-  // The Mods & Updates page (open()'s page: the Mod Menu's Back comes there)
+  // The Mods page (open()'s page: the Mod Menu's Back comes there)
   static constexpr int kModsPage = 8;
+  // Updates follows the hidden Mod settings page so existing page IDs stay put.
+  static constexpr int kUpdatesPage = 10;
   // page: the one shown first (-1: Game in a zoo, else Display)
   void open(bool inGame, int page = -1);
   void close() { this->closeAsked = true; }
@@ -95,8 +97,13 @@ public:
   std::function<void(int delay, int durationMs)> onTooltips;
   // Reset window positions (Controls): the dragged windows put back
   std::function<void()> onResetWindows;
+  // Updates' Review update opens the main-menu update prompt. A zoo must be
+  // left through its normal save/leave flow before an installer may close it.
+  std::function<void()> onUpdate;
   // Back in the middle (Reset window positions)
   void resetPosition();
+  // ours: isolated options captures and tab checks; no zoo or updater worker.
+  static int updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const std::string &out);
 
 private:
   ResourceManager *rm;

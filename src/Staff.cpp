@@ -2280,6 +2280,16 @@ Animation *Staff::baseArt(const Member &m) const {
   return onPad && t.baseUsed ? t.baseUsed : t.base;
 }
 
+// ours: drawing and optional lighting share native playback, including the
+// reversed spin-down and one-shot spin-up/tranquillizer sequences.
+int Staff::baseFrame(const Member &m,Animation *a)const {
+  if(!a)a=baseArt(m);return a?int(std::fmod(m.baseAnimTime*1000/std::max(1u,a->frameTimeMs()),std::max(1,a->frameCount()))):0;
+}
+int Staff::helicopterFrame(const Member &m,Animation *a)const {
+  if(!a)return 0;int f=int(m.animTime*1000/std::max(1u,a->frameTimeMs()));
+  if(m.heliStage==HeliStage::SpinUp || m.heliStage==HeliStage::SpinDown || m.heliStage==HeliStage::Fire)f=std::min(f,std::max(0,a->frameCount()-1));
+  if(m.heliStage==HeliStage::SpinDown)f=std::max(0,a->frameCount()-1-f);return f;
+}
 void Staff::collect(const WorldRenderer &view, const WorldMap &map,
                     std::vector<Fences::Drawable> &all,
                     std::vector<Fences::Drawable> *raised) const {
@@ -2324,7 +2334,7 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
         for(int k=0;k<count;k++) {
           const float a=xs[left]+k*step,b=std::min(xs[right],a+step);
           Fences::Drawable strip{edgeDepth((a+b)*0.5f)-0.02f,bx,by,base,baseSide,tint,lit};
-          strip.frame=static_cast<int>(std::fmod(m.baseAnimTime*1000/std::max(1u,base->frameTimeMs()),std::max(1,base->frameCount())));strip.clip=true;strip.clipX0=k?a:-1e9f;strip.clipX1=k==count-1?1e9f:b;
+          strip.frame=baseFrame(m);strip.clip=true;strip.clipX0=k?a:-1e9f;strip.clipX1=k==count-1?1e9f:b;
           out.push_back(strip);
         }
       }
@@ -2340,10 +2350,7 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
         if (std::abs(x-m.x) <= t.footX*0.5f && std::abs(y-m.y) <= t.footY*0.5f && z >= g+t.padZ-0.01f)
           hdepth = std::max(hdepth, baseFrontDepth);
         Fences::Drawable d{hdepth+0.02f,hx,hy,heli,side,tint,lit};
-        int frame=static_cast<int>(m.animTime*1000/std::max(1u,heli->frameTimeMs()));
-        if(m.heliStage==HeliStage::SpinUp || m.heliStage==HeliStage::SpinDown || m.heliStage==HeliStage::Fire)
-          frame=std::min(frame,std::max(0,heli->frameCount()-1));
-        if(m.heliStage==HeliStage::SpinDown)frame=std::max(0,heli->frameCount()-1-frame);
+        int frame=helicopterFrame(m,heli);
         d.frame=frame;out.push_back(d);
         if(m.id==selected && selectArrow)out.push_back({hdepth+0.03f,hx,hy-65,selectArrow,CompassDirection::N,tint,false});
       }

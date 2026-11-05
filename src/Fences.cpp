@@ -14,6 +14,16 @@
 #include "IniReader.hpp"
 #include "ItemCatalog.hpp"
 #include "RenderSettings.hpp"
+#include "GpuTankLayer.hpp"
+#include <memory>
+
+// ours: reference path retained for native pixel/state comparisons.
+static bool reuseFenceWork = true;
+void fenceWorkReuse(bool on) { reuseFenceWork = on; }
+static bool composeTanksOnGpu = true; // guarded GPU path; native fallback preserves zoomed-in output
+void fenceGpuComposition(bool on) { composeTanksOnGpu = on; }
+namespace FrameProfile {extern bool active;void record(const char *,double);double ms(Uint64);}
+namespace {struct ProfScope{const char *n;Uint64 t;explicit ProfScope(const char *m):n(m),t(FrameProfile::active?SDL_GetPerformanceCounter():0){}~ProfScope(){if(t)FrameProfile::record(n,FrameProfile::ms(t));}};}
 
 // Art laid edge to edge drawn as one picture: at the art's own size into a
 // clear layer, then the layer enlarged into place. A tank's glass and water
@@ -95,7 +105,7 @@ static void layered(SDL_Renderer *r, const std::function<void()> &draw) {
   draw();
   RenderSettings::snapEdges = snapWas;
   RenderSettings::worldZoomedIn = zoomedIn;
-  SDL_SetTextureScaleMode(layer, RenderSettings::lookFor(sx));
+  RenderSettings::setScaleMode(layer, RenderSettings::lookFor(sx));
   SDL_SetRenderTarget(r, was);
   // (the viewport and clip in the screen's pixels as they were)
   SDL_RenderSetScale(r, 1.0f, 1.0f);
@@ -306,6 +316,9 @@ bool Fences::showPortal(const Edge &e, int &show, int &home) const {
      !a->filling || !b->filling || waterLevel(*a)<=0 || waterLevel(*b)<=0 ||
      std::abs(a->wallTop()-b->wallTop())>0.01f)return false;
   show=a->show?a->id:b->id;home=a->show?b->id:a->id;
+  const auto pair=std::make_pair(show,home);
+  if(reuseFenceWork)if(auto found=sharedPortalCache.find(pair);found!=sharedPortalCache.end())
+    return e==found->second;
   std::vector<Edge> shared;
   for(const auto &[edge,piece]:this->edges) {
     int ax=edge.x-(edge.alongX?0:1),ay=edge.y-(edge.alongX?1:0);
@@ -327,7 +340,9 @@ bool Fences::showPortal(const Edge &e, int &show, int &home) const {
     }
     if(run.size()>longest.size())longest=std::move(run);
   }
-  return longest.size()>=3 && e==longest[longest.size()/2];
+  const Edge portal=longest.size()>=3?longest[longest.size()/2]:Edge{false,-1,-1};
+  if(reuseFenceWork)sharedPortalCache[pair]=portal;
+  return longest.size()>=3 && e==portal;
 }
 
 const FenceType *Fences::portalType(const Edge &edge) const {
@@ -353,6 +368,7 @@ int Fences::typeIndex(const std::string &key) const {
 }
 
 void Fences::clear() {
+  sharedPortalCache.clear();
   this->edges.clear();
   this->exhibitList.clear();
   this->filterList.clear();
@@ -645,6 +661,7 @@ bool Fences::replaceable(const Piece &p, int type) const {
 }
 
 void Fences::place(const Edge &e, int type, int drag, const WorldMap &map) {
+  sharedPortalCache.clear();
   if (auto have = this->edges.find(e); have != this->edges.end()) {
     // Over one already: replaced by a new one of this kind (a gate stays a
     // gate)
@@ -841,6 +858,7 @@ int Fences::tankOf(const Edge &e) const {
 static std::vector<Fences::Edge> boundaryOf(const Fences::Exhibit &ex);
 
 void Fences::remove(const Edge &e, WorldMap &map) {
+  sharedPortalCache.clear();
   auto it = this->edges.find(e);
   if (it == this->edges.end())
     return;
@@ -885,6 +903,7 @@ Fences::Exhibit *Fences::exhibit(int id) {
 // ----------------------------------------------------------------------------
 std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int year,
                                         bool loading) {
+  sharedPortalCache.clear();
   const int W = map.getWidth(), H = map.getHeight();
   std::vector<int> region(static_cast<size_t>(W) * H, -1);
   auto blocked = [&](int x, int y, int nx, int ny) {
@@ -2338,9 +2357,11 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
   // diver's ladder down into it, then the water over them, see-through:
   // the surface at the water's height, its sides behind the front glass.
   // Sorted at the back of the tank.
+  ProfScope profTanks("fc tanks");
   for (const Exhibit &ex : this->exhibitList) {
     if (!ex.tank)
       continue;
+    ProfScope profBuild("fc tank walls");
     std::string set = (ex.salt ? "salt" : "fresh") + scumSuffix(ex.purity);
     Animation *surfaceArt = this->waterPart(set, "top");
     if (!surfaceArt)
@@ -2421,6 +2442,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     }
     if (backDepth > 1e29f)
       continue;
+    ProfScope profWater("fc tank water+cover");
     std::stable_sort(back.begin(), back.end(),
                      [](const Sprite &p, const Sprite &q) { return p.depth < q.depth; });
     // The water: up to a unit under the walls' top (tanks.cfg waterOffset
@@ -2544,7 +2566,38 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       // sides reach past its last column)
       const float column = view.getTileWidth() * 0.75f + 1.0f;
       const int reach = std::max(1, ex.groundHeight - ex.floorHeight) + 1;
-      for (auto [x, y] : ex.tiles)
+      if(reuseFenceWork) {
+        // ours: ask each neighbouring tile once, rather than once for every
+        // overlapping tank neighbourhood. In a screen column only the minimum
+        // tank depth matters to the original "any nearer tile" test.
+        std::map<float,float> nearest;
+        for(const auto &s:spots) {
+          auto [at,inserted]=nearest.emplace(s.sx,s.d);
+          if(!inserted)at->second=std::min(at->second,s.d);
+        }
+        const int width=map.getWidth(),height=map.getHeight();
+        std::vector<uint8_t> candidates(size_t(width)*height,0);
+        int x0=width,y0=height,x1=-1,y1=-1;
+        for(auto [x,y]:ex.tiles) {
+          const int left=std::max(0,x-reach),right=std::min(width-1,x+reach);
+          const int top=std::max(0,y-reach),bottom=std::min(height-1,y+reach);
+          x0=std::min(x0,left);x1=std::max(x1,right);y0=std::min(y0,top);y1=std::max(y1,bottom);
+          for(int yy=top;yy<=bottom;++yy)for(int xx=left;xx<=right;++xx)candidates[size_t(yy)*width+xx]=1;
+        }
+        for(int y=y0;y<=y1;++y)for(int x=x0;x<=x1;++x) {
+          if(!candidates[size_t(y)*width+x] || ex.tiles.count({x,y}))continue;
+          float sx,sy,d;view.worldToScreenF(x+.5f,y+.5f,0,sx,sy,d);
+          bool nearer=false;
+          for(auto at=nearest.lower_bound(sx-column);at!=nearest.end() && at->first<=sx+column;++at)
+            if(std::fabs(at->first-sx)<=column && d>at->second){nearer=true;break;}
+          // (whose tile it is asked only of the ones in front: the same
+          // tiles, a fraction of the exhibit lookups each frame)
+          if(!nearer)continue;
+          const Exhibit *neighbour=this->exhibit(this->exhibitAt(x,y));
+          if(neighbour && neighbour->tank)continue;
+          cover.insert({x,y});
+        }
+      } else for (auto [x, y] : ex.tiles)
         for (int dy = -reach; dy <= reach; dy++)
           for (int dx = -reach; dx <= reach; dx++) {
             int nx = x + dx, ny = y + dy;
@@ -2632,36 +2685,106 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
         rr = s.sx + 64;
       }
     };
-    auto within = [&](const std::vector<Sprite> &all, const Strip &st) {
-      std::vector<Sprite> some;
+    // ours: the tank's sprites are shared by its strips, each strip keeping
+    // the ones that reach into it by index; each sprite's box is asked once
+    // (copied into every strip, and every box asked again in each, two big
+    // tanks spent 10 ms a frame here). The same sprites drawn, in the same order.
+    struct Shared {
+      std::vector<Sprite> back, water, frontLow;
+      std::vector<Rim> rims;
+    };
+    struct Picks {
+      std::vector<uint32_t> back, water, frontLow, rims;
+    };
+    auto shared = std::make_shared<Shared>();
+    shared->back = std::move(back);
+    shared->water = std::move(water);
+    shared->frontLow = std::move(frontLow);
+    shared->rims = std::move(rims);
+    auto spans = [&](const std::vector<Sprite> &all) {
+      std::vector<std::pair<float, float>> lr;
+      lr.reserve(all.size());
       for (const Sprite &sp : all) {
         float l, rr;
         bounds(sp, l, rr);
+        lr.push_back({l, rr});
+      }
+      return lr;
+    };
+    const auto backSpan = spans(shared->back), waterSpan = spans(shared->water), frontSpan = spans(shared->frontLow);
+    // (the front rims' outline too: a strip draws the ones that reach into it)
+    std::vector<std::pair<float, float>> rimSpan;
+    for (const Rim &m : shared->rims) {
+      float x0 = 1e30f, x1 = -1e30f;
+      if (m.front) {
+        float y, d;
+        view.worldToScreenF(m.ax, m.ay, static_cast<float>(m.outside), x0, y, d);
+        view.worldToScreenF(m.bx, m.by, static_cast<float>(m.outside), x1, y, d);
+        if (x0 > x1)
+          std::swap(x0, x1);
+      }
+      rimSpan.push_back({x0, x1});
+    }
+    auto within = [&](const std::vector<std::pair<float, float>> &span, const Strip &st) {
+      std::vector<uint32_t> some;
+      for (size_t i = 0; i < span.size(); i++)
         // (and what's just past its edges: enlarged smoothly, a strip's edge
         // pixel blends in the one beyond - left out, a light seam showed)
-        if (rr > st.x0 - 2.0f && l < st.x1 + 2.0f)
-          some.push_back(sp);
-      }
+        if (span[i].second > st.x0 - 2.0f && span[i].first < st.x1 + 2.0f)
+          some.push_back(static_cast<uint32_t>(i));
       return some;
     };
+    // (the cover tiles' screen columns, once)
+    std::vector<std::pair<float, std::pair<int, int>>> coverAt;
+    coverAt.reserve(cover.size());
+    for (auto [cx, cy] : cover) {
+      float sx, sy, d;
+      view.worldToScreenF(cx + 0.5f, cy + 0.5f, 0, sx, sy, d);
+      coverAt.push_back({sx, {cx, cy}});
+    }
+    const int tankId=ex.id;
+    auto paintInterior=[this,tankId,level](SDL_Renderer *r,const Shared &all,const Picks *only) {
+      auto each=[](const std::vector<Sprite> &list,const std::vector<uint32_t> *pick,const auto &draw) {
+        if(pick)for(uint32_t i:*pick)draw(list[i]);
+        else for(const Sprite &s:list)draw(s);
+      };
+      auto anchored=[r](const Sprite &s){s.art->drawAnchored(r,s.sx,s.sy,s.side,s.tinted?&s.tint:nullptr,s.frame);};
+      layered(r,[&]{each(all.back,only?&only->back:nullptr,anchored);});
+      if(this->drawTankContents)this->drawTankContents(r,tankId,false,level);
+      layered(r,[&]{
+        static const SDL_FPoint diamond[4]={{.5f,2.f/32},{1.f-4.f/62,.5f},{.5f,1.f-2.f/32},{4.f/62,.5f}};
+        each(all.water,only?&only->water:nullptr,[&](const Sprite &s){
+          if(s.quad)s.art->drawMapped(r,s.side,s.frame,s.q,diamond,s.tint);
+          else anchored(s);
+        });
+      });
+      if(this->drawTankContents)this->drawTankContents(r,tankId,true,level);
+      layered(r,[&]{each(all.frontLow,only?&only->frontLow:nullptr,anchored);});
+    };
+    std::shared_ptr<GpuTankLayer> gpu;
+    std::shared_ptr<std::function<void(SDL_Renderer*)>> whole;
+    if(composeTanksOnGpu && ex.tiles.size()>=64 && strips.size()>=8) {
+      gpu=std::make_shared<GpuTankLayer>();
+      whole=std::make_shared<std::function<void(SDL_Renderer*)>>([paintInterior,shared](SDL_Renderer *r){paintInterior(r,*shared,nullptr);});
+    }
+    ProfScope profStrips("fc tank strips");
+    const float halfTile = view.getTileWidth() * 0.5f;
     for (const Strip &st : strips) {
-      std::vector<Sprite> back1 = within(back, st), water1 = within(water, st), front1 = within(frontLow, st);
-      std::set<std::pair<int, int>> cover1;
-      for (auto [cx, cy] : cover) {
-        float sx, sy, d;
-        view.worldToScreenF(cx + 0.5f, cy + 0.5f, 0, sx, sy, d);
-        if (sx + view.getTileWidth() * 0.5f > st.x0 && sx - view.getTileWidth() * 0.5f < st.x1)
-          cover1.insert({cx, cy});
-      }
+      Picks picks{within(backSpan, st), within(waterSpan, st), within(frontSpan, st), within(rimSpan, st)};
+      std::vector<std::pair<int, int>> cover1; // (sorted, as redrawGround takes them)
+      for (const auto &[sx, tile] : coverAt)
+        if (sx + halfTile > st.x0 && sx - halfTile < st.x1)
+          cover1.push_back(tile);
+      std::sort(cover1.begin(), cover1.end());
+      cover1.erase(std::unique(cover1.begin(), cover1.end()), cover1.end());
       Drawable part = inside;
       part.depth = st.depth;
       part.clip = true;
       part.clipX0 = st.x0;
       part.clipX1 = st.x1;
       part.clipY1 = st.y1;
-      const int tankId = ex.id;
-      part.custom = [this, back = back1, water = water1, frontLow = front1, cover = cover1, rims, wet, level,
-                     vp, tankId](SDL_Renderer *r) {
+      part.custom = [this, shared, picks = std::move(picks), cover = std::move(cover1), wet, level,
+                     vp, paintInterior, gpu, whole](SDL_Renderer *r) {
       // The tank's walls and water are pieces laid edge to edge (a height
       // unit each, up the glass): drawn bigger and smoothed piece by piece,
       // each one's soft edge left a line where it meets the next. They're
@@ -2670,37 +2793,17 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       // So each group of them is drawn at the art's own size into a layer and
       // the layer enlarged as one picture (Fences::layered); what swims in
       // the tank is drawn between them, at the zoom, as it was
-      layered(r, [&] {
-        for (const Sprite &s : back)
-          s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr, s.frame);
-      });
-      // (what's in the tank under the water, the water over it)
-      if (this->drawTankContents)
-        this->drawTankContents(r, tankId, false, level);
-      layered(r, [&] {
-      // (the art's diamond - its top, right, bottom and left points - a
-      // little inside its stepped edge, whose outer pixels are clear)
-      static const SDL_FPoint diamond[4] = {
-          {0.5f, 2.0f / 32}, {1.0f - 4.0f / 62, 0.5f}, {0.5f, 1.0f - 2.0f / 32}, {4.0f / 62, 0.5f}};
-      for (const Sprite &s : water)
-        if (s.quad)
-          s.art->drawMapped(r, s.side, s.frame, s.q, diamond, s.tint);
-        else
-          s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr, s.frame);
-      });
-      if (this->drawTankContents)
-        this->drawTankContents(r, tankId, true, level);
+      {ProfScope ps("tc interior");if(!gpu || !gpu->draw(r,*whole))paintInterior(r,*shared,&picks);}
       (void)wet;
       (void)level;
-      layered(r, [&] {
-        for (const Sprite &s : frontLow)
-          s.art->drawAnchored(r, s.sx, s.sy, s.side, s.tinted ? &s.tint : nullptr, s.frame);
-      });
+      {ProfScope pg("tc ground");
       if (this->redrawGround)
-        this->redrawGround(r, cover);
+        this->redrawGround(r, cover);}
+      ProfScope pr("tc rims");
       SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
       SDL_SetRenderDrawColor(r, 176, 96, 40, 230);
-      for (const Rim &m : rims) {
+      for (uint32_t i : picks.rims) {
+        const Rim &m = shared->rims[i];
         if (!m.front)
           continue;
         float x0, y0, x1, y1, d;
@@ -2709,12 +2812,13 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
         SDL_RenderDrawLineF(r, x0, y0, x1, y1);
       }
       };
-      out.push_back(part);
+      out.push_back(std::move(part));
     }
   }
 
+  {ProfScope profEdges("fc edges");
   for (const auto &kv : this->edges)
-    add(kv.first, kv.second, kv.second.type, false, SDL_Color{255, 255, 255, 255});
+    add(kv.first, kv.second, kv.second.type, false, SDL_Color{255, 255, 255, 255});}
   // Filters: running, decayed, or stopped; their hose toward the tank (the
   // art is named a quarter turn round, as the tank gate's)
   auto addFilter = [&](const Filter &f, Animation *a, bool tinted, SDL_Color tint) {

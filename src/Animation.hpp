@@ -5,6 +5,8 @@
 #include <functional>
 #include <unordered_map>
 #include <vector>
+#include <map>
+#include <tuple>
 
 #include <SDL2/SDL.h>
 
@@ -52,6 +54,15 @@ public:
   // them)
   bool drawMapped(SDL_Renderer *renderer, CompassDirection direction, int frame, const SDL_FPoint dst[4],
                   const SDL_FPoint uv[4], SDL_Color tint);
+  bool drawMapped(SDL_Renderer *renderer, CompassDirection direction, int frame, const SDL_FPoint dst[4],
+                  const SDL_FPoint uv[4], SDL_Color tint, bool anchoredMirror);
+  // addition: its frame as a shadow cast on the ground (the day/night
+  // lighting). place(across, up) gives where on the screen the shadow of the
+  // frame's point that many pixels right of its anchor and above it lands.
+  // Black, alpha times its own.
+  bool drawCastShadow(SDL_Renderer *renderer, CompassDirection direction, int frame,
+                      const std::function<SDL_FPoint(float across, float up)> &place, Uint8 alpha,
+                      Uint8 tipAlpha); // (alpha at the foot, tipAlpha at the frame's top: fading along it)
   // Where drawAnchored would put it: its box on the screen (false: no frame)
   bool anchoredBounds(float x, float y, CompassDirection direction, float &left, float &top, float &right,
                       float &bottom);
@@ -77,6 +88,13 @@ public:
   }
 
   bool hasFrames(CompassDirection direction);
+
+  // addition: emission is sampled from the current art, with its own anchor
+  // and mirror. Cropped islands keep a bulb or flame separate from its roof.
+  enum EmissionKind { LampGlass=1, Flame=2, BuildingLights=3, WaterHighlights=4, BulbStrings=5 };
+  struct EmissionPatch { SDL_Texture *texture=nullptr; SDL_Rect rect{}; SDL_FPoint offset{}; SDL_Color colour{}; int pixels=0; const char *material="";bool reflective=false; };
+  const std::vector<EmissionPatch> &emissionPatches(SDL_Renderer *,CompassDirection,int frame,int kind);
+  SDL_FRect emissionRect(const EmissionPatch &,float x,float y,CompassDirection,SDL_RendererFlip *flip=nullptr);
 
   // Art drawn magnified (UI): upscaled per the art upscaling setting, and
   // frames can come from an HD pack at <hdDir>/<direction>_<frame>.png
@@ -118,6 +136,14 @@ public:
                : it->second[frame];
   }
 
+  // addition: native geometry input with the same directional mirroring and
+  // anchor as drawing. The caller borrows the surface; no art is copied.
+  struct LightingFrame {SDL_Surface *surface=nullptr;SDL_Point anchor{};bool mirrored=false;const std::vector<uint64_t> *shadowRuns=nullptr;};
+  LightingFrame lightingFrame(CompassDirection side,int frame);
+  const std::string &lightingKey()const {return hd_dir;}
+  size_t lightingTextureBytes()const;
+  void setBlackIsBody(bool value){blackIsBody=value;}
+
 private:
   // Per direction: frame 0's offset from its surface's corner to where the
   // original draws it (see anchorOffset)
@@ -148,6 +174,13 @@ private:
 
   std::unordered_map<std::string, std::vector<SDL_Surface *>> surfaces;
   std::unordered_map<std::string, std::vector<SDL_Texture *>> textures;
+  // addition: the untouched original and shadow-free art have separate caches.
+  bool paletteShadows=false,blackIsBody=false;
+  std::unordered_map<std::string,std::vector<std::vector<uint64_t>>> shadowRuns;
+  std::unordered_map<std::string,std::vector<SDL_Texture *>> textures_lit,textures_lit_hi;
+  std::map<std::tuple<std::string,int,int>,std::vector<EmissionPatch>> emissions;
+  void releaseLighting();
+  std::string lightingDirection(CompassDirection side);
 
   template <typename T>
   std::string convertCompassDirectionToExistingAnimationString(
@@ -158,6 +191,17 @@ private:
 
   // Each direction's anchor point in its frames (frame 0)
   std::unordered_map<std::string, SDL_Point> anchor_points;
+  // ours: what a draw looks up for a direction, kept - every sprite drawn
+  // asked the same string-keyed maps several times. The anchor points are
+  // set once, as it loads; the frame sets' memo holds while textureGen does
+  // (moved on whenever a set gains, loses or remakes frames). Each keeps the
+  // mirroring (renderer_flip) the lookups it stands for left behind.
+  struct AnchorMemo { int8_t state = 0; SDL_RendererFlip flip = SDL_FLIP_NONE; SDL_Point anchor{}; };
+  AnchorMemo anchorMemo[10];
+  const AnchorMemo *anchorFor(CompassDirection direction);
+  struct FramesMemo { uint32_t gen = 0; bool setsFlip = false; SDL_RendererFlip flip = SDL_FLIP_NONE; std::vector<SDL_Texture *> *frames = nullptr; };
+  FramesMemo framesMemo[4][10];
+  uint32_t textureGen = 1;
   void loadSurfaces(std::string direction_string, AnimationData *data);
 };
 

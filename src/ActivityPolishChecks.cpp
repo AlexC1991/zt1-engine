@@ -1,4 +1,5 @@
 #include "World.hpp"
+#include "GpuTankLayer.hpp"
 #include "Animation.hpp"
 #include "ItemCatalog.hpp"
 #include "IniReader.hpp"
@@ -390,7 +391,7 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
   }
   check("off-screen sprite pruning preserves pixels at four zooms, four rotations and five view positions",cullPixels && cullSawPixels && cullCases==80);
   check("sprite pruning preserves the parent clip and renderer scale",cullState && probe);
-  Features::tankClip=oldTankClip;if(probe)SDL_DestroyRenderer(probe);if(canvas)SDL_FreeSurface(canvas);
+  Features::tankClip=oldTankClip;if(probe){GpuTankLayer::releasePool(probe);SDL_DestroyRenderer(probe);}if(canvas)SDL_FreeSurface(canvas);
   const Fences::Edge sides[4]={{true,37,30},{false,40,31},{true,37,34},{false,36,31}};
   // Full save/load deliberately does not persist fake Lab animal counts.
   // Use a real occupant so the specialist still has work after restoration.

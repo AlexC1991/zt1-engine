@@ -155,6 +155,19 @@ endif()
 target_compile_definitions(zt1-engine PRIVATE ZT1_VERSION="${ZT1_VERSION}"
     ZT1_OFFICIAL_BUILD=$<BOOL:${ZT1_OFFICIAL_BUILD}> ZT1_TEST_BUILD=$<BOOL:${ZT1_TEST_BUILD}>)
 
+# addition: a small independent updater window can remain open while the
+# application files are replaced. It needs no game art or installed DLLs.
+if(WIN32)
+    add_executable(zt1-update-helper WIN32 tools/update-helper.cpp)
+    target_compile_definitions(zt1-update-helper PRIVATE UNICODE _UNICODE)
+    target_link_libraries(zt1-update-helper PRIVATE user32 gdi32 shell32 bcrypt crypt32)
+    if(MSVC)
+        set_property(TARGET zt1-update-helper PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_compile_options(zt1-update-helper PRIVATE /MT)
+    endif()
+    add_dependencies(zt1-engine zt1-update-helper)
+endif()
+
 # 12. THE ORIGINAL GAME IN THE LAB (src/original/): zoo.exe is 32-bit, so
 # these are built only in a 32-bit tree (build/): zt1-original.exe starts
 # zoo.exe with zt1-hook.dll loaded into it (windowed, in the Lab's Play view)

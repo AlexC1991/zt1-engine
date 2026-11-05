@@ -49,6 +49,10 @@ public:
   // hidden by the ground in front of it)
   void renderTerrainTiles(SDL_Renderer *renderer, const WorldMap &map, SpriteDatabase &spriteDB,
                           const std::set<std::pair<int, int>> &tiles);
+  // (the same, the tiles sorted: ours, a tank's every depth strip every
+  // frame - a set's nodes made and freed, and looked up, for each)
+  void renderTerrainTiles(SDL_Renderer *renderer, const WorldMap &map, SpriteDatabase &spriteDB,
+                          const std::vector<std::pair<int, int>> &sortedTiles);
 
   // Isometric coordinate conversion. Returns the screen position of world
   // grid vertex (tileX, tileY) at the given height, in logical (pre-zoom)
@@ -207,6 +211,9 @@ private:
     std::vector<SDL_Vertex> vertices;
   };
   std::vector<Bucket> buckets;
+  // ours: how many of them are in use; the rest kept with their space, not
+  // made and freed again for every diagonal of every frame
+  size_t bucketsUsed = 0;
   void addToBucket(int layer, int order, SDL_Texture *texture,
                    const SDL_Vertex &a, const SDL_Vertex &b,
                    const SDL_Vertex &c);
@@ -224,7 +231,7 @@ private:
                    const SDL_Vertex &a, const SDL_Vertex &b,
                    const SDL_Vertex &c);
   void flushBatch(SDL_Renderer *renderer);
-  const std::set<std::pair<int, int>> *onlyTiles = nullptr; // (renderTerrainTiles)
+  const std::vector<std::pair<int, int>> *onlyTiles = nullptr; // (renderTerrainTiles; sorted)
 };
 
 #endif // WORLD_RENDERER_HPP

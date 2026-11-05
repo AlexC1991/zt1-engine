@@ -20,6 +20,7 @@ class WorldRenderer;
 // on the ground under it. Which one comes is weighted by cFrequency; the
 // ones with none (the witch, Santa, the biplane) come on their days.
 class Ambient {
+  friend class DayNightLighting; // addition: same flying poses/altitude for optional sun shadows.
 public:
   void load(ResourceManager *rm);
   void clear() { this->flyers.clear(); }

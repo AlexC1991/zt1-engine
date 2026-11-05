@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,16 @@ public:
 
   UiAction handleInputs(std::vector<Input> &inputs) override;
   void draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) override;
+
+  // addition: the optional visual cycle extends the native date well along the bar.
+  // An empty time restores the untouched original date/pause presentation.
+  void setDateTime(const std::string &calendar, const std::string &time = "");
+
+  // addition: session-only speed selection; changing it never changes Pause.
+  void setGameSpeed(int speed);
+  int gameSpeed() const { return this->selectedSpeed; }
+  std::function<void(int)> onGameSpeed;
+  SDL_Rect speedButtonRect() const;
 
   // Searches the HUD, then the panels
   UiElement *getElementById(int id);
@@ -255,6 +266,17 @@ public:
   void setFilter(int panelId, int choice);
 
 private:
+  std::unique_ptr<IniReader> dateTimeIni;
+  std::unique_ptr<UiText> dateTimeText;
+  std::string dateTime;
+  SDL_Rect dateTimeWell = {};
+  int selectedSpeed = 1;
+  bool speedDown = false;
+  SDL_Rect speedRect = {};
+  SDL_Texture *speedArtwork = nullptr;
+  SDL_Texture *speedNativeFaces[4] = {}; // Pause/Play, each native N/H face
+  void drawSpeedControl(SDL_Renderer *renderer, const SDL_Rect &pause);
+  void drawDateTime(SDL_Renderer *renderer);
   struct Entry {
     UiLayout *layout = nullptr;
     int id = 0;

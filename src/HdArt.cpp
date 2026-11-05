@@ -10,6 +10,12 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <fstream>
+#include <set>
+#include <cstdlib>
+#include <iomanip>
+#include <sstream>
+#include "LightingAssets.hpp"
 
 #include "SDL_image.h"
 
@@ -145,7 +151,22 @@ std::map<std::string, std::unique_ptr<Animation>> g_ownPalette;
 int g_ownGeneration = -1;
 } // namespace
 
-void setResources(ResourceManager *rm) { g_rm = rm; }
+// addition: palette-reference animations are owned by this cache. Release
+// them while their ResourceManager and SDL renderer are still alive, before
+// the resource inventory is reset or destroyed.
+void setResources(ResourceManager *rm) {
+  g_ownPalette.clear();g_ownGeneration=-1;g_rm=rm;
+}
+
+// addition: a baked material belongs to the same enabled root as its colour
+// frame. A lower-priority pack must not light a different replacement's art.
+SDL_Surface *loadEmission(const std::string &path,const std::string &material) {
+  ensure();std::error_code ec;
+  for(const auto &root:g_roots)if(fs::exists(root+path+".png",ec)) {
+    const auto file=root+material+".png";return fs::exists(file,ec)?IMG_Load(file.c_str()):nullptr;
+  }return nullptr;
+}
+
 
 SDL_Surface *recolour(SDL_Surface *hd, SDL_Surface *painted, const std::string &name, const std::string &direction,
                       int frame) {
@@ -225,8 +246,55 @@ SDL_Surface *recolour(SDL_Surface *hd, SDL_Surface *painted, const std::string &
   return out;
 }
 
+
+// addition: these tool-only layers reuse the reviewed runtime material stencils.
+// Colour frames remain independent of time, sunshine and neighbouring lamps.
+SDL_Renderer *exportRenderer=nullptr;
+std::string materialKey(int kind) {
+  const auto *a=LightingAssets::profile(kind);if(!a)return "unknown";
+  std::ostringstream data;data<<std::setprecision(9)<<a->id<<a->animated;
+  for(const auto &view:a->views){data<<'|';for(const auto &r:view){data<<r.name<<int(r.material)<<int(r.pixels)<<r.stroke<<r.animated<<r.shadowCut;
+    for(int c:{r.colour.r,r.colour.g,r.colour.b,r.colour.a})data<<':'<<c;
+    for(auto p:r.outline)data<<':'<<p.x<<','<<p.y;}}
+  uint64_t hash=1469598103934665603ull;for(unsigned char c:data.str()){hash^=c;hash*=1099511628211ull;}
+  std::ostringstream hex;hex<<std::hex<<hash;return hex.str();
+}
+int writeIndex(ResourceManager *rm,const std::string &out) {
+  std::ofstream f(out);auto keys=rm->listResources("",".ani");std::sort(keys.begin(),keys.end());
+  for(const auto &key:keys)if(!key.starts_with("ui/"))f<<key<<'\n';return f?0:1;
+}
+void exportMaterialSeeds(Animation &art,const std::string &direction,int frame,SDL_Surface *source,const std::string &flat,const std::string &out) {
+  using namespace LightingAssets;if(!exportRenderer)return;
+  const std::string key=art.lightingKey();const auto first=key.find('/'),second=key.find('/',first+1);
+  if(first==std::string::npos || second==std::string::npos)return;
+  const auto top=key.substr(0,first),item=key.substr(first+1,second-first-1),state=fs::path(key).parent_path().filename().string();
+  std::set<int> profiles;if(const auto *a=find(item))profiles.insert(a->id);
+  if(top=="animals"){if(int id=fluorescenceProfile("animals/"+item+".ai"))profiles.insert(id);if(int id=actorEffect("animals/"+item+".ai",state,frame))profiles.insert(id);}
+  if(top=="guests"){if(int id=actorEffect("guests/"+item,state,frame))profiles.insert(id);}
+  if(item=="heli")for(int layer=0;layer<2;++layer)if(int id=aircraftProfile(state=="tiltspin"?"fly":state=="levspin"?"level":state,layer))profiles.insert(id);
+  // Native cinema/arcade fixture channels have their own animation profiles.
+  if(item=="cinema")profiles.insert(3214);if(item=="dkarcade")profiles.insert(3224);
+  std::ofstream manifest(fs::path(out)/"material-seeds.tsv",std::ios::app);
+  for(int id:profiles){const auto *a=profile(id);if(!a || (!a->animated && frame!=0))continue;
+    for(int side=0;side<8;++side){const auto dir=CompassDirection(side);auto native=art.lightingFrame(dir,frame);if(native.surface!=source)continue;
+      const auto &patches=art.emissionPatches(exportRenderer,dir,frame,id);if(patches.empty())continue;
+      auto *target=SDL_CreateTexture(exportRenderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,source->w,source->h);
+      auto *image=SDL_CreateRGBSurfaceWithFormat(0,source->w,source->h,32,SDL_PIXELFORMAT_RGBA32);if(!target || !image){SDL_DestroyTexture(target);SDL_FreeSurface(image);throw std::runtime_error("material seed allocation failed");}
+      auto *previous=SDL_GetRenderTarget(exportRenderer);SDL_SetRenderTarget(exportRenderer,target);SDL_RenderSetViewport(exportRenderer,nullptr);SDL_RenderSetClipRect(exportRenderer,nullptr);SDL_RenderSetScale(exportRenderer,1,1);SDL_SetRenderDrawColor(exportRenderer,0,0,0,0);SDL_RenderClear(exportRenderer);
+      for(const auto &p:patches){SDL_BlendMode blend;SDL_GetTextureBlendMode(p.texture,&blend);SDL_SetTextureBlendMode(p.texture,SDL_BLENDMODE_NONE);SDL_RenderCopy(exportRenderer,p.texture,nullptr,&p.rect);SDL_SetTextureBlendMode(p.texture,blend);}
+      const std::string seed=std::to_string(id)+"@"+std::to_string(side)+"@"+flat;
+      fs::create_directories(fs::path(out)/"material-seeds");const bool ok=SDL_RenderReadPixels(exportRenderer,nullptr,SDL_PIXELFORMAT_RGBA32,image->pixels,image->pitch)==0 && IMG_SavePNG(image,(fs::path(out)/"material-seeds"/seed).string().c_str())==0;
+      SDL_SetRenderTarget(exportRenderer,previous);SDL_DestroyTexture(target);SDL_FreeSurface(image);if(!ok)throw std::runtime_error("could not write material seed");
+      std::string path=key+"/"+direction+"_"+std::to_string(frame)+".png";
+      manifest<<seed<<'\t'<<"_lighting/"<<materialKey(id)<<'/'<<id<<'/'<<side<<'/'<<path<<'\t'<<flat<<'\n';
+    }
+  }
+}
+
 int exportFrames(ResourceManager *rm, const std::string &outDir, const std::vector<std::string> &prefixes) {
   int written = 0;
+  const int limit=std::getenv("ZT_HD_EXPORT_LIMIT")?std::max(1,std::atoi(std::getenv("ZT_HD_EXPORT_LIMIT"))):2147483647;
+  std::set<std::string> skipped;if(const char *path=std::getenv("ZT_HD_SKIP_LIST")){std::ifstream f(path);std::string line;while(std::getline(f,line)){if(!line.empty() && line.back()=='\r')line.pop_back();skipped.insert(line);}}
   std::error_code ec;
   for (const std::string &key : rm->listResources("", ".ani")) {
     bool wanted = prefixes.empty() ? key.rfind("ui/", 0) != 0 : false;
@@ -247,15 +315,19 @@ int exportFrames(ResourceManager *rm, const std::string &outDir, const std::vect
     fs::create_directories(outDir, ec);
     a->forEachFrame([&](const std::string &direction, int frame, SDL_Surface *s) {
       std::string file = (fs::path(outDir) / (flat + "~" + direction + "_" + std::to_string(frame) + ".png")).string();
-      if (fs::exists(file, ec))
+      if (written>=limit || skipped.count(fs::path(file).filename().string()) || fs::exists(file, ec))
         return;
       if (SDL_Surface *c = rgba(s)) {
         bleed(c);
-        if (IMG_SavePNG(c, file.c_str()) == 0)
+        if (IMG_SavePNG(c, file.c_str()) == 0){
+          exportMaterialSeeds(*a,direction,frame,s,fs::path(file).filename().string(),outDir);
           written++;
+        }else {SDL_FreeSurface(c);delete a;throw std::runtime_error("could not export HD frame");}
         SDL_FreeSurface(c);
       }
     });
+    delete a; // addition: a million-frame batch must release each decoded animation.
+    if(written>=limit)break;
   }
   SDL_Log("[HdArt] exported %d frames to %s", written, outDir.c_str());
   return written;
@@ -432,6 +504,7 @@ int finishFrames(const std::string &framesDir, const std::string &upDir, const s
   };
   std::vector<std::thread> workers;
   unsigned n = std::max(1u, std::thread::hardware_concurrency());
+  if(const char *workers=std::getenv("ZT_HD_WORKERS"))n=std::clamp(unsigned(std::max(1,std::atoi(workers))),1u,n);
   for (unsigned t = 0; t < n; t++)
     workers.emplace_back(work);
   for (std::thread &t : workers)
@@ -441,3 +514,7 @@ int finishFrames(const std::string &framesDir, const std::string &upDir, const s
 }
 
 } // namespace HdArt
+
+// addition: tool entry points without changing the runtime HD-art interface.
+int hdWriteIndex(ResourceManager *rm,const std::string &out){return HdArt::writeIndex(rm,out);}
+void hdSetExportRenderer(SDL_Renderer *renderer){HdArt::exportRenderer=renderer;}
