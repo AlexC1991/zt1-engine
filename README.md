@@ -115,13 +115,6 @@ The base game's **freeform** mode is the focus, and most of it works as in the o
 
 **Marine Mania** (Complete Collection) is in: tanks, marine animals, tank filters, Marine Specialists who climb in, feed and clean underwater as in the original, and scheduled animal shows with their tricks, audiences and income. **Dinosaur Digs** has started: dinosaurs, eggs and DRT capture work, and the rest is still being checked against the original.
 
-| | |
-|---|---|
-| ![Guests walking the zoo](docs/screenshots/guests.jpg) | ![A lioness catching a zebra](docs/screenshots/lion_hunt.jpg) |
-| Guests, keepers and the zoo at work | Predators hunt the prey they list |
-| ![The Zoo Status finances](docs/screenshots/zoo_status.jpg) | ![The research panel](docs/screenshots/research.jpg) |
-| The original's panels: Zoo Status, finances, graphs | Research and conservation |
-
 ### Graphics and Game Options
 
 **Game Options** is a window with every setting, opened from the in-game disk button or the main menu. Each page is one list you scroll, with the setting under the mouse explained at its foot. Switch it off (Controls › Game Options) to get the original's side panel back.
@@ -131,7 +124,7 @@ The base game's **freeform** mode is the focus, and most of it works as in the o
 - **Art upscaling:** how the 2001 art looks when drawn bigger: FSR (AMD's upscaler, on the graphics card), Stylized, Sharp, Smooth or MMPX pixel-art scaling, with an Art Sharpness slider.
 - **Effects:** anti-aliasing (FXAA), bloom, a tilt-shift miniature look, contrast and vibrance, a vignette and film grain. They apply to the zoo only, never the menus, and all are off unless you pick them.
 - **Day and night:** an optional twelve-minute day with sunrise and sunset, sun shadows in each object's real shape, and buildings, lamps, signs and fires that light up at night.
-- **Game speed:** an optional button beside Pause for normal, 2x and 5x speed, and an optional 24-hour clock.
+- **Game speed:** an optional button beside Pause for normal, 2x and 5x speed. While it or day and night is on, a 24-hour clock shows beside the date.
 - **Accessibility:** colour-blind filters and a bigger mouse pointer.
 - **HD art (optional mods):** zoomed in, the map's art can be drawn from much bigger HD pictures. See [Modding](#modding).
 
@@ -139,8 +132,10 @@ The game draws with Direct3D 11 by default, which is the fastest on Windows, and
 
 | | |
 |---|---|
-| ![Marine Mania tanks](docs/screenshots/tanks.jpg) | ![Raised walkways](docs/screenshots/walkways.jpg) |
-| Marine Mania tanks | Raised walkways, an optional extra |
+| ![The zoo at night, lit by its lamps, windows, signs and carousel bulbs](docs/screenshots/night.jpg) | ![Late afternoon: long sun shadows in each object's real shape](docs/screenshots/sunset_shadows.jpg) |
+| Day and night: lamps, windows, signs and bulbs light the zoo after dark, with a 24-hour clock beside the date | Sun shadows in each object's real shape, long and warm towards sunset |
+| ![The Game Options window on its Gameplay page](docs/screenshots/game_options.jpg) | ![Raised walkways](docs/screenshots/walkways.jpg) |
+| Game Options: every setting in one window, the engine's additions each a switch | Raised walkways, an optional extra |
 
 ### Optional extras
 
@@ -155,7 +150,7 @@ Each is a switch; off means the original's behaviour. They're on the Gameplay, C
 | `mapTooltips` | hints over the map, not only on buttons |
 | `hotkeys` | Esc / right-click put tools away, Ctrl+Z undoes, Q/E rotate, F11 full screen |
 | `daynight` | the day and night cycle and its lighting |
-| `fastforward` / `gametime` | the game speed button; the 24-hour clock |
+| `fastforward` | the game speed button (with day and night, it brings the 24-hour clock) |
 | `dragwindows` / `smartstack` | drag any window by its title; windows step aside instead of covering each other |
 | `tankclip` / `tankgroundback` / `nofenceonpath` | tank animals cut off at the glass; the ground put back when a tank goes; no fences across paths |
 | `mods` / `modmenu` / `custommaps` | load mods; the Mod Menu; freeform maps made in the Lab |
@@ -171,8 +166,15 @@ Mods use the game's own kind of files. A mod is a folder in `mods/` with a `mod.
 - **Old Zoo Tycoon downloads** (`.ztd` files from fan sites) can be added straight from the Mod Menu.
 - **Mods can have settings**, shown on their own page in Game Options › Mods.
 - **Shader mods** bring their own looks: art shaders for the map's art and screen shaders for the whole picture. The bundled **Toon** mod is one.
-- **HD art mods** replace the map's art with pictures four times the size, used when you zoom in. Three are in the repository, one each for Zoo Tycoon, Marine Mania and Dinosaur Digs. Their art is the game's own, enlarged on the author's PC by Real-ESRGAN, an open-source upscaler; that's why they carry the AI tag. An HD art mod adds a **Graphics card memory** setting: kept compressed (the default), its pictures take a quarter of the graphics card's memory.
+- **HD art mods** replace the map's art with pictures four times the size, used when you zoom in. There are three, one each for Zoo Tycoon, Marine Mania and Dinosaur Digs, arriving in the repository part by part. Their art is the game's own, enlarged on the author's PC by Real-ESRGAN, an open-source upscaler; that's why they carry the AI tag. An HD art mod adds a **Graphics card memory** setting: kept compressed (the default), its pictures take a quarter of the graphics card's memory.
 - **The ZT1 Lab** makes mods without code: new animals from your own art, buildings, scenery, fences, staff and guest looks, freeform maps, theme packs and HD art, then checks and uploads them to the repository.
+
+| | |
+|---|---|
+| ![The Mod Menu with an HD art mod picked: its cover, details and size](docs/screenshots/mod_menu.jpg) | ![The mod repository in the Mod Menu, with each mod's picture](docs/screenshots/mod_repository.jpg) |
+| The Mod Menu: your mods with their pictures and sizes, sorting, and the mods folder on any drive | The mod repository: checked mods to download in the game |
+| ![HD art: giraffe, dolphin, grizzly bear and cheetah before and after](docs/screenshots/hd_art.jpg) | ![The ZT1 Lab making a new animal: its pictures and values](docs/screenshots/lab_animal_maker.jpg) |
+| HD art mods: the game's own art at four times the detail | The ZT1 Lab: a new animal made from your own art, with its values |
 
 ---
 
@@ -186,6 +188,10 @@ Mods use the game's own kind of files. A mod is a folder in `mods/` with a `mod.
 - the original game running alongside, for recording what it does.
 
 Its **Explore** view answers "where is X in the original, and do we have it yet?". See [lab-app/README.md](lab-app/README.md).
+
+<img src="docs/screenshots/lab_test_zoo.jpg" alt="The ZT1 Lab's Test Zoo: a custom animal in its exhibit, with the Inspector showing its needs live" width="720">
+
+*The Test Zoo: the engine running inside the Lab, here with a custom animal, its needs shown live in the Inspector.*
 
 **Use it with your own AI agent.** The Lab comes with an [MCP](https://modelcontextprotocol.io) server (`lab-app/mcp/server.js`), so any agent that speaks MCP can drive the Lab: Claude Code, Codex, Cursor, VS Code / Copilot, Gemini CLI, and others. That covers searching the original's functions, reading their code, editing and building the engine, placing things in the test zoo and reading what happened.
 - It runs on your own PC only (it talks to the Lab on 127.0.0.1).
