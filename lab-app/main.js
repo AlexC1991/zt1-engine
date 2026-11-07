@@ -3468,7 +3468,10 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
       const size = fs.statSync(zip).size;
       const sha256 = await sha256File(zip);
       const old = had.get(part.id);
-      if (old && old.sha256 === sha256 && old.size === size && !old.uploading) {
+      // (the same file isn't sent again - unless its last check errored or
+      // was turned down: sending it again is what asks for a new check)
+      const oldCheck = (old && old.check && old.check.state) || '';
+      if (old && old.sha256 === sha256 && old.size === size && !old.uploading && oldCheck !== 'error' && oldCheck !== 'rejected') {
         modkitLog(`${label}the repository has it already.`);
         fs.rmSync(zip, { force: true });
         continue;
