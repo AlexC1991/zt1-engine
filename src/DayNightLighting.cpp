@@ -1,4 +1,5 @@
 #include "DayNightLighting.hpp"
+#include "Fences.hpp"
 #include "Animation.hpp"
 #include "World.hpp"
 #include "IniReader.hpp"
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <sstream>
 
 namespace FrameProfile {extern bool active;void record(const char *,double);double ms(Uint64);}
 namespace {
@@ -115,13 +117,28 @@ DayNightLighting::Type DayNightLighting::typeOf(ResourceManager *rm,const std::s
     // addition: an explicit material definition can be selected by a mod.
     t.profile=ai->getInt("lighting","profile",t.profile);
     t.casts=ai->getInt("lighting","castshadow",t.casts?1:0)!=0;
+    // addition: a mod item's own light maps and the lights it casts (the Lab's
+    // Night light layer and Lamp point): light = x, y, z, r, g, b, power,
+    // radius - x, y in tiles from its middle, turning with it, z its height
+    // in the units of the lamps' own (the street lamp's lantern is 3.9)
+    if(ai->getInt("lighting","lightmap",0)>0) {
+      std::vector<LightingAssets::Source> sources;
+      for(const auto &line:ai->getList("lighting","light")) {
+        float v[8]={0,0,2,255,226,159,1,5};int n=0;std::stringstream in(line);std::string part;
+        while(n<8 && std::getline(in,part,',')){try{v[n]=std::stof(part);}catch(...){break;}++n;}
+        if(n<3)continue;
+        auto byte=[](float c){return Uint8(std::clamp(c,0.0f,255.0f));};
+        sources.push_back({"mod light",{v[0],v[1],std::clamp(v[2],0.0f,12.0f)},{0,0,0},{byte(v[3]),byte(v[4]),byte(v[5]),255},std::clamp(v[6],0.0f,4.0f),std::clamp(v[7],.5f,12.0f)});
+      }
+      t.profile=LightingAssets::modProfile(file,std::move(sources));
+    }
   }
   return types[file]=t;
 }
 
 void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObjects &objects,const WorldMap &map,
                                WorldRenderer &view,double clock,int width,int height,SDL_Renderer *renderer) {
-  counters={};lights.clear();emitters.clear();instances.clear();transientLights.clear();frameRenderer=renderer;frameView=&view;frameMap=&map;fluorescenceCues.clear();fluorescentArt.clear();fixtureClock=previewBeamTime>=0?previewBeamTime:clock;
+  counters={};lights.clear();emitters.clear();instances.clear();transientLights.clear();frameRenderer=renderer;frameView=&view;frameMap=&map;frameFences=&world.getFences();fluorescenceCues.clear();fluorescentArt.clear();fixtureClock=previewBeamTime>=0?previewBeamTime:clock;
   hour=previewHour>=0?previewHour:hourAt(clock);sky=skyAt(hour);
   const float zoom=view.getCamera().zoom,w=width/zoom,h=height/zoom;logicalW=w;logicalH=h;
   covers.clear();size_t hash=1469598103934665603ULL;
@@ -199,10 +216,13 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
       for(const auto &patch:materialArt->emissionPatches(renderer,side,frame,profile)) {
         SDL_RendererFlip flip;const auto box=materialArt->emissionRect(patch,sx,sy,side,&flip);
         Light e{o.x,o.y,z,0,0,i,distance};e.sx=sx+(flip==SDL_FLIP_HORIZONTAL?-patch.offset.x:patch.offset.x);e.sy=sy+patch.offset.y;
-        e.patch=box;e.texture=patch.texture;e.flip=flip;e.depth=depth;e.kind=profile;e.reflective=patch.reflective;emitters.push_back(e);
+        e.patch=box;e.texture=patch.texture;e.flip=flip;e.depth=depth;e.kind=profile;e.reflective=patch.reflective;e.glow=patch.glow;e.glowPad=patch.glowPad;emitters.push_back(e);
       }
     };
+    const size_t before=emitters.size();
     emission(asset->animated?display:o.art,asset->id);
+    // (a mod item lit only in its idle art: that glow while it's in use too)
+    if(asset->lightMap && emitters.size()==before && display!=o.art)emission(o.art,asset->id);
     if(asset->nightFixtures && o.used)emission(o.used,asset->id+3000);
   }
   // The scene hash is independent of the camera: a pan reuses 3D irradiance.
@@ -222,6 +242,32 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
       std::vector<Instance> kept;kept.reserve(instances.size());
       for(size_t k=0;k<instances.size();++k)if(keep[k]){kept.push_back(instances[k]);mix(size_t(instances[k].owner));}
       instances.swap(kept);
+    }
+  }
+  // addition: fence pieces with lights of their own (Fences::litPieces: the
+  // electrified bars' beacons) - their glow as the piece's pose shows it, and
+  // a small light on the ground under it, there while it glows
+  {
+    uint64_t serial=0;
+    for(const auto &f:world.getFences().litPieces()) {
+      const auto *asset=LightingAssets::find(f.key);if(!asset || !f.art)continue;++serial;
+      const uint64_t owner=(uint64_t(1)<<53)|serial;
+      // (where it is on the screen now: Fences::collect's may be a frame old)
+      float fsx,fsy,fdepth;view.worldToScreenF(f.x,f.y,f.z,fsx,fsy,fdepth);
+      const float distance=(fsx-w*.5f)*(fsx-w*.5f)+(fsy-h*.5f)*(fsy-h*.5f);
+      bool glowing=false;
+      const bool near=fsx>-200 && fsx<w+200 && fsy>-300 && fsy<h+300;
+      if(near && sky.lamps>.001f)for(const auto &patch:f.art->emissionPatches(renderer,f.side,f.frame,asset->id)) {
+        if(!patch.pixels)continue;glowing=true;
+        SDL_RendererFlip flip;const auto box=f.art->emissionRect(patch,fsx,fsy,f.side,&flip);
+        Light e{f.x,f.y,f.z,0,0,owner,distance};e.sx=fsx+(flip==SDL_FLIP_HORIZONTAL?-patch.offset.x:patch.offset.x);e.sy=fsy+patch.offset.y;
+        e.patch=box;e.texture=patch.texture;e.flip=flip;e.depth=fdepth;e.kind=asset->id;e.reflective=patch.reflective;e.glow=patch.glow;e.glowPad=patch.glowPad;emitters.push_back(e);
+      }
+      // (always listed, so blinking never remakes the lighting: only shown)
+      for(const auto &source:asset->sources) {
+        Light l{f.x+source.position.x,f.y+source.position.y,f.z+source.position.z,source.radius,source.position.z,owner,distance};
+        l.energy=source.power;l.colour=source.colour;l.groundOnly=true;l.shown=glowing?1.0f:0.0f;lights.push_back(l);
+      }
     }
   }
   for(const auto &o:structureInstances)if(o.asset)for(const auto &source:o.asset->sources) {
@@ -299,8 +345,13 @@ void DayNightLighting::composite(SDL_Renderer *renderer,WorldRenderer &view,cons
     const auto &grid=groundLight[li];const auto &source=lights[li];const int cells=source.sweep!=0 && source.cone>0?48:source.cone>0?32:20;
     const int first=int(vertices.size());
     for(const auto &sample:grid) {
-      float x,y,d;view.worldToScreenF(sample.position.x,sample.position.y,sample.position.z,x,y,d);
-      auto colour=sample.colour;if(source.cone>0 && source.sweep!=0){const float e=1-std::exp(-sample.energy*sourceDirection(source,sample.position));colour={Uint8(source.colour.r*e),Uint8(source.colour.g*e),Uint8(source.colour.b*e),255};}colour.a=Uint8(255*sky.lamps);
+      // (on a tank's water: laid on its surface and mostly taken in by it -
+      // the glints on top are drawEmission's - not lit as ground would be)
+      const float water=waterLevelAt(sample.position.x,sample.position.y);
+      const float z=water>-1e8f?std::max(sample.position.z,water):sample.position.z;
+      float x,y,d;view.worldToScreenF(sample.position.x,sample.position.y,z,x,y,d);
+      auto colour=sample.colour;if(source.cone>0 && source.sweep!=0){const float e=1-std::exp(-sample.energy*sourceDirection(source,sample.position));colour={Uint8(source.colour.r*e),Uint8(source.colour.g*e),Uint8(source.colour.b*e),255};}colour.a=Uint8(255*sky.lamps*std::clamp(source.shown,0.0f,1.0f));
+      if(water>-1e8f){colour.r=Uint8(colour.r*.3f);colour.g=Uint8(colour.g*.3f);colour.b=Uint8(colour.b*.3f);}
       vertices.push_back({{x*scale,y*scale},colour,{0,0}});
     }
     for(int y=0;y<cells;++y)for(int x=0;x<cells;++x) {
@@ -383,6 +434,15 @@ void DayNightLighting::drawEmission(SDL_Renderer *renderer,WorldRenderer &view,c
       if(!v.empty()){SDL_SetTextureBlendMode(e.texture,SDL_BLENDMODE_BLEND);SDL_RenderGeometry(renderer,e.texture,v.data(),int(v.size()),indices.data(),int(indices.size()));++counters.emissives;}
       continue;
     }
+    // addition: its soft light round it (Animation::EmissionPatch::glow),
+    // faint - the air lit, not the art washed out
+    if(e.glow && !e.reflective) {
+      const float pad=e.glowPad*zoom;
+      const SDL_FRect around{dest.x-pad,dest.y-pad,dest.w+2*pad,dest.h+2*pad};
+      const float strength=glowStrength*(e.glowPad>Animation::kGlowPad?1.6f:1.0f);
+      SDL_SetTextureAlphaMod(e.glow,Uint8(std::clamp(strength*sky.lamps*e.energy,0.0f,255.0f)));
+      SDL_RenderCopyExF(renderer,e.glow,nullptr,&around,0,nullptr,e.flip);
+    }
     if(!e.reflective) {
       SDL_SetTextureBlendMode(e.texture,SDL_BLENDMODE_ADD);SDL_SetTextureAlphaMod(e.texture,Uint8(35*sky.lamps*e.energy));
       for(const auto offset:{SDL_FPoint{-1,0},SDL_FPoint{1,0},SDL_FPoint{0,-1},SDL_FPoint{0,1}}) {
@@ -395,6 +455,48 @@ void DayNightLighting::drawEmission(SDL_Renderer *renderer,WorldRenderer &view,c
     SDL_RenderCopyExF(renderer,e.texture,nullptr,&dest,0,nullptr,e.flip);
     SDL_SetTextureAlphaMod(e.texture,255);++counters.emissives;
   }
+  // addition: where a light falls on a tank's water, small glints come and
+  // go on its surface - the lighthouse's sweeping beam shimmers across a
+  // tank, a lamp beside one sparkles faintly - instead of the water lit flat
+  if(frameFences && sky.lamps>.001f && !frameFences->exhibits().empty()) {
+    std::vector<SDL_Vertex> v;std::vector<int> idx;const float t=float(fixtureClock);
+    for(size_t li=0;li<groundLight.size() && li<lights.size();++li) {
+      const auto &l=lights[li];if(l.groundOnly)continue;
+      const bool beam=l.cone>0 && l.sweep!=0;
+      for(const auto &s:groundLight[li]) {
+        const float e=beam?1-std::exp(-s.energy*sourceDirection(l,s.position)):1-std::exp(-s.energy);
+        if(e<.04f)continue;
+        const float level=waterLevelAt(s.position.x,s.position.y);if(level<-1e8f)continue;
+        uint32_t h=uint32_t(int(s.position.x*16))*73856093u^uint32_t(int(s.position.y*16))*19349663u;h^=h>>13;h*=0x5bd1e995u;h^=h>>15;
+        const float phase=(h&1023)/1023.0f*6.2831853f,speed=2.2f+((h>>10)&255)/255.0f*2.0f;
+        const float twinkle=std::pow(std::max(0.0f,std::sin(t*speed+phase)),6.0f);if(twinkle<.05f)continue;
+        const float jx=(((h>>18)&63)/63.0f-.5f)*.35f,jy=(((h>>24)&63)/63.0f-.5f)*.35f;
+        float sx,sy,d;view.worldToScreenF(s.position.x+jx,s.position.y+jy,level,sx,sy,d);
+        const float px=rect.x+sx*zoom,py=rect.y+sy*zoom,r=std::max(1.0f,1.7f*zoom);
+        const float a=std::clamp(255*e*twinkle*sky.lamps*(beam?1.0f:.5f),0.0f,255.0f);if(a<4)continue;
+        const SDL_Color c{Uint8(std::min(255,l.colour.r+40)),Uint8(std::min(255,l.colour.g+40)),Uint8(std::min(255,l.colour.b+40)),Uint8(a)};
+        const int first=int(v.size());
+        v.insert(v.end(),{{{px-r*2.2f,py},c,{0,0}},{{px,py-r*.8f},c,{0,0}},{{px+r*2.2f,py},c,{0,0}},{{px,py+r*.8f},c,{0,0}}});
+        idx.insert(idx.end(),{first,first+1,first+2,first,first+2,first+3});
+      }
+    }
+    if(!v.empty()){SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_ADD);SDL_RenderGeometry(renderer,nullptr,v.data(),int(v.size()),idx.data(),int(idx.size()));}
+  }
+}
+
+std::string DayNightLighting::describeLights()const {
+  std::string out=std::to_string(lights.size())+" lights, "+std::to_string(emitters.size())+" glowing patches, lamps at "+std::to_string(int(sky.lamps*100))+"%";
+  char line[200];int n=0;
+  for(const auto &l:lights){if(++n>40)break;std::snprintf(line,sizeof line,"\n  at %.1f,%.1f height %.1f  reach %.1f  power %.2f  rgb %d,%d,%d%s%s",l.x,l.y,l.z,l.radius,l.energy,l.colour.r,l.colour.g,l.colour.b,l.cone>0?" (beam)":"",l.groundOnly?(l.shown>0?" (ground, lit)":" (ground, dark)"):"");out+=line;}
+  return out;
+}
+
+float DayNightLighting::waterLevelAt(float x,float y)const {
+  if(!frameFences)return -1e9f;
+  const int id=frameFences->exhibitAt(int(std::floor(x)),int(std::floor(y)));
+  const auto *ex=id>=0?frameFences->exhibit(id):nullptr;
+  if(!ex || !ex->tank || ex->water<=.01f)return -1e9f;
+  return ex->level>-1e8f?ex->level:ex->floorHeight+ex->water*(ex->wallTop()-ex->floorHeight);
 }
 
 void DayNightLighting::finishEmitters() {

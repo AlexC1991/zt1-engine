@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <map>
+#include <vector>
 #include <set>
 #include <string>
 #include <vector>
@@ -15,7 +16,9 @@
 class ResourceManager;
 class UiLayout;
 class UiButton;
-class UiScrollBar;
+#include "UiScrollBar.hpp"
+class UiElement;
+class IniReader;
 class UiText;
 
 // Interface Size's slider (Game Options; zoo.ini [user] uiScale,
@@ -131,6 +134,9 @@ private:
   std::vector<SDL_Point> resolutions;
   int resolutionPending = -1, listedMode = -1;
   void setPage(int page);
+  // (Display game time: on and greyed while another switch shows the clock)
+  UiButton *gameTimeBox = nullptr;
+  void showGameTimeSwitch();
   void wire();
   void finishClose();
   void hideRow(std::initializer_list<int> ids, bool hide);
@@ -149,6 +155,32 @@ private:
   // Each frame: what changes while it's open (the resolution let go, the
   // art's note, rows shown or left out)
   void tick(SDL_Renderer *renderer);
+  // ours: a page taller than the window scrolls - its rows drawn clipped to
+  // the page, moved up by scroll (pixels), with the game's own scrollbar
+  // down its right edge (and the mouse wheel) - instead of pages of rows
+  int scroll = 0, contentBottom = 0;
+  struct PageScroll : UiScrollable {
+    UiOptions *o = nullptr;
+    int getScrollPosition() const override;
+    int getScrollMaximum() const override;
+    int getScrollPage() const override;
+    void setScrollPosition(int position) override;
+    SDL_Rect getScrollBounds() const override;
+  } pageScroll;
+  std::vector<UiElement *> pageElements() const;
+  // ours: each page's rows - its elements grouped by where they're laid
+  // out, top to bottom - and the rows under one that's hidden (an empty
+  // list row, a setting that doesn't apply) moved up to close the gap
+  struct Row {
+    int y0 = 0, h = 0, dy = 0;
+    std::vector<int> ids;
+  };
+  std::map<int, std::vector<Row>> rows;
+  std::map<int, int> originalY;
+  IniReader *ini = nullptr;
+  void reflow();
+  SDL_Rect viewport() const; // (the page's rows' part of the window, as drawn)
+  void scrollBy(int pixels);
 };
 
 #endif // UI_OPTIONS_HPP

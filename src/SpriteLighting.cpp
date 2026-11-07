@@ -1,17 +1,61 @@
 #include "Animation.hpp"
 #include "LightingAssets.hpp"
 #include "HdArt.hpp"
-namespace HdArt {std::string materialKey(int);SDL_Surface *loadEmission(const std::string &,const std::string &);}
+namespace HdArt {std::string materialKey(int);SDL_Surface *loadEmission(const std::string &,const std::string &);SDL_Surface *loadModLight(const std::string &);}
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <vector>
+
+// addition: the soft light round a glowing patch - its own pixels blurred a
+// few pixels past it - drawn faintly over the scene at night
+// (DayNightLighting::drawEmission), so a sign, a beacon or a spark lights the
+// air round it, not only itself. Made once with the patch, at the art's own
+// size (an HD patch scaled down to it).
+static SDL_Texture *glowOf(SDL_Renderer *renderer,SDL_Surface *source,int w,int h,int pad=Animation::kGlowPad) {
+  if(!renderer || !source || w<=0 || h<=0 || w>1024 || h>1024)return nullptr;
+  SDL_Surface *rgba=SDL_ConvertSurfaceFormat(source,SDL_PIXELFORMAT_RGBA32,0);if(!rgba)return nullptr;
+  if(rgba->w!=w || rgba->h!=h) {
+    SDL_Surface *small=SDL_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);
+    if(small){SDL_FillRect(small,nullptr,0);SDL_SetSurfaceBlendMode(rgba,SDL_BLENDMODE_NONE);SDL_BlitScaled(rgba,nullptr,small,nullptr);}
+    SDL_FreeSurface(rgba);rgba=small;if(!rgba)return nullptr;
+  }
+  const int W=w+2*pad,H=h+2*pad;
+  std::vector<float> a(size_t(W)*H*4,0.0f),b(a.size(),0.0f);
+  for(int y=0;y<h;++y){const Uint8 *row=static_cast<const Uint8*>(rgba->pixels)+size_t(y)*rgba->pitch;
+    for(int x=0;x<w;++x){const Uint8 *p=row+x*4;const float al=p[3]/255.0f;float *o=&a[(size_t(y+pad)*W+x+pad)*4];o[0]=p[0]*al;o[1]=p[1]*al;o[2]=p[2]*al;o[3]=al;}}
+  SDL_FreeSurface(rgba);
+  // (a box of 7 across then down, twice: near enough a soft round blur)
+  auto pass=[&](const std::vector<float> &in,std::vector<float> &out,bool across) {
+    const int r=std::max(2,pad/2);
+    for(int y=0;y<H;++y)for(int x=0;x<W;++x) {
+      float s[4]={0,0,0,0};
+      for(int k=-r;k<=r;++k){const int xx=across?x+k:x,yy=across?y:y+k;if(xx<0 || yy<0 || xx>=W || yy>=H)continue;
+        const float *p=&in[(size_t(yy)*W+xx)*4];s[0]+=p[0];s[1]+=p[1];s[2]+=p[2];s[3]+=p[3];}
+      float *o=&out[(size_t(y)*W+x)*4];for(int c=0;c<4;++c)o[c]=s[c]/(2*r+1);
+    }
+  };
+  pass(a,b,true);pass(b,a,false);pass(a,b,true);pass(b,a,false);
+  SDL_Surface *out=SDL_CreateRGBSurfaceWithFormat(0,W,H,32,SDL_PIXELFORMAT_RGBA32);if(!out)return nullptr;
+  for(int y=0;y<H;++y){Uint8 *row=static_cast<Uint8*>(out->pixels)+size_t(y)*out->pitch;
+    for(int x=0;x<W;++x){const float *p=&a[(size_t(y)*W+x)*4];Uint8 *o=row+x*4;
+      if(p[3]<=1e-4f){o[0]=o[1]=o[2]=o[3]=0;continue;}
+      for(int c=0;c<3;++c)o[c]=Uint8(std::clamp(p[c]/p[3],0.0f,255.0f));
+      // (thinned by the blur: lifted, so a one-pixel bulb still shows)
+      o[3]=Uint8(std::min(1.0f,p[3]*1.8f)*255);}}
+  SDL_Texture *t=SDL_CreateTextureFromSurface(renderer,out);SDL_FreeSurface(out);
+  if(t){SDL_SetTextureBlendMode(t,SDL_BLENDMODE_ADD);SDL_SetTextureScaleMode(t,SDL_ScaleModeLinear);}
+  return t;
+}
 
 void Animation::releaseLighting() {
+  releaseHi(); // (its lit zoomed-in set goes with it: kept counted)
   ++textureGen;
   for(auto *set:{&textures_lit,&textures_lit_hi}) {
     for(auto &[key,frames]:*set)for(auto *t:frames)SDL_DestroyTexture(t);
     set->clear();
   }
-  for(auto &[key,patches]:emissions)for(auto &p:patches)SDL_DestroyTexture(p.texture);
+  for(auto &[key,patches]:emissions)for(auto &p:patches){SDL_DestroyTexture(p.texture);if(p.glow)SDL_DestroyTexture(p.glow);}
   emissions.clear();
 }
 
@@ -29,13 +73,35 @@ const std::vector<Animation::EmissionPatch> &Animation::emissionPatches(SDL_Rend
   const bool high=usesHi() && HdArt::active();
   const std::string generation="@"+std::to_string(HdArt::generation())+"@";
   if(!emissions.empty() && std::get<0>(emissions.begin()->first).find(generation)==std::string::npos) {
-    for(auto &[k,list]:emissions)for(auto &p:list)SDL_DestroyTexture(p.texture);emissions.clear();
+    for(auto &[k,list]:emissions)for(auto &p:list){SDL_DestroyTexture(p.texture);if(p.glow)SDL_DestroyTexture(p.glow);}emissions.clear();
   }
   auto cacheKey=std::make_tuple(key+":"+std::to_string(int(side))+generation+(high?"hd":"native"),index,kind);
   auto cached=emissions.find(cacheKey);if(cached!=emissions.end())return cached->second;
-  auto &patches=emissions[cacheKey];if(!asset || it==surfaces.end() || it->second.empty() || !it->second[index])return patches;
-  auto *source=it->second[index];const auto anchor=anchor_points[key];const int view=viewIndex(int(side));
+  auto &patches=emissions[cacheKey];if(!asset || it==surfaces.end() || it->second.empty() || !sourceFrame(key,size_t(index)))return patches;
+  auto *source=sourceFrame(key,size_t(index));const auto anchor=anchor_points[key];const int view=viewIndex(int(side));
   const bool mirrored=renderer_flip==SDL_FLIP_HORIZONTAL,batched=kind>=200;
+  if(asset->lightMap) {
+    // addition: a mod item's light map (the Lab's Night light layer): a PNG
+    // with the art's ground point at its middle, its colour the glow, one
+    // for each frame - frame 0's serving the frames without one. Mirrored
+    // views use their source's map, flipped with it (emissionRect).
+    std::string base=hd_dir+"/light/"+key+"_";std::transform(base.begin(),base.end(),base.begin(),[](unsigned char c){return char(std::tolower(c));});
+    SDL_Surface *map=HdArt::loadModLight(base+std::to_string(index));
+    if(!map && index)map=HdArt::loadModLight(base+"0");
+    auto *rgba=map?SDL_ConvertSurfaceFormat(map,SDL_PIXELFORMAT_RGBA32,0):nullptr;if(map)SDL_FreeSurface(map);
+    if(!rgba)return patches;
+    int left=rgba->w,top=rgba->h,right=0,bottom=0,pixels=0;
+    for(int y=0;y<rgba->h;++y)for(int x=0;x<rgba->w;++x)if(static_cast<Uint8*>(rgba->pixels)[y*rgba->pitch+x*4+3]){left=std::min(left,x);top=std::min(top,y);right=std::max(right,x+1);bottom=std::max(bottom,y+1);++pixels;}
+    if(pixels) {
+      SDL_Rect area{left,top,right-left,bottom-top};
+      SDL_Rect box{left-rgba->w/2+anchor.x,top-rgba->h/2+anchor.y,area.w,area.h};
+      auto *cropped=SDL_CreateRGBSurfaceWithFormat(0,area.w,area.h,32,SDL_PIXELFORMAT_RGBA32);SDL_Texture *texture=nullptr,*glow=nullptr;
+      if(cropped){SDL_SetSurfaceBlendMode(rgba,SDL_BLENDMODE_NONE);SDL_BlitSurface(rgba,&area,cropped,nullptr);texture=SDL_CreateTextureFromSurface(renderer,cropped);if(texture)glow=glowOf(renderer,cropped,box.w,box.h);SDL_FreeSurface(cropped);}
+      if(texture){SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);SDL_SetTextureScaleMode(texture,SDL_ScaleModeLinear);
+        patches.push_back({texture,box,{box.x+box.w*.5f-anchor.x,box.y+box.h*.5f-anchor.y},{255,230,180,255},pixels,"mod light map",false,glow});}
+    }
+    SDL_FreeSurface(rgba);return patches;
+  }
   if(high) {
     const auto path=hd_dir+"/"+key+"_"+std::to_string(index);
     const auto material="_lighting/"+HdArt::materialKey(kind)+"/"+std::to_string(kind)+"/"+std::to_string(int(side))+"/"+path;
@@ -50,11 +116,12 @@ const std::vector<Animation::EmissionPatch> &Animation::emissionPatches(SDL_Rend
         if(pixels) {
           SDL_Rect box{left/scale,top/scale,(right+scale-1)/scale-left/scale,(bottom+scale-1)/scale-top/scale};
           SDL_Rect area{box.x*scale,box.y*scale,box.w*scale,box.h*scale};auto *cropped=SDL_CreateRGBSurfaceWithFormat(0,area.w,area.h,32,SDL_PIXELFORMAT_RGBA32);
-          SDL_Texture *texture=nullptr;
-          if(cropped){SDL_SetSurfaceBlendMode(rgba,SDL_BLENDMODE_NONE);SDL_BlitSurface(rgba,&area,cropped,nullptr);texture=SDL_CreateTextureFromSurface(renderer,cropped);SDL_FreeSurface(cropped);}
+          SDL_Texture *texture=nullptr,*glow=nullptr;
+          if(cropped){SDL_SetSurfaceBlendMode(rgba,SDL_BLENDMODE_NONE);SDL_BlitSurface(rgba,&area,cropped,nullptr);texture=SDL_CreateTextureFromSurface(renderer,cropped);if(texture)glow=glowOf(renderer,cropped,box.w,box.h);SDL_FreeSurface(cropped);}
           if(texture){SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);SDL_SetTextureScaleMode(texture,SDL_ScaleModeLinear);
             const bool reflective=std::all_of(asset->views[view].begin(),asset->views[view].end(),[](const Region &r){return r.material==Material::Water || r.material==Material::Steam;});
-            patches.push_back({texture,box,{box.x+box.w*.5f-anchor.x,box.y+box.h*.5f-anchor.y},{255,230,180,255},std::max(1,pixels/(scale*scale)),"baked HD material",reflective});
+            patches.push_back({texture,box,{box.x+box.w*.5f-anchor.x,box.y+box.h*.5f-anchor.y},{255,230,180,255},std::max(1,pixels/(scale*scale)),"baked HD material",reflective,reflective?nullptr:glow});
+            if(reflective && glow)SDL_DestroyTexture(glow);
             SDL_FreeSurface(rgba);SDL_FreeSurface(baked);return patches;}
         }SDL_FreeSurface(rgba);
       }SDL_FreeSurface(baked);
@@ -113,9 +180,13 @@ const std::vector<Animation::EmissionPatch> &Animation::emissionPatches(SDL_Rend
     }
     if(atlas)continue;
     if(!pixels){SDL_FreeSurface(surface);continue;}
-    auto *texture=SDL_CreateTextureFromSurface(renderer,surface);SDL_FreeSurface(surface);if(!texture)continue;
+    auto *texture=SDL_CreateTextureFromSurface(renderer,surface);
+    const bool water=region.material==Material::Water;
+    // (fire and lava: a wider, warmer light round them than a bulb's)
+    const int glowPad=region.material==Material::Fire?Animation::kFireGlowPad:Animation::kGlowPad;
+    SDL_Texture *glow=texture && !water?glowOf(renderer,surface,box.w,box.h,glowPad):nullptr;SDL_FreeSurface(surface);if(!texture)continue;
     SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);SDL_SetTextureScaleMode(texture,SDL_ScaleModeLinear);
-    patches.push_back({texture,box,{(box.x+box.w*.5f)-anchor.x,(box.y+box.h*.5f)-anchor.y},region.colour,pixels,region.name,region.material==Material::Water});
+    patches.push_back({texture,box,{(box.x+box.w*.5f)-anchor.x,(box.y+box.h*.5f)-anchor.y},region.colour,pixels,region.name,water,glow,glowPad});
   }
   if(atlas) {
     // addition: ivory claws/horns must not become lights between electrical
@@ -138,9 +209,10 @@ const std::vector<Animation::EmissionPatch> &Animation::emissionPatches(SDL_Rend
       SDL_Rect box{al,at,ar-al,ab-at};auto *cropped=SDL_CreateRGBSurfaceWithFormat(0,box.w,box.h,32,SDL_PIXELFORMAT_RGBA32);
       if(cropped) {
         SDL_SetSurfaceBlendMode(atlas,SDL_BLENDMODE_NONE);SDL_BlitSurface(atlas,&box,cropped,nullptr);
-        auto *texture=SDL_CreateTextureFromSurface(renderer,cropped);SDL_FreeSurface(cropped);
+        auto *texture=SDL_CreateTextureFromSurface(renderer,cropped);
+        SDL_Texture *glow=texture && !reflective?glowOf(renderer,cropped,box.w,box.h):nullptr;SDL_FreeSurface(cropped);
         if(texture){SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);SDL_SetTextureScaleMode(texture,SDL_ScaleModeLinear);
-          patches.push_back({texture,box,{box.x+box.w*.5f-anchor.x,box.y+box.h*.5f-anchor.y},{255,230,180,255},atlasPixels,"mapped native surfaces",reflective});}
+          patches.push_back({texture,box,{box.x+box.w*.5f-anchor.x,box.y+box.h*.5f-anchor.y},{255,230,180,255},atlasPixels,"mapped native surfaces",reflective,glow});}
       }
     }
     SDL_FreeSurface(atlas);
@@ -160,7 +232,7 @@ size_t Animation::lightingTextureBytes()const {
   size_t bytes=0;
   auto count=[&](SDL_Texture *t){int w=0,h=0;if(t && SDL_QueryTexture(t,nullptr,nullptr,&w,&h)==0)bytes+=size_t(w)*h*4;};
   for(const auto *set:{&textures_lit,&textures_lit_hi})for(const auto &[name,frames]:*set)for(auto *t:frames)count(t);
-  for(const auto &[key,patches]:emissions)for(const auto &p:patches)count(p.texture);
+  for(const auto &[key,patches]:emissions)for(const auto &p:patches){count(p.texture);count(p.glow);}
   return bytes;
 }
 

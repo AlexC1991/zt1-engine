@@ -33,7 +33,7 @@
 namespace {
 constexpr uint32_t kMagic = 0x5A543153; // "S1TZ"
 constexpr uint32_t kMapMagic = 0x504D3153; // "S1MP": a map design (saveMap)
-constexpr uint32_t kVersion = 14; // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
+constexpr uint32_t kVersion = 15; // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
 
 // A little binary writer and reader: numbers as they are, strings with
 // their length, vectors with their count
@@ -1890,6 +1890,7 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
                       m.habitatCheck, m.boredCheck, m.socialCheck, m.reproductionCheck,
                       m.preyCheck, m.huntCheck}) o.raw(value);
     o.raw(m.swimZ); o.raw(m.swimTo);
+    for (int value : {m.mate, m.mother, m.father, m.matePick, m.eaten ? 1 : 0}) o.raw(value);
   }
   o.raw(an.nextId);
   o.raw(static_cast<uint32_t>(an.counts.size()));
@@ -2150,6 +2151,12 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
                          &m.habitatCheck, &m.boredCheck, &m.socialCheck, &m.reproductionCheck,
                          &m.preyCheck, &m.huntCheck}) i.get(*value);
       i.get(m.swimZ); i.get(m.swimTo);
+    }
+    if (version >= 15)
+    {
+      int eaten = 0;
+      for (int *value : {&m.mate, &m.mother, &m.father, &m.matePick, &eaten}) i.get(*value);
+      m.eaten = eaten != 0;
     }
     m.exhibit = f.exhibitAt(static_cast<int>(m.x), static_cast<int>(m.y));
     m.food = 100 - m.hunger;

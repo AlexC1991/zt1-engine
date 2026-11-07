@@ -12,6 +12,24 @@ The emission layers use the same reviewed material regions, pixel masks, native 
 
 At zoomed-in scales, the renderer loads the matching baked layer from the same enabled pack as the colour frame. It verifies integer dimensions and crops transparent canvas from the GPU texture while preserving native placement coordinates. The material fingerprint changes when its authored region, tint or mask settings change. Missing or mismatched layers fall back to the existing native material pass. Zooming out uses native materials. The pack stays an ordinary optional mod; generation does not enable it or change the user's normal mod selection.
 
+## Sharing it: one mod per game, packed
+
+`re/lab/hd_split.py` sorts the finished pack by game: Zoo Tycoon, Marine Mania and Dinosaur Digs. An art folder goes with its item's `[Member]` tag (`dinosaur`, `aqua`), as the content filter reads it, or else with the game whose archives first had it. `re/lab/hd_pack.py` then builds one mod per game. It packs each art folder into `hd/<top>/<name>.ztd` (stored, since the PNGs are compressed already), with the frames and that art's current light maps, and leaves out light maps an older build made. It lists the archives as `"parts"` of at most 3.5 GB. The engine reads packed folders as it reads loose files (`HdArt`). The Lab uploads each part as its own download.
+
+The mod's description says why it carries the AI tag: the frames are the game's own art enlarged by Real-ESRGAN, an open-source upscaler run locally, not made by an image generator.
+
+## In the game: loading and memory
+
+The engine treats the pack as something to stream, not to hold. HD frames are used only while the map is zoomed in, one direction of one animation at a time.
+
+- **Background loading** (`HdArt::requestFrames`): a direction's frames are read and decoded on worker threads, most recently wanted first. The original frames are drawn until the HD frames arrive, so zooming in never stops the game.
+- **Two levels:** up to about 2.1x zoom, frames are halved from the pack's 4x (a quarter of the memory). From 2.4x, the full 4x frames are used. Between those zooms, the level stays as it was.
+- **A budget:** zoomed-in textures are kept up to 1.5 GB. Beyond that, those not drawn for longest are freed (`Animation::trimZoomedIn`).
+- **Compressed on the GPU** (`GpuCompressed`, `Bc7`): each HD frame is encoded to BC7 as its texture is made, one byte a pixel instead of four. The GPU reads BC7 as it draws. SDL 2 can't make compressed textures, so SDL makes an ordinary one and its storage is swapped: on OpenGL through `SDL_GL_BindTexture`, on Direct3D 11 through SDL's own texture record, checked against the texture first. If any check fails, the ordinary texture is kept. Frames whose size isn't a multiple of 4 are padded with their edge pixels; `ArtScaler::contentRect` keeps draws to the art itself. How is the player's choice: every HD art mod that is switched on gets a **Graphics card memory** setting on its Settings page (Game Options > Mods & Updates), added by the game, not by the mod (`Mods::kHdCompression`, kept in zoo.ini `[Mod:<folder>]`). It offers Full size, Compressed (fast, the default: mode 6 only) and Compressed (best quality). Changing it on one HD art mod changes it on all of them, and the zoomed-in pictures are remade at once. With best quality, the encoder tries each block in the modes that suit it and keeps the one that decodes closest; a block that mode 6 already gets within about 2 levels a channel is left at that. Solid blocks use mode 6 (one line of colours), or modes 1 and 3 (two groups of pixels on lines of their own, which suits busy colour such as leaves). Blocks with soft or clear pixels use mode 6, mode 5 (colour and alpha on separate steps) or mode 7 (two groups with alpha). For the two-group modes, the two most promising of the 64 patterns are tried. Against the uncompressed frames in the lit scene this measures about 52 dB, with 0.15% of pixels more than 8 levels off; mode 6 alone gave 44 dB and 1.1%. The game's own art is never compressed.
+- **Source frames packed** (`Animation::packAll`): the original frames are kept packed and unpacked when needed, up to 512 MB.
+
+The panel walk-through checks the encoder, that the GPU draws a compressed texture exactly as it decodes, and that random blocks of every mode written (the two-group ones in all 64 patterns) decode on the GPU exactly as `Bc7::decodeBlock` decodes them ("compressed HD textures"). A wrong pattern or anchor table cannot pass.
+
 ## Run and resume
 
 `re/lab/hd_batch.py` is the resumable worker. The local `hd_art_batch` Lab script launches it using the Lab toolkit and reports completed batches in Test Zoo. The older `hd_art` single-prefix example remains available.

@@ -124,10 +124,13 @@ size_t DayNightLighting::collectStructures(World &world) {
         const int pose=p.gate?std::clamp(int(p.open),0,std::max(0,art->frameCount()-1)):0;
         const bool glass=t.key=="glass" || t.key=="smglass" || t.key=="dglas";
         const std::string key="fence:"+art->lightingKey()+":"+std::to_string(pose)+":"+std::to_string(t.height)+":"+std::to_string(h1-h0);
+        const size_t before=structureInstances.size();
         add(key,position,angle,serial++,[&]{Model m=fencePlane(*art,pose,float(t.height),glass,t.key=="dglas",t.key=="buoyrope"?-1.0f:0);
           const float slope=float(h1-h0);const float sign=e.alongX?std::cos(angle):std::sin(angle);
           for(auto &f:m.faces)for(auto &v:f.p)v.z+=v.x*slope*sign;
           return m;},nullptr,false);
+        // (lit at night through its own art: a lamp or a beam on the fence)
+        if(structureInstances.size()>before && !glass){auto &o=structureInstances.back();o.artwork=art;o.frame=pose;o.nightReceiver=true;}
         continue;
       }
       const auto *ex=fences.exhibit(p.tank);if(!ex || !ex->tank)continue;
@@ -137,8 +140,12 @@ size_t DayNightLighting::collectStructures(World &world) {
       // lines across the floor - and the walls not shaded themselves; glass
       // stops half the light)
       std::string key="tankbox:"+std::to_string(top-low);
+      const size_t before=structureInstances.size();
       add(key,position,e.alongX?0:1.5707963268f,serial++,[&]{Model m;box(m,-.5f,-.05f,.5f,.05f,0,top-low);return m;},
           nullptr,false,t.seeThrough?.5f:1.0f);
+      // (a solid wall is lit at night as a wall is - the box is the wall, so
+      // no art mask; glass lets the light through to the water behind it)
+      if(structureInstances.size()>before && !t.seeThrough)structureInstances.back().nightReceiver=true;
     }
     if(Features::elevatedPaths)for(const auto &[xy,d]:decks.all()) {
       const auto *tile=map.getTile(xy.first,xy.second);if(!tile)continue;

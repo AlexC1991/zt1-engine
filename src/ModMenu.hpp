@@ -25,6 +25,9 @@ void selectionChanged(UiLayout *layout, ResourceManager *rm);
 void toggle(UiLayout *layout, ResourceManager *rm);
 // Another mods folder (the Windows folder picker)
 void chooseFolder(UiLayout *layout, ResourceManager *rm);
+// ours: the list's order cycled (name, size, switched on, newest; the
+// repository's name, size, not downloaded)
+void sort(UiLayout *layout, ResourceManager *rm);
 // Restart the game to load the mods switched on: false when it can't (in
 // the Lab's Play view: restart Play there) - the message says so
 bool restart(UiLayout *layout);

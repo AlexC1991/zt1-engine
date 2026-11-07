@@ -1,5 +1,8 @@
 #include "Animation.hpp"
 #include <algorithm>
+#include <unordered_set>
+#include <atomic>
+#include <mutex>
 #include <iterator>
 #include <cmath>
 #include <cstring>
@@ -27,6 +30,11 @@ static std::vector<uint64_t> compressShadow(const std::vector<Uint8> &mask) {
   }
   return runs;
 }
+namespace {
+void liveAdd(const Animation *a); // (memoryStats)
+void liveRemove(const Animation *a);
+} // namespace
+
 static void removePaletteShadow(SDL_Surface *target,const SDL_Surface *original,const std::vector<Uint8> &mask) {
   if(!target || !original || mask.empty() || target->format->BytesPerPixel!=4)return;
   for(int y=0;y<target->h;++y)for(int x=0;x<target->w;++x) {
@@ -39,6 +47,7 @@ Animation::Animation(std::unordered_map<std::string, AnimationData *> *data)
     : current_frame(0), last_direction(CompassDirection::S),
       renderer_flip(SDL_FLIP_NONE), has_background(false),
       frame_time_in_ms(100), frame_start_time(0) {
+  liveAdd(this);
   // (one view named for itself - the dust ball's "animation = dust" - is
   // its N: art the same from every side)
   static const char *compass[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW", "G", "H"};
@@ -48,12 +57,14 @@ Animation::Animation(std::unordered_map<std::string, AnimationData *> *data)
   for (auto map_entry : *data) {
     this->loadSurfaces(single ? std::string("N") : map_entry.first, map_entry.second);
   }
+  packAll();
 }
 
 Animation::Animation(SDL_Surface *single_frame)
     : current_frame(0), last_direction(CompassDirection::S),
       renderer_flip(SDL_FLIP_NONE), has_background(false),
       frame_time_in_ms(100), frame_start_time(0) {
+  liveAdd(this);
   if (single_frame) {
     // Duplicate the surface so we own the memory
     SDL_Surface *copy = SDL_DuplicateSurface(single_frame);
@@ -61,13 +72,436 @@ Animation::Animation(SDL_Surface *single_frame)
       this->surfaces["N"].push_back(copy);
     }
   }
+  packAll();
 }
 
-Animation::Animation(Animation &&other) noexcept { *this = std::move(other); }
+namespace {
+// ours: the animations holding zoomed-in sets, their total size, and the
+// frame count (trimZoomedIn)
+std::unordered_set<Animation *> g_hiHolders;
+size_t g_hiBytes = 0;
+uint32_t g_hiFrame = 1;
+bool g_hiGradual = true;
+double g_hiSpentMs = 0; // (making zoomed-in sets, this frame)
+// ours: the HD level for the zoom (the window's scale in it): 2x up to a
+// little past 2, 4x from a little further (between, as it was, so it
+// doesn't flick to and fro), and a count moved on when it changes
+int g_hdLevel = 2;
+uint32_t g_levelGen = 1;
+std::atomic<uint64_t> g_nextLoaderId{1};
+// (1.5 GB of pixels: a busy zoo's view zoomed in with HD art needs well
+// under it; ZT_HD_BUDGET_MB sets another, for checks)
+size_t hiBudget() {
+  static const size_t budget = [] {
+    const char *mb = std::getenv("ZT_HD_BUDGET_MB");
+    return (mb && std::atoi(mb) > 0 ? size_t(std::atoi(mb)) : size_t(1536)) << 20;
+  }();
+  return budget;
+}
+} // namespace
+
+uint64_t Animation::nextLoaderId() { return g_nextLoaderId++; }
+
+namespace {
+// ours: every animation alive (memoryStats); one may be made off the main
+// thread (the background preload)
+std::mutex g_liveMutex;
+std::unordered_set<const Animation *> g_live;
+void liveAdd(const Animation *a) {
+  std::lock_guard<std::mutex> lock(g_liveMutex);
+  g_live.insert(a);
+}
+void liveRemove(const Animation *a) {
+  std::lock_guard<std::mutex> lock(g_liveMutex);
+  g_live.erase(a);
+}
+size_t textureBytes(const std::unordered_map<std::string, std::vector<SDL_Texture *>> &set) {
+  size_t n = 0;
+  for (const auto &[key, frames] : set)
+    for (SDL_Texture *t : frames)
+      if (t) {
+        int w = 0, h = 0;
+        n += ArtScaler::textureBytes(t);
+      }
+  return n;
+}
+} // namespace
+
+Animation::Animation() { liveAdd(this); }
+
+std::string Animation::memoryStats() {
+  std::lock_guard<std::mutex> lock(g_liveMutex);
+  size_t surfaces = 0, frames = 0, normal = 0, lit = 0, hi = 0;
+  for (const Animation *a : g_live) {
+    for (const auto &[key, list] : a->surfaces)
+      for (const SDL_Surface *s : list)
+        if (s) {
+          surfaces += size_t(s->pitch) * s->h;
+          frames++;
+        }
+    normal += textureBytes(a->textures);
+    lit += textureBytes(a->textures_lit);
+    hi += textureBytes(a->textures_hi) + textureBytes(a->textures_lit_hi);
+  }
+  size_t packedBytes = 0, packedFrames = 0;
+  for (const Animation *a : g_live)
+    for (const auto &[key, pd] : a->packed) {
+      packedBytes += pd.colours.size() * 4;
+      for (const PackedFrame &f : pd.frames) {
+        packedBytes += f.data.capacity();
+        packedFrames += f.present ? 1 : 0;
+      }
+    }
+  char out[320];
+  std::snprintf(out, sizeof out, "%zu animations; source frames packed %zu (%zu MB), unpacked %zu (%zu MB); textures: normal %zu MB, lit %zu MB, zoomed-in %zu MB",
+                g_live.size(), packedFrames, packedBytes >> 20, frames, surfaces >> 20, normal >> 20, lit >> 20, hi >> 20);
+  return out;
+}
+
+void Animation::releaseHi() {
+  HdArt::cancelFrames(loaderId); // (its frames on their way: not wanted now)
+  hiLevel.clear();
+  for (auto *set : {&textures_hi, &textures_lit_hi}) {
+    for (auto &kv : *set)
+      for (SDL_Texture *t : kv.second)
+        if (t)
+          SDL_DestroyTexture(t);
+    set->clear();
+  }
+  g_hiBytes -= std::min(g_hiBytes, hi_bytes);
+  hi_bytes = 0;
+  g_hiHolders.erase(this);
+  ++textureGen;
+}
+
+void Animation::setGradualZoomedIn(bool on) { g_hiGradual = on; }
+
+void Animation::releaseAllTextures() {
+  std::vector<Animation *> all;
+  {
+    std::lock_guard<std::mutex> lock(g_liveMutex);
+    for (const Animation *a : g_live)
+      all.push_back(const_cast<Animation *>(a));
+  }
+  for (Animation *a : all) {
+    for (auto &kv : a->textures)
+      for (SDL_Texture *t : kv.second)
+        if (t)
+          SDL_DestroyTexture(t);
+    a->textures.clear();
+    a->releaseHi();
+    a->releaseLighting();
+  }
+}
+
+void Animation::trimZoomedIn() {
+  ++g_hiFrame;
+  g_hiSpentMs = 0;
+  HdArt::loaderTick();
+  trimSources();
+  const float zoom = RenderSettings::lastWorldZoom;
+  const int level = zoom >= 2.4f ? 4 : zoom <= 2.1f ? 2 : g_hdLevel;
+  if (level != g_hdLevel) {
+    g_hdLevel = level;
+    ++g_levelGen;
+  }
+  if (g_hiBytes <= hiBudget())
+    return;
+  // (oldest first, down to three quarters of the budget, so it isn't
+  // trimming again every frame)
+  std::vector<Animation *> idle;
+  for (Animation *a : g_hiHolders)
+    if (a->hi_drawn + 1 < g_hiFrame)
+      idle.push_back(a);
+  std::sort(idle.begin(), idle.end(), [](const Animation *a, const Animation *b) { return a->hi_drawn < b->hi_drawn; });
+  for (Animation *a : idle) {
+    if (g_hiBytes <= hiBudget() / 4 * 3)
+      break;
+    a->releaseHi();
+  }
+}
+
+size_t Animation::zoomedInBytes() { return g_hiBytes; }
+
+namespace {
+// ours: the animations holding unpacked source frames, and their size; the
+// budget for them (512 MB: what's on the screen and near it; ZT_SOURCE_
+// BUDGET_MB sets another, for checks); and who's told when one's let go
+std::unordered_set<const Animation *> g_srcHolders;
+size_t g_srcBytes = 0;
+size_t sourceBudget() {
+  static const size_t budget = [] {
+    const char *mb = std::getenv("ZT_SOURCE_BUDGET_MB");
+    return (mb && std::atoi(mb) > 0 ? size_t(std::atoi(mb)) : size_t(512)) << 20;
+  }();
+  return budget;
+}
+std::function<void(SDL_Surface *)> g_frameFreed;
+const void *g_frameFreedOwner = nullptr;
+void put16(std::vector<uint8_t> &out, unsigned v) {
+  out.push_back(static_cast<uint8_t>(v & 0xFF));
+  out.push_back(static_cast<uint8_t>(v >> 8));
+}
+unsigned get16(const uint8_t *&p) {
+  const unsigned v = p[0] | (p[1] << 8);
+  p += 2;
+  return v;
+}
+} // namespace
+
+void Animation::setFrameFreedHook(const void *owner, std::function<void(SDL_Surface *)> hook) {
+  if (!hook && owner != g_frameFreedOwner)
+    return; // (another's since)
+  g_frameFreed = std::move(hook);
+  g_frameFreedOwner = g_frameFreed ? owner : nullptr;
+}
+
+// Each direction's frames packed, its own unpacked ones freed (made again
+// when asked for). A row: its runs' count, then each run's clear gap and
+// length, and its colours (a byte each, the table's indices, or four).
+// Only RGBA32 frames are packed (the .ani's own); any other kept as it is.
+// ours: a direction's colours (at most 256, never 0 - clear) to their index:
+// a small fixed table, remembering the last colour asked for (runs of one
+// colour are common). A general hash map here, asked twice a pixel, was most
+// of an animation's loading time - a hitch whenever an animal first did
+// something (Animals::art)
+namespace {
+struct ColourTable {
+  uint32_t key[1024] = {};
+  uint8_t value[1024] = {};
+  uint32_t lastKey = 0;
+  int lastValue = -1, size = 0;
+  int find(uint32_t k) {
+    if (k == lastKey && lastValue >= 0)
+      return lastValue;
+    for (unsigned h = (k * 2654435761u) >> 22;; h = (h + 1) & 1023) {
+      if (!key[h])
+        return -1;
+      if (key[h] == k) {
+        lastKey = k;
+        lastValue = value[h];
+        return lastValue;
+      }
+    }
+  }
+  void add(uint32_t k, uint8_t v) {
+    unsigned h = (k * 2654435761u) >> 22;
+    while (key[h])
+      h = (h + 1) & 1023;
+    key[h] = k;
+    value[h] = v;
+    ++size;
+    lastKey = k;
+    lastValue = v;
+  }
+};
+} // namespace
+
+void Animation::packAll() {
+  for (auto &[direction, frames] : this->surfaces) {
+    PackedDirection pd;
+    bool packable = !frames.empty();
+    ColourTable index;
+    for (SDL_Surface *s : frames) {
+      if (!s)
+        continue;
+      if (s->format->format != SDL_PIXELFORMAT_RGBA32 || s->w > 65535 || SDL_MUSTLOCK(s)) {
+        packable = false;
+        break;
+      }
+      for (int y = 0; y < s->h && pd.indexed; y++) {
+        const uint32_t *row = reinterpret_cast<const uint32_t *>(static_cast<const uint8_t *>(s->pixels) + size_t(y) * s->pitch);
+        for (int x = 0; x < s->w; x++)
+          if (row[x] && index.find(row[x]) < 0) {
+            if (index.size == 256) {
+              pd.indexed = false;
+              break;
+            }
+            index.add(row[x], static_cast<uint8_t>(index.size));
+            pd.colours.push_back(row[x]);
+          }
+      }
+    }
+    if (!packable)
+      continue;
+    if (!pd.indexed)
+      pd.colours.clear();
+    for (SDL_Surface *s : frames) {
+      PackedFrame f;
+      if (s) {
+        f.present = true;
+        f.w = s->w;
+        f.h = s->h;
+        for (int y = 0; y < s->h; y++) {
+          const uint32_t *row = reinterpret_cast<const uint32_t *>(static_cast<const uint8_t *>(s->pixels) + size_t(y) * s->pitch);
+          const size_t countAt = f.data.size();
+          put16(f.data, 0);
+          unsigned runs = 0;
+          for (int x = 0; x < s->w;) {
+            const int gapFrom = x;
+            while (x < s->w && !row[x])
+              x++;
+            if (x == s->w)
+              break;
+            const int runFrom = x;
+            while (x < s->w && row[x])
+              x++;
+            put16(f.data, static_cast<unsigned>(runFrom - gapFrom));
+            put16(f.data, static_cast<unsigned>(x - runFrom));
+            for (int k = runFrom; k < x; k++) {
+              if (pd.indexed) {
+                f.data.push_back(static_cast<uint8_t>(index.find(row[k])));
+              } else {
+                const uint32_t v = row[k];
+                const uint8_t *b = reinterpret_cast<const uint8_t *>(&v);
+                f.data.insert(f.data.end(), b, b + 4);
+              }
+            }
+            runs++;
+          }
+          f.data[countAt] = static_cast<uint8_t>(runs & 0xFF);
+          f.data[countAt + 1] = static_cast<uint8_t>(runs >> 8);
+        }
+        f.data.shrink_to_fit();
+      }
+      pd.frames.push_back(std::move(f));
+    }
+    for (SDL_Surface *&s : frames)
+      if (s) {
+        SDL_FreeSurface(s);
+        s = nullptr;
+      }
+    this->packed[direction] = std::move(pd);
+  }
+}
+
+SDL_Surface *Animation::sourceFrame(const std::string &direction, size_t frame) const {
+  auto slots = this->surfaces.find(direction);
+  if (slots == this->surfaces.end() || frame >= slots->second.size())
+    return nullptr;
+  this->src_used = g_hiFrame;
+  if (SDL_Surface *s = slots->second[frame])
+    return s;
+  auto pd = this->packed.find(direction);
+  if (pd == this->packed.end() || frame >= pd->second.frames.size() || !pd->second.frames[frame].present)
+    return nullptr;
+  const PackedFrame &f = pd->second.frames[frame];
+  SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, f.w, f.h, 32, SDL_PIXELFORMAT_RGBA32);
+  if (!s)
+    return nullptr;
+  SDL_FillRect(s, nullptr, 0);
+  const uint8_t *p = f.data.data();
+  for (int y = 0; y < f.h; y++) {
+    uint32_t *row = reinterpret_cast<uint32_t *>(static_cast<uint8_t *>(s->pixels) + size_t(y) * s->pitch);
+    const unsigned runs = get16(p);
+    int x = 0;
+    for (unsigned r = 0; r < runs; r++) {
+      x += static_cast<int>(get16(p));
+      const unsigned length = get16(p);
+      for (unsigned k = 0; k < length; k++, x++) {
+        if (pd->second.indexed) {
+          row[x] = pd->second.colours[*p++];
+        } else {
+          std::memcpy(&row[x], p, 4);
+          p += 4;
+        }
+      }
+    }
+  }
+  slots->second[frame] = s;
+  const size_t bytes = size_t(s->pitch) * s->h;
+  this->src_bytes += bytes;
+  g_srcBytes += bytes;
+  g_srcHolders.insert(this);
+  return s;
+}
+
+bool Animation::sourceSize(const std::string &direction, size_t frame, int &w, int &h) const {
+  auto slots = this->surfaces.find(direction);
+  if (slots == this->surfaces.end() || frame >= slots->second.size())
+    return false;
+  if (const SDL_Surface *s = slots->second[frame]) {
+    w = s->w;
+    h = s->h;
+    return true;
+  }
+  auto pd = this->packed.find(direction);
+  if (pd == this->packed.end() || frame >= pd->second.frames.size() || !pd->second.frames[frame].present)
+    return false;
+  w = pd->second.frames[frame].w;
+  h = pd->second.frames[frame].h;
+  return true;
+}
+
+// Its unpacked frames that are packed too, freed (the others - not
+// packable - kept: they're the only copy)
+void Animation::releaseSources() const {
+  for (auto &[direction, frames] : this->surfaces) {
+    auto pd = this->packed.find(direction);
+    if (pd == this->packed.end())
+      continue;
+    for (size_t i = 0; i < frames.size(); i++)
+      if (frames[i] && i < pd->second.frames.size() && pd->second.frames[i].present) {
+        if (g_frameFreed)
+          g_frameFreed(frames[i]);
+        SDL_FreeSurface(frames[i]);
+        frames[i] = nullptr;
+      }
+  }
+  g_srcBytes -= std::min(g_srcBytes, this->src_bytes);
+  this->src_bytes = 0;
+  g_srcHolders.erase(this);
+}
+
+// A direction's frames gone for good, unpacked and packed (UI art, once
+// its textures are made: as before, it doesn't keep them)
+void Animation::dropSources(const std::string &direction) {
+  auto slots = this->surfaces.find(direction);
+  if (slots == this->surfaces.end())
+    return;
+  for (SDL_Surface *s : slots->second)
+    if (s) {
+      const size_t bytes = std::min(this->src_bytes, size_t(s->pitch) * s->h);
+      if (this->packed.count(direction)) {
+        this->src_bytes -= bytes;
+        g_srcBytes -= std::min(g_srcBytes, bytes);
+      }
+      if (g_frameFreed)
+        g_frameFreed(s);
+      SDL_FreeSurface(s);
+    }
+  slots->second.clear();
+  this->packed.erase(direction);
+}
+
+void Animation::trimSources() {
+  if (g_srcBytes <= sourceBudget())
+    return;
+  // (longest unused first, down to three quarters; none asked for in the
+  // last frame - something may be holding it)
+  std::vector<const Animation *> idle;
+  for (const Animation *a : g_srcHolders)
+    if (a->src_used + 1 < g_hiFrame)
+      idle.push_back(a);
+  std::sort(idle.begin(), idle.end(), [](const Animation *a, const Animation *b) { return a->src_used < b->src_used; });
+  for (const Animation *a : idle) {
+    if (g_srcBytes <= sourceBudget() / 4 * 3)
+      break;
+    a->releaseSources();
+  }
+}
+
+
+Animation::Animation(Animation &&other) noexcept {
+  liveAdd(this);
+  *this = std::move(other);
+}
 
 Animation &Animation::operator=(Animation &&other) noexcept {
   if (this != &other) {
+    releaseHi();
     releaseLighting();
+    releaseSources();
     for (AnchorMemo &m : this->anchorMemo)
       m = AnchorMemo{};
     textures_lit=std::move(other.textures_lit);textures_lit_hi=std::move(other.textures_lit_hi);
@@ -114,11 +548,36 @@ Animation &Animation::operator=(Animation &&other) noexcept {
     other.surfaces.clear();
     other.textures.clear();
     other.textures_hi.clear();
+    // (its zoomed-in sets came too: counted as this one's now, with their
+    // levels and the frames on their way to them)
+    this->hi_drawn = other.hi_drawn;
+    std::swap(this->loaderId, other.loaderId);
+    this->hiLevel = std::move(other.hiLevel);
+    other.hiLevel.clear();
+    if (other.hi_bytes) {
+      g_hiHolders.erase(&other);
+      g_hiHolders.insert(this);
+      this->hi_bytes = other.hi_bytes;
+      other.hi_bytes = 0;
+    }
+    // (and its packed frames, with their unpacked ones' count)
+    this->packed = std::move(other.packed);
+    other.packed.clear();
+    this->src_used = other.src_used;
+    if (other.src_bytes) {
+      g_srcHolders.erase(&other);
+      g_srcHolders.insert(this);
+      this->src_bytes = other.src_bytes;
+      other.src_bytes = 0;
+    }
   }
   return *this;
 }
 
 Animation::~Animation() {
+  liveRemove(this);
+  releaseSources();
+  releaseHi();
   releaseLighting();
   if (onRelease) onRelease();
   for (auto surface_list : this->surfaces) {
@@ -157,10 +616,10 @@ void Animation::draw(SDL_Renderer *renderer, int x, int y,
       this->current_frame = 0;
 
     SDL_Texture *t = this->textures[direction_string][this->current_frame];
-    if (t == nullptr)
-      return;
-
-    ArtScaler::querySize(t, &rect.w, &rect.h);
+    if (t)
+      ArtScaler::querySize(t, &rect.w, &rect.h);
+    else if (!this->sourceSize(direction_string, this->current_frame, rect.w, rect.h))
+      return; // (one not made yet - makeLazyFrame - measured from its source)
   } else {
     direction_string = convertCompassDirectionToExistingAnimationString(
         direction, this->surfaces);
@@ -173,12 +632,8 @@ void Animation::draw(SDL_Renderer *renderer, int x, int y,
     if ((size_t)this->current_frame >= this->surfaces[direction_string].size())
       this->current_frame = 0;
 
-    SDL_Surface *s = this->surfaces[direction_string][this->current_frame];
-    if (s == nullptr)
+    if (!this->sourceSize(direction_string, this->current_frame, rect.w, rect.h))
       return;
-
-    rect.w = s->w;
-    rect.h = s->h;
   }
 
   if (rect.w <= 0 || rect.h <= 0)
@@ -194,7 +649,7 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
   // Map art switches to its upscaled frames while the map is zoomed in
   bool hi = this->usesHi();
   std::vector<SDL_Texture *> *frames =
-      this->frameTextures(renderer, direction, hi);
+      this->frameTextures(renderer, direction, hi, this->current_frame);
   if (frames == nullptr || frames->empty())
     return;
   size_t texCount = frames->size();
@@ -216,7 +671,10 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
 
   if (texture) {
     RenderSettings::applyArtScaleMode(texture);
-    SDL_RenderCopyEx(renderer, texture, NULL, dest_rect, 0, NULL,
+    // (a texture made up to whole blocks: only the art's part of it)
+    SDL_Rect content;
+    const bool padded = ArtScaler::contentRect(texture, &content);
+    SDL_RenderCopyEx(renderer, texture, padded ? &content : NULL, dest_rect, 0, NULL,
                      this->renderer_flip);
   }
 }
@@ -254,7 +712,7 @@ bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
     return false;
   SDL_RendererFlip flip = this->renderer_flip;
   bool hi = this->usesHi();
-  std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, hi);
+  std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, hi, frame >= 0 ? frame : this->current_frame);
   if (!frames || frames->empty())
     return false;
   if (static_cast<size_t>(this->current_frame) >= frames->size())
@@ -282,7 +740,9 @@ bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
     SDL_SetTextureColorMod(texture, tint->r, tint->g, tint->b);
     SDL_SetTextureAlphaMod(texture, tint->a);
   }
-  SDL_RenderCopyExF(renderer, texture, nullptr, &dest, 0, nullptr, flip);
+  SDL_Rect content;
+  const bool padded = ArtScaler::contentRect(texture, &content);
+  SDL_RenderCopyExF(renderer, texture, padded ? &content : nullptr, &dest, 0, nullptr, flip);
   if (tint) {
     SDL_SetTextureColorMod(texture, 255, 255, 255);
     SDL_SetTextureAlphaMod(texture, 255);
@@ -298,7 +758,7 @@ Animation::LightingFrame Animation::lightingFrame(CompassDirection side,int fram
   if(found==surfaces.end() || found->second.empty())return {};
     const size_t index=std::max(0,frame)%found->second.size();
   const auto masks=shadowRuns.find(key);const std::vector<uint64_t> *mask=!blackIsBody && masks!=shadowRuns.end() && index<masks->second.size()?&masks->second[index]:nullptr;
-  return {found->second[index],anchor_points[key],renderer_flip==SDL_FLIP_HORIZONTAL,mask};
+  return {sourceFrame(key,index),anchor_points[key],renderer_flip==SDL_FLIP_HORIZONTAL,mask};
 }
 
 bool Animation::drawMapped(SDL_Renderer *renderer, CompassDirection direction, int frame, const SDL_FPoint dst[4],
@@ -317,7 +777,7 @@ bool Animation::drawMapped(SDL_Renderer *renderer, CompassDirection direction, i
   if (!this->anchorFor(direction))
     return false;
   bool hi = this->usesHi();
-  std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, hi);
+  std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, hi, frame >= 0 ? frame : 0);
   if (!frames || frames->empty())
     return false;
   size_t index = frame >= 0 ? static_cast<size_t>(frame) % frames->size() : 0;
@@ -332,6 +792,12 @@ bool Animation::drawMapped(SDL_Renderer *renderer, CompassDirection direction, i
   // drawAnchored. Existing mapped water art keeps its own supplied UVs.
   if (anchoredMirror && this->renderer_flip == SDL_FLIP_HORIZONTAL)
     for (auto &vertex : v) vertex.tex_coord.x = 1.0f - vertex.tex_coord.x;
+  float um = 1.0f, vm = 1.0f; // (a texture made up to whole blocks: its art's part)
+  if (ArtScaler::contentUV(texture, &um, &vm))
+    for (auto &vertex : v) {
+      vertex.tex_coord.x *= um;
+      vertex.tex_coord.y *= vm;
+    }
   const int idx[6] = {0, 1, 2, 0, 2, 3};
   SDL_RenderGeometry(renderer, texture, v, 4, idx, 6);
   return true;
@@ -346,7 +812,7 @@ bool Animation::drawCastShadow(SDL_Renderer *renderer, CompassDirection directio
   if (!anchor)
     return false;
   const SDL_RendererFlip flip = this->renderer_flip;
-  std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, this->usesHi());
+  std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, this->usesHi(), frame >= 0 ? frame : 0);
   if (!frames || frames->empty())
     return false;
   SDL_Texture *texture = (*frames)[frame >= 0 ? static_cast<size_t>(frame) % frames->size() : 0];
@@ -358,9 +824,11 @@ bool Animation::drawCastShadow(SDL_Renderer *renderer, CompassDirection directio
   const float left = -ax, top = static_cast<float>(anchor->anchor.y), right = left + w, bottom = top - h;
   auto cast = [&](float across, float up) { return place(across, up); };
   const SDL_Color black{0, 0, 0, alpha}, tip{0, 0, 0, tipAlpha};
-  const float u0 = flip == SDL_FLIP_HORIZONTAL ? 1.0f : 0.0f, u1 = 1.0f - u0;
+  float um = 1.0f, vm = 1.0f; // (a texture made up to whole blocks: its art's part)
+  ArtScaler::contentUV(texture, &um, &vm);
+  const float u0 = flip == SDL_FLIP_HORIZONTAL ? um : 0.0f, u1 = um - u0;
   SDL_Vertex v[4] = {{cast(left, top), tip, {u0, 0}}, {cast(right, top), tip, {u1, 0}},
-                     {cast(right, bottom), black, {u1, 1}}, {cast(left, bottom), black, {u0, 1}}};
+                     {cast(right, bottom), black, {u1, vm}}, {cast(left, bottom), black, {u0, vm}}};
   const int idx[6] = {0, 1, 2, 0, 2, 3};
   RenderSettings::applyArtScaleMode(texture);
   return SDL_RenderGeometry(renderer, texture, v, 4, idx, 6) == 0;
@@ -372,7 +840,7 @@ bool Animation::hitTestAnchored(float px,float py,float x,float y,CompassDirecti
   auto frames=this->surfaces.find(key);auto anchor=this->anchor_points.find(key);
   if(frames==this->surfaces.end() || frames->second.empty() || anchor==this->anchor_points.end())return false;
   const int index=(frame>=0?frame:static_cast<int>(this->current_frame))%static_cast<int>(frames->second.size());
-  SDL_Surface *source=frames->second[index];if(!source)return false;
+  SDL_Surface *source=sourceFrame(key,static_cast<size_t>(index));if(!source)return false;
   int sx=static_cast<int>(std::floor(px-x+(mirrored?source->w-anchor->second.x:anchor->second.x)));
   const int sy=static_cast<int>(std::floor(py-y+anchor->second.y));
   if(sx<0 || sy<0 || sx>=source->w || sy>=source->h)return false;
@@ -417,65 +885,186 @@ bool Animation::usesHi() const {
          (ArtScaler::worldFactor() > 1 || HdArt::active() || Shaders::artActive());
 }
 
+// ours: a plain map-art frame (not magnified, not HD) made the first time
+// it's drawn, as the whole direction's were before (Animation::frameTextures)
+void Animation::makeLazyFrame(SDL_Renderer *renderer, std::vector<SDL_Texture *> &frames, const std::string &direction,
+                              bool relight, int wanted) {
+  if (wanted < 0 || frames.empty())
+    return;
+  const size_t index = static_cast<size_t>(wanted) % frames.size();
+  if (frames[index])
+    return;
+  SDL_Surface *surface = this->sourceFrame(direction, index);
+  if (!surface)
+    return;
+  SDL_Surface *clean = nullptr;
+  if (relight) {
+    std::vector<Uint8> shadowMask(size_t(surface->w) * surface->h, 0);
+    auto masks = shadowRuns.find(direction);
+    if (masks != shadowRuns.end() && index < masks->second.size())
+      for (uint64_t run : masks->second[index]) {
+        const size_t start = size_t(run >> 32), count = uint32_t(run);
+        if (start + count <= shadowMask.size())
+          std::fill_n(shadowMask.begin() + start, count, Uint8(1));
+      }
+    clean = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+    if (clean)
+      removePaletteShadow(clean, surface, shadowMask);
+  }
+  SDL_Texture *t = SDL_CreateTextureFromSurface(renderer, clean ? clean : surface);
+  if (!t)
+    SDL_Log("Warning: Failed to create texture: %s", SDL_GetError());
+  frames[index] = t;
+  if (clean)
+    SDL_FreeSurface(clean);
+}
+
 std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
                                                      CompassDirection direction,
-                                                     bool hi) {
+                                                     bool hi, int wanted) {
   // (an HD art mod switched on or off since they were made: made again)
   // (or a shader mod's art shader changed)
   if (hi && this->hi_generation != HdArt::generation() * 100000 + Shaders::generation()) {
-    for (auto &kv : this->textures_hi)
-      for (SDL_Texture *t : kv.second)
-        if (t)
-          SDL_DestroyTexture(t);
-    this->textures_hi.clear();
-    for(auto &[key,frames]:textures_lit_hi)for(auto *t:frames)SDL_DestroyTexture(t);
-    textures_lit_hi.clear();
+    this->releaseHi();
     this->hi_generation = HdArt::generation() * 100000 + Shaders::generation();
-    ++this->textureGen;
   }
+  if (hi)
+    this->hi_drawn = g_hiFrame;
   const bool relight=this->world_art && !blackIsBody && RenderSettings::relightWorld && Features::dayNightLighting && paletteShadows;
   auto &set = relight ? (hi?textures_lit_hi:textures_lit) : (hi?this->textures_hi:this->textures);
+  const bool lazy = !hi && !this->upscale && this->world_art;
+  // ours: HD frames at the zoom's level (a shader mod's art shader takes
+  // them at 4x, as it always has)
+  const bool hdBacked = hi && !this->hd_dir.empty() && HdArt::active();
+  const int want = Shaders::artActive() ? 4 : g_hdLevel;
+  auto lvKey = [&](const std::string &d) { return (relight ? "L" : "") + d; };
+  // ours: frames used as they are (not recoloured, relit or through an art
+  // shader) encoded for the graphics card by the loader too, as the HD art
+  // mod's setting says (HdArt::requestFrames)
+  const int encodeHow = hdBacked && !relight && this->recoloured.empty() && !Shaders::artActive() ? HdArt::compression() : 0;
+  auto pathsFor = [&](const std::string &d) {
+    std::vector<std::string> paths;
+    auto it = this->surfaces.find(d);
+    for (size_t f = 0; it != this->surfaces.end() && f < it->second.size(); f++)
+      paths.push_back(this->hd_dir + "/" + d + "_" + std::to_string(f));
+    return paths;
+  };
   // (what the lookups below found last time, while no set has changed)
   const int di = static_cast<int>(direction);
   FramesMemo *memo = di >= 0 && di < 10 ? &this->framesMemo[(relight ? 2 : 0) + (hi ? 1 : 0)][di] : nullptr;
-  if (memo && memo->gen == this->textureGen && memo->frames) {
+  if (memo && memo->gen == this->textureGen && memo->frames && (!hdBacked || memo->levelGen == g_levelGen)) {
     if (memo->setsFlip)
       this->renderer_flip = memo->flip;
+    if (lazy)
+      this->makeLazyFrame(renderer, *memo->frames, memo->key, relight, wanted);
     return memo->frames;
   }
+  // A set found: as it is; made at another level, the new level asked for
+  // and this one drawn until it comes (then this one's freed and the new
+  // one made: null)
+  auto useFound = [&](const std::string &d, bool mirrored) -> std::vector<SDL_Texture *> * {
+    auto level = this->hiLevel.find(lvKey(d));
+    const bool stale = hdBacked && level != this->hiLevel.end() && level->second != 0 && level->second != want;
+    if (!stale) {
+      if (memo)
+        *memo = {this->textureGen, mirrored, mirrored ? this->renderer_flip : SDL_FLIP_NONE, &set[d], g_levelGen, d};
+      if (lazy)
+        this->makeLazyFrame(renderer, set[d], d, relight, wanted);
+      return &set[d];
+    }
+    if (g_hiGradual && (g_hiSpentMs >= 30.0 || !HdArt::framesReady(this->loaderId, lvKey(d), want))) {
+      HdArt::requestFrames(this->loaderId, lvKey(d), want, pathsFor(d), encodeHow);
+      return &set[d];
+    }
+    for (SDL_Texture *t : set[d])
+      if (t) {
+        const size_t bytes = std::min(this->hi_bytes, ArtScaler::textureBytes(t));
+        this->hi_bytes -= bytes;
+        g_hiBytes -= std::min(g_hiBytes, bytes);
+        SDL_DestroyTexture(t);
+      }
+    set.erase(d);
+    this->hiLevel.erase(level);
+    ++this->textureGen;
+    return nullptr;
+  };
   // The art's own frames for this direction (or button state) when it has
   // them - even if another one was made first - else the nearest it has
   std::string exact = convertCompassDirectionToString(direction);
   std::string direction_string;
   if (set.count(exact) && !set[exact].empty()) {
-    if (memo)
-      *memo = {this->textureGen, false, SDL_FLIP_NONE, &set[exact]};
-    return &set[exact];
-  }
-  if (this->surfaces.count(exact) && !this->surfaces[exact].empty())
+    if (std::vector<SDL_Texture *> *found = useFound(exact, false))
+      return found;
+    direction_string = exact;
+  } else if (this->surfaces.count(exact) && !this->surfaces[exact].empty())
     direction_string = exact;
   else {
     direction_string =
         convertCompassDirectionToExistingAnimationString(direction, set);
     if (!direction_string.empty() && !set[direction_string].empty()) {
-      if (memo)
-        *memo = {this->textureGen, true, this->renderer_flip, &set[direction_string]};
-      return &set[direction_string];
-    }
-    direction_string = convertCompassDirectionToExistingAnimationString(
-        direction, this->surfaces);
+      if (std::vector<SDL_Texture *> *found = useFound(direction_string, true))
+        return found;
+    } else
+      direction_string = convertCompassDirectionToExistingAnimationString(
+          direction, this->surfaces);
   }
   auto source = this->surfaces.find(direction_string);
   if (direction_string.empty() || source == this->surfaces.end())
     return nullptr;
+  // (this frame's time for making zoomed-in sets used up: the normal frames
+  // for now, the zoomed-in ones made in a later frame - setGradualZoomedIn)
+  if (hi && g_hiGradual && g_hiSpentMs >= 30.0)
+    return this->frameTextures(renderer, direction, false, wanted);
+  const Uint64 madeFrom = SDL_GetPerformanceCounter();
+  bool magnified = this->upscale || hi;
+  // ours: an HD art mod's frames for the whole direction, at the level -
+  // from the background loader in play (asked for, and the normal frames
+  // drawn until they come), read at once on all cores in the checks
+  // (HdArt::loadMany) - then made into textures below
+  std::vector<SDL_Surface *> hdFrames;
+  int builtLevel = 0;
+  if (magnified && !this->hd_dir.empty() && HdArt::active()) {
+    builtLevel = hi ? want : 4;
+    if (hi && g_hiGradual) {
+      if (!HdArt::takeFrames(this->loaderId, lvKey(direction_string), builtLevel, hdFrames)) {
+        HdArt::requestFrames(this->loaderId, lvKey(direction_string), builtLevel, pathsFor(direction_string), encodeHow);
+        return this->frameTextures(renderer, direction, false, wanted);
+      }
+    } else {
+      hdFrames = HdArt::loadMany(pathsFor(direction_string), builtLevel);
+    }
+  }
+  const bool anyHd = std::any_of(hdFrames.begin(), hdFrames.end(), [](SDL_Surface *s) { return s != nullptr; });
 
   std::vector<SDL_Texture *> &frames = set[direction_string];
   frames.clear();
   ++this->textureGen;
-  bool magnified = this->upscale || hi;
-  int index = 0;
-  for (SDL_Surface *surface : source->second) {
-    int frame = index++;
+  std::vector<bool> hdTaken(hdFrames.size(), false);
+  auto takeHd = [&](int frame, const std::string &path) -> SDL_Surface * {
+    if (frame >= 0 && static_cast<size_t>(frame) < hdFrames.size() && !hdTaken[frame]) {
+      SDL_Surface *hd = hdFrames[frame]; // (null: not in the mod)
+      hdFrames[frame] = nullptr;
+      hdTaken[frame] = true;
+      return hd;
+    }
+    // (asked again: read again, as before, at the level)
+    SDL_Surface *again = ArtScaler::loadHdSurface(path);
+    if (again && builtLevel == 2) {
+      SDL_Surface *half = HdArt::halve(again);
+      SDL_FreeSurface(again);
+      again = half;
+    }
+    return again;
+  };
+  const size_t frameCount = source->second.size();
+  const bool oneNow = lazy && !magnified && wanted >= 0 && frameCount > 1;
+  for (size_t index = 0; index < frameCount; index++) {
+    if (oneNow && index != static_cast<size_t>(wanted) % frameCount) {
+      frames.push_back(nullptr); // (made when it's first drawn: makeLazyFrame)
+      continue;
+    }
+    SDL_Surface *surface = this->sourceFrame(direction_string, index);
+    const int frame = static_cast<int>(index);
     if (!surface) {
       frames.push_back(nullptr);
       continue;
@@ -507,13 +1096,13 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
         this->hd_dir.rfind("terrain/", 0) != 0) {
       std::string hdPath = this->hd_dir + "/" + direction_string + "_" + std::to_string(frame);
       SDL_Surface *big = nullptr;
-      if (SDL_Surface *hd = ArtScaler::loadHdSurface(hdPath)) {
+      if (SDL_Surface *hd = takeHd(frame, hdPath)) {
         if (!this->recoloured.empty())
           hd = HdArt::recolour(hd, surface, this->recoloured, direction_string, frame);
         int k = surface->w > 0 ? hd->w / surface->w : 0;
         if (k >= 2 && hd->w == surface->w * k && hd->h == surface->h * k)
           big = SDL_ConvertSurfaceFormat(hd, SDL_PIXELFORMAT_RGBA32, 0);
-        SDL_FreeSurface(hd);
+        HdArt::freeFrame(hd);
       }
       if (!big)
         big = ArtScaler::upscaleSurface(surface, 4);
@@ -531,13 +1120,13 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
     if (!t && magnified && !this->hd_dir.empty()) {
       std::string hdPath =
           this->hd_dir + "/" + direction_string + "_" + std::to_string(frame);
-      if (SDL_Surface *hd = ArtScaler::loadHdSurface(hdPath)) {
+      if (SDL_Surface *hd = takeHd(frame, hdPath)) {
         if (!this->recoloured.empty())
           hd = HdArt::recolour(hd, surface, this->recoloured, direction_string, frame);
         if(relight)removePaletteShadow(hd,original,shadowMask);
         t = ArtScaler::createHdTexture(renderer, hd, surface->w, surface->h,
                                        hdPath);
-        SDL_FreeSurface(hd);
+        HdArt::freeFrame(hd);
       }
     }
     if (!t) {
@@ -551,13 +1140,24 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
     }
     if (!t)
       SDL_Log("Warning: Failed to create texture: %s", SDL_GetError());
+    if (hi && t) {
+      const size_t bytes = ArtScaler::textureBytes(t);
+      this->hi_bytes += bytes;
+      g_hiBytes += bytes;
+      g_hiHolders.insert(this);
+    }
     frames.push_back(t);
     if(clean)SDL_FreeSurface(clean);
-    if (!this->world_art)
-      SDL_FreeSurface(surface);
   }
+  if (hi) {
+    g_hiSpentMs += (SDL_GetPerformanceCounter() - madeFrom) * 1000.0 / SDL_GetPerformanceFrequency();
+    this->hiLevel[lvKey(direction_string)] = anyHd ? builtLevel : 0;
+  }
+  for (SDL_Surface *hd : hdFrames) // (any not used: a frame without art)
+    if (hd)
+      HdArt::freeFrame(hd);
   if (!this->world_art)
-    source->second.clear();
+    this->dropSources(direction_string);
   return &frames;
 }
 
@@ -580,8 +1180,16 @@ void Animation::queryTexture(CompassDirection direction, int *w, int *h) {
   if (!this->textures[direction_string].empty()) {
     if ((size_t)this->current_frame < this->textures[direction_string].size()) {
       SDL_Texture *t = this->textures[direction_string][this->current_frame];
+      int sw = 0, sh = 0;
       if (t)
         ArtScaler::querySize(t, w, h);
+      else if (this->sourceSize(direction_string, this->current_frame, sw, sh)) {
+        // (not made yet: makeLazyFrame - its source's size)
+        if (w)
+          *w = sw;
+        if (h)
+          *h = sh;
+      }
     }
   } else {
     direction_string = convertCompassDirectionToExistingAnimationString(
@@ -589,12 +1197,12 @@ void Animation::queryTexture(CompassDirection direction, int *w, int *h) {
     if (!this->surfaces[direction_string].empty()) {
       if ((size_t)this->current_frame <
           this->surfaces[direction_string].size()) {
-        SDL_Surface *s = this->surfaces[direction_string][this->current_frame];
-        if (s) {
+        int sw = 0, sh = 0;
+        if (this->sourceSize(direction_string, this->current_frame, sw, sh)) {
           if (w)
-            *w = s->w;
+            *w = sw;
           if (h)
-            *h = s->h;
+            *h = sh;
         }
       }
     }

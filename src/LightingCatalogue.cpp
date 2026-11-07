@@ -1,3 +1,4 @@
+#include <cmath>
 #include "LightingAssets.hpp"
 
 namespace LightingAssets {
@@ -1124,7 +1125,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.views[1].push_back({"native flame",Material::Fire,{{-70.75f,-25.52f},{-11.25f,-34.32f},{55.25f,-25.52f},{71.0f,6.16f},{25.5f,36.96f},{-56.75f,28.16f},{-77.75f,0.0f}},0,{255,155,65,255},true,true,PixelMask::Flame});
     asset.views[2].push_back({"native flame",Material::Fire,{{-68.9f,-34.35f},{-0.5f,-37.08f},{57.64f,-25.25f},{74.74f,7.51f},{31.99f,34.81f},{-51.8f,25.71f},{-75.74f,-0.68f}},0,{255,155,65,255},true,true,PixelMask::Flame});
     asset.views[3].push_back({"native flame",Material::Fire,{{-64.0f,-25.64f},{9.5f,-34.44f},{69.0f,-23.0f},{79.5f,10.44f},{37.5f,35.08f},{-46.5f,28.92f},{-72.75f,4.28f}},0,{255,155,65,255},true,true,PixelMask::Flame});
-    asset.sources.push_back({"mapped fixture",{0.114f,0.057f,0.4f},{0,0,0},{255,154,65,255},0.5f,4.0f});
+    asset.sources.push_back({"mapped fixture",{0.114f,0.057f,1.2f},{0,0,0},{255,120,45,255},.8f,5.0f});
+    for(int k=0;k<4;++k){const float a=k*1.5707963f+.785398f;asset.sources.push_back({"lava rim",{1.60f*std::cos(a),1.60f*std::sin(a),1.00f},{0,0,0},{255,120,45,255},1.00f,4.00f});}
     asset.animated=true;definitions.push_back(std::move(asset));
   }
   {
@@ -1492,7 +1494,11 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.views[2].push_back({"hot lava",Material::Fire,{{-67.0f,-368.2f},{48.2f,-368.2f},{48.2f,-69.91f},{-67.0f,-69.91f}},0,{255,104,29,255},true,false,PixelMask::Lava});
     asset.views[3].push_back({"hot lava",Material::Fire,{{-141.0f,-93.0f},{144.0f,-93.0f},{144.0f,76.0f},{-141.0f,76.0f}},0,{255,104,29,255},true,false,PixelMask::Lava});
     asset.views[3].push_back({"hot lava",Material::Fire,{{-69.75f,-329.6f},{44.25f,-329.6f},{44.25f,-54.13f},{-69.75f,-54.13f}},0,{255,104,29,255},true,false,PixelMask::Lava});
-    asset.sources.push_back({"mapped fixture",{-0.058f,0.105f,6.87f},{0,0,0},{255,154,65,255},0.5f,4.0f});
+    // (lava lights a wide warm patch round it: the crater from its top, and
+    // round the foot, where the lava runs, a ring of lights - one light in
+    // its middle lit only the ground under its own picture, 3.5 tiles across)
+    asset.sources.push_back({"mapped fixture",{-0.058f,0.105f,6.87f},{0,0,0},{255,120,45,255},1.0f,7.0f});
+    for(int k=0;k<4;++k){const float a=k*1.5707963f+.785398f;asset.sources.push_back({"lava rim",{2.70f*std::cos(a),2.70f*std::sin(a),1.00f},{0,0,0},{255,120,45,255},1.10f,4.50f});}
     asset.animated=true;definitions.push_back(std::move(asset));
   }
   {
@@ -1505,7 +1511,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.views[2].push_back({"hot lava",Material::Fire,{{-81.64f,-457.8f},{57.4f,-457.8f},{57.4f,-109.5f},{-81.64f,-109.5f}},0,{255,104,29,255},true,false,PixelMask::Lava});
     asset.views[3].push_back({"hot lava",Material::Fire,{{-50.75f,-145.4f},{53.25f,-145.4f},{53.25f,34.18f},{-50.75f,34.18f}},0,{255,104,29,255},true,false,PixelMask::Lava});
     asset.views[3].push_back({"hot lava",Material::Fire,{{-89.75f,-440.6f},{56.5f,-440.6f},{56.5f,-110.96f},{-89.75f,-110.96f}},0,{255,104,29,255},true,false,PixelMask::Lava});
-    asset.sources.push_back({"mapped fixture",{-0.013f,0.09f,10.5f},{0,0,0},{255,154,65,255},0.5f,4.0f});
+    asset.sources.push_back({"mapped fixture",{-0.013f,0.09f,10.5f},{0,0,0},{255,120,45,255},1.2f,8.0f});
+    for(int k=0;k<4;++k){const float a=k*1.5707963f+.785398f;asset.sources.push_back({"lava rim",{2.70f*std::cos(a),2.70f*std::sin(a),1.00f},{0,0,0},{255,120,45,255},1.10f,4.50f});}
     asset.animated=true;definitions.push_back(std::move(asset));
   }
   {

@@ -94,10 +94,6 @@ void GameBenchmark::beforeFrame(World &world) {
     }
   } else if(phase==1) {
     const double t=seconds(recordStart);const int r=int(t/90)%4;
-    // ours (temporary): profile from a chosen second of the run as well
-    static const double profileAt=std::getenv("ZT_GAME_BENCH_PROFILE_AT")?std::atof(std::getenv("ZT_GAME_BENCH_PROFILE_AT")):-1;
-    static bool profiled=false;
-    if(profileAt>=0 && !profiled && t>=profileAt){profiled=true;FrameProfile::start();SDL_Log("[GameBench] profiling from %.0f s",t);}
     if(rotation!=r){world.rotateView((r-rotation+4)%4);rotation=r;}
     const double part=std::fmod(t,90.0);
     const double theta=(part-30)*6.283185307179586/60;

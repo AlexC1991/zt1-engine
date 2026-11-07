@@ -64,8 +64,10 @@ unsigned compileShader(const std::string &fragment, std::string &log);
 // uTime and the shader's settings - written into out (a target texture)
 bool artPass(SDL_Renderer *renderer, unsigned prog, SDL_Texture *color, SDL_Texture *aux, SDL_Texture *out, int w,
              int h, const std::vector<std::pair<std::string, float>> &uniforms);
-// A screen pass: prog run over the window's finished frame (uColor)
-bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pair<std::string, float>> &uniforms);
+// A screen pass: prog run over the window's finished frame (uColor); smooth:
+// uColor read between pixels (blended), else exactly
+bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pair<std::string, float>> &uniforms,
+                bool smooth = false);
 
 // Starts a layer of lowW x lowH art pixels (cleared to clear) and makes it
 // the render target

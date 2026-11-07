@@ -247,6 +247,7 @@ public:
   int previewType = -1;
   float previewX = 0, previewY = 0;
   Fences::Fit previewFit = Fences::Fit::Ok;
+  bool previewPoor = false; // (it fits, but the first month's pay is more than the cash: red)
 
 private:
   ResourceManager *rm = nullptr;

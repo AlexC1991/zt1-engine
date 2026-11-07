@@ -174,7 +174,9 @@ def main():
                 announce(root,f'HD verified: {state["frames_done"]} colour frames, {state["layers_done"]} material maps, {state["chunks_done"]} batches.')
                 if args.max_chunks and state['chunks_done']>=args.max_chunks:status(state='sample-complete');return
         status(state='complete',finished=time.time())
-        meta['about']='Local 4x map-art preview with separate emission maps. Review in the Lab before publishing.';atomic_json(output/'mod.json',meta)
+        # (a mod.json already written up for players is left as it is)
+        current=json.loads((output/'mod.json').read_text()) if (output/'mod.json').exists() else {}
+        if str(current.get('about','')).startswith('Local 4x'):meta['about']='Local 4x map-art preview with separate emission maps. Review in the Lab before publishing.';atomic_json(output/'mod.json',meta)
         lighting=json.loads((output/'lighting.json').read_text());lighting['status']='complete';atomic_json(output/'lighting.json',lighting)
         announce(root,'HD generation complete. The mod remains off until selected.')
     except Exception as error:

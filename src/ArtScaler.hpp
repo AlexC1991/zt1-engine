@@ -56,6 +56,11 @@ SDL_Texture *createTexture(SDL_Renderer *renderer, SDL_Surface *surface,
 // gives the art's own size)
 void markScale(SDL_Texture *texture, int scale);
 
+// ours: an RGBA32 surface sharpened in place by FSR's RCAS (as the
+// upscaler's own last step: stops 0 the strongest, 2 light; alpha kept).
+// One thread: for the HD loader's workers (an HD art mod's Sharpness)
+void sharpen(SDL_Surface *surface, float stops);
+
 // The art made k times bigger (FSR on the CPU, or MMPX as picked at start):
 // a new RGBA surface the caller frees
 SDL_Surface *upscaleSurface(SDL_Surface *surface, int k);
@@ -73,6 +78,16 @@ void querySize(SDL_Texture *texture, int *w, int *h);
 
 // Texture pixels per art pixel (1 for art that is not upscaled)
 int scaleOf(SDL_Texture *texture);
+
+// ours: a texture made up past the art's edge to whole blocks of 4 (a
+// compressed one: GpuCompressed) - padX columns and padY rows - marked so;
+// querySize gives the art's size, and contentRect the part of the texture
+// that's the art (false: all of it), contentUV the same as a fraction of it
+void markPadded(SDL_Texture *texture, int scale, int padX, int padY, bool compressed);
+bool contentRect(SDL_Texture *texture, SDL_Rect *rect);
+bool contentUV(SDL_Texture *texture, float *u, float *v);
+// Its bytes on the GPU (4 a pixel; 1 compressed)
+size_t textureBytes(SDL_Texture *texture);
 
 // A rect in art pixels converted to the texture's pixels (for src rects)
 SDL_Rect toTexture(SDL_Texture *texture, const SDL_Rect &rect);

@@ -240,7 +240,8 @@ def load(req):
 
 
 def write_entries(ztd, entries):
-    """The .ztd again with these entries replaced or added, swapped in whole"""
+    """The .ztd again with these entries replaced or added (None: taken
+    out), swapped in whole"""
     fd, tmp = tempfile.mkstemp(suffix='.ztd', dir=os.path.dirname(ztd))
     os.close(fd)
     try:
@@ -251,11 +252,15 @@ def write_entries(ztd, entries):
                     for info in z.infolist():
                         k = info.filename.lower().replace(chr(92), '/')
                         if k in want:
-                            out.writestr(info.filename, want.pop(k)[1])
+                            # (None: the entry taken out)
+                            data = want.pop(k)[1]
+                            if data is not None:
+                                out.writestr(info.filename, data)
                         else:
                             out.writestr(info, z.read(info.filename))
             for k, (name, data) in want.items():
-                out.writestr(name, data)
+                if data is not None:
+                    out.writestr(name, data)
         os.replace(tmp, ztd)
     finally:
         if os.path.exists(tmp):

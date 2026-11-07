@@ -2056,16 +2056,30 @@ void UiGameScreen::drawSpeedControl(SDL_Renderer *renderer, const SDL_Rect &paus
     SDL_SetTextureScaleMode(this->speedArtwork,SDL_ScaleModeLinear);
     SDL_SetTextureColorMod(this->speedArtwork,255,255,255);
     SDL_RenderCopyF(renderer,this->speedArtwork,&source,&joined);
-    if (hover || this->speedDown) {
+    // (as a lit button: brighter under the pointer, and pressed in - darker,
+    // a pixel lower - while held and for a moment after a quick click)
+    const bool pressed = this->speedDown || SDL_GetTicks() < this->speedPressUntil;
+    if (hover || pressed) {
       SDL_Rect previous{};
       const bool clipped = SDL_RenderIsClipEnabled(renderer) == SDL_TRUE;
       SDL_RenderGetClipRect(renderer,&previous);
       SDL_Rect clip = this->speedRect;
       if (clipped) SDL_IntersectRect(&previous,&this->speedRect,&clip);
       SDL_RenderSetClipRect(renderer,&clip);
-      const Uint8 shade = this->speedDown ? 190 : 255;
-      SDL_SetTextureColorMod(this->speedArtwork,shade,this->speedDown ? 180 : 242,this->speedDown ? 150 : 195);
-      SDL_RenderCopyF(renderer,this->speedArtwork,&source,&joined);
+      if (pressed) {
+        // (the lobe drawn again over itself, darkened and nudged down)
+        SDL_FRect step = joined;
+        step.y += 1.0f;
+        SDL_SetTextureColorMod(this->speedArtwork,150,140,120);
+        SDL_RenderCopyF(renderer,this->speedArtwork,&source,&step);
+      } else {
+        SDL_SetTextureBlendMode(this->speedArtwork,SDL_BLENDMODE_ADD);
+        SDL_SetTextureColorMod(this->speedArtwork,255,235,160);
+        SDL_SetTextureAlphaMod(this->speedArtwork,90);
+        SDL_RenderCopyF(renderer,this->speedArtwork,&source,&joined);
+        SDL_SetTextureAlphaMod(this->speedArtwork,255);
+        SDL_SetTextureBlendMode(this->speedArtwork,SDL_BLENDMODE_BLEND);
+      }
       SDL_RenderSetClipRect(renderer,clipped ? &previous : nullptr);
       SDL_SetTextureColorMod(this->speedArtwork,255,255,255);
     }
@@ -2111,7 +2125,7 @@ void UiGameScreen::drawDateTime(SDL_Renderer *renderer) {
   }
   auto *ini = this->hud->getIniReader();
   const SDL_Rect back = background->getLastRect();
-  Animation *art = this->resource_manager->getAnimation("ui/main/backgnd3/backgnd3");
+  Animation *art = this->resource_manager->sharedAnimation("ui/main/backgnd3/backgnd3");
   int width = 0, height = 0;
   if (art) art->queryTexture(CompassDirection::N, &width, &height);
   const int left = ini->getInt(pause->getName(), "x") + ini->getInt(nativeDate->getName(), "x");
@@ -2181,8 +2195,8 @@ void UiGameScreen::drawDateTime(SDL_Renderer *renderer) {
     const int speedShift = Features::fastForward ? speedWidth : 0;
     const int overlap = std::max(0, well.x + well.w + wellGap - originalMoney.x - speedShift);
     if (overlap > 0 && overlap < originalMoney.w - 2 * endcap) {
-      Animation *moneyArt = this->resource_manager->getAnimation("ui/main/backgnd4/backgnd4");
-      Animation *filler = this->resource_manager->getAnimation("ui/main/bg3/bg3");
+      Animation *moneyArt = this->resource_manager->sharedAnimation("ui/main/backgnd4/backgnd4");
+      Animation *filler = this->resource_manager->sharedAnimation("ui/main/bg3/bg3");
       int mw = 0, mh = 0, fw = 0, fh = 0;
       if (moneyArt) moneyArt->queryTexture(CompassDirection::N,&mw,&mh);
       if (filler) filler->queryTexture(CompassDirection::N,&fw,&fh);
@@ -2208,7 +2222,7 @@ void UiGameScreen::drawDateTime(SDL_Renderer *renderer) {
   }
   if (Features::fastForward) {
     // addition: cover the vacated date lip with the player's native plain bar.
-    Animation *filler = this->resource_manager->getAnimation("ui/main/bg3/bg3");
+    Animation *filler = this->resource_manager->sharedAnimation("ui/main/bg3/bg3");
     int fw = 0, fh = 0;
     if (filler) filler->queryTexture(CompassDirection::N, &fw, &fh);
     if (fw > 0 && fh >= source.h + 5)
@@ -2230,7 +2244,7 @@ void UiGameScreen::drawDateTime(SDL_Renderer *renderer) {
     if (RenderSettings::drawsUiArt()) {
       SDL_Rect face = shown->getLastRect();
       auto *nativeButton = dynamic_cast<UiButton *>(shown);
-      Animation *native = nativeButton ? this->resource_manager->getAnimation(nativeButton->getAnimationPath()) : nullptr;
+      Animation *native = nativeButton ? this->resource_manager->sharedAnimation(nativeButton->getAnimationPath()) : nullptr;
       SDL_Point pointer{this->mouseX,this->mouseY};
       const bool hover = SDL_PointInRect(&pointer,&face) && !SDL_PointInRect(&pointer,&this->speedRect);
       const int key = (shown == play ? 2 : 0) + (hover ? 1 : 0);
@@ -2279,7 +2293,7 @@ void UiGameScreen::drawDateTime(SDL_Renderer *renderer) {
       auto *value = this->hud->getElementById(1015);
       if (meter && value) {
         const std::string valueWidth = ini->get(value->getName(),"dx");
-        Animation *meterArt = this->resource_manager->getAnimation("ui/main/progbck/progbck");
+        Animation *meterArt = this->resource_manager->sharedAnimation("ui/main/progbck/progbck");
         int mw = 0, mh = 0;
         if (meterArt) meterArt->queryTexture(CompassDirection::N,&mw,&mh);
         ini->set(value->getName(),"dx",std::to_string(std::max(1,std::atoi(valueWidth.c_str())-statusShift)));
@@ -2733,6 +2747,7 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
         if (e.panel && e.open && SDL_PointInRect(&in.position,&e.rect)) covered = true;
       if (over && !covered && in.event == InputEvent::LEFT_CLICK) {
         this->speedDown = true;
+        this->speedPressUntil = SDL_GetTicks() + 160;
         this->selectedSpeed = this->selectedSpeed == 1 ? 2 : this->selectedSpeed == 2 ? 5 : 1;
         if (UiButton::clickSound) UiButton::clickSound();
         if (this->onGameSpeed) this->onGameSpeed(this->selectedSpeed);

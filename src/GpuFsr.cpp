@@ -43,6 +43,7 @@ struct Gl {
   PFNGLUNIFORM4FPROC Uniform4f;
   void(APIENTRY *CopyTexSubImage2D)(GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei);
   PFNGLACTIVETEXTUREPROC ActiveTexture;
+  void(APIENTRY *TexParameteri)(GLenum, GLenum, GLint);
 };
 
 static Gl gl;
@@ -101,6 +102,9 @@ static bool loadGl() {
   ok &= load(gl.Uniform2f, "glUniform2f");
   ok &= load(gl.Uniform4f, "glUniform4f");
   ok &= load(gl.CopyTexSubImage2D, "glCopyTexSubImage2D");
+  // (a screen pass that reads between pixels - the graphics effects' FXAA,
+  // blurs: optional, the rest read exact pixels)
+  gl.TexParameteri = reinterpret_cast<decltype(gl.TexParameteri)>(SDL_GL_GetProcAddress("glTexParameteri"));
   // (for mods' shaders: two textures at once - optional, FSR doesn't need it)
   gl.ActiveTexture = reinterpret_cast<PFNGLACTIVETEXTUREPROC>(SDL_GL_GetProcAddress("glActiveTexture"));
   return ok;
@@ -608,7 +612,8 @@ bool artPass(SDL_Renderer *renderer, unsigned prog, SDL_Texture *color, SDL_Text
 static SDL_Texture *g_screen = nullptr;
 static int g_screenW = 0, g_screenH = 0;
 
-bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pair<std::string, float>> &uniforms) {
+bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pair<std::string, float>> &uniforms,
+                bool smooth) {
   if (!g_available || !prog || !renderer)
     return false;
   SDL_Texture *was = SDL_GetRenderTarget(renderer);
@@ -629,11 +634,20 @@ bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pa
   // pixel reads its own place at gl_FragCoord / uSize)
   SDL_GL_BindTexture(g_screen, nullptr, nullptr);
   gl.CopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
+  const bool blend = smooth && gl.TexParameteri;
+  if (blend) {
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  }
   gl.Viewport(0, 0, w, h);
   gl.UseProgram(prog);
   gl.Uniform1i(gl.GetUniformLocation(prog, "uColor"), 0);
   setUniforms(prog, float(w), float(h), uniforms);
   fullQuad();
+  if (blend) {
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  }
   gl.UseProgram(static_cast<GLuint>(program));
   if (blendOn)
     gl.Enable(GL_BLEND);

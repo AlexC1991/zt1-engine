@@ -37,6 +37,13 @@ uint16_t le16(const unsigned char *p) { return p[0] | (p[1] << 8); }
 uint32_t le32(const unsigned char *p) {
   return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
 }
+#ifdef _WIN32
+int seek64(FILE *f, long long at, int from) { return _fseeki64(f, at, from); }
+long long tell64(FILE *f) { return _ftelli64(f); }
+#else
+int seek64(FILE *f, long long at, int from) { return fseeko(f, at, from); }
+long long tell64(FILE *f) { return ftello(f); }
+#endif
 
 // The names in a zip's central directory; false if it can't be read this
 // way (then libzip lists it)
@@ -47,24 +54,27 @@ bool readCentralDirectory(const std::string &path,
     return false;
   bool ok = false;
   std::vector<unsigned char> tail;
-  if (fseek(f, 0, SEEK_END) == 0) {
-    long size = ftell(f);
-    long want = std::min<long>(size, 22 + 65535);
-    tail.resize(static_cast<size_t>(want));
-    if (want >= 22 && fseek(f, size - want, SEEK_SET) == 0 &&
+  // (64-bit offsets: an HD mod's archives can be over 2 GB, past what
+  // long - 32 bits on Windows - holds)
+  if (seek64(f, 0, SEEK_END) == 0) {
+    long long size = tell64(f);
+    long long want = std::min<long long>(size, 22 + 65535);
+    if (want >= 22)
+      tail.resize(static_cast<size_t>(want));
+    if (want >= 22 && seek64(f, size - want, SEEK_SET) == 0 &&
         fread(tail.data(), 1, tail.size(), f) == tail.size()) {
       // End of central directory record, searched from the end
-      for (long i = want - 22; i >= 0; i--) {
+      for (long long i = want - 22; i >= 0; i--) {
         const unsigned char *e = tail.data() + i;
         if (le32(e) != 0x06054b50)
           continue;
         uint16_t count = le16(e + 10);
         uint32_t cdSize = le32(e + 12), cdOffset = le32(e + 16);
         if (count == 0xFFFF || cdOffset == 0xFFFFFFFF ||
-            (long)cdOffset + (long)cdSize > size)
+            (long long)cdOffset + cdSize > size)
           break; // zip64: leave it to libzip
         std::vector<unsigned char> cd(cdSize);
-        if (fseek(f, (long)cdOffset, SEEK_SET) != 0 ||
+        if (seek64(f, cdOffset, SEEK_SET) != 0 ||
             fread(cd.data(), 1, cd.size(), f) != cd.size())
           break;
         size_t at = 0;
@@ -136,6 +146,39 @@ std::vector<std::string> ZtdFile::getFileList(const std::string &ztd_file) {
   if (OpenArchive *archive = listArchive(ztd_file, &error))
     return archive->names;
   return {};
+}
+
+bool ZtdFile::hasFile(const std::string &ztd_file, const std::string &file_name) {
+  std::lock_guard<std::mutex> lock(archivesMutex);
+  int error = 0;
+  OpenArchive *archive = listArchive(ztd_file, &error);
+  return archive && archive->index.count(Utils::string_to_lower(file_name));
+}
+
+void *ZtdFile::tryFileContent(const std::string &ztd_file, const std::string &file_name, int *size) {
+  std::lock_guard<std::mutex> lock(archivesMutex);
+  int error = 0;
+  OpenArchive *archive = openArchive(ztd_file, &error);
+  if (!archive)
+    return nullptr;
+  auto entry = archive->index.find(Utils::string_to_lower(file_name));
+  struct zip_stat info;
+  zip_stat_init(&info);
+  if (entry == archive->index.end() || zip_stat_index(archive->zip, entry->second, 0, &info) != 0)
+    return nullptr;
+  zip_file_t *fd = zip_fopen_index(archive->zip, entry->second, 0);
+  if (!fd)
+    return nullptr;
+  void *content = malloc(info.size + 1);
+  const zip_int64_t got = content ? zip_fread(fd, content, info.size) : -1;
+  zip_fclose(fd);
+  if (got != static_cast<zip_int64_t>(info.size)) {
+    free(content);
+    return nullptr;
+  }
+  if (size)
+    *size = static_cast<int>(info.size);
+  return content;
 }
 
 void * ZtdFile::getFileContent(const std::string &ztd_file, const std::string &file_name, int * size) {

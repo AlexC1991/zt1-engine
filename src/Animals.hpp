@@ -5,6 +5,7 @@
 #include <map>
 #include <random>
 #include <string>
+#include <deque>
 #include <set>
 #include <vector>
 
@@ -117,6 +118,18 @@ public:
     // Getting out (cIsJumper, cIsClimber, cBashStrength, cCrushesFences)
     bool jumper = false, climber = false;
     int bash = 0, crush = 0;
+    // A young one's own numbers: zoo.exe keeps a type for each subtype, the
+    // young's [y/Characteristics/Integers] over the grown one's (a young
+    // T. rex walks at half the pace, can't jump fences, is more attractive)
+    struct Age {
+      float slow = 0, medium = 0, fast = 0;
+      int attractiveness = 0, chaseAnimalChance = 0, bash = 0, testFenceChance = 0;
+      bool jumper = false, climber = false;
+    } young;
+    Age forAge(bool baby) const {
+      return baby ? young
+                  : Age{slow, medium, fast, attractiveness, chaseAnimalChance, bash, testFenceChance, jumper, climber};
+    }
     // Testing a live electric fence (zoo.exe 0x438ebc): a cTestFenceChance
     // in 100 every cZapCheck ticks to try one cTestFenceOffset tiles off; each zap
     // cZapHappinessChange, and it learns: each zap uses up
@@ -156,6 +169,9 @@ public:
     int timeDeath = 5001, deathChance = 100;
     int reproductionChance = 0, reproductionInterval = 0, happyReproduceThreshold = 100,
         offspring = 1, babyToAdult = 0;
+    // cMatingType (1: it waits before taking another mate, and minds losing
+    // one) and cNoMateChange (zoo.exe setDefaults 0x4b659e: -19)
+    int matingType = 0, noMateChange = -19;
     bool smallPoo = false;
     int buildingUseChance = 0;
     // Per subtype (0 m, 1 f, 2 y): animation name -> art path (no .ani)
@@ -214,6 +230,13 @@ public:
     bool sick = false, noFoodSeen = false, sleeping = false;
     int healthCheck = 0, energyCheck = 0, reproductionCheck = 0, starve = 0;
     int life = 5000, ready = 0, grow = 0, notHappyCheck = 0;
+    // Its mate, mother and father (ids, -1: none - zoo.exe ZTAnimal +0x2e8,
+    // +0x2ec, +0x2f0, the debug overlay's Mate, Mother, Father) and the
+    // reproduction checks left before a new mate once it's lost one (+0x348)
+    int mate = -1, mother = -1, father = -1, matePick = 0;
+    // An egg that's been eaten (zoo.exe +0x3a6, set by 0x5a5606): its
+    // broken shell, gone when its hatch countdown (15) runs out
+    bool eaten = false;
     // A shelter or toy it's off to (object id) or in; hidden inside
     int building = -1, buildingCheck = 0;
     // In the water (swimmers: where it wanders), the water and drink checks
@@ -331,6 +354,8 @@ public:
   bool canDrop(int id, float x, float y, const WorldMap &map, const Fences &fences) const;
   void drop(int id, float x, float y, const Fences &fences);
 
+  // ours: one animation of a species in the zoo loaded ahead (true: one was)
+  bool warmOne();
   void update(float seconds, double simSeconds, const WorldMap &map, const Fences &fences);
   void setItems(ZooItems *items) { this->items = items; }
   void setIndex(WorldIndex *index) { this->index = index; }
@@ -478,6 +503,7 @@ public:
   bool previewFemale = false;
   float previewX = 0, previewY = 0;
   Fences::Fit previewFit = Fences::Fit::Ok;
+  bool previewPoor = false; // (it fits, but costs more than the cash: red)
 
   // Guests, for loose predators (zoo.exe 0x43954c): the nearest man guest
   // within a radius not yet attacked (-1: none); where one is; caught
@@ -573,6 +599,12 @@ private:
   std::map<int, int> counts; // per type: how many were ever adopted
   int nextId = 1;
   mutable std::map<std::string, Animation *> artCache;
+  // ours: a species' animations loaded ahead, one at a time in the frame's
+  // spare time (warmOne), once one of it is in the zoo - loaded when an animal
+  // first did something, each was a 3-40 ms hitch
+  std::deque<std::string> warmQueue;
+  std::set<std::string> warmQueued;
+  std::vector<char> typeWarmed;
   mutable std::map<const Animation *, Animation *> underCache; // (an art's "under" layer, or none)
   mutable std::map<const Animation *, Animation *> shadowCache; // (an art's shadow, or none)
   Animation *selectArrow = nullptr;
@@ -582,7 +614,12 @@ private:
   std::vector<Fences::Edge> breaks;
   std::vector<int> kills; // caught prey to go (next update)
   std::vector<Notice> notices;                 // message bar
-  std::vector<std::pair<int, int>> births;     // mother, kind
+  struct Birth {
+    int mother, father, kind;
+  };
+  std::vector<Birth> births;
+  bool mateLost(Member &m);
+  Member *findMate(Member &m);
   Animation *crateArt = nullptr;
   bool breakOut(Member &m, const WorldMap &map, const Fences &fences);
   float total(const Rating &r) const {

@@ -28,6 +28,7 @@ struct Definition {
   std::vector<Source> sources;
   bool animated=false;
   bool nightFixtures=false; // addition: native active lamps also run while empty at night
+  bool lightMap=false; // addition: a mod item's own light maps (modProfile)
 };
 void appendCatalogueDefinitions(std::vector<Definition> &);
 void appendWaterDefinitions(std::vector<Definition> &);
@@ -44,6 +45,11 @@ const std::vector<Definition> &all();
 // an unknown item has no inferred lights or stretched-sprite shadow.
 const Definition *find(const std::string &item);
 const Definition *profile(int id);
+// addition: a mod item's own night lights, drawn in the Lab (Mods > the Night
+// light layer): its glow from light-map PNGs beside its art, <art folder>/
+// light/<direction>_<frame>.png (the ground point at the picture's middle),
+// and the lights it casts. The item's file asks for it: [lighting] lightmap = 1
+int modProfile(const std::string &file,std::vector<Source> sources);
 int viewIndex(int compassDirection);
 bool inside(const Region &,float x,float y);
 

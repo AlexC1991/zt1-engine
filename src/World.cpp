@@ -47,13 +47,15 @@ struct Scope {
 void end(){
   if(!active || !frameStart)return;
   const double elapsed=ms(frameStart);
-  if(elapsed>(std::getenv("ZT_SLOW_MS")?std::atof(std::getenv("ZT_SLOW_MS")):33.333) && slowLogged++<(std::getenv("ZT_SLOW_MS")?60:8)){std::ostringstream row;row<<"slow="<<elapsed<<"ms";for(const auto &[name,value]:frameCosts)if(value>0.2)row<<" "<<name<<"="<<value<<"ms";SDL_Log("[FrameProfile] %s",row.str().c_str());}
+  // (ZT_FRAME_PROFILE_FRAMES: how many frames, and slow ones logged, for a long look)
+  static const int span=std::getenv("ZT_FRAME_PROFILE_FRAMES")?std::max(240,std::atoi(std::getenv("ZT_FRAME_PROFILE_FRAMES"))):240;
+  if(elapsed>33.333 && slowLogged++<(span>240?span:8)){std::ostringstream row;row<<"slow="<<elapsed<<"ms";for(const auto &[name,value]:frameCosts)if(value>0.2)row<<" "<<name<<"="<<value<<"ms";SDL_Log("[FrameProfile] %s",row.str().c_str());}
   frames.push_back(elapsed);
-  if(frames.size()<240)return;
+  if(frames.size()<size_t(span))return;
   active=false;std::sort(frames.begin(),frames.end());
   double total=0;for(double value:frames)total+=value;
   SDL_Log("[FrameProfile] frames=%zu mean=%.3fms median=%.3fms p95=%.3fms p99=%.3fms observed=%.1ffps",
-    frames.size(),total/frames.size(),(frames[119]+frames[120])*0.5,frames[227],frames[237],1000.0*frames.size()/total);
+    frames.size(),total/frames.size(),(frames[frames.size()/2-1]+frames[frames.size()/2])*0.5,frames[frames.size()*95/100],frames[frames.size()*99/100],1000.0*frames.size()/total);
   SDL_Log("[FrameProfile] max=%.3fms over33ms=%zu over50ms=%zu cameraSamples=%d movedFrames=%d cameraTravel=%.1fpx pausedFrames=%d",
     frames.back(),std::count_if(frames.begin(),frames.end(),[](double t){return t>33.333;}),
     std::count_if(frames.begin(),frames.end(),[](double t){return t>50;}),cameraSamples,cameraMoves,cameraTravel,pausedFrames);
@@ -87,6 +89,7 @@ World::World(ResourceManager *resourceManager)
   SpriteDatabase::get().loadDefinitions();
 
   SpriteManager::get().init(resourceManager);
+  Animation::setFrameFreedHook(this, [this](SDL_Surface *s) { this->lighting.forgetSurface(s); });
 
   SDL_Log("[World] World systems initialized");
 }
@@ -94,6 +97,7 @@ World::World(ResourceManager *resourceManager)
 // (its looping sounds stopped: another zoo loaded from a zoo kept the old
 // one's ambience and buildings' loops playing)
 World::~World() {
+  Animation::setFrameFreedHook(this, {});
   Sound::get().stop(this->ambienceChannel);
   for (const auto &[i, c] : this->buildingLoops)
     Sound::get().stop(c);
@@ -736,6 +740,7 @@ int World::frameTankAt(float x, float y) const {
 
 void World::draw(SDL_Renderer *renderer) {
   FrameProfile::Scope profile("world draw");
+  Animation::trimZoomedIn(); // (before anything draws: Animation.hpp)
   {
     // (as Fences::exhibitAt: the first named exhibit holding the tile; a
     // tank's id if it is one)
@@ -873,7 +878,7 @@ void World::draw(SDL_Renderer *renderer) {
         const float z=floating?level:tile?static_cast<float>(tile->cornerHeight[0]):0;
         float x,y,d;this->worldRenderer.worldToScreenF(this->ghostX,this->ghostY,z,x,y,d);
         const float angle=this->ghostFacing*3.14159265f/4.0f;
-        const SDL_Color tint=this->ghostFit==Fences::Fit::Ok?SDL_Color{0,255,0,255}:SDL_Color{255,60,60,255};
+        const SDL_Color tint=this->ghostFit==Fences::Fit::Ok && !this->ghostPoor?SDL_Color{0,255,0,255}:SDL_Color{255,60,60,255};
         Animation *art=this->objectPreview.underIdle && !surface?this->objectPreview.underIdle:this->objectPreview.art;
         art->drawAnchored(r,x,y,this->worldRenderer.screenSide(std::sin(angle),-std::cos(angle)),&tint,0);
       }
@@ -884,10 +889,20 @@ void World::draw(SDL_Renderer *renderer) {
   fences.redrawGround = [this](SDL_Renderer *r, const std::vector<std::pair<int, int>> &tiles) {
     this->worldRenderer.renderTerrainTiles(r, this->worldMap, SpriteDatabase::get(), tiles);
     // (the bulldozer's path tile among them: red again, not covered)
-    if (std::binary_search(tiles.begin(), tiles.end(), this->bulldozePath))
+    if (std::binary_search(tiles.begin(), tiles.end(), this->bulldozePath) || !this->dragPaths.empty())
       this->drawBulldozePath(r);
   };
   {FrameProfile::Scope profile("fence collect");fences.collect(worldRenderer, worldMap, fenceArt);}
+  // (the bulldozer's drag: its fences red)
+  if (bulldozer && bulldozeDrag.dragging && !dragFences.empty()) {
+    std::vector<Fences::Drawable> only;
+    for (const Fences::Edge &e : dragFences)
+      fences.preview.push_back({e, false});
+    fences.deleting = true;
+    fences.collect(worldRenderer, worldMap, only);
+    fences.preview.clear();
+    fences.deleting = false;
+  }
   // The bulldozer's piece glows red; the gate tool's green
   if ((bulldozer || gateTool) && highlight.x >= 0) {
     std::vector<Fences::Drawable> only;
@@ -934,7 +949,7 @@ void World::draw(SDL_Renderer *renderer) {
       float sx, sy, depth;
       worldRenderer.worldToScreenF(ghostX, ghostY, h, sx, sy, depth);
       float angle = ghostFacing * 3.14159265f / 4.0f;
-      SDL_Color tint = ghostFit == Fences::Fit::Ok ? SDL_Color{0, 255, 0, 255} : SDL_Color{255, 60, 60, 255};
+      SDL_Color tint = ghostFit == Fences::Fit::Ok && !ghostPoor ? SDL_Color{0, 255, 0, 255} : SDL_Color{255, 60, 60, 255};
       fenceArt.push_back({depth, sx, sy, a, worldRenderer.screenSide(std::sin(angle), -std::cos(angle)), tint, true});
     }
   // (big animals' strips on the right side of the fences in their columns)
@@ -1081,8 +1096,11 @@ void World::drawPathPreview(SDL_Renderer *renderer, const std::set<std::pair<int
 }
 
 void World::drawBulldozePath(SDL_Renderer *renderer) {
-  if (this->bulldozer && this->bulldozePath.first >= 0) {
-    auto [x, y] = this->bulldozePath;
+  std::vector<std::pair<int, int>> tiles = this->dragPaths;
+  if (this->bulldozePath.first >= 0)
+    tiles.push_back(this->bulldozePath);
+  for (const auto &[x, y] : tiles)
+  if (this->bulldozer) {
     if (const MapTile *t = this->worldMap.getTile(x, y)) {
       const float cx[4] = {0, 1, 1, 0}, cy[4] = {0, 0, 1, 1};
       const int ci[4] = {CORNER_X0Y0, CORNER_X1Y0, CORNER_X1Y1, CORNER_X0Y1};
@@ -1101,6 +1119,31 @@ void World::drawBulldozePath(SDL_Renderer *renderer) {
 }
 
 void World::drawToolOverlay(SDL_Renderer *renderer) {
+  // The bulldozer's drag: its rectangle's tiles outlined green, its paths
+  // red (watched in the original, 2026-11-06)
+  if (this->bulldozer && this->bulldozeDrag.dragging) {
+    this->drawBulldozePath(renderer);
+    const int x0 = std::min(this->bulldozeDrag.tx0, this->bulldozeDrag.tx1),
+              x1 = std::max(this->bulldozeDrag.tx0, this->bulldozeDrag.tx1),
+              y0 = std::min(this->bulldozeDrag.ty0, this->bulldozeDrag.ty1),
+              y1 = std::max(this->bulldozeDrag.ty0, this->bulldozeDrag.ty1);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 60, 230, 120, 230);
+    const float cx[5] = {0, 1, 1, 0, 0}, cy[5] = {0, 0, 1, 1, 0};
+    const int ci[5] = {CORNER_X0Y0, CORNER_X1Y0, CORNER_X1Y1, CORNER_X0Y1, CORNER_X0Y0};
+    for (int ty = y0; ty <= y1; ty++)
+      for (int tx = x0; tx <= x1; tx++)
+        if (const MapTile *t = this->worldMap.getTile(tx, ty)) {
+          SDL_FPoint pts[5];
+          for (int i = 0; i < 5; i++) {
+            float sx, sy, d;
+            this->worldRenderer.worldToScreenF(tx + cx[i], ty + cy[i], static_cast<float>(t->cornerHeight[ci[i]]), sx, sy, d);
+            pts[i] = {sx, sy};
+          }
+          SDL_RenderDrawLinesF(renderer, pts, 5);
+        }
+    return;
+  }
   // The bulldozer's path tile: red (measured from the original)
   if (this->bulldozer && this->bulldozePath.first >= 0) {
     this->drawBulldozePath(renderer);
@@ -2231,7 +2274,10 @@ void World::collectWalkways(std::vector<Fences::Drawable> &out) {
   static const SDL_Color bulldozeRed{255, 70, 60, 255};
   for (const auto &kv : this->walkways.all())
     add(kv.first.first, kv.first.second, kv.second.h, kv.second.type,
-        this->bulldozer && kv.first == this->bulldozeDeck ? &bulldozeRed : nullptr);
+        this->bulldozer && (kv.first == this->bulldozeDeck ||
+                            std::find(this->dragDecks.begin(), this->dragDecks.end(), kv.first) != this->dragDecks.end())
+            ? &bulldozeRed
+            : nullptr);
   // The drag's decks, tinted
   if (this->line.active || this->smartPlan) {
     static const SDL_Color green{120, 255, 120, 230}, red{255, 90, 90, 230};
@@ -2980,16 +3026,45 @@ void World::mouseMove(int x, int y) {
     float unit = std::max(1.0f, (y0 - y1) * zoom); // (a step: a height unit)
     int want = static_cast<int>((this->wallDrag.pressY - y) / unit);
     const int id = this->wallDrag.tank;
-    while (this->wallDrag.steps < want && this->fences.canAdjustWall(id, 1)) {
+    // (measured in the original, 2026-11-07: the walls go a step further
+    // only while the whole drag's price is within the cash - $764 and a $627
+    // step: one step however far the mouse goes; $100: none - and letting go
+    // charges that price, #72)
+    const double step = this->fences.wallStepCost(id);
+    auto affords = [&](int steps) { return this->canAfford(static_cast<int>(std::lround(std::abs(steps) * step))); };
+    while (this->wallDrag.steps < want && this->fences.canAdjustWall(id, 1) &&
+           (this->wallDrag.steps < 0 || affords(this->wallDrag.steps + 1))) {
       this->fences.adjustWall(id, 1);
       this->wallDrag.steps++;
     }
-    while (this->wallDrag.steps > want && this->fences.canAdjustWall(id, -1)) {
+    while (this->wallDrag.steps > want && this->fences.canAdjustWall(id, -1) &&
+           (this->wallDrag.steps > 0 || affords(this->wallDrag.steps - 1))) {
       this->fences.adjustWall(id, -1);
       this->wallDrag.steps--;
     }
     this->hoverPrice = this->wallDragCost();
     return;
+  }
+  if (this->bulldozer && this->bulldozeDrag.pressed) {
+    // (moved more than 16 pixels from the press: a drag - zoo.exe 0x4ec0b4)
+    if (!this->bulldozeDrag.dragging &&
+        (std::abs(x - this->bulldozeDrag.pressX) > 16 || std::abs(y - this->bulldozeDrag.pressY) > 16) &&
+        this->bulldozeDrag.onMap)
+      this->bulldozeDrag.dragging = true;
+    if (this->bulldozeDrag.dragging) {
+      float wx, wy;
+      if (this->pick(x, y, wx, wy)) {
+        this->bulldozeDrag.tx1 = static_cast<int>(std::floor(wx));
+        this->bulldozeDrag.ty1 = static_cast<int>(std::floor(wy));
+      }
+      this->highlight = {false, -1, -1};
+      this->bulldozeDeck = this->bulldozePath = {-1, -1};
+      this->fences.highlightFilter = -1;
+      this->placedObjects.highlight = -1;
+      this->bulldozeTip.clear();
+      this->gatherBulldozeRect();
+      return;
+    }
   }
   if (this->bulldozer) {
     // What it would take away, drawn red, with what would come back for it
@@ -3205,6 +3280,11 @@ void World::mouseMove(int x, int y) {
     this->objectGhost = true;
     this->ghostFit = this->objectFit(this->objectTool, wx, wy, this->ghostFacing);
     this->hoverPrice = this->ghostFit == Fences::Fit::Ok ? this->objectCost : 0;
+    // zoo.exe 0x5ce19f: an item that costs more than the cash (canAfford
+    // 0x4fb08c) has its placement marked not possible - its preview red, its
+    // price still shown - and a click on it is refused as any other, with no
+    // insufficient-funds message (#71)
+    this->ghostPoor = this->ghostFit == Fences::Fit::Ok && !this->canAfford(this->objectCost);
     return;
   }
   // An animal picked up follows the cursor
@@ -3239,6 +3319,9 @@ void World::mouseMove(int x, int y) {
     this->animals.previewX = wx;
     this->animals.previewY = wy;
     this->animals.previewFit = this->animals.canPlace(this->animalTool, wx, wy, this->worldMap, this->fences);
+    // (zoo.exe 0x5ce19f: more than the cash, red - #71)
+    this->animals.previewPoor =
+        this->animals.previewFit == Fences::Fit::Ok && !this->canAfford(this->animals.types()[this->animalTool].cost);
     this->hoverPrice = this->animals.previewFit == Fences::Fit::Ok
                            ? this->animals.types()[this->animalTool].cost
                            : 0;
@@ -3256,6 +3339,9 @@ void World::mouseMove(int x, int y) {
     this->staff.previewX = point.first;
     this->staff.previewY = point.second;
     this->staff.previewFit = this->staff.canPlaceType(this->staffTool, wx, wy, this->worldMap, this->fences);
+    // (zoo.exe 0x5ce19f: more than the cash, red - #71)
+    this->staff.previewPoor =
+        this->staff.previewFit == Fences::Fit::Ok && !this->canAfford(this->staff.types()[this->staffTool].salary);
     // "-$1000" where one can go (the first month's pay), "$0" where not
     this->hoverPrice = this->staff.previewFit == Fences::Fit::Ok
                            ? this->staff.types()[this->staffTool].salary
@@ -3437,21 +3523,168 @@ int World::fencePreviewPrice() const {
   return sum;
 }
 
-World::ToolResult World::mouseDown(int x, int y) {
-  ZT_FN("", "The mouse pressed on the map");
+// ours, as the original's bulldozeRect (zoo.exe 0x5092f4): every tile in the
+// rectangle, inside the zoo; on each its path, its walkway deck, the
+// fence pieces along its edges (not the zoo's own walls, not a tank's) and
+// the scenery on it - not buildings among the structures (its [Member]),
+// as the original leaves them - lit red, the money back for them all shown
+void World::gatherBulldozeRect() {
+  this->dragPaths.clear();
+  this->dragDecks.clear();
+  this->dragObjects.clear();
+  this->dragFences.clear();
+  auto item = [](const std::string &file) -> const CatalogItem * {
+    for (const CatalogItem &it : ItemCatalog::get().all())
+      if (it.file == file)
+        return &it;
+    return nullptr;
+  };
+  const int x0 = std::min(this->bulldozeDrag.tx0, this->bulldozeDrag.tx1),
+            x1 = std::max(this->bulldozeDrag.tx0, this->bulldozeDrag.tx1),
+            y0 = std::min(this->bulldozeDrag.ty0, this->bulldozeDrag.ty1),
+            y1 = std::max(this->bulldozeDrag.ty0, this->bulldozeDrag.ty1);
+  int price = 0;
+  for (int ty = y0; ty <= y1; ty++)
+    for (int tx = x0; tx <= x1; tx++) {
+      if (!this->worldMap.getTile(tx, ty) || !this->fences.insideZoo(tx, ty))
+        continue;
+      if (this->worldMap.isPath(tx, ty)) {
+        this->dragPaths.push_back({tx, ty});
+        if (const CatalogItem *it =
+                item("paths/" + this->worldMap.getPathTypes()[this->worldMap.getPathType(tx, ty)] + ".ai"))
+          price += static_cast<int>(std::lround(it->cost * 0.8));
+      }
+      if (this->walkways.at(tx, ty)) {
+        this->dragDecks.push_back({tx, ty});
+        if (const CatalogItem *it = item("paths/" + this->walkways.at(tx, ty)->type + ".ai"))
+          price += static_cast<int>(std::lround(it->cost * 2 * 0.8));
+      }
+      for (const Fences::Edge &e : {Fences::Edge{true, tx, ty}, Fences::Edge{true, tx, ty + 1}, Fences::Edge{false, tx, ty},
+                                    Fences::Edge{false, tx + 1, ty}}) {
+        const Fences::Piece *p = this->fences.at(e);
+        if (!p || p->tank >= 0 || this->fences.types()[p->type].zooWall)
+          continue;
+        bool known = false;
+        for (const Fences::Edge &k : this->dragFences)
+          known = known || (k.alongX == e.alongX && k.x == e.x && k.y == e.y);
+        if (known)
+          continue;
+        this->dragFences.push_back(e);
+        price += this->fences.refundOf(e);
+      }
+    }
+  const auto &objects = this->placedObjects.objects();
+  for (size_t i = 0; i < objects.size(); i++) {
+    const int tx = static_cast<int>(std::floor(objects[i].x)), ty = static_cast<int>(std::floor(objects[i].y));
+    if (tx < x0 || tx > x1 || ty < y0 || ty > y1 || !this->fences.insideZoo(tx, ty))
+      continue;
+    const CatalogItem *it = item(PlacedObjects::fileOf(objects[i]));
+    if (it && it->members.count("structures"))
+      continue; // (a building: left as it is, as the original)
+    this->dragObjects.push_back(static_cast<int>(i));
+    if (it)
+      price += static_cast<int>(std::lround(it->cost * 0.8));
+  }
+  this->placedObjects.highlights = this->dragObjects;
+  this->hoverPrice = price;
+}
+
+// The drag let go: the rectangle's paths, decks, scenery and fences taken,
+// each with its money back - but the walls that would let an exhibit's
+// animals out, which wait on the original's question (string 157): yes,
+// they go too; no, they stay (watched in the original, 2026-11-06)
+World::ToolResult World::bulldozeRectRelease() {
+  ToolResult r;
+  auto item = [](const std::string &file) -> const CatalogItem * {
+    for (const CatalogItem &it : ItemCatalog::get().all())
+      if (it.file == file)
+        return &it;
+    return nullptr;
+  };
+  for (const auto &[tx, ty] : this->dragPaths) {
+    if (!this->worldMap.isPath(tx, ty))
+      continue;
+    int price = 0;
+    if (const CatalogItem *it = item("paths/" + this->worldMap.getPathTypes()[this->worldMap.getPathType(tx, ty)] + ".ai"))
+      price = it->cost;
+    UndoStep u{UndoStep::Kind::RemovedPath};
+    u.x = tx;
+    u.y = ty;
+    u.pathType = this->pathTypeAt(tx, ty);
+    this->worldMap.setPath(tx, ty, "");
+    u.money = static_cast<int>(std::lround(price * 0.8));
+    r.refund += u.money;
+    this->recordUndo(u);
+  }
+  for (const auto &[tx, ty] : this->dragDecks)
+    if (this->walkways.at(tx, ty)) {
+      int price = 0;
+      if (const CatalogItem *it = item("paths/" + this->walkways.at(tx, ty)->type + ".ai"))
+        price = it->cost;
+      this->walkways.remove(tx, ty);
+      r.refund += static_cast<int>(std::lround(price * 2 * 0.8));
+    }
+  // (scenery: from the end of the list, so the others' places hold)
+  std::vector<int> objects = this->dragObjects;
+  std::sort(objects.rbegin(), objects.rend());
+  for (int o : objects) {
+    if (o < 0 || o >= static_cast<int>(this->placedObjects.objects().size()))
+      continue;
+    const PlacedObjects::Object gone = this->placedObjects.objects()[o];
+    const std::string file = PlacedObjects::fileOf(gone);
+    int refund = 0;
+    if (const CatalogItem *it = item(file))
+      refund = static_cast<int>(std::lround(it->cost * 0.8));
+    UndoStep u{UndoStep::Kind::RemovedObject};
+    u.object = gone;
+    u.money = refund;
+    this->recordUndo(u);
+    const int ex = this->fences.exhibitAt(static_cast<int>(std::floor(gone.x)), static_cast<int>(std::floor(gone.y)));
+    this->animals.snapshot(ex, this->worldMap, this->fences);
+    this->placedObjects.remove(o);
+    this->animals.markDirty();
+    this->animals.react(ex, Animals::Change::Object, file, -1, true, this->worldMap, this->fences);
+    r.refund += refund;
+  }
+  // (fences: an exhibit's wall to the open zoo, or between two, waits on
+  // the question; the rest go now)
+  for (const Fences::Edge &e : this->dragFences) {
+    const Fences::Piece *pc = this->fences.at(e);
+    if (!pc)
+      continue;
+    const int ex = e.alongX ? this->fences.exhibitAt(e.x, e.y - 1) : this->fences.exhibitAt(e.x - 1, e.y);
+    const int other = this->fences.exhibitAt(e.x, e.y);
+    const bool habitat = !this->fences.types()[pc->type].zooWall;
+    if (habitat && ex != other) {
+      this->pendingFences.push_back(e);
+      continue;
+    }
+    UndoStep u{UndoStep::Kind::RemovedFence};
+    u.edge = e;
+    u.fenceType = !pc->gate && pc->tank < 0 ? pc->type : -1;
+    u.money = this->removeFence(e);
+    r.refund += u.money;
+    if (u.fenceType >= 0)
+      this->recordUndo(u);
+  }
+  if (!this->pendingFences.empty())
+    r.askEscape = true;
+  this->dragPaths.clear();
+  this->dragDecks.clear();
+  this->dragObjects.clear();
+  this->dragFences.clear();
+  this->placedObjects.highlights.clear();
+  this->bulldozeDrag = {};
+  this->reindex();
+  this->hoverPrice = -1;
+  return r;
+}
+
+// The bulldozer's click (let go where it was pressed): what's under it taken
+World::ToolResult World::bulldozeClick(int x, int y) {
   ToolResult r;
   float wx = 0, wy = 0;
   bool onMap = this->pick(x, y, wx, wy);
-  this->undoFresh = true;
-  ZT_STEP("", "Where on the ground", {"x", wx}, {"y", wy}, {"on the map", onMap ? 1.0 : 0.0},
-          {"tool", this->bulldozer             ? "bulldozer"
-                   : !this->objectTool.empty() ? this->objectTool
-                   : this->animalTool >= 0     ? "animal"
-                   : this->staffTool >= 0      ? "staff"
-                   : this->fenceTool >= 0      ? "fence"
-                   : !this->pathTool.empty()   ? "path"
-                                               : "none"});
-  if (this->bulldozer) {
     this->mouseMove(x,y); // Clicking consumes exactly the target highlighted at this position.
     {
       int f = this->fences.highlightFilter;
@@ -3568,6 +3801,36 @@ World::ToolResult World::mouseDown(int x, int y) {
         this->recordUndo(u);
     }
     this->hoverPrice = -1;
+    return r;
+  }
+
+World::ToolResult World::mouseDown(int x, int y) {
+  ZT_FN("", "The mouse pressed on the map");
+  ToolResult r;
+  float wx = 0, wy = 0;
+  bool onMap = this->pick(x, y, wx, wy);
+  this->undoFresh = true;
+  ZT_STEP("", "Where on the ground", {"x", wx}, {"y", wy}, {"on the map", onMap ? 1.0 : 0.0},
+          {"tool", this->bulldozer             ? "bulldozer"
+                   : !this->objectTool.empty() ? this->objectTool
+                   : this->animalTool >= 0     ? "animal"
+                   : this->staffTool >= 0      ? "staff"
+                   : this->fenceTool >= 0      ? "fence"
+                   : !this->pathTool.empty()   ? "path"
+                                               : "none"});
+  if (this->bulldozer) {
+    // (as the original: a press only marks where - what a click takes, or
+    // the rectangle a drag makes, is taken on letting go: bulldozeRect
+    // 0x5092f4, watched in the original 2026-11-06)
+    this->mouseMove(x, y);
+    this->bulldozeDrag = {};
+    this->bulldozeDrag.pressed = true;
+    this->bulldozeDrag.pressX = x;
+    this->bulldozeDrag.pressY = y;
+    this->bulldozeDrag.onMap = onMap;
+    this->bulldozeDrag.tx0 = this->bulldozeDrag.tx1 = static_cast<int>(std::floor(wx));
+    this->bulldozeDrag.ty0 = this->bulldozeDrag.ty1 = static_cast<int>(std::floor(wy));
+    this->pendingFences.clear();
     return r;
   }
   // Putting a picked-up animal down: in an exhibit (else still held, and
@@ -3707,8 +3970,7 @@ World::ToolResult World::mouseDown(int x, int y) {
             {"fit", this->ghostFit == Fences::Fit::Ok ? "yes" : this->ghostFit == Fences::Fit::InTheWay ? "something's in the way" : "no"},
             {"message", this->fitMessage}, {"exhibit", ex});
     if (this->objectGhost && this->ghostFit == Fences::Fit::Ok && !this->canAfford(this->objectCost)) {
-      Sound::get().play("sounds/noplace");
-      r.messageId = kInsufficientFunds;
+      Sound::get().play("sounds/noplace"); // (red: refused, no message - zoo.exe 0x5ce19f, #71)
     } else if (this->objectGhost && this->ghostFit == Fences::Fit::Ok &&
         this->placedObjects.add(this->objectTool, this->ghostX, this->ghostY, this->ghostFacing)) {
       r.cost = this->objectCost;
@@ -3747,8 +4009,7 @@ World::ToolResult World::mouseDown(int x, int y) {
     int ex = this->fences.exhibitAt(static_cast<int>(std::floor(wx)), static_cast<int>(std::floor(wy)));
     bool fits = this->animals.canPlace(this->animalTool, wx, wy, this->worldMap, this->fences) == Fences::Fit::Ok;
     if (fits && !this->canAfford(this->animals.types()[this->animalTool].cost)) {
-      Sound::get().play("sounds/noplace");
-      r.messageId = kInsufficientFunds;
+      Sound::get().play("sounds/noplace"); // (red: refused, no message - zoo.exe 0x5ce19f, #71)
       this->mouseMove(x, y);
       return r;
     }
@@ -3787,8 +4048,7 @@ World::ToolResult World::mouseDown(int x, int y) {
     if (!onMap)
       return r;
     if (!this->canAfford(this->staff.types()[this->staffTool].salary)) {
-      Sound::get().play("sounds/noplace");
-      r.messageId = kInsufficientFunds;
+      Sound::get().play("sounds/noplace"); // (red: refused, no message - zoo.exe 0x5ce19f, #71)
       return r;
     }
     int id = this->staff.hire(this->staffTool, wx, wy, this->worldMap, this->fences);
@@ -3887,10 +4147,7 @@ World::ToolResult World::mouseDown(int x, int y) {
           r.exhibit = this->fences.exhibitOf(e);
         } else if (p->tank >= 0 && this->fences.pieceBelowTop <= 20.0f) {
           // (from its top only, where the up/down cursor shows - 0x4fb5ab)
-          this->wallDrag.tank = p->tank;
-          this->wallDrag.pressY = y;
-          this->wallDrag.steps = 0;
-          this->hoverPrice = 0;
+          this->beginWallDrag(p->tank, y);
         }
       }
     return r;
@@ -3932,6 +4189,15 @@ World::ToolResult World::mouseUp(int x, int y) {
     this->wallDrag = {};
     this->hoverPrice = -1;
     return r;
+  }
+  if (this->bulldozer && this->bulldozeDrag.pressed) {
+    const bool dragged = this->bulldozeDrag.dragging;
+    this->mouseMove(x, y);
+    this->bulldozeDrag.pressed = false;
+    if (dragged)
+      return this->bulldozeRectRelease();
+    this->bulldozeDrag = {};
+    return this->bulldozeClick(x, y);
   }
   if (this->line.active) {
     if (!this->line.pressed)
@@ -4150,6 +4416,23 @@ int World::removeFence(const Fences::Edge &e) {
 }
 
 int World::confirmFenceRemoval() {
+  // (a drag's walls: all of them, the question asked once)
+  if (!this->pendingFences.empty()) {
+    int refund = 0;
+    for (const Fences::Edge &e : this->pendingFences)
+      if (const Fences::Piece *pc = this->fences.at(e)) {
+        UndoStep u{UndoStep::Kind::RemovedFence};
+        u.edge = e;
+        u.fenceType = !pc->gate && pc->tank < 0 ? pc->type : -1;
+        u.money = this->removeFence(e);
+        refund += u.money;
+        if (u.fenceType >= 0)
+          this->recordUndo(u);
+      }
+    this->pendingFences.clear();
+    this->reindex();
+    return refund;
+  }
   if (this->pendingFence.x < 0)
     return 0;
   Fences::Edge e = this->pendingFence;

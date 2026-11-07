@@ -167,9 +167,16 @@ void ZooItems::collect(const WorldRenderer &view, const WorldMap &map,
     float h = t ? static_cast<float>(t->height) : 0;
     float sx, sy, depth;
     view.worldToScreenF(i.x, i.y, h, sx, sy, depth);
-    // ours: single-view native litter has no southern frame; keep it visible
-    // using its provided northern frame instead of submitting an empty view.
-    const auto side=a->lightingFrame(CompassDirection::SE,0).surface?CompassDirection::SE:CompassDirection::NE;
+    // ours: art with a single view (no southern frame) kept visible with the
+    // view it has, instead of submitting an empty one.
+    auto side=a->lightingFrame(CompassDirection::SE,0).surface?CompassDirection::SE:CompassDirection::NE;
+    if (i.kind == Kind::Litter) {
+      // (each pile faces its own way: the original takes the dropping guest's
+      // facing - 0x52da40, its +0x11c & 15 - which isn't kept here; the
+      // litter's own number stands in for it, the same after a save)
+      const float angle = static_cast<float>(i.id % 4) * 1.5707963f;
+      side = view.screenSide(std::sin(angle), -std::cos(angle));
+    }
     Fences::Drawable d{depth - 0.01f, sx, sy, a, side, white, false};
     // (its frames play, as the original's do: each item from its own start)
     uint32_t ms = a->frameTimeMs() ? a->frameTimeMs() : 100;
@@ -210,7 +217,12 @@ Animation *ZooItems::artOf(const Item &i)const {
       a = this->art("objects/poo/idle/idle");
       break;
     case Kind::Litter:
-      a = this->art("items/trash/trash");
+      // A pile of litter is the object objects/other/trash (zoo.exe 0x52cfbe,
+      // made where the guest stood by guestDropLitter 0x52da40):
+      // scenery/other/trash.ai, its idle art in four views. items/trash is
+      // the guest's inventory icon, a paper on a dark square - drawn on the
+      // ground it showed as a small box
+      a = this->art("objects/trash/idle/idle");
       break;
     }
   return a;

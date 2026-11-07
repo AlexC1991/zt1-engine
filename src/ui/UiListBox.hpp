@@ -25,6 +25,9 @@ struct ListBoxItem {
     std::vector<std::string> cells;
     std::vector<SDL_Color> cellColors;
     Animation* iconArt = nullptr; // an icon drawn from art (a guest's, in its colours)
+    // ours: text kept whole at the row's right edge (a size); the row's own
+    // text is shortened with "..." to leave room for it
+    std::string right;
 };
 
 class Animation;
@@ -53,6 +56,11 @@ public:
     // An item's own text colour (the Message List's red news)
     void setItemColor(int index, SDL_Color color) {
         if (index >= 0 && index < (int)items.size()) { items[index].hasColor = true; items[index].color = color; }
+    }
+
+    // ours: an item's text at the right edge, kept whole (the Mod Menu's sizes)
+    void setItemRight(int index, const std::string& text) {
+        if (index >= 0 && index < (int)items.size()) items[index].right = text;
     }
 
     int getSelectedIndex() const { return selected_index; }

@@ -103,7 +103,7 @@ int runLightingAssetAudit(World &world,ResourceManager *rm,SDL_Renderer *rendere
   save(t.file,"fence",t.art[0][0]);if(t.hasGate)save(t.file,"gate",t.art[1][0]);save(t.file,"decayed",t.det[0]);save(t.file,"broken",t.broke[0]);
   if(t.tank){save(t.file,"tank_top",t.tankArt[1][2]);save(t.file,"platform",t.platform);save(t.file,"ladder",t.ladder);save(t.file,"portal",t.portal);}
  }
- for(const char *path:{"objects/poo/idle/idle","items/trash/trash","objects/dustcld/idle/idle","objects/watcloud/idle/idle"})
+ for(const char *path:{"objects/poo/idle/idle","objects/trash/idle/idle","objects/dustcld/idle/idle","objects/watcloud/idle/idle"})
   if(rm->hasResource(std::string(path)+".ani")){meta<<cell(path)<<','<<cell(path)<<",runtime_effect,,,,,,0\n";save(path,"effect",rm->getAnimation(path));}
  auto &sprites=SpriteDatabase::get();
  for(int n=0;n<32;++n) {

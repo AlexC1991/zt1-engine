@@ -588,7 +588,7 @@ std::string runShowManagementChecks(World &world,ResourceManager *rm) {
       const size_t walls=f.pieces().size();world.setBulldozer(true);world.mouseMove(wx,wy);
       pickedAll &= objects.highlight==objects.indexOf(star);
       // Preview on all sides; delete only on the final side.
-      if(rotation==3){world.mouseDown(wx,wy);removedOnlyObject &= !objects.byId(star) && walls==f.pieces().size();}
+      if(rotation==3){world.mouseDown(wx,wy);world.mouseUp(wx,wy);removedOnlyObject &= !objects.byId(star) && walls==f.pieces().size();}
       world.setBulldozer(false);
     }
     world.rotateView(1);

@@ -2433,7 +2433,7 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
       float sx, sy, depth;
       view.worldToScreenF(this->previewX, this->previewY,
                           groundAt(map, this->previewX, this->previewY), sx, sy, depth);
-      SDL_Color tint = this->previewFit == Fences::Fit::Ok ? SDL_Color{0, 255, 0, 255}
+      SDL_Color tint = this->previewFit == Fences::Fit::Ok && !this->previewPoor ? SDL_Color{0, 255, 0, 255}
                                                            : SDL_Color{255, 60, 60, 255};
       const auto side = pt.kind == Kind::Helicopter ? view.screenSide(0, -1) : CompassDirection::SE;
       out.push_back({depth, sx, sy, a, side, tint, true});

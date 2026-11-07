@@ -77,6 +77,9 @@ public:
   // A file of the game's as text (empty when there's none)
   std::string getGameText(const std::string &file_name);
   Animation *getAnimation(const std::string &file_name);
+  // ours: a UI picture drawn every frame, loaded once and kept here (the
+  // caller doesn't delete it): getAnimation makes a new copy each call
+  Animation *sharedAnimation(const std::string &file_name);
   Pallet *getPallet(const std::string &file_name);
   SDL_Texture *getLoadTexture(SDL_Renderer *renderer);
   SDL_Texture *getStringTexture(SDL_Renderer *renderer, const int font,
@@ -137,6 +140,7 @@ private:
   std::unordered_map<uint32_t, std::string> string_map;
   std::unordered_map<std::string, Animation *> animation_map;
   std::unordered_set<Animation *> ownedAnimations;
+  std::unordered_map<std::string, Animation *> sharedAnimations; // (sharedAnimation's)
   Animation *withArtOptions(Animation *a, const std::string &name, const std::string &aniKey);
   void clearAnimations();
   std::unordered_map<std::string, Pallet *> pallet_map;

@@ -10,7 +10,9 @@
 //    guide (the linked animation, faint, under the drawing), one set of
 //    frames for each way it faces (N, NE, E, SE, S: the game mirrors the
 //    other three), and pencil, eraser, fill, line, box, oval, picker and
-//    move. A layer marked shadow is the ground shadow. Colours are free:
+//    move. A layer marked shadow is the ground shadow; on a placed item
+//    (scenery, a building) a layer marked Night light is what glows at night,
+//    and a lamp point says where the light it casts comes from. Colours are free:
 //    saving makes the animal's 256-colour palette from everything drawn
 // (loaded after modkit.js)
 
@@ -40,7 +42,12 @@ const AN_TOOLS = [
   ['move', '✥', 'Move the layer (M)'],
   ['anchor', '⊕', 'The ground point: where the animal stands (A)'],
   ['band', '⇕', 'A height band, to make taller or shorter in every direction - legs, a neck (H)'],
+  ['lamp', '✺', 'Lamp point: where the light it casts at night comes from, in the pen colour (P)'],
 ];
+// The items the game's day and night lighting draws: these get the Night
+// light layer, the lamp point and the night view (re/lab/itemmaker.py LIT_KINDS)
+const ED_LIT = ['building', 'scenery', 'filter', 'foliage', 'rock', 'shelter', 'toy', 'entrance', 'food'];
+const edLit = () => !!(AN.item && ED_LIT.includes(AN.item.kind) && AN.ed && !AN.ed.pic);
 
 // ---------------------------------------------------------------- the page
 async function animalsPage(m) {
@@ -351,6 +358,8 @@ async function edOpen(slot, anim, refPath, pic) {
     showRef: p && p.version && r.project ? !!r.project.stencilShown : how === 'stencil',
     stFill: +store.get('edStFill', 20), stLine: store.get('edStLine', true), stInside: false,
     recent: store.get('edRecent', []), playing: false, undo: [], redo: [], dirty: false, ref: null,
+    // (its lamp point: {x, y, color, radius, power} - the light it casts)
+    lamp: p.lamp || null, night: false,
   };
   for (const d of AN_DIRS) {
     const frames = (p.dirs || {})[d] || [];
@@ -429,7 +438,7 @@ const edIb = (act, icon, tip, arg, on) =>
 
 function edHtml() {
   const ed = AN.ed;
-  const tools = AN_TOOLS.map(([k, ic, tip]) => `<div class="edtool${ed.tool === k ? ' on' : ''}" data-act="edTool" data-arg="${k}" title="${esc(tip)}">${ic}</div>`).join('');
+  const tools = AN_TOOLS.filter(([k]) => k !== 'lamp' || edLit()).map(([k, ic, tip]) => `<div class="edtool${ed.tool === k ? ' on' : ''}" data-act="edTool" data-arg="${k}" title="${esc(tip)}">${ic}</div>`).join('');
   // (the direction ring: the five drawn ways, and the three the game mirrors
   // from them, this frame in each)
   const dirs = (AN.item ? AN_DIRS.map(d => [d, d]) : ED_RING).map(([d, from]) => {
@@ -442,9 +451,9 @@ function edHtml() {
     .map((l, i) => ({ l, i }))
     .reverse()
     .map(
-      ({ l, i }) => `<div class="edlayer${i === ed.li ? ' sel' : ''}" data-act="edLayer" data-arg="${i}" title="${esc(l.name)}${l.shadow ? ': the ground shadow (the game draws it see-through)' : ''}"><span class="edeye${l.visible ? '' : ' off'}" data-act="edEye" data-arg="${i}" title="${
+      ({ l, i }) => `<div class="edlayer${i === ed.li ? ' sel' : ''}" data-act="edLayer" data-arg="${i}" title="${esc(l.name)}${l.shadow ? ': the ground shadow (the game draws it see-through)' : l.light ? ': its night light - what glows at night' : ''}"><span class="edeye${l.visible ? '' : ' off'}" data-act="edEye" data-arg="${i}" title="${
         l.visible ? 'Hide it' : 'Show it'
-      }">${ic(l.visible ? 'eye' : 'eyeOff')}</span><span class="nm">${esc(l.name)}</span>${l.shadow ? `<span class="edlshadow">${ic('shadow')}</span>` : ''}</div>`,
+      }">${ic(l.visible ? 'eye' : 'eyeOff')}</span><span class="nm">${esc(l.name)}</span>${l.shadow ? `<span class="edlshadow">${ic('shadow')}</span>` : ''}${l.light ? `<span class="edlshadow edllight">${ic('bulb')}</span>` : ''}</div>`,
     )
     .join('');
   const frames = edFrames()
@@ -499,7 +508,7 @@ function edHtml() {
             'edLayerRename',
             'pencil',
             'Rename it',
-          )}${edIb('edLayerShadow', 'shadow', 'Make it the ground shadow (or not)')}${edIb('edLayerDel', 'trash', 'Delete it')}</div>
+          )}${edIb('edLayerShadow', 'shadow', 'Make it the ground shadow (or not)')}${edLit() ? edIb('edLayerLight', 'bulb', 'Make it the night light: what glows at night (or not)') : ''}${edIb('edLayerDel', 'trash', 'Delete it')}</div>
           <div class="edlayers">${layers}</div>
         </div>
         <div class="edcard every">
@@ -520,8 +529,10 @@ function edHtml() {
         </div>
         <div class="edcard">
           <div class="edcardh"><span>View</span></div>
-          <div class="edgrid">${edIb('edView', 'onion', 'Onion skin: the frames either side, faint', 'onion', ed.onion)}${edIb('edView', 'mirror', 'Mirror the pen across the ground point', 'mirror', ed.mirror)}</div>
-        </div>
+          <div class="edgrid">${edIb('edView', 'onion', 'Onion skin: the frames either side, faint', 'onion', ed.onion)}${edIb('edView', 'mirror', 'Mirror the pen across the ground point', 'mirror', ed.mirror)}${
+            edLit() ? edIb('edView', 'moon', 'Night view: as the zoo shows it after dark', 'night', ed.night) : ''
+          }</div>
+        </div>${edLit() ? edNightCard() : ''}
       </div></div>
     <div class="edtl">
       <div class="edtlg">${edIb('edPlay', ed.playing ? 'pause' : 'play', ed.playing ? 'Pause (Space)' : 'Play (Space)')}${edIb('edStep', 'prev', 'The frame before (←)', -1)}${edIb('edStep', 'next', 'The next frame (→)', 1)}
@@ -569,6 +580,19 @@ function edMounted() {
       if (v) v.textContent = ed.stFill + '%';
       edDraw();
     };
+  // (the lamp point's colour, reach and brightness)
+  for (const [id, key, num] of [['ed-lampcol', 'color', false], ['ed-lampr', 'radius', true], ['ed-lampp', 'power', true]]) {
+    const el = $(id);
+    if (el && ed.lamp)
+      el.oninput = () => {
+        ed.lamp[key] = num ? +el.value : el.value;
+        const v = $(id + 'v');
+        if (v) v.textContent = el.value;
+        ed.dirty = true;
+        edTop();
+        edDraw();
+      };
+  }
   const ms = $('ed-ms');
   if (ms)
     ms.onchange = () => {
@@ -593,13 +617,15 @@ function edSetColor(c, remember) {
   }
 }
 
-// A frame's layers as one picture (the shadow as see-through black)
+// A frame's layers as one picture (the shadow as see-through black; a Night
+// light layer shown only in the night view, glowing over the darkened art)
 function edComposite(frame, alpha = 1) {
   const ed = AN.ed;
   const out = edBlank(ed.w, ed.h);
+  const night = ed.night && edLit();
   ed.layers.forEach((l, i) => {
     const c = frame.cells[i];
-    if (!c || !l.visible) return;
+    if (!c || !l.visible || l.light) return;
     for (let p = 0; p < c.data.length; p += 4) {
       const a = c.data[p + 3];
       if (a < 128) continue;
@@ -616,7 +642,46 @@ function edComposite(frame, alpha = 1) {
       }
     }
   });
+  if (night) {
+    // (the zoo's night: the art dark and blue - DayNightLighting's sky at
+    // midnight, roughly - and what glows over it at its own colour)
+    for (let p = 0; p < out.data.length; p += 4) {
+      out.data[p] *= 0.22;
+      out.data[p + 1] *= 0.26;
+      out.data[p + 2] *= 0.42;
+    }
+    ed.layers.forEach((l, i) => {
+      const c = frame.cells[i];
+      if (!c || !l.visible || !l.light) return;
+      for (let p = 0; p < c.data.length; p += 4) {
+        const a = c.data[p + 3] / 255;
+        if (!a) continue;
+        for (let k = 0; k < 3; k++) out.data[p + k] = out.data[p + k] * (1 - a * 0.9) + c.data[p + k] * a * 0.9;
+        out.data[p + 3] = Math.max(out.data[p + 3], 255 * a * alpha);
+      }
+    });
+  }
   return out;
+}
+
+// The Night card: the lamp point's colour, how far it reaches and how bright
+function edNightCard() {
+  const ed = AN.ed;
+  const lit = ed.layers.some((l) => l.light);
+  const lamp = ed.lamp;
+  return `<div class="edcard">
+          <div class="edcardh"><span>Night</span><span class="spacer"></span>${edIb('edLightFrom', 'bulb', 'Glow where the pen colour is: lit windows or bulbs already painted, in every frame and direction')}${
+            lamp ? edIb('edLampOff', 'trash', 'Take the lamp point away') : ''
+          }</div>
+          <div class="ednight dim">${lit ? 'Glows at night: its Night light layer.' : 'Nothing glows yet: mark a layer Night light and paint the windows, bulbs or flames in the colour they shine.'}</div>
+          ${
+            lamp
+              ? `<label class="edslider" title="The light's colour"><span>Colour</span><input type="color" id="ed-lampcol" value="${esc(lamp.color)}"><b></b></label>
+          <label class="edslider" title="How far its light reaches, in tiles"><span>Reach</span><input type="range" id="ed-lampr" min="1" max="10" step="0.5" value="${lamp.radius}"><b id="ed-lamprv">${lamp.radius}</b></label>
+          <label class="edslider" title="How bright it is: the street lamp is 1.8"><span>Bright</span><input type="range" id="ed-lampp" min="0.1" max="3" step="0.1" value="${lamp.power}"><b id="ed-lamppv">${lamp.power}</b></label>`
+              : `<div class="ednight dim">Casts no light. Put a lamp point (✺) where its light comes from to light the ground round it.</div>`
+          }
+        </div>`;
 }
 
 function edDraw(preview) {
@@ -661,6 +726,27 @@ function edDraw(preview) {
     g.fillRect(0, Math.min(ed.band.y0, ed.band.y1) * z, ed.w * z, (Math.abs(ed.band.y1 - ed.band.y0) || 1) * z);
     g.strokeStyle = 'rgba(106,168,239,.7)';
     g.strokeRect(0.5, Math.min(ed.band.y0, ed.band.y1) * z + 0.5, ed.w * z - 1, (Math.abs(ed.band.y1 - ed.band.y0) || 1) * z - 1);
+  }
+  // (the lamp point, and in the night view the light it casts)
+  if (ed.lamp && edLit()) {
+    const lx = (ed.lamp.x + 0.5) * z,
+      ly = (ed.lamp.y + 0.5) * z;
+    if (ed.night) {
+      const [r, gg, b] = edHex(ed.lamp.color);
+      const rad = ed.lamp.radius * 16 * z;
+      const grad = g.createRadialGradient(lx, ly, 0, lx, ly, rad);
+      grad.addColorStop(0, `rgba(${r},${gg},${b},${Math.min(0.6, 0.25 * ed.lamp.power)})`);
+      grad.addColorStop(1, `rgba(${r},${gg},${b},0)`);
+      g.globalCompositeOperation = 'lighter';
+      g.fillStyle = grad;
+      g.fillRect(lx - rad, ly - rad, rad * 2, rad * 2);
+      g.globalCompositeOperation = 'source-over';
+    }
+    g.strokeStyle = 'rgba(255,214,90,.95)';
+    g.lineWidth = 1.5;
+    g.beginPath();
+    g.arc(lx, ly, Math.max(3, z * 1.5), 0, Math.PI * 2);
+    g.stroke();
   }
   // (the ground point)
   g.strokeStyle = 'rgba(255,90,90,.9)';
@@ -806,6 +892,14 @@ function edDown(e) {
     ed.stroke = null;
     edDraw();
     return edTop();
+  }
+  if (ed.tool === 'lamp') {
+    // (its height above the ground point is what the game uses: the light
+    // shines from above the item's middle - itemmaker.night_lights)
+    ed.lamp = { radius: 4, power: 1, ...(ed.lamp || {}), x, y, color: ed.color, height: ed.ay - y };
+    ed.dirty = true;
+    ed.stroke = null;
+    return anRender();
   }
   if (ed.tool === 'band') {
     ed.band = { y0: y, y1: y };
@@ -1051,8 +1145,75 @@ Object.assign(ACTIONS, {
   edLayerShadow: () => {
     const l = AN.ed.layers[AN.ed.li];
     l.shadow = !l.shadow;
+    if (l.shadow) l.light = false;
     AN.ed.dirty = true;
     toast(l.shadow ? 'Its pixels are the ground shadow now (any colour: the game draws them as its shadow).' : 'An ordinary layer again.', 3000);
+    anRender();
+  },
+  edLayerLight: () => {
+    const l = AN.ed.layers[AN.ed.li];
+    l.light = !l.light;
+    if (l.light) l.shadow = false;
+    AN.ed.night = l.light || AN.ed.night;
+    AN.ed.dirty = true;
+    toast(
+      l.light
+        ? 'Its pixels glow at night now, in the colours you paint them (the game draws them over the item after dark, with Day and night on). The night view is on to see it.'
+        : 'An ordinary layer again.',
+      5000,
+    );
+    anRender();
+  },
+  // (what's already painted to glow - lit windows, bulbs - copied onto the
+  // Night light layer: every pixel near the pen colour, in every frame and
+  // direction; a Night light layer made on top if there's none)
+  edLightFrom: async () => {
+    const ed = AN.ed;
+    if (!ed) return;
+    const a = await ask(
+      'Glow where this colour is',
+      [
+        { key: 'near', label: `How close to the pen colour ${ed.color} a colour counts (pick one off the drawing with ⊙ first; 0 just that one, 100 a lot)`, value: '20' },
+      ],
+      'Make it glow',
+    );
+    if (!a) return;
+    const F = edHex(ed.color);
+    const near = Math.max(0, Math.min(100, +a.near || 0)) * 2.2;
+    edPushAll();
+    let at = ed.layers.findIndex((l) => l.light);
+    if (at < 0) {
+      ed.layers.push({ name: 'Night light', visible: true, light: true });
+      for (const d of AN_DIRS) for (const f of ed.dirs[d]) f.cells.push(null);
+      at = ed.layers.length - 1;
+    }
+    let n = 0;
+    for (const d of AN_DIRS)
+      for (const f of ed.dirs[d]) {
+        let out = f.cells[at];
+        f.cells.forEach((c, li) => {
+          if (!c || li === at || ed.layers[li].shadow || ed.layers[li].light || !ed.layers[li].visible) return;
+          const p = c.data;
+          for (let i = 0; i < p.length; i += 4) {
+            if (p[i + 3] < 128 || Math.hypot(p[i] - F[0], p[i + 1] - F[1], p[i + 2] - F[2]) > near) continue;
+            if (!out) out = f.cells[at] = edBlank(ed.w, ed.h);
+            out.data[i] = p[i];
+            out.data[i + 1] = p[i + 1];
+            out.data[i + 2] = p[i + 2];
+            out.data[i + 3] = 255;
+            n++;
+          }
+        });
+      }
+    ed.li = at;
+    ed.night = true;
+    ed.dirty = true;
+    toast(n ? `${n} pixels glow at night now, on ${esc(ed.layers[at].name)}.` : 'No pixels that close to the pen colour: pick the colour off the drawing with ⊙, or count more colours.', 5000);
+    anRender();
+  },
+  edLampOff: () => {
+    AN.ed.lamp = null;
+    AN.ed.dirty = true;
     anRender();
   },
   edFrameAdd: () => {
@@ -1153,6 +1314,8 @@ Object.assign(ACTIONS, {
     const empty = AN_DIRS.filter((d) => !ed.dirs[d].some((f) => f.cells.some(Boolean)));
     if (empty.length === AN_DIRS.length) return toast('Nothing drawn yet.', 2500);
     const project = { version: 1, w: ed.w, h: ed.h, ax: ed.ax, ay: ed.ay, ms: ed.ms, layers: ed.layers, dirs: {}, stencil: ed.ref ? ed.ref.from : '', stencilShown: !!ed.showRef };
+    // (the lamp point's height kept from the ground point as it is now)
+    if (ed.lamp && edLit()) project.lamp = { ...ed.lamp, height: ed.ay - ed.lamp.y };
     for (const d of AN_DIRS) {
       if (!ed.dirs[d].some((f) => f.cells.some(Boolean))) continue;
       project.dirs[d] = ed.dirs[d].map((f) => ({ cells: f.cells.map(edEncode) }));
@@ -1183,6 +1346,8 @@ Object.assign(ACTIONS, {
     ed.dirty = false;
     toast(
       `Saved: ${esc(ed.slot)} plays what you drew. ${r.colours} colours${r.merged ? ` (${r.merged} merged into others: the palette holds 254)` : ''}.${
+        r.lit ? ` ${r.lit} night light map${r.lit === 1 ? '' : 's'}.` : ''
+      }${
         empty.length ? ` Nothing drawn facing ${empty.join(', ')} yet: it shows nothing there.` : ''
       }`,
       7000,
@@ -1228,7 +1393,7 @@ document.addEventListener('keydown', (e) => {
     return anRender();
   }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  const tool = { b: 'pencil', e: 'eraser', g: 'fill', l: 'line', r: 'rect', o: 'oval', i: 'picker', m: 'move', a: 'anchor', h: 'band' }[k];
+  const tool = { b: 'pencil', e: 'eraser', g: 'fill', l: 'line', r: 'rect', o: 'oval', i: 'picker', m: 'move', a: 'anchor', h: 'band', ...(edLit() ? { p: 'lamp' } : {}) }[k];
   if (tool) return ACTIONS.edTool(tool);
   if (k === '[' || k === ']') return ACTIONS.edSize(Math.max(1, Math.min(4, ed.size + (k === ']' ? 1 : -1))));
   if (k === 'arrowleft' || k === 'arrowright') {
@@ -1534,8 +1699,8 @@ async function edGuideFrom(ref) {
 function edCopyGuide() {
   const ed = AN.ed;
   const shadowAt = ed.layers.findIndex((l) => l.shadow);
-  let bodyAt = ed.layers.findIndex((l, i) => !l.shadow && i === ed.li);
-  if (bodyAt < 0) bodyAt = ed.layers.findIndex((l) => !l.shadow);
+  let bodyAt = ed.layers.findIndex((l, i) => !l.shadow && !l.light && i === ed.li);
+  if (bodyAt < 0) bodyAt = ed.layers.findIndex((l) => !l.shadow && !l.light);
   for (const d of AN_DIRS) {
     const srcs = ed.ref.dirs[d] || [];
     ed.dirs[d] = srcs.map((src) => {

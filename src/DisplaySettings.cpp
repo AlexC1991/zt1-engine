@@ -7,6 +7,7 @@
 
 #include "Embed.hpp"
 #include "GpuFsr.hpp"
+#include "GraphicsEffects.hpp"
 #include "RenderSettings.hpp"
 #include "Settings.hpp"
 #include "ShaderMods.hpp"
@@ -273,7 +274,7 @@ const char *startupRenderer() {
   const float bright = static_cast<float>(std::atof(Settings::get("user", "brightness", "1").c_str()));
   bool needs = std::fabs(bright - 1.0f) > 0.001f || Settings::get("user", "colorfilter", "off") != "off" ||
                parseArt(Settings::get("user", "artupscale", "fsr")) == Art::Stylized ||
-               SDL_getenv("ZT_LIGHTING_GPU") != nullptr;
+               SDL_getenv("ZT_LIGHTING_GPU") != nullptr || GraphicsEffects::anyOn();
   for (const Shaders::Shader &s : Shaders::all())
     needs = needs || s.on;
   if (needs)

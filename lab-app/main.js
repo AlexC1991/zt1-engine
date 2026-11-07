@@ -523,8 +523,12 @@ ipcMain.handle('play:original', (_e, opts = {}) => {
   if (!fs.existsSync(c.exe)) return { error: `The original isn't at ${c.exe} (re/private/original.json says where it is).` };
   const launcher = roots.originalExe;
   if (!fs.existsSync(launcher)) return { error: roots.looked('zt1-original.exe (built with the engine: build first)') };
-  // (its disc: mounted unless it already is)
-  if (c.iso && fs.existsSync(c.iso)) {
+  // (its disc: mounted unless it already is; an image that isn't where the
+  // config says is said, not skipped - without its disc the game sits on
+  // its loading screen)
+  if (c.iso && !fs.existsSync(c.iso))
+    return { error: `Its disc image isn't at ${c.iso}: put where it is now in re/private/original.json ("iso").` };
+  if (c.iso) {
     const q = c.iso.replace(/'/g, "''");
     const r = psRun(`$i = Get-DiskImage -ImagePath '${q}'; if (-not $i.Attached) { Mount-DiskImage -ImagePath '${q}' | Out-Null }; (Get-DiskImage -ImagePath '${q}' | Get-Volume).DriveLetter`);
     if (!r.ok) return { error: 'Couldn’t mount its disc image: ' + r.out.slice(0, 200) };
@@ -2800,6 +2804,28 @@ function fileHead(p) {
     fs.closeSync(fd);
   }
 }
+// An archived file's first bytes, read straight from the archive (fd open on
+// it). unzipper's own stream for an entry reads to the end of the archive and
+// keeps its file open when stopped early: checking a pack of a million
+// entries ran out of open files and took the Lab down.
+function zipEntryHead(fd, f) {
+  const none = Buffer.alloc(0);
+  const at = Number(f.offsetToLocalFileHeader);
+  const local = Buffer.alloc(30);
+  if (fs.readSync(fd, local, 0, 30, at) < 30 || local.readUInt32LE(0) !== 0x04034b50) return none;
+  const data = at + 30 + local.readUInt16LE(26) + local.readUInt16LE(28);
+  const stored = f.compressionMethod === 0;
+  if (!stored && f.compressionMethod !== 8) return none;
+  const raw = Buffer.alloc(stored ? 4 : 512);
+  const n = fs.readSync(fd, raw, 0, raw.length, data);
+  if (stored) return raw.subarray(0, n);
+  try {
+    const zlib = require('zlib');
+    return zlib.inflateRawSync(raw.subarray(0, n), { finishFlush: zlib.constants.Z_SYNC_FLUSH }).subarray(0, 4);
+  } catch {
+    return none;
+  }
+}
 function entryHead(f) {
   return new Promise((resolve) => {
     const s = f.stream();
@@ -2843,20 +2869,24 @@ async function checkMod(dir) {
           if (really) errors.push(`${rel} is really ${really}: a mod holds game data only.`);
         }
         if (path.extname(e.name).toLowerCase() === '.ztd') {
+          let fd = null;
           try {
             const unzipper = require('unzipper');
             const z = await unzipper.Open.file(p);
+            fd = fs.openSync(p, 'r');
             for (const f of z.files) {
               if (f.type !== 'File') continue;
               if (f.path.includes('..') || path.isAbsolute(f.path) || /^[A-Za-z]:/.test(f.path)) errors.push(`${rel}: ${f.path} points outside the mod.`);
               else if (!modFileOk(path.basename(f.path))) errors.push(`${rel}: ${f.path} isn't game data.`);
               else {
-                const really = sniffProgram(await entryHead(f));
+                const really = sniffProgram(zipEntryHead(fd, f));
                 if (really) errors.push(`${rel}: ${f.path} is really ${really}.`);
               }
             }
           } catch {
             errors.push(`${rel} isn't a .ztd the game can read (a .ztd is a zip).`);
+          } finally {
+            if (fd !== null) fs.closeSync(fd);
           }
         }
       }
@@ -3322,6 +3352,25 @@ ipcMain.handle('modkit:takedown', async (_e, id) => {
 // Uploading a mod: checked here first, zipped (its folder's files, as the
 // game reads them), sent in chunks, then the repository's own checks; once
 // they pass it's in every official game's Mod Menu. The same again updates it.
+// ours: a mod whose mod.json lists "parts" ([{id, name, files}], files by
+// their path in the mod) goes up as those parts - each its own download, all
+// unpacking into the same folder, its top-level files (mod.json, a cover)
+// in each - so a pack of tens of GB isn't one fragile download. A part the
+// repository already has, the same to the byte, isn't sent again.
+function freeBytes(dir) {
+  try {
+    const s = fs.statfsSync(dir);
+    return Number(s.bavail) * Number(s.bsize);
+  } catch {
+    return 0;
+  }
+}
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const h = require('crypto').createHash('sha256');
+    fs.createReadStream(file).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
+  });
+}
 ipcMain.handle('modkit:upload', async (_e, folder) => {
   const dir = modPath(folder);
   if (!dir) return { ok: false, message: 'No such mod.' };
@@ -3336,8 +3385,36 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
   }
   if (!/^[A-Za-z0-9 ._-]+$/.test(meta.folder))
     return { ok: false, message: `Its folder's name ("${meta.folder}") can only have letters, numbers, spaces and . _ - in it: rename the folder.`, check };
-  const work = fs.mkdtempSync(path.join(require('os').tmpdir(), 'zt1-upload-'));
-  const zip = path.join(work, 'part.zip');
+  const top = fs.readdirSync(dir).filter((n) => !n.startsWith('.') && n !== 'repository-preview.png');
+  let parts = [{ id: 'files', name: 'The mod', files: top }];
+  if (Array.isArray(meta.parts) && meta.parts.length) {
+    const shared = top.filter((n) => fs.statSync(path.join(dir, n)).isFile());
+    parts = [];
+    for (const p of meta.parts) {
+      const id = String(p.id || '');
+      if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(id)) return { ok: false, message: `A part's id ("${id}") must be lower-case letters, numbers, . _ or -.`, check };
+      const files = (p.files || []).map(String);
+      for (const f of files) {
+        const full = path.resolve(dir, f);
+        if (!full.startsWith(path.resolve(dir) + path.sep) || !fs.existsSync(full))
+          return { ok: false, message: `Part ${id} names ${f}, which isn't in the mod.`, check };
+      }
+      parts.push({ id, name: String(p.name || id), files: [...new Set([...shared, ...files])] });
+    }
+  }
+  // (packed beside the mod when its biggest part fits there with 1 GB to
+  // spare - a part can be gigabytes, and the system drive is often the
+  // fullest - else wherever has the most room)
+  const sizeOf = (f) => {
+    const full = path.join(dir, f);
+    const st = fs.statSync(full);
+    if (!st.isDirectory()) return st.size;
+    return fs.readdirSync(full).reduce((n, c) => n + sizeOf(path.join(f, c)), 0);
+  };
+  const need = Math.max(...parts.map((p) => p.files.reduce((n, f) => n + sizeOf(f), 0))) + 2 ** 30;
+  const roots = [path.dirname(fs.realpathSync(dir)), require('os').tmpdir()];
+  const room = roots.find((r) => freeBytes(r) >= need) || roots.sort((a, b) => freeBytes(b) - freeBytes(a))[0];
+  const work = fs.mkdtempSync(path.join(room, 'zt1-upload-'));
   try {
     modkitLog('Packing it...');
     // A bounded cover for browsing before download. It travels inside the
@@ -3354,52 +3431,73 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
         }
       }
     }
-    const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
-    // (its files by name, not ".": that makes "./mod.json", and the
-    // repository wants mod.json at the top of the zip)
-    const top = fs.readdirSync(dir).filter((n) => !n.startsWith('.') && n !== 'repository-preview.png');
-    const previewArgs = fs.existsSync(previewFile) ? ['-C', work, 'repository-preview.png'] : [];
-    const z = cp.spawnSync(tar, ['-a', '-c', '-f', zip, '-C', dir, ...top, ...previewArgs], { windowsHide: true });
-    if (z.status !== 0 || !fs.existsSync(zip)) throw new Error("It couldn't be zipped.");
-    const size = fs.statSync(zip).size;
-    const sha256 = require('crypto').createHash('sha256').update(fs.readFileSync(zip)).digest('hex');
-    const entry = { id: check.id, name: meta.name, author: meta.author || '', version: meta.version || '', about: meta.about || '', folder: path.basename(dir), parts: [{ id: 'files', name: 'The mod' }] };
+    const entry = { id: check.id, name: meta.name, author: meta.author || '', version: meta.version || '', about: meta.about || '', folder: path.basename(dir), parts: parts.map((p) => ({ id: p.id, name: p.name })) };
     modkitLog(`Telling the repository about ${entry.name}...`);
     let r = await repoMine('POST', '/mods', entry);
     if (r.status === 409) throw new Error(`The id "${entry.id}" is someone else's mod: give yours another id.`);
     if (r.status !== 200 && r.status !== 201) throw new Error(repoError(r));
-    r = await repoMine('PUT', `/mods/${entry.id}/parts/files`, { size, sha256 });
-    if (r.status !== 201 && r.status !== 200) throw new Error((r.json && (r.json.message || r.json.error)) || `The mod repository answered ${r.status}.`);
-    const { upload, chunkBytes, chunks } = r.json;
-    const fd = fs.openSync(zip, 'r');
-    try {
-      for (let n = 1; n <= chunks; n++) {
-        const len = Math.min(chunkBytes, size - (n - 1) * chunkBytes);
-        const buf = Buffer.alloc(len);
-        fs.readSync(fd, buf, 0, len, (n - 1) * chunkBytes);
-        modkitLog(`Sending ${n} of ${chunks}...`);
-        const c = await repoMine('PUT', `/mods/${entry.id}/parts/files/chunks/${n}?upload=${encodeURIComponent(upload)}`, buf, true);
-        if (c.status !== 200) throw new Error(`Part ${n} wasn't taken (${c.status}).`);
+    const before = await repoMine('GET', '/mods/' + encodeURIComponent(entry.id));
+    const had = new Map(((before.status === 200 && before.json && before.json.parts) || []).map((p) => [p.id, p]));
+    const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    for (let k = 0; k < parts.length; k++) {
+      const part = parts[k];
+      const label = parts.length > 1 ? `Part ${k + 1} of ${parts.length} (${part.name}): ` : '';
+      const zip = path.join(work, 'part.zip');
+      const list = path.join(work, 'files.txt');
+      // (by name, not ".": that makes "./mod.json", and the repository wants
+      // mod.json at the top of the zip; stored, not compressed again - a
+      // pack's archives and pictures are compressed already)
+      // (the names given to tar as they are: Windows' tar misreads a -T list
+      // given with names too - the cover - and packs the list itself. Only
+      // a list too long for a command line goes as -T, without the cover)
+      const previewArgs = fs.existsSync(previewFile) ? ['-C', work, 'repository-preview.png'] : [];
+      const short = part.files.reduce((n, f) => n + f.length + 3, 0) < 24000;
+      if (!short) fs.writeFileSync(list, part.files.join('\n') + '\n');
+      const names = short ? ['-C', dir, ...part.files, ...previewArgs] : ['-C', dir, '-T', list];
+      modkitLog(`${label}packing...`);
+      const z = cp.spawnSync(tar, ['-a', '-c', '-f', zip, '--options', 'zip:compression=store', ...names], { windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+      if (z.status !== 0 || !fs.existsSync(zip)) throw new Error(`${label}it couldn't be zipped. ${String(z.stderr || '').slice(0, 300)}`);
+      const size = fs.statSync(zip).size;
+      const sha256 = await sha256File(zip);
+      const old = had.get(part.id);
+      if (old && old.sha256 === sha256 && old.size === size && !old.uploading) {
+        modkitLog(`${label}the repository has it already.`);
+        fs.rmSync(zip, { force: true });
+        continue;
       }
-    } finally {
-      fs.closeSync(fd);
+      r = await repoMine('PUT', `/mods/${entry.id}/parts/${part.id}`, { size, sha256 });
+      if (r.status !== 201 && r.status !== 200) throw new Error((r.json && (r.json.message || r.json.error)) || `The mod repository answered ${r.status}.`);
+      const { upload, chunkBytes, chunks } = r.json;
+      const fd = fs.openSync(zip, 'r');
+      try {
+        for (let n = 1; n <= chunks; n++) {
+          const len = Math.min(chunkBytes, size - (n - 1) * chunkBytes);
+          const buf = Buffer.alloc(len);
+          fs.readSync(fd, buf, 0, len, (n - 1) * chunkBytes);
+          modkitLog(`${label}sending ${n} of ${chunks}...`);
+          const c = await repoMine('PUT', `/mods/${entry.id}/parts/${part.id}/chunks/${n}?upload=${encodeURIComponent(upload)}`, buf, true);
+          if (c.status !== 200) throw new Error(`${label}piece ${n} wasn't taken (${c.status}).`);
+        }
+      } finally {
+        fs.closeSync(fd);
+      }
+      r = await repoMine('POST', `/mods/${entry.id}/parts/${part.id}/complete`, { upload });
+      if (r.status !== 202 && r.status !== 200) throw new Error(repoError(r));
+      fs.rmSync(zip, { force: true });
     }
-    r = await repoMine('POST', `/mods/${entry.id}/parts/files/complete`, { upload });
-    if (r.status !== 202 && r.status !== 200) throw new Error(repoError(r));
     // Its checks over there (the rules, every file sniffed, a virus scan):
     // live when they pass, else turned down with the reasons
     modkitLog('Checking it over there (rules and a virus scan)...');
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 360; i++) {
       await new Promise((res) => setTimeout(res, 5000));
       const g = await repoMine('GET', '/mods/' + encodeURIComponent(entry.id));
       if (g.status !== 200) continue;
       const row = uploadRow(g.json);
-      const part = (g.json.parts || [])[0] || {};
-      const state = (part.check || {}).state;
-      if (state === 'live' || (state !== 'queued' && state !== 'checking' && part.live && !part.uploading))
-        return { ok: true, message: "It passed the checks: it's in every official game's Mod Menu (Mod repository).", check };
-      if (state === 'rejected' || state === 'error')
+      const states = (g.json.parts || []).map((part) => ({ state: (part.check || {}).state, live: part.live && !part.uploading }));
+      if (states.some((s) => s.state === 'rejected' || s.state === 'error'))
         return { ok: false, message: `${row.status}: ${row.reason}`, check };
+      if (states.length && states.every((s) => s.state === 'live' || (s.state !== 'queued' && s.state !== 'checking' && s.live)))
+        return { ok: true, message: "It passed the checks: it's in every official game's Mod Menu (Mod repository).", check };
     }
     return { ok: true, message: "Uploaded: it's still being checked. Your uploads shows when it's offered.", check };
   } catch (e) {

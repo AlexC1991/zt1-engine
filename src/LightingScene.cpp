@@ -75,7 +75,7 @@ bool DayNightLighting::verifyLocalLightIndex()const {
 }
 std::array<float,3> DayNightLighting::irradiance(Point p,Point normal,uint64_t receiver,bool transientOnly,bool includeProjectors)const {
   std::array<float,3> colour{};const auto near=lightSources.find(lightCell(cellAt(p.x),cellAt(p.y)));
-  auto accumulate=[&](const Light &l){if(!includeProjectors && l.cone>0 && l.sweep!=0)return;const float energy=sourceEnergy(l,p,normal,receiver);
+  auto accumulate=[&](const Light &l){if(l.groundOnly || (!includeProjectors && l.cone>0 && l.sweep!=0))return;const float energy=sourceEnergy(l,p,normal,receiver);
     colour[0]+=energy*l.colour.r/255;colour[1]+=energy*l.colour.g/255;colour[2]+=energy*l.colour.b/255;};
   if(!transientOnly && near!=lightSources.end())for(size_t index:near->second)accumulate(lights[index]);
   for(const auto &l:transientLights)accumulate(l);for(auto &v:colour)v=1-std::exp(-v);return colour;
@@ -99,7 +99,7 @@ void DayNightLighting::buildIrradiance(const WorldMap &map) {
   for(const auto &l:lights) {
     uint64_t stamp=1469598103934665603ull;auto mix=[&](uint64_t n){stamp^=n;stamp*=1099511628211ull;};
     for(float n:{l.x,l.y,l.z,l.radius,l.energy,l.normal.x,l.normal.y,l.normal.z,l.cone,l.sweep})mix(std::hash<float>{}(n));
-    mix(l.colour.r);mix(l.colour.g);mix(l.colour.b);
+    mix(l.colour.r);mix(l.colour.g);mix(l.colour.b);mix(l.groundOnly);
     std::vector<size_t> nearby;
     for(int y=cellAt(l.y-l.radius);y<=cellAt(l.y+l.radius);++y)for(int x=cellAt(l.x-l.radius);x<=cellAt(l.x+l.radius);++x){
       const auto found=lightOccluders.find(lightCell(x,y));if(found!=lightOccluders.end())nearby.insert(nearby.end(),found->second.begin(),found->second.end());
@@ -188,7 +188,9 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
       const float gx[]={-1,-1,1,1},gy[]={1,-1,-1,1};
       // (a fence or tank wall casts but is not shaded itself: its own shadow
       // drawn over its art turned the fence black - LightingStructures)
-      d.visible=o.shaded && d.outward.x*gx[view.getRotation()]+d.outward.y*gy[view.getRotation()]+d.outward.z*2>0;
+      // (at night, with no sun shadow to fall on itself, it is lit as any
+      // wall: a lamp or the lighthouse's beam on a fence, a solid tank wall)
+      d.visible=(o.shaded || (o.nightReceiver && sky.shadow<.02f)) && d.outward.x*gx[view.getRotation()]+d.outward.y*gy[view.getRotation()]+d.outward.z*2>0;
       projectedFaces.push_back(d);
     }
   }

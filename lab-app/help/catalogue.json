@@ -30,6 +30,16 @@
     "keywords": "dino dinosaur marine sprites animation"
   },
   {
+    "id": "night-lights",
+    "title": "Make items light up at night",
+    "summary": "Light maps: windows, bulbs and flames that glow after dark, and the light an item casts.",
+    "group": "Making mods",
+    "tabs": [
+      "mods"
+    ],
+    "keywords": "light map lightmap night glow lamp lantern emission day and night"
+  },
+  {
     "id": "test-zoo-and-maps",
     "title": "Build a test zoo and a custom map",
     "summary": "Boundaries, entrances, land exhibits, marine tanks and saved maps.",
@@ -233,7 +243,9 @@
     "title": "Save between the engine and original",
     "summary": "Shared .zoo files, engine-only saves, custom content and compatibility limits.",
     "group": "Reference",
-    "tabs": ["play"],
+    "tabs": [
+      "play"
+    ],
     "legacy": false,
     "source": "../../docs/ORIGINAL_SAVE_COMPATIBILITY.md"
   },

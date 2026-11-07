@@ -652,8 +652,18 @@ label.check { align-items: center; color: var(--text2); }
 .ln.rawhere { background: rgba(255, 196, 0, 0.14); }
 
 /* --- Scene: the Watch log (layout.js) */
-.wtrows { overflow: auto; flex: 1; min-height: 0; padding: 2px 8px; }
-.wtrow { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr) 90px; gap: 8px; padding: 2px 0; font-size: 12.5px; border-bottom: 1px solid var(--line); }
+.wtrows { overflow: auto; flex: 1; min-height: 0; padding: 2px 8px; container-type: inline-size; }
+.wtrow { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr) 90px; grid-template-areas: "time name doing pos"; gap: 8px; padding: 2px 0; font-size: 12.5px; border-bottom: 1px solid var(--line); }
+.wtrow > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wtrow > span:nth-child(1) { grid-area: time; }
+.wtrow > span:nth-child(2) { grid-area: name; }
+.wtrow > span:nth-child(3) { grid-area: doing; }
+.wtrow > span:nth-child(4) { grid-area: pos; text-align: right; }
+/* (a narrow Watch panel: the name on its own line, so nothing overlaps) */
+@container (max-width: 380px) {
+  .wtrow { grid-template-columns: 52px minmax(0, 1fr) 76px; grid-template-areas: "name name name" "time doing pos"; row-gap: 0; }
+  .wtrow > span:nth-child(2) { font-weight: 600; }
+}
 .wtrow.bad span { color: var(--red, #e5735f); }
 
 /* --- top bar: the tabs' groups (the original's / our engine's) */
@@ -1009,8 +1019,8 @@ label.check { align-items: center; color: var(--text2); }
 .edib.on { background: var(--green-bg); color: var(--green-text); border-color: #21402d; }
 .edside { width: 236px; flex: none; overflow: auto; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
 .edcard { border: 1px solid var(--line); border-radius: 9px; background: var(--bg2); padding: 6px 6px 8px; }
-.edcardh { display: flex; align-items: center; gap: 2px; padding: 0 2px 4px 4px; font-size: 11px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
-.edcardh .edib { width: 26px; height: 24px; }
+.edcardh { display: flex; flex-wrap: wrap; align-items: center; gap: 1px; padding: 0 2px 4px 4px; font-size: 11px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+.edcardh .edib { width: 23px; height: 24px; }
 .edcardh .edib .ic { width: 15px; height: 15px; }
 .edcardh .dim { text-transform: none; letter-spacing: 0; font-size: 11px; margin-left: auto; }
 .edgrid { display: flex; flex-wrap: wrap; gap: 3px; }
@@ -1027,6 +1037,9 @@ label.check { align-items: center; color: var(--text2); }
 .edlayer .edeye { display: flex; }
 .edlayer .edeye .ic, .edlshadow .ic { width: 15px; height: 15px; }
 .edlshadow { color: var(--blue-text); display: flex; }
+.edlshadow.edllight { color: #ffd65a; }
+.ednight { font-size: 11.5px; padding: 4px 4px 0; line-height: 1.4; }
+.edslider input[type="color"] { flex: 0 0 34px; height: 20px; padding: 0; border: 0; background: none; }
 .edtl { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 6px 8px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--line); }
 .edtlg { display: flex; align-items: center; gap: 2px; flex: none; }
 .edms { display: flex; align-items: center; gap: 4px; margin-left: 6px; color: var(--muted); font-size: 11.5px; }

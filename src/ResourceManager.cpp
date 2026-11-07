@@ -449,7 +449,15 @@ void ResourceManager::clearAnimations() {
     animation->onRelease = {};
     delete animation;
   }
+  sharedAnimations.clear();
   animation_map.clear();
+}
+
+Animation *ResourceManager::sharedAnimation(const std::string &name) {
+  auto it = sharedAnimations.find(name);
+  if (it == sharedAnimations.end())
+    it = sharedAnimations.emplace(name, getAnimation(name)).first;
+  return it->second;
 }
 void ResourceManager::reloadMods() {
   clearAnimations();

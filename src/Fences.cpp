@@ -1,5 +1,7 @@
 #include <cstdlib>
 #include "Fences.hpp"
+#include "LightingAssets.hpp"
+#include <unordered_map>
 #include "Features.hpp"
 #include <random>
 #include "Sound.hpp"
@@ -22,8 +24,6 @@ static bool reuseFenceWork = true;
 void fenceWorkReuse(bool on) { reuseFenceWork = on; }
 static bool composeTanksOnGpu = true; // guarded GPU path; native fallback preserves zoomed-in output
 void fenceGpuComposition(bool on) { composeTanksOnGpu = on; }
-namespace FrameProfile {extern bool active;void record(const char *,double);double ms(Uint64);}
-namespace {struct ProfScope{const char *n;Uint64 t;explicit ProfScope(const char *m):n(m),t(FrameProfile::active?SDL_GetPerformanceCounter():0){}~ProfScope(){if(t)FrameProfile::record(n,FrameProfile::ms(t));}};}
 
 // Art laid edge to edge drawn as one picture: at the art's own size into a
 // clear layer, then the layer enlarged into place. A tank's glass and water
@@ -2103,8 +2103,18 @@ int Fences::platformAt(float px, float py, const WorldRenderer &view) const {
   return -1;
 }
 
+// ours: whether a fence type's art has lights (LightingAssets), asked once
+static bool hasLights(const std::string &key) {
+  static std::unordered_map<std::string, bool> known;
+  auto it = known.find(key);
+  if (it == known.end())
+    it = known.emplace(key, LightingAssets::find(key) != nullptr).first;
+  return it->second;
+}
+
 void Fences::collect(const WorldRenderer &view, const WorldMap &map,
                      std::vector<Drawable> &out) const {
+  this->lit.clear();
   auto add = [&](const Edge &e, const Piece &p, int type, bool tinted, SDL_Color tint) {
     const bool placed = !tinted;
     const FenceType &t = this->typeList[type];
@@ -2312,7 +2322,17 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       const int baseLast = t.art[1][0] ? std::max(0, t.art[1][0]->frameCount() - 1) : 0;
       const int last = std::max(0, art->frameCount() - 1);
       d.frame = baseLast ? std::clamp(static_cast<int>(p.open * last / baseLast), 0, last) : 0;
+    } else if (art->frameCount() > 1) {
+      // A fence whose art is an animation - the electrified fences' current,
+      // the bars' warning beacons (fences/dzbar, dzchn: 12 frames of 83 ms) -
+      // plays it on the game's clock, as a filter's (art with frame -1 here
+      // stayed on its first frame: dzbar's beacons dark). ours: the art's own
+      // frames at its own speed; its phase not compared with the original's
+      const uint32_t ms = art->frameTimeMs() ? art->frameTimeMs() : 83;
+      d.frame = static_cast<int>(static_cast<uint64_t>(this->rippleClock / ms) % art->frameCount());
     }
+    if (placed && hasLights(t.key))
+      this->lit.push_back({art, d.frame < 0 ? 0 : d.frame, side, sx, sy, depth, mx, my, (h0 + h1) * 0.5f, t.key});
     // In two halves, each sorted at its own middle: a building's strips
     // are a quarter tile wide, sorted the same way, so one standing against
     // the fence goes behind all of it (sorted as a whole at its middle,
@@ -2357,11 +2377,9 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
   // diver's ladder down into it, then the water over them, see-through:
   // the surface at the water's height, its sides behind the front glass.
   // Sorted at the back of the tank.
-  ProfScope profTanks("fc tanks");
   for (const Exhibit &ex : this->exhibitList) {
     if (!ex.tank)
       continue;
-    ProfScope profBuild("fc tank walls");
     std::string set = (ex.salt ? "salt" : "fresh") + scumSuffix(ex.purity);
     Animation *surfaceArt = this->waterPart(set, "top");
     if (!surfaceArt)
@@ -2442,7 +2460,6 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     }
     if (backDepth > 1e29f)
       continue;
-    ProfScope profWater("fc tank water+cover");
     std::stable_sort(back.begin(), back.end(),
                      [](const Sprite &p, const Sprite &q) { return p.depth < q.depth; });
     // The water: up to a unit under the walls' top (tanks.cfg waterOffset
@@ -2767,7 +2784,6 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       gpu=std::make_shared<GpuTankLayer>();
       whole=std::make_shared<std::function<void(SDL_Renderer*)>>([paintInterior,shared](SDL_Renderer *r){paintInterior(r,*shared,nullptr);});
     }
-    ProfScope profStrips("fc tank strips");
     const float halfTile = view.getTileWidth() * 0.5f;
     for (const Strip &st : strips) {
       Picks picks{within(backSpan, st), within(waterSpan, st), within(frontSpan, st), within(rimSpan, st)};
@@ -2793,13 +2809,11 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       // So each group of them is drawn at the art's own size into a layer and
       // the layer enlarged as one picture (Fences::layered); what swims in
       // the tank is drawn between them, at the zoom, as it was
-      {ProfScope ps("tc interior");if(!gpu || !gpu->draw(r,*whole))paintInterior(r,*shared,&picks);}
+      if(!gpu || !gpu->draw(r,*whole))paintInterior(r,*shared,&picks);
       (void)wet;
       (void)level;
-      {ProfScope pg("tc ground");
       if (this->redrawGround)
-        this->redrawGround(r, cover);}
-      ProfScope pr("tc rims");
+        this->redrawGround(r, cover);
       SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
       SDL_SetRenderDrawColor(r, 176, 96, 40, 230);
       for (uint32_t i : picks.rims) {
@@ -2816,9 +2830,8 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     }
   }
 
-  {ProfScope profEdges("fc edges");
   for (const auto &kv : this->edges)
-    add(kv.first, kv.second, kv.second.type, false, SDL_Color{255, 255, 255, 255});}
+    add(kv.first, kv.second, kv.second.type, false, SDL_Color{255, 255, 255, 255});
   // Filters: running, decayed, or stopped; their hose toward the tank (the
   // art is named a quarter turn round, as the tank gate's)
   auto addFilter = [&](const Filter &f, Animation *a, bool tinted, SDL_Color tint) {

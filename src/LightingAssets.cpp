@@ -1,6 +1,7 @@
 #include "LightingAssets.hpp"
 #include "CompassDirection.hpp"
 #include <algorithm>
+#include <deque>
 #include <cmath>
 
 namespace LightingAssets {
@@ -104,7 +105,16 @@ std::vector<Definition> definitions() {
   restaurant.sources.push_back({"side neon",{-1.7f,-.6f,1.0f},{0,0,0},{255,60,90,255},.25f,4});
   restaurant.sources.push_back({"interior windows",{-.1f,-1.75f,1.0f},{0,-1,0},{255,209,143,255},.4f,4});
   result.push_back(restaurant);
-  for(auto &a:result)a.animated=a.id==103 || a.id==105 || a.id==106;
+  // The electrified bars fence's two red warning beacons on its top rail
+  // (fences/dzbar: lit in frames 2-6 of its 12, about 78-90 px above the
+  // piece's ground point in every view). Only lit red lens pixels glow, so
+  // the dark half of the blink gives none; a small red light under them,
+  // only while they're lit (DayNightLighting: fence pieces)
+  Definition beacons{1100,"dzbar"}; // (past 1000: a fence, not a catalogue object)
+  for(auto &v:beacons.views)v.push_back({"warning beacons",M::Glass,{{-40,-112},{40,-112},{40,-66},{-40,-66}},0,{255,70,55,255},true,false,PixelMask::RedLens});
+  beacons.sources.push_back({"warning beacons",{0,0,5.2f},{0,0,0},{255,60,45,255},.55f,3.0f});
+  result.push_back(beacons);
+  for(auto &a:result)a.animated=a.id==103 || a.id==105 || a.id==106 || a.id==1100;
   appendCatalogueDefinitions(result);
   appendWaterDefinitions(result);
   appendEffectDefinitions(result);
@@ -116,11 +126,27 @@ std::vector<Definition> definitions() {
 }
 }
 const std::vector<Definition> &all(){static const auto assets=definitions();return assets;}
+namespace {
+// ours: mod profiles, numbered from 9000 (past every catalogue id and its
+// +3000 fixture set), kept for the session: a deque keeps their addresses
+constexpr int kModProfiles=9000;
+std::deque<Definition> &modDefinitions(){static std::deque<Definition> d;return d;}
+std::deque<std::string> &modNames(){static std::deque<std::string> n;return n;}
+}
+int modProfile(const std::string &file,std::vector<Source> sources) {
+  auto &defs=modDefinitions();auto &names=modNames();
+  for(size_t i=0;i<defs.size();++i)if(names[i]==file){defs[i].sources=std::move(sources);return defs[i].id;}
+  names.push_back(file);Definition d{kModProfiles+int(defs.size()),names.back().c_str()};
+  // (animated: its glow follows the pose shown, as a flame's does)
+  d.sources=std::move(sources);d.animated=true;d.lightMap=true;defs.push_back(std::move(d));
+  return defs.back().id;
+}
 const Definition *find(const std::string &item) {
   for(const auto &a:all())if(item==a.item)return &a;
   return nullptr;
 }
 const Definition *profile(int id) {
+  if(id>=kModProfiles){for(const auto &a:modDefinitions())if(a.id==id)return &a;return nullptr;}
   for(const auto &a:all())if(a.id==id)return &a;
   return nullptr;
 }

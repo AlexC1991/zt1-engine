@@ -484,7 +484,7 @@ void PlacedObjects::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view
   static const SDL_Color red{255, 60, 50, 255};
   for (const One &d : all) {
     // (the bulldozer over it: red, as everywhere)
-    const SDL_Color *tint = static_cast<int>(d.o - this->list.data()) == this->highlight ? &red : nullptr;
+    const SDL_Color *tint = this->lit(static_cast<int>(d.o - this->list.data())) ? &red : nullptr;
     if (d.o->bg)
       d.o->bg->drawAnchored(renderer, d.sx, d.sy, d.side, tint, animationFrame(*d.o, d.o->bg));
     // (under the water, the underidle; on the surface, idle)
@@ -598,7 +598,7 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
     if (under && under(x, y))
       depth -= 1.0f;
     static const SDL_Color red{255, 60, 50, 255};
-    bool lit = static_cast<int>(&o - this->list.data()) == this->highlight;
+    bool lit = this->lit(static_cast<int>(&o - this->list.data()));
     if ((o.inUse || o.randomActive) && o.used)
       art = o.used;
     if (o.half && o.fill > 12)

@@ -7,9 +7,9 @@
 >
 > **Back up any saves you care about.**
 
-### Alpha 2026.10.30
+### Alpha 2026.11.7
 
-This alpha is **2026.10.30**, following **v2026.10.20**. See the release notes for changes and known limitations.
+This alpha is **2026.11.7**, following **v2026.11.1**. See the release notes for the full list of changes and known limitations.
 
 
 > **You need your own copy of Zoo Tycoon.** ZT1-Engine comes with **no** Zoo Tycoon art, sound, maps or game files: it plays the copy you have installed, reading it where it is (it never changes your game's folder).
@@ -41,7 +41,7 @@ Each alpha carries three files. **Two of them play the game; the third is for lo
 
 | Download | What it is |
 |---|---|
-| **The ZT1 Engine: `ZT1-Engine-Setup-<version>.exe`** (about 4 MB) | **The engine. Get this one.** An installer. It reads your Zoo Tycoon where it's installed, and offers each new alpha at the main menu. |
+| **The ZT1 Engine: `ZT1-Engine-Setup-<version>.exe`** (about 5 MB) | **The engine. Get this one.** An installer. It reads your Zoo Tycoon where it's installed, and offers each new alpha at the main menu. |
 | **The Game Build: `ZT1-Game-Build-<version>-win64.zip`** (about 3 MB) | **The other way to play.** A folder that runs on its own, like the first alpha. Unzip it anywhere and run **`start.bat`**: the first time it copies your Zoo Tycoon's files into the folder and starts the game, and for that it needs [Python 3](https://www.python.org/downloads/). After that the folder plays by itself, but it doesn't update itself — download the next one when it's out. |
 | **The ZT1 Lab: `ZT1-Lab-Setup-<version>.exe`** (about 570 MB) | **Not needed to play.** The workbench this engine is developed with. Details below — skip it unless it sounds like your kind of thing. |
 
@@ -80,7 +80,7 @@ When a new alpha is out, ZT1-Engine downloads and verifies it in the background,
 
 - **Saved zoos:** `Documents\zt1-engine\Saved Games`
 - **Snapshots:** `Documents\zt1-engine\screenshots`
-- **Settings, mods and scenario progress:** `%LocalAppData%\zt1-engine`
+- **Settings, mods and scenario progress:** `%LocalAppData%\zt1-engine`. Mods can go anywhere: in the Mod Menu, **Folder...** picks another folder (on another drive, for big mods such as the HD art) and offers to move your mods there.
 - **The engine itself:** `%LocalAppData%\Programs\ZT1-Engine` (uninstall it from Windows' Settings › Apps; your saves and settings stay)
 - **The ZT1 Lab:** `%LocalAppData%\Programs\ZT1-Lab`. Private research and recordings live in a linked checkout's `re\private`, or the Lab's application data when used alone; back these up too. Root selections and updater state also live outside the install folder.
 
@@ -96,13 +96,16 @@ Its settings stay in the folder (`build\Release\zoo.ini`), and saved zoos go to 
 
 ## New in this alpha
 
-- **Marine shows:** linked home/show tanks, portals, editable tricks, specialists, spectators and admissions.
-- **Animal and habitat behavior:** awareness of nearby animals, marine body clearance and species preferences, mixed land/water routing, dinosaur capture and egg hatching checks.
-- **Mod studio:** PNG/sprite-sheet and OBJ-pose imports, animals and object builders, custom maps, food and eggs, theme-pack publishing and download covers. The Lab includes offline help and tutorial videos.
-- **Mod switches:** downloads start off; in-game switches preserve required map/placed content and keep temporary Lab tests separate from normal selections.
-- **Save compatibility:** partial original-save imports, original manager/finance state and native format 14. Shared .zoo saves also carry a compatible stock world for the original game.
-- **Polish:** building alignment/animations, DRT flights and capture roles, gates and specialist ladder animations; menu pause and clearer mod pagination; more reliable embedded Play startup and Lab command replies.
-- **Interface options:** windows can stack side by side, move, lock and remember positions. Optional layout changes have Game Options switches.
+Everything new is optional where it goes beyond the original: each addition has its own switch in Game Options, and switching it off gives the original's behaviour.
+
+- **Day and night (optional):** a twelve-minute day with sunrise and sunset, sun shadows that follow the time of day, and lit windows, signs, streetlights, beacons, fires and the lighthouse's turning beam at night. Light sinks into tank water with glints on the surface, and soft glows surround lights.
+- **Game speed and clock (optional):** a speed button beside Pause/Play for normal, 2x and 5x. While day and night or game speed is on, a 24-hour clock shows beside the date. Both switches are in Game Options › Gameplay.
+- **Animals behave more like the original:** babies come as often as in the original (one mate per animal, no pairing with their own young), animals eat until full, dinosaur eggs are laid and hatch as in the original, and young animals use their own speeds and values.
+- **Bulldozer drag:** drag to clear a whole rectangle, with the money back shown before you let go.
+- **Zoo advice:** the original's advisor messages about sick animals, protestors, hungry or tired guests and a dirty zoo.
+- **Graphics:** optional effects (anti-aliasing, bloom, tilt-shift, vignette and more), Direct3D 11 drawing, much faster drawing in busy zoos, fewer stutters, less memory, and optional HD art mods in three parts.
+- **Game Options:** every page scrolls as one list, Mods and Updates have their own tabs, and the updater shows its progress.
+- **Night lights for mods:** items made in the Lab can glow at night and cast light.
 
 ## What you can try in this alpha
 
@@ -130,9 +133,9 @@ This alpha covers the **base Zoo Tycoon game's freeform mode**: its **animals an
 ### Not in this alpha yet
 
 - **Marine Mania:** shows now have linked tanks, scripts, specialists, spectators and admissions. Wider species/trick coverage, mixed habitats and containment still need testing. Original show scripts import, while exact active performance and spectator continuation remains incomplete.
-- **Dinosaur Digs:** egg hatching, behavior and DRT/scientist capture are implemented and have targeted checks. Full expansion parity and every custom dinosaur are not certified.
-- **Scenarios:** they open, but their goals and events aren't implemented yet. Stick to **freeform**.
-- **Original `.zoo` saves:** import terrain and substantial animal, staff, guest and manager state. This is a partial conversion: original routes/task stacks, show state and some other details remain incomplete. Shared .zoo saves carry an original-compatible world and full engine state. Engine-only .zt1save files require this engine. New snapshots use format 14, which older released engines cannot read. Resaving in the original removes engine-only data; retain separate copies.
+- **Dinosaur Digs:** eggs, hatching, young dinosaurs, sea dinosaurs that use water and land, scientists, and DRT capture are implemented and have targeted checks. Full expansion parity and every custom dinosaur are not certified.
+- **Scenarios:** their goals, grants and awards run and are kept in saves, but scenario play is still being checked against the original. **Freeform** is the best-tested way to play.
+- **Original `.zoo` saves:** import terrain and substantial animal, staff, guest and manager state. This is a partial conversion: original routes/task stacks, show state and some other details remain incomplete. Shared .zoo saves carry an original-compatible world and full engine state. Engine-only .zt1save files require this engine. New snapshots use format 15, which older released engines cannot read. Resaving in the original removes engine-only data; retain separate copies.
 - **Linux and macOS:** this engine is Windows only. For Linux, see [sharkwouter's zt1-engine](https://github.com/sharkwouter/zt1-engine), which this project grew from.
 
 ---
@@ -153,6 +156,9 @@ set SDL_AUDIODRIVER=wasapi
 "%LocalAppData%\Programs\ZT1-Engine\zt1-engine.exe"
 ```
 This only affects that one launch. It doesn't change anything else on your PC.
+
+**The game runs slowly or the picture looks wrong**
+Open Game Options › Display and set **Frame Rate Limit** to 60 (None makes the game draw as fast as it can and keeps your PC busy). If you turned on Graphics effects, Brightness, the colour filter or a shader mod, the game switches to OpenGL at its next start; turn them off to go back to Direct3D 11.
 
 **Settings went wrong**
 Delete `%LocalAppData%\zt1-engine\zoo.ini`: the next start makes a fresh one. Your saved zoos in `Documents` are not touched.

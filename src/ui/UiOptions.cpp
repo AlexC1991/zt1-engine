@@ -14,6 +14,7 @@
 #include "../Embed.hpp"
 #include "../Features.hpp"
 #include "../GpuFsr.hpp"
+#include "../GraphicsEffects.hpp"
 #include "../HdArt.hpp"
 #include "../ShaderMods.hpp"
 #include "../IniReader.hpp"
@@ -203,7 +204,7 @@ const char *kPageNames[kPages] = {"Game",          "Display", "Graphics", "Sound
 const char *kPageAbout[kPages] = {
     "Load or save your zoo, or leave it.",
     "The game's window: windowed or full screen, its resolution, frame rate and brightness.",
-    "Interface size, art upscaling, and optional day and night lighting.",
+    "Interface size, how the art is drawn bigger, effects for the map, and optional day and night lighting.",
     "How loud the game and the menu music are.",
     "Scrolling the map, tool tips, hotkeys and which Game Options you get.",
     "Colour-blind filters and a bigger mouse pointer.",
@@ -213,13 +214,20 @@ const char *kPageAbout[kPages] = {
     "This mod's own settings (its mod.json). Each works the moment it's changed.",
     "Check for a new version at startup, check now, or install an update when you're ready.",
 };
-// Element ids: the frame's, the tabs', then each page's own (9200 + 100 a page)
+// Element ids: the frame's, the tabs', then each page's own (9200 + 1000 a
+// page: room for lists of any length)
 enum : int {
-  kBackground = 9100, kTitle, kClose, kPageTitle, kAbout, kDone,
+  kBackground = 9100, kTitle, kClose, kPageTitle, kAbout, kDone, kPageScroll,
   kTabFirst = 9110, kTabSet = 9119,
 };
-int pageId(int page, int k) { return 9200 + page * 100 + k; }
-int pageOf(int id) { return id >= 9200 && id < 9200 + kPages * 100 ? (id - 9200) / 100 : -1; }
+constexpr int kPageIds = 1000;
+int pageId(int page, int k) { return 9200 + page * kPageIds + k; }
+int pageOf(int id) { return id >= 9200 && id < 9200 + kPages * kPageIds ? (id - 9200) / kPageIds : -1; }
+// ours: where a page's rows show (window units): under its title, above the
+// words about the setting under the mouse; longer pages scroll in it
+const int kViewTop = 52, kViewBottom = 440 - 102, kViewLeft = 182, kViewRight = 640 - 12, kScrollStep = 10;
+// (the footer box, under the rows: what the setting under the mouse does)
+const int kFooterTop = 440 - 98;
 // Each page's own (k): its rows' pieces. A choice is a tick box and its
 // words (k, k + 1) in a set
 enum : int { kLoad = 1, kSave, kMainMenu, kExit }; // Game
@@ -232,6 +240,10 @@ enum : int {
   kScaleLabel = 1, kScaleBar, kScaleAuto, kScaleNote,
   kArtLabel, kArtFsr, kArtSharp = 8, kArtSmooth = 10, kArtMmpx = 12, kArtSet = 14,
   kArtNote, kSharpLabel, kSharpBar, kArtStyled = 18,
+  // (the effects: GraphicsEffects.hpp)
+  kFxaa = 40, kBloomLabel = 44, kBloomOff = 45, kBloomSoft = 47, kBloomStrong = 49, kBloomSet = 51,
+  kTiltLabel = 52, kTiltOff = 53, kTiltLight = 55, kTiltStrong = 57, kTiltSet = 59,
+  kContrastLabel = 60, kContrastBar, kVibranceLabel, kVibranceBar, kVignette = 64, kGrain = 66,
 }; // Graphics
 enum : int { kVolumeLabel = 1, kVolumeBar, kMusicLabel, kMusicBar }; // Sound
 enum : int {
@@ -246,18 +258,18 @@ enum : int {
 // (Shaders: each shader a tick box, its name and its Settings button, from
 // kShaderFirst + 3i; the shown one's settings a label and slider each, from
 // kSettingFirst + 2j, three across)
-enum : int { kShaderFirst = 1, kShaderRows = 3, kSettingFirst = 20, kSettingRows = 12, kShadersNone = 50 };
+enum : int { kShaderFirst = 100, kShaderRows = 20, kSettingFirst = 200, kSettingRows = 24, kShadersNone = 50 };
 // (Mods: each mod a tick box and its name, kModFirst + 2i, + 1,
 // and its Settings button when it has some, kModSettingsFirst + i)
-enum : int { kModMenu = 1, kModMenuText, kModsTitle, kModsNote, kModPrev, kModNext, kModPageText, kModFirst = 20, kModRows = 5, kModSettingsFirst = 80 };
+enum : int { kModMenu = 1, kModMenuText, kModsTitle, kModsNote, kModPrev, kModNext, kModPageText, kModFirst = 100, kModRows = 100, kModSettingsFirst = 300 };
 enum : int { kUpdateNow = 12, kUpdateStatus }; // Updates
 // (Updates' startup check row: which of the page's switches it is)
 int updatesRow();
 // (a mod's settings page: Back, its name and what it is; each setting from
 // kMsFirst + 4j - its words, its slider, a toggle's tick box and words -
 // three across)
-enum : int { kMsBack = 1, kMsName, kMsNone, kMsFirst = 10, kMsRows = 12 };
-enum : int { kSwitchFirst = 40, kSwitchTextFirst = 70 }; // a page's extras: toggle, its name
+enum : int { kMsBack = 1, kMsName, kMsNone, kMsFirst = 100, kMsRows = 24 };
+enum : int { kSwitchFirst = 400, kSwitchTextFirst = 600 }; // a page's extras: toggle, its name
 // The window's size, and its columns: labels, then controls
 const int kW = 640, kH = 440;
 const int kLabelX = 196, kControlX = 356, kControlW = 254, kRowsY = 58;
@@ -267,8 +279,7 @@ bool g_makingInGame = true;
 // Which page each extra is on (any other: Gameplay). This window's own
 // switch is Controls' Game Options row, not a tick box of its own
 int extraPage(const std::string &name) {
-  if (name == "daynight")
-    return kGraphics;
+  // (the day/night cycle is a way to play, with Game speed: Gameplay)
   if (name == "optionswindow")
     return -1;
   if (name == "hotkeys" || name == "smartstack" || name == "dragwindows")
@@ -364,6 +375,18 @@ std::string bodyText(int id, int x, int y, int dx, const std::string &dy = "fitf
                      "layer=2\r\n" +
                      (centred ? "justify=center\r\n" : ""));
 }
+// ours: a section's name over its rows, in the page title's gold (its
+// words set by wire() from this list: a page's headings, made with it)
+std::vector<std::pair<int, std::string>> g_headings;
+const int kHeadH = 20;
+std::string heading(int id, int y, const std::string &words) {
+  g_headings.push_back({id, words});
+  return section("Head" + std::to_string(id),
+                 "type=UIText\r\nid=" + std::to_string(id) + "\r\n" + at(196, y + 2) +
+                     "dx=380\r\ndy=fitfont\r\nfont=25001\r\nfontsize=25002\r\nforecolor=255\r\nforecolor=218\r\n"
+                     "forecolor=90\r\nbackcolor=59\r\nbackcolor=71\r\nbackcolor=45\r\nborder=1\r\ntransparent=1\r\n"
+                     "shadowtext=1\r\nlayer=2\r\n");
+}
 std::string goldButton(int id, int x, int y, int textId = 0) {
   return section("Button" + std::to_string(id),
                  "type=UIButton\r\nid=" + std::to_string(id) + "\r\n" + at(x, y) +
@@ -401,7 +424,10 @@ std::string slider(int id, int x, int y, int dx = 110) {
 // and a tick box 4 down beside its own text
 const int kRow = 30, kTextDown = 7, kTickDown = 4, kTickText = 26;
 
+enum : int { kHeadFirst = 900 }; // (a page's headings: kHeadFirst + n)
+
 std::string optionsLayout() {
+  g_headings.clear();
   // (kW x kH: the Help window's frame, stretched from its edges, drawn with
   // the zoo behind its panes by UiOptions::draw - not an element)
   std::string t = section("LayoutInfo", "x=center\r\ny=center\r\ndx=" + std::to_string(kW) +
@@ -432,8 +458,14 @@ std::string optionsLayout() {
   }
   t += radioSet(kTabSet, tabs);
   t += goldButton(kDone, 34, kH - 65);
+  // The page's scrollbar (the game's own, as its windows' lists have:
+  // ui/confirm.lyt), down the page's right edge when it's taller than the
+  // window (UiOptions::PageScroll places it)
+  t += section("PageScroll", "type=UIScrollBar\r\nid=" + std::to_string(kPageScroll) +
+                                 "\r\nanimation=ui/sharedui/scrolbck/scrolbck\r\nupArrow=ui/sharedui/arowup/arowup"
+                                 "\r\nthumb=ui/sharedui/thumb/thumb\r\ndownArrow=ui/sharedui/arowdn/arowdn\r\nlayer=3");
   // What the setting under the mouse does: three lines at the page's foot
-  t += bodyText(kAbout, kLabelX, kH - 90, kW - 222, "62");
+  t += bodyText(kAbout, kLabelX, kFooterTop + 8, kW - 222, "52");
 
   auto label = [&t](int id, int y, int dx = 156) { t += bodyText(id, kLabelX, y + kTextDown, dx); };
   // A choice: its tick box and words (k, k + 1)
@@ -445,6 +477,13 @@ std::string optionsLayout() {
   auto onOff = [&t](int id, int x, int y, int dx) {
     t += tickBox(id, x, y + kTickDown, false);
     t += bodyText(id + 1, x + kTickText, y + kTextDown, dx);
+  };
+  // ours: a switch's row as the other rows - its name on the left, its tick
+  // box (k) at the row's right end, its words (k + 1) along the row
+  const int kToggleX = kControlX + kControlW - 34;
+  auto toggle = [&t, kToggleX](int id, int y) {
+    t += tickBox(id, kToggleX, y + kTickDown, false);
+    t += bodyText(id + 1, kLabelX, y + kTextDown, kToggleX - kLabelX - 10);
   };
 
   // Game: the original panel's four buttons (their own strings), in the
@@ -459,6 +498,8 @@ std::string optionsLayout() {
 
   // Display
   int y = kRowsY;
+  t += heading(pageId(kDisplay, kHeadFirst), y, "Screen");
+  y += kHeadH;
   label(pageId(kDisplay, kModeLabel), y);
   // (three: started left of the controls' column, room for their words)
   choice(pageId(kDisplay, kModeWin), kControlX - 50, y, 60);
@@ -470,24 +511,32 @@ std::string optionsLayout() {
   label(pageId(kDisplay, kResLabel), y);
   t += slider(pageId(kDisplay, kResBar), kControlX, y, kControlW - 30);
   y += kRow;
+  t += heading(pageId(kDisplay, kHeadFirst + 1), y, "Frame rate");
+  y += kHeadH;
   label(pageId(kDisplay, kFpsLimLabel), y);
   t += slider(pageId(kDisplay, kFpsLimBar), kControlX, y, kControlW - 30);
   y += kRow;
-  onOff(pageId(kDisplay, kVsync), kLabelX, y, 380);
+  toggle(pageId(kDisplay, kVsync), y);
   y += kRow;
+  t += heading(pageId(kDisplay, kHeadFirst + 2), y, "Picture");
+  y += kHeadH;
   label(pageId(kDisplay, kBrightLabel), y);
   t += slider(pageId(kDisplay, kBrightBar), kControlX, y, kControlW - 30);
   y += kRow;
-  onOff(pageId(kDisplay, kFps), kLabelX, y, 380);
+  toggle(pageId(kDisplay, kFps), y);
 
   // Graphics
   y = kRowsY;
+  t += heading(pageId(kGraphics, kHeadFirst), y, "Interface");
+  y += kHeadH;
   label(pageId(kGraphics, kScaleLabel), y);
   // (wide: every 0.05 a step of its own)
   t += slider(pageId(kGraphics, kScaleBar), kControlX, y, kControlW - 10);
   t += tickBox(pageId(kGraphics, kScaleAuto), kControlX, y + 28, false);
   t += bodyText(pageId(kGraphics, kScaleNote), kControlX + kTickText, y + 31, 200);
   y += kRow + 26;
+  t += heading(pageId(kGraphics, kHeadFirst + 1), y, "Art");
+  y += kHeadH;
   label(pageId(kGraphics, kArtLabel), y);
   // (five: two rows - the graphics card's two, then the plain looks)
   choice(pageId(kGraphics, kArtFsr), kControlX, y, 50);
@@ -504,6 +553,35 @@ std::string optionsLayout() {
   y += 66;
   label(pageId(kGraphics, kSharpLabel), y);
   t += slider(pageId(kGraphics, kSharpBar), kControlX, y, kControlW - 30);
+  y += kRow + 6;
+  // Effects (GraphicsEffects.hpp): each a row, off unless picked
+  t += heading(pageId(kGraphics, kHeadFirst + 3), y, "Effects");
+  y += kHeadH;
+  toggle(pageId(kGraphics, kFxaa), y);
+  y += kRow;
+  auto threeWay = [&](int labelK, int k0, int k1, int k2, int setK) {
+    label(pageId(kGraphics, labelK), y);
+    choice(pageId(kGraphics, k0), kControlX, y, 40);
+    choice(pageId(kGraphics, k1), kControlX + 76, y, 50);
+    choice(pageId(kGraphics, k2), kControlX + 162, y, 56);
+    t += radioSet(pageId(kGraphics, setK), {pageId(kGraphics, k0), pageId(kGraphics, k1), pageId(kGraphics, k2)});
+    y += kRow;
+  };
+  threeWay(kBloomLabel, kBloomOff, kBloomSoft, kBloomStrong, kBloomSet);
+  threeWay(kTiltLabel, kTiltOff, kTiltLight, kTiltStrong, kTiltSet);
+  label(pageId(kGraphics, kContrastLabel), y);
+  t += slider(pageId(kGraphics, kContrastBar), kControlX, y, kControlW - 30);
+  y += kRow;
+  label(pageId(kGraphics, kVibranceLabel), y);
+  t += slider(pageId(kGraphics, kVibranceBar), kControlX, y, kControlW - 30);
+  y += kRow;
+  toggle(pageId(kGraphics, kVignette), y);
+  y += kRow;
+  toggle(pageId(kGraphics, kGrain), y);
+  // (its switches, if any are ever given it, under the effects: the day/night
+  // cycle that was here is a way to play, on Gameplay)
+  y += kRow + 6;
+  const int graphicsSwitchesY = y;
 
   // Sound
   y = kRowsY;
@@ -518,7 +596,7 @@ std::string optionsLayout() {
   label(pageId(kControls, kScrollLabel), y);
   t += slider(pageId(kControls, kScrollBar), kControlX, y, kControlW - 30);
   y += kRow;
-  onOff(pageId(kControls, kEdge), kLabelX, y, 380);
+  toggle(pageId(kControls, kEdge), y);
   y += kRow;
   label(pageId(kControls, kTipsLabel), y);
   choice(pageId(kControls, kTipsShort), kControlX, y, 50);
@@ -572,10 +650,9 @@ std::string optionsLayout() {
   }
   t += bodyText(pageId(kShaders, kShadersNone), kLabelX, kRowsY + 4, kW - 222, "52");
   for (int j = 0; j < kSettingRows; j++) {
-    int id = pageId(kShaders, kSettingFirst + 2 * j);
-    int sx = kLabelX + (j % 3) * 144, sy = kRowsY + kShaderRows * 34 + 6 + (j / 3) * 42;
-    t += bodyText(id, sx, sy, 140);
-    t += slider(id + 1, sx, sy + 13, 132);
+    int id = pageId(kShaders, kSettingFirst + 2 * j), sy = kRowsY + kShaderRows * 34 + 6 + j * kRow;
+    label(id, sy);
+    t += slider(id + 1, kControlX, sy, kControlW - 30);
   }
 
   // Mods: the Mod Menu (it was Get New Zoo Tycoon Items' on the
@@ -583,28 +660,18 @@ std::string optionsLayout() {
   // each on or off right here
   t += goldButton(pageId(kMods, kModMenu), kLabelX, kRowsY + 2);
   t += bodyText(pageId(kMods, kModMenuText), kLabelX + 126, kRowsY + 4, kW - 348, "26");
-  t += bodyText(pageId(kMods, kModsTitle), kLabelX, kRowsY + 118, 132);
-  t += bodyText(pageId(kMods, kModsNote), kLabelX + 150, kRowsY + 118, kW - 372);
-  const int modRowsY = kRowsY + 134, modRowStep = 24;
+  int modSwitches = 0;
+  for (const Features::Switch &f : Features::all())
+    if (extraPage(f.name) == kMods)
+      modSwitches++;
+  const int modsTitleY = kRowsY + 40 + modSwitches * 24 + 8;
+  t += bodyText(pageId(kMods, kModsTitle), kLabelX, modsTitleY, 132);
+  t += bodyText(pageId(kMods, kModsNote), kLabelX + 150, modsTitleY, kW - 372);
+  const int modRowsY = modsTitleY + 22, modRowStep = 26;
   for (int i = 0; i < kModRows; i++) {
     onOff(pageId(kMods, kModFirst + 2 * i), kLabelX, modRowsY + i * modRowStep, 270);
     t += goldButton(pageId(kMods, kModSettingsFirst + i), kW - 146, modRowsY + i * modRowStep);
   }
-
-  // Compact arrows and the page number fit between the list and its footer.
-  const int modArrowW = 32, modArrowH = 24, modPagerGap = 8, modPageTextW = 96;
-  const int modPagerW = 2 * modArrowW + 2 * modPagerGap + modPageTextW;
-  const int modPagerX = kLabelX + (kW - 222 - modPagerW) / 2;
-  const int modPagerY = modRowsY + kModRows * modRowStep + 8;
-  auto modPageButton = [&t](int id, int x, int y) {
-    std::string b = goldButton(id, x, y);
-    t += b.substr(0, b.size() - 2) + "dx=" + std::to_string(modArrowW) +
-         "\r\ndy=" + std::to_string(modArrowH) + "\r\n\r\n";
-  };
-  modPageButton(pageId(kMods, kModPrev), modPagerX, modPagerY);
-  t += bodyText(pageId(kMods, kModPageText), modPagerX + modArrowW + modPagerGap,
-                modPagerY + kTextDown, modPageTextW, "fitfont", true);
-  modPageButton(pageId(kMods, kModNext), modPagerX + modPagerW - modArrowW, modPagerY);
 
   // Updates: status below the startup checkbox and manual check button,
   // rather than appending a changing message to the checkbox's label.
@@ -616,45 +683,37 @@ std::string optionsLayout() {
   t += bodyText(pageId(kModSet, kMsName), kLabelX + 126, kRowsY + 4, kW - 348, "26");
   t += bodyText(pageId(kModSet, kMsNone), kLabelX, kRowsY + 44, kW - 222, "52");
   for (int j = 0; j < kMsRows; j++) {
-    int id = pageId(kModSet, kMsFirst + 4 * j);
-    int sx = kLabelX + (j % 3) * 144, sy = kRowsY + 44 + (j / 3) * 42;
-    t += bodyText(id, sx, sy, 140);
-    t += slider(id + 1, sx, sy + 13, 132);
-    t += tickBox(id + 2, sx, sy + 12, false);
-    t += bodyText(id + 3, sx + kTickText, sy + 15, 114);
+    int id = pageId(kModSet, kMsFirst + 4 * j), sy = kRowsY + 44 + j * kRow;
+    label(id, sy);
+    t += slider(id + 1, kControlX, sy, kControlW - 30);
+    toggle(id + 2, sy);
   }
 
   // The extras, each on its page, below that page's other rows (24 apart)
   int next[kPages] = {};
-  next[kGraphics] = 270;
+  next[kGraphics] = graphicsSwitchesY;
   next[kControls] = kRowsY + 7 * kRow + 6;
   next[kGameplay] = kRowsY;
   next[kMods] = kRowsY + 40;
   next[kUpdates] = kRowsY;
-  // (more than fit above the description box: a second column beside
-  // the first - the Gameplay page's ran down over the box)
-  int total[kPages] = {};
-  for (const Features::Switch &f : Features::all())
-    if (int p = extraPage(f.name); p >= 0)
-      total[p]++;
-  // (the infinite money cheat: beside Load mods, in a column of its own -
-  // the mods list fills the page under the switches)
-  int count[kPages] = {}, row[kPages] = {};
+  // (one under another, however many: a page longer than the window
+  // scrolls)
+  int count[kPages] = {};
   for (const Features::Switch &f : Features::all()) {
     int p = extraPage(f.name);
     if (p < 0)
       continue;
     int k = count[p]++;
-    const bool cheat = std::string(f.name) == "infinitemoney";
-    const int r = cheat ? 0 : row[p]++;
-    const int perColumn = std::max(1, (kH - 96 - next[p]) / 24);
-    const bool twoColumns = cheat || total[p] > perColumn;
-    const int column = cheat ? 1 : r / perColumn, ry = next[p] + (r % perColumn) * 24;
-    const int x = kLabelX + column * 214;
-    const int textW = std::string(f.name) == "updatechecks" ? kW - 146 - x - kTickText - 12
-                                                          : twoColumns ? 186 : 380;
-    t += tickBox(pageId(p, kSwitchFirst + k), x, ry + kTickDown, false);
-    t += bodyText(pageId(p, kSwitchTextFirst + k), x + kTickText, ry + kTextDown, textW);
+    const int ry = next[p] + k * 24, x = kLabelX;
+    const int textW = std::string(f.name) == "updatechecks" ? kW - 146 - x - kTickText - 12 : 380;
+    // (Check for updates keeps its box first: Check now ends its row)
+    if (std::string(f.name) == "updatechecks") {
+      t += tickBox(pageId(p, kSwitchFirst + k), x, ry + kTickDown, false);
+      t += bodyText(pageId(p, kSwitchTextFirst + k), x + kTickText, ry + kTextDown, textW);
+    } else {
+      t += tickBox(pageId(p, kSwitchFirst + k), kToggleX, ry + kTickDown, false);
+      t += bodyText(pageId(p, kSwitchTextFirst + k), kLabelX, ry + kTextDown, kToggleX - kLabelX - 10);
+    }
     // (Check for updates: Check now - or Install now - at its end)
     if (std::string(f.name) == "updatechecks")
       t += goldButton(pageId(p, kUpdateNow), kW - 146, ry - 2);
@@ -702,7 +761,7 @@ int UiOptions::updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const s
     options.open(inGame, kMods);
     check(options.layout != nullptr, "options opens");
     if (!options.layout) continue;
-    for (int page : {kMods, kUpdates, kGameplay, kGraphics}) {
+    for (int page : {kMods, kUpdates, kGameplay, kGraphics, kDisplay, kSound, kControls, kAccess, kShaders}) {
       options.showPage(page);
       SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); SDL_RenderClear(renderer);
       options.draw(renderer, &screen);
@@ -740,15 +799,34 @@ int UiOptions::updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const s
           if (fits) {
             auto r = box->getLastRect(), text = words->getLastRect();
             const auto frame = options.lastRect;
+            // (across, in the page; down, in it or within its scroll)
+            const SDL_Rect view = options.viewport();
             fits = r.w > 0 && r.h > 0 && text.w > 0 && text.h > 0 &&
-                   r.x >= frame.x && text.x >= r.x + r.w &&
-                   text.x + text.w <= frame.x + frame.w &&
-                   std::max(r.y + r.h, text.y + text.h) <= description->getLastRect().y;
+                   r.x >= frame.x && (text.x >= r.x + r.w || text.x + text.w <= r.x) &&
+                   r.x + r.w <= frame.x + frame.w && text.x + text.w <= frame.x + frame.w &&
+                   std::max(r.y + r.h, text.y + text.h) <=
+                       view.y + view.h + options.pageScroll.getScrollMaximum() * kScrollStep;
           }
           check(fits, std::string(f.name) + " Gameplay row fits without clipping");
         }
+        // ours: a page longer than the window scrolls - scrolled to its
+        // end, its last switch is in the page, under the title, above the
+        // words at its foot
+        if (index > 0) {
+          options.scrollBy(100000);
+          SDL_RenderClear(renderer);
+          options.draw(renderer, &screen);
+          auto *last = tabs->getElementById(pageId(kGameplay, kSwitchTextFirst + index - 1));
+          const SDL_Rect view = options.viewport();
+          SDL_Rect lr = last ? last->getLastRect() : SDL_Rect{0, 0, 0, 0};
+          check(options.pageScroll.getScrollMaximum() > 0 && lr.h > 0 && lr.y >= view.y && lr.y + lr.h <= view.y + view.h,
+                "Gameplay scrolls to its last switch");
+          options.scrollBy(-100000);
+          SDL_RenderClear(renderer);
+          options.draw(renderer, &screen);
+        }
       }
-      for(const std::string name : {"gametime", "daynight", "fastforward"}) {
+      for(const std::string name : {"daynight", "fastforward"}) {
         const int owner=extraPage(name);
         int index=0;Features::Switch *feature=nullptr;
         for(auto &f:Features::all())if(extraPage(f.name)==owner) {
@@ -760,19 +838,20 @@ int UiOptions::updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const s
         check(feature && box && words && box->isHidden()==(page!=owner) && words->isHidden()==(page!=owner),
               name+" switch appears only on its own page");
         if(page==owner && box && words && feature) {
-          const char *label = name == "gametime" ? "Display game time" :
-                              name == "daynight" ? "Day/night cycle" : "Game speed";
+          const char *label = name == "daynight" ? "Day/night cycle" : "Game speed";
           check(words->getText()==label,name+" has its player-facing label");
           if (name == "fastforward")
             check(owner == kGameplay, "fastforward belongs on Gameplay");
           auto r=box->getLastRect(),text=words->getLastRect();
           auto *description=tabs->getElementById(kAbout);
-          check(r.w>0 && r.h>0 && text.x>=r.x+r.w && description && text.y+text.h<=description->getLastRect().y,
-                name+" label and switch fit above the description");
+          const SDL_Rect view = options.viewport();
+          check(r.w>0 && r.h>0 && (text.x>=r.x+r.w || text.x+text.w<=r.x) && description &&
+                text.y+text.h<=view.y+view.h+options.pageScroll.getScrollMaximum()*kScrollStep,
+                name+" label and switch fit in the page (or its scroll)");
           if((std::getenv("ZT_HUD_CLOCK_CHECKS") || std::getenv("ZT_FAST_FORWARD_CHECKS")) &&
              std::getenv("ZT1_CONFIG_PATH")) {
             const bool saved=*feature->value;
-            bool *other=name=="gametime"?&Features::dayNightLighting:&Features::showGameTime;
+            bool *other=name=="daynight"?&Features::fastForward:&Features::dayNightLighting;
             const bool otherValue=*other;
             const bool lightingValue=Features::dayNightLighting;
             *feature->value=false;box->setToggledOn(false);
@@ -792,12 +871,25 @@ int UiOptions::updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const s
         }
       }
       SDL_Surface *image = SDL_CreateRGBSurfaceWithFormat(0, 800, 600, 32, SDL_PIXELFORMAT_ARGB8888);
-      const char *shotName=page==kGameplay?"gameplay":page==kGraphics?"graphics":page==kMods?"mods":"updates";
+      const std::string shotName = kPageNames[page];
       std::string file = out + "/options-" + (inGame ? "zoo-" : "menu-") + shotName + ".png";
       bool saved = image && SDL_RenderReadPixels(renderer, &screen, SDL_PIXELFORMAT_ARGB8888, image->pixels, image->pitch) == 0 &&
                    IMG_SavePNG(image, file.c_str()) == 0;
       if (image) SDL_FreeSurface(image);
       check(saved, "capture " + file);
+      // (a long page scrolled, too: Graphics' effects, under the fold)
+      if (page == kGraphics) {
+        options.scrollBy(150);
+        SDL_RenderClear(renderer);
+        options.draw(renderer, &screen);
+        SDL_Surface *more = SDL_CreateRGBSurfaceWithFormat(0, 800, 600, 32, SDL_PIXELFORMAT_ARGB8888);
+        const std::string scrolled = out + "/options-" + (inGame ? "zoo-" : "menu-") + shotName + "-scrolled.png";
+        check(more && SDL_RenderReadPixels(renderer, &screen, SDL_PIXELFORMAT_ARGB8888, more->pixels, more->pitch) == 0 &&
+                  IMG_SavePNG(more, scrolled.c_str()) == 0,
+              "capture " + scrolled);
+        if (more) SDL_FreeSurface(more);
+        options.scrollBy(-150);
+      }
       SDL_RenderPresent(renderer);
     }
   }
@@ -813,6 +905,13 @@ void UiOptions::open(bool inGame, int page) {
   if (!ini)
     return;
   this->layout = new UiLayout(ini, this->rm);
+  this->ini = ini;
+  this->rows.clear();
+  this->originalY.clear();
+  this->pageScroll.o = this;
+  this->scroll = this->contentBottom = 0;
+  if (auto *bar = dynamic_cast<UiScrollBar *>(this->layout->getElementById(kPageScroll)))
+    bar->attach(&this->pageScroll);
   this->inGame = inGame;
   this->closeAsked = false;
   this->justOpened = true;
@@ -1016,7 +1115,18 @@ void UiOptions::showModSettings() {
         // (a choice: one of them)
         if (copy.type == "choice")
           value = std::round(value);
-        Mods::setSetting(folder, name, value);
+        // (an HD art mod's graphics card setting: the same on every HD art
+        // mod, and the zoomed-in pictures made again with it, at once)
+        if (name == Mods::kHdCompression) {
+          if (std::lround(value) != Mods::hdCompression(folder)) {
+            for (const Mods::Mod &m : Mods::list())
+              for (const Mods::Setting &other : m.settings)
+                if (other.name == name)
+                  Mods::setSetting(m.folder, name, value);
+            HdArt::refresh();
+          }
+        } else
+          Mods::setSetting(folder, name, value);
         Shaders::setModValue(folder, name, value);
         text(id, label(copy, value));
       };
@@ -1148,8 +1258,9 @@ void UiOptions::tick(SDL_Renderer *renderer) {
     }
   // Rows that only apply sometimes
   this->hideRow({pageId(kGraphics, kSharpLabel), pageId(kGraphics, kSharpBar)},
-                !((Display::art() == Display::Art::Fsr || Display::art() == Display::Art::Stylized) &&
-                  GpuFsr::available()));
+                !(((Display::art() == Display::Art::Fsr || Display::art() == Display::Art::Stylized) &&
+                   GpuFsr::available()) ||
+                  HdArt::active()));
   this->hideRow({pageId(kAccess, kStrengthLabel), pageId(kAccess, kStrengthBar)},
                 Display::filter() == Display::Filter::Off);
   // What the art looks like now
@@ -1203,15 +1314,26 @@ void UiOptions::finishClose() {
   this->closeAsked = false;
 }
 
+// addition: Display game time ticked and greyed while the day/night cycle or
+// game speed shows the clock anyway (Features::gameTimeNeeded); the player's
+// own choice comes back as it was when neither needs it
+void UiOptions::showGameTimeSwitch() {
+  if (!this->gameTimeBox)
+    return;
+  const bool needed = Features::gameTimeNeeded();
+  this->gameTimeBox->setDisabled(needed);
+  this->gameTimeBox->setToggledOn(needed || Features::showGameTime);
+}
+
 void UiOptions::setPage(int page) {
   if (!this->inGame && page == kGame)
     page = kDisplay;
   this->page = page;
+  this->scroll = 0;
   // Each page's own elements shown, the others' hidden
-  for (int p = 0; p < kPages; p++)
-    for (int k = 1; k < 100; k++)
-      if (UiElement *e = this->layout->getElementById(pageId(p, k)))
-        e->setHidden(p != page || this->hiddenIds.count(pageId(p, k)));
+  for (UiElement *e : this->layout->getChildren())
+    if (const int p = pageOf(e->getId()); p >= 0)
+      e->setHidden(p != page || this->hiddenIds.count(e->getId()));
   // (a mod's settings: under Mods' tab, titled with the mod)
   if (UiButton *tab = dynamic_cast<UiButton *>(this->layout->getElementById(kTabFirst + (page == kModSet ? kMods : page))))
     tab->choose();
@@ -1228,6 +1350,7 @@ void UiOptions::setPage(int page) {
 }
 
 void UiOptions::wire() {
+  this->gameTimeBox = nullptr; // (set again below, with the layout as it is now)
   UiLayout *L = this->layout;
   auto text = [L](int id, const std::string &s) {
     if (UiText *t = dynamic_cast<UiText *>(L->getElementById(id)))
@@ -1239,6 +1362,8 @@ void UiOptions::wire() {
     for (int id : ids)
       this->about[id] = s;
   };
+  for (const auto &[id, words] : g_headings) // (the pages' section names)
+    text(id, words);
 
   // The frame
   for (int p : kTabPages)
@@ -1431,13 +1556,76 @@ void UiOptions::wire() {
     s->onChange = [](int v) {
       char b[16];
       std::snprintf(b, sizeof b, "%.2f", 2.0f - v / 50.0f);
+      const bool changed = Settings::get("user", "artsharpness", "0.2") != b;
       Settings::set("user", "artsharpness", b);
-      // (FSR sharpens every frame: at once)
+      // (FSR sharpens every frame: at once; HD art as it loads: made again)
       GpuFsr::setSharpness(2.0f - v / 50.0f);
+      if (changed && HdArt::active())
+        HdArt::refresh();
     };
   }
+  // Effects (GraphicsEffects.hpp): each changed at once and kept
+  {
+    auto need = [](const std::string &what) {
+      return GpuFsr::available() ? what : what + " Needs OpenGL: picked, it works from the next start.";
+    };
+    auto change = [](std::function<void(GraphicsEffects::Settings &)> f) {
+      GraphicsEffects::Settings s = GraphicsEffects::settings();
+      f(s);
+      GraphicsEffects::set(s);
+    };
+    const GraphicsEffects::Settings &now = GraphicsEffects::settings();
+    onOff(kGraphics, kFxaa, "Anti-aliasing (FXAA)", now.fxaa,
+          [change](bool on) { change([on](GraphicsEffects::Settings &s) { s.fxaa = on; }); });
+    describe({pageId(kGraphics, kFxaa), pageId(kGraphics, kFxaa + 1)},
+             need("Smooths the jagged edges where the map's art meets the ground and other art."));
+    text(pageId(kGraphics, kBloomLabel), "Bloom");
+    choices(kGraphics, {kBloomOff, kBloomSoft, kBloomStrong}, {"Off", "Soft", "Strong"}, now.bloom,
+            [change](int i) { change([i](GraphicsEffects::Settings &s) { s.bloom = i; }); });
+    describe({pageId(kGraphics, kBloomLabel), pageId(kGraphics, kBloomOff), pageId(kGraphics, kBloomOff + 1),
+              pageId(kGraphics, kBloomSoft), pageId(kGraphics, kBloomSoft + 1), pageId(kGraphics, kBloomStrong),
+              pageId(kGraphics, kBloomStrong + 1)},
+             need("Bright parts of the map - sunlit paths, lamps at night, water - glow softly into what's around them."));
+    text(pageId(kGraphics, kTiltLabel), "Tilt-shift");
+    choices(kGraphics, {kTiltOff, kTiltLight, kTiltStrong}, {"Off", "Light", "Strong"}, now.tiltShift,
+            [change](int i) { change([i](GraphicsEffects::Settings &s) { s.tiltShift = i; }); });
+    describe({pageId(kGraphics, kTiltLabel), pageId(kGraphics, kTiltOff), pageId(kGraphics, kTiltOff + 1),
+              pageId(kGraphics, kTiltLight), pageId(kGraphics, kTiltLight + 1), pageId(kGraphics, kTiltStrong),
+              pageId(kGraphics, kTiltStrong + 1)},
+             need("Blurs the top and bottom of the view, so the zoo looks like a model seen close up."));
+    auto percent = [text](int id, const char *name, int v) { text(id, std::string(name) + ": " + std::to_string(v) + "%"); };
+    percent(pageId(kGraphics, kContrastLabel), "Contrast", now.contrast);
+    if (UiScrollBar *s = bar(pageId(kGraphics, kContrastBar))) {
+      s->setValue(now.contrast);
+      s->onChange = [percent, change](int v) {
+        change([v](GraphicsEffects::Settings &e) { e.contrast = v; });
+        percent(pageId(kGraphics, kContrastLabel), "Contrast", v);
+      };
+    }
+    describe({pageId(kGraphics, kContrastLabel), pageId(kGraphics, kContrastBar)},
+             need("Deeper darks and brighter lights across the map. 0% is as the game draws it."));
+    percent(pageId(kGraphics, kVibranceLabel), "Vibrance", now.vibrance);
+    if (UiScrollBar *s = bar(pageId(kGraphics, kVibranceBar))) {
+      s->setValue(now.vibrance);
+      s->onChange = [percent, change](int v) {
+        change([v](GraphicsEffects::Settings &e) { e.vibrance = v; });
+        percent(pageId(kGraphics, kVibranceLabel), "Vibrance", v);
+      };
+    }
+    describe({pageId(kGraphics, kVibranceLabel), pageId(kGraphics, kVibranceBar)},
+             need("Livelier colour: the duller colours lifted most, so nothing turns garish. 0% is as the game draws it."));
+    onOff(kGraphics, kVignette, "Vignette", now.vignette,
+          [change](bool on) { change([on](GraphicsEffects::Settings &s) { s.vignette = on; }); });
+    describe({pageId(kGraphics, kVignette), pageId(kGraphics, kVignette + 1)},
+             need("Darkens the corners of the view a little, drawing the eye to the middle."));
+    onOff(kGraphics, kGrain, "Film grain", now.grain,
+          [change](bool on) { change([on](GraphicsEffects::Settings &s) { s.grain = on; }); });
+    describe({pageId(kGraphics, kGrain), pageId(kGraphics, kGrain + 1)},
+             need("A fine, moving grain over the map, like film."));
+  }
   describe({pageId(kGraphics, kSharpBar), pageId(kGraphics, kSharpLabel)},
-           "How crisp FSR keeps the enlarged art: further right is sharper. (FSR only.)");
+           "How crisp the enlarged art is kept: further right is sharper. FSR's own, and an HD art mod's pictures "
+           "(at any Art upscaling).");
 
   // Sound (the original's: gameopt2_MainVolumeScrollbar_click 0x58b98d, 0 is
   // silence; gameopt2_MainMenuMusicScrollbar_click 0x47ff4d)
@@ -1579,14 +1767,19 @@ void UiOptions::wire() {
       b->setToggledOn(*f.value);
       bool *value = f.value;
       std::string name = f.name;
-      b->onClick = [b, value, name] {
+      if (name == "gametime")
+        this->gameTimeBox = b;
+      b->onClick = [this, b, value, name] {
         *value = b->isToggledOn();
         Settings::saveExtra(name, *value);
         b->setToggledOn(*value); // a required map pack can refuse All Off
+        if (name == "gametime" || name == "daynight" || name == "fastforward")
+          this->showGameTimeSwitch();
       };
     }
     describe({pageId(p, kSwitchFirst + k), pageId(p, kSwitchTextFirst + k)}, extraAbout(f));
   }
+  this->showGameTimeSwitch();
   // (Mods' switches - Load mods among them: HD art mods follow it
   // at once, and the list says so)
   for (int k = 0; k < count[kMods]; k++)
@@ -1665,14 +1858,41 @@ UiAction UiOptions::handleInputs(std::vector<Input> &inputs) {
     if (this->dragMoved)
       return UiAction::NONE;
   }
+  // ours: the wheel over the page scrolls it; rows scrolled out of the page
+  // (or all of them, the mouse off the page) don't take the inputs
+  const SDL_Rect view = this->viewport();
+  SDL_Point mouse = {this->mouseX, this->mouseY};
+  const bool overPage = SDL_PointInRect(&mouse, &view);
+  for (Input &in : inputs)
+    if (overPage && (in.event == InputEvent::SCROLL_UP || in.event == InputEvent::SCROLL_DOWN)) {
+      this->scrollBy(in.event == InputEvent::SCROLL_UP ? -3 * kScrollStep : 3 * kScrollStep);
+      in.event = InputEvent::NONE;
+    }
+  std::vector<UiElement *> away;
+  bool held = false;
+  for (UiElement *e : this->pageElements())
+    if (auto *bar = dynamic_cast<UiScrollBar *>(e); bar && bar->isDragging())
+      held = true;
+  if (!held)
+    for (UiElement *e : this->pageElements()) {
+      SDL_Rect r = e->getLastRect();
+      if (!overPage || !SDL_HasIntersection(&r, &view)) {
+        e->setHidden(true);
+        away.push_back(e);
+      }
+    }
   this->layout->handleInputs(inputs);
+  // (shown again only if they're still the page's own: a tab clicked just now
+  // has hidden this page for another, and its rows must stay hidden)
+  for (UiElement *e : away)
+    e->setHidden(pageOf(e->getId()) != this->page || this->hiddenIds.count(e->getId()));
   // What the setting under the mouse does (else the page's own words)
   if (UiText *a = dynamic_cast<UiText *>(this->layout->getElementById(kAbout))) {
     std::string said = aboutText(kPageAbout[this->page]);
     SDL_Point m = {this->mouseX, this->mouseY};
     for (const auto &[id, words] : this->about)
       if (UiElement *e = this->layout->getElementById(id))
-        if (pageOf(id) == this->page && !e->isHidden()) {
+        if (pageOf(id) == this->page && !e->isHidden() && overPage) {
           SDL_Rect r = e->getLastRect();
           if (SDL_PointInRect(&m, &r)) {
             said = aboutText(words);
@@ -1696,6 +1916,7 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
     return;
   this->scale.update(renderer, originX, originY);
   this->tick(renderer);
+  this->reflow(); // (rows hidden this frame: those under them closed up)
   SDL_Rect r = this->layout->computeRect(renderer, screen);
   // (ours, dragwindows: where it was dragged to, its title kept on the screen)
   if (!this->settled) {
@@ -1719,8 +1940,9 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
     // parchment, the Zoo Status window's zoo (ui/sharedui/zoobck: the
     // tiger, the tree and the ape behind its stripes) on that window's own
     // dark green
-    Animation *frame = this->rm->getAnimation("ui/help/help/help");
-    Animation *zoo = this->rm->getAnimation("ui/sharedui/zoobck/zoobck");
+    // (kept by the resource manager: a new copy each frame was a leak)
+    Animation *frame = this->rm->sharedAnimation("ui/help/help/help");
+    Animation *zoo = this->rm->sharedAnimation("ui/sharedui/zoobck/zoobck");
     const SDL_Color white = {255, 255, 255, 255};
     // (a part of the art, src in its pixels, stretched over dst)
     auto piece = [&](Animation *a, int aw, int ah, SDL_FRect src, SDL_FRect dst) {
@@ -1744,7 +1966,9 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
           piece(frame, fw, fh, {sx[i], sy[j], sx[i + 1] - sx[i], sy[j + 1] - sy[j]},
                 {r.x + dx[i], r.y + dy[j], dx[i + 1] - dx[i], dy[j + 1] - dy[j]});
     }
-    const SDL_Rect panes[] = {{9, 26, 170, kH - 55}, {182, 51, kW - 194, kH - 80}};
+    const SDL_Rect panes[] = {{9, 26, 170, kH - 55},
+                              {182, 51, kW - 194, kFooterTop - 4 - 51},
+                              {182, kFooterTop, kW - 194, kH - 29 - kFooterTop}};
     int zw = 0, zh = 0;
     if (zoo)
       zoo->queryTexture(CompassDirection::N, &zw, &zh);
@@ -1753,7 +1977,10 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
     for (const SDL_Rect &p : panes) {
       SDL_Rect clip = {r.x + p.x, r.y + p.y, p.w, p.h};
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-      SDL_SetRenderDrawColor(renderer, 41, 61, 44, 255);
+      if (p.y == kFooterTop)
+        SDL_SetRenderDrawColor(renderer, 30, 46, 33, 255);
+      else
+        SDL_SetRenderDrawColor(renderer, 41, 61, 44, 255);
       SDL_RenderFillRect(renderer, &clip);
       if (zoo && zw > 15 && zh > 45) {
         // (zoobck's own picture starts 15 in and 45 down: it covers the
@@ -1765,10 +1992,88 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
               {static_cast<float>(r.x), static_cast<float>(r.y), static_cast<float>(kW), static_cast<float>(kH)});
         SDL_RenderSetClipRect(renderer, nullptr);
       }
+      // (the footer box: darker over the zoo, a fine light edge along its top)
+      if (p.y == kFooterTop) {
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 110);
+        SDL_RenderFillRect(renderer, &clip);
+        SDL_SetRenderDrawColor(renderer, 237, 228, 173, 70);
+        SDL_Rect edge = {clip.x, clip.y, clip.w, 1};
+        SDL_RenderFillRect(renderer, &edge);
+      }
     }
     SDL_SetRenderDrawBlendMode(renderer, was);
   }
+  // ours: the page's rows drawn on their own, clipped to the page and moved
+  // up by its scroll; the rest (frame, tabs, title, scrollbar) as laid out
+  std::vector<UiElement *> rows = this->pageElements();
+  {
+    int bottom = 0;
+    for (UiElement *e : rows) {
+      // (a text's height known once it's drawn: as last drawn, else a line)
+      SDL_Rect er = e->computeRect(renderer, &r);
+      const int h = er.h > 0 ? er.h : e->getLastRect().h > 0 ? e->getLastRect().h : 16;
+      bottom = std::max(bottom, er.y + h - r.y);
+    }
+    this->contentBottom = bottom;
+  }
+  for (UiElement *e : rows)
+    e->setHidden(true);
   this->layout->draw(renderer, &r);
+  for (UiElement *e : rows)
+    e->setHidden(false);
+  {
+    this->scroll = std::clamp(this->scroll, 0, this->pageScroll.getScrollMaximum() * kScrollStep);
+    SDL_Rect clip = {r.x + kViewLeft, r.y + kViewTop, kViewRight - kViewLeft, kViewBottom - kViewTop};
+    SDL_Rect shifted = r;
+    shifted.y -= this->scroll;
+    std::stable_sort(rows.begin(), rows.end(), [](UiElement *a, UiElement *b) { return a->getLayer() < b->getLayer(); });
+    SDL_Rect wasClip;
+    SDL_RenderGetClipRect(renderer, &wasClip);
+    const bool wasClipped = SDL_RenderIsClipEnabled(renderer);
+    SDL_RenderSetClipRect(renderer, &clip);
+    // ours: each row on a faint band, alternately lighter and darker, so a
+    // setting reads as one line; a heading with a fine gold rule under it
+    if (RenderSettings::drawsUiArt() && this->page != kGame)
+      if (auto it = this->rows.find(this->page); it != this->rows.end()) {
+        SDL_BlendMode wasBlend;
+        SDL_GetRenderDrawBlendMode(renderer, &wasBlend);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        int n = 0;
+        for (const Row &row : it->second) {
+          bool shown = false, head = false;
+          for (int id : row.ids) {
+            shown = shown || !this->hiddenIds.count(id);
+            head = head || (id - 9200) % kPageIds >= kHeadFirst;
+          }
+          if (!shown)
+            continue;
+          const int y = shifted.y + row.y0 + row.dy;
+          if (head) {
+            SDL_SetRenderDrawColor(renderer, 255, 218, 90, 120);
+            SDL_Rect rule = {r.x + kLabelX, y + kHeadH - 1, kViewRight - kLabelX - 24, 1};
+            SDL_RenderFillRect(renderer, &rule);
+            n = 0;
+            continue;
+          }
+          SDL_SetRenderDrawColor(renderer, n % 2 ? 255 : 0, n % 2 ? 255 : 0, n % 2 ? 255 : 0, n % 2 ? 14 : 46);
+          SDL_Rect band = {r.x + kLabelX - 6, y + 1, kViewRight - kLabelX - 18, std::max(1, row.h - 2)};
+          SDL_RenderFillRect(renderer, &band);
+          n++;
+        }
+        SDL_SetRenderDrawBlendMode(renderer, wasBlend);
+      }
+    int bottom = 0;
+    for (UiElement *e : rows) {
+      SDL_RenderSetClipRect(renderer, &clip); // (again for each: drawing can reset it)
+      e->draw(renderer, &shifted);
+      SDL_Rect er = e->getLastRect();
+      if (er.h > 0)
+        bottom = std::max(bottom, er.y + er.h - shifted.y);
+    }
+    SDL_RenderSetClipRect(renderer, wasClipped ? &wasClip : nullptr);
+    this->contentBottom = bottom;
+  }
   // Its lock, beside the close button
   this->lockRect = {0, 0, 0, 0};
   if (Features::dragWindows)
@@ -1781,6 +2086,96 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
         WindowLock::draw(renderer, this->rm, this->lockRect, this->locked, over, over && this->lockDown);
       }
     }
+}
+
+// ours: the page's own elements (shown), the page's scroll and its bar
+std::vector<UiElement *> UiOptions::pageElements() const {
+  std::vector<UiElement *> out;
+  if (this->layout)
+    for (UiElement *e : this->layout->getChildren())
+      if (pageOf(e->getId()) == this->page && !e->isHidden())
+        out.push_back(e);
+  return out;
+}
+
+SDL_Rect UiOptions::viewport() const {
+  return {this->lastRect.x + kViewLeft, this->lastRect.y + kViewTop, kViewRight - kViewLeft, kViewBottom - kViewTop};
+}
+
+void UiOptions::reflow() {
+  if (!this->layout || !this->ini)
+    return;
+  if (this->rows.empty()) {
+    // (each element's place as laid out - kept as y0, so a window opened
+    // again starts from it - then each page's rows: elements within 18 of
+    // a row's top are in it)
+    std::map<int, std::vector<std::pair<int, int>>> placed;
+    for (UiElement *e : this->layout->getChildren()) {
+      const int p = pageOf(e->getId());
+      if (p < 0)
+        continue;
+      std::string y0 = this->ini->get(e->getName(), "y0");
+      if (y0.empty()) {
+        y0 = this->ini->get(e->getName(), "y");
+        this->ini->set(e->getName(), "y0", y0);
+      }
+      this->originalY[e->getId()] = std::atoi(y0.c_str());
+      placed[p].push_back({this->originalY[e->getId()], e->getId()});
+    }
+    for (auto &[p, items] : placed) {
+      std::sort(items.begin(), items.end());
+      std::vector<Row> &list = this->rows[p];
+      for (const auto &[y, id] : items) {
+        if (list.empty() || y >= list.back().y0 + 18)
+          list.push_back({y, 0, 0, {}});
+        list.back().ids.push_back(id);
+      }
+      for (size_t i = 0; i < list.size(); i++)
+        list[i].h = i + 1 < list.size() ? list[i + 1].y0 - list[i].y0 : kRow;
+      for (Row &r : list)
+        for (int id : r.ids)
+          if (UiElement *e = this->layout->getElementById(id))
+            this->ini->set(e->getName(), "y", std::to_string(this->originalY[id]));
+    }
+  }
+  auto it = this->rows.find(this->page);
+  if (it == this->rows.end() || it->second.empty())
+    return;
+  int y = it->second.front().y0;
+  for (Row &r : it->second) {
+    bool shown = false;
+    for (int id : r.ids)
+      shown = shown || !this->hiddenIds.count(id);
+    if (!shown)
+      continue;
+    const int dy = y - r.y0;
+    if (dy != r.dy) {
+      r.dy = dy;
+      for (int id : r.ids)
+        if (UiElement *e = this->layout->getElementById(id))
+          this->ini->set(e->getName(), "y", std::to_string(this->originalY[id] + dy));
+    }
+    y += r.h;
+  }
+}
+
+void UiOptions::scrollBy(int pixels) {
+  this->scroll = std::clamp(this->scroll + pixels, 0, this->pageScroll.getScrollMaximum() * kScrollStep);
+}
+
+int UiOptions::PageScroll::getScrollPosition() const { return o->scroll / kScrollStep; }
+int UiOptions::PageScroll::getScrollMaximum() const {
+  const int over = o->contentBottom + 8 - kViewBottom;
+  return over > 0 ? (over + kScrollStep - 1) / kScrollStep : 0;
+}
+int UiOptions::PageScroll::getScrollPage() const { return (kViewBottom - kViewTop) / kScrollStep; }
+void UiOptions::PageScroll::setScrollPosition(int position) {
+  o->scroll = std::clamp(position, 0, getScrollMaximum()) * kScrollStep;
+}
+SDL_Rect UiOptions::PageScroll::getScrollBounds() const {
+  SDL_Rect v = o->viewport();
+  v.w -= 2; // (inside the pane's edge)
+  return v;
 }
 
 void UiOptions::resetPosition() {

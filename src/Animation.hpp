@@ -22,7 +22,7 @@ class Animation {
   // A manager-owned animation unregisters if a caller deletes it early.
   std::function<void()> onRelease;
 public:
-  Animation() = default;
+  Animation();
   Animation(std::unordered_map<std::string, AnimationData *> *data);
   explicit Animation(SDL_Surface *single_frame);
   ~Animation();
@@ -92,7 +92,9 @@ public:
   // addition: emission is sampled from the current art, with its own anchor
   // and mirror. Cropped islands keep a bulb or flame separate from its roof.
   enum EmissionKind { LampGlass=1, Flame=2, BuildingLights=3, WaterHighlights=4, BulbStrings=5 };
-  struct EmissionPatch { SDL_Texture *texture=nullptr; SDL_Rect rect{}; SDL_FPoint offset{}; SDL_Color colour{}; int pixels=0; const char *material="";bool reflective=false; };
+  struct EmissionPatch { SDL_Texture *texture=nullptr; SDL_Rect rect{}; SDL_FPoint offset{}; SDL_Color colour{}; int pixels=0; const char *material="";bool reflective=false;
+    SDL_Texture *glow=nullptr; int glowPad=kGlowPad; }; // (glow: its soft light round it, glowPad past its rect)
+  static constexpr int kGlowPad=6, kFireGlowPad=14;
   const std::vector<EmissionPatch> &emissionPatches(SDL_Renderer *,CompassDirection,int frame,int kind);
   SDL_FRect emissionRect(const EmissionPatch &,float x,float y,CompassDirection,SDL_RendererFlip *flip=nullptr);
 
@@ -121,8 +123,8 @@ public:
   template <typename F> void forEachFrame(F f) const {
     for (const auto &[direction, frames] : this->surfaces)
       for (size_t i = 0; i < frames.size(); i++)
-        if (frames[i])
-          f(direction, static_cast<int>(i), frames[i]);
+        if (SDL_Surface *frame = this->sourceFrame(direction, i))
+          f(direction, static_cast<int>(i), frame);
   }
   // Map art drawn in a palette of its own (a building's picked colours, a
   // keeper's hair and skin, a guest's clothes): its name, for HD art - made
@@ -130,10 +132,7 @@ public:
   void setRecoloured(const std::string &name) { this->recoloured = name; }
   // One of its own frames (nullptr: it hasn't that one)
   SDL_Surface *frameSurface(const std::string &direction, int frame) const {
-    auto it = this->surfaces.find(direction);
-    return it == this->surfaces.end() || frame < 0 || frame >= static_cast<int>(it->second.size())
-               ? nullptr
-               : it->second[frame];
+    return frame < 0 ? nullptr : this->sourceFrame(direction, static_cast<size_t>(frame));
   }
 
   // addition: native geometry input with the same directional mirroring and
@@ -142,6 +141,33 @@ public:
   LightingFrame lightingFrame(CompassDirection side,int frame);
   const std::string &lightingKey()const {return hd_dir;}
   size_t lightingTextureBytes()const;
+  // ours: the zoomed-in frames (the upscaled set, or an HD art mod's 4x
+  // ones) are kept up to a budget. Called as a frame starts, before any
+  // drawing: past the budget, the sets drawn longest ago are freed (never
+  // one drawn in the last frame), to be made again if they're seen again.
+  // Without it a long look around a big zoo zoomed in ran out of memory.
+  static void trimZoomedIn();
+  static size_t zoomedInBytes();
+  // ours: what all the animations hold - their source frames, their
+  // normal and lit textures, the zoomed-in ones - for finding where the
+  // memory goes (the tour check prints it)
+  static std::string memoryStats();
+  // ours: and they're made a few at a time - up to 30 ms of a frame - with
+  // the normal frames drawn meanwhile, so a busy view zoomed into doesn't
+  // stop the game while hundreds of HD frames load. Off: all made at once
+  // (the check modes, whose pictures must be complete).
+  static void setGradualZoomedIn(bool on);
+  // ours: unpacked source frames kept up to a budget (packed above): called
+  // as a frame starts; and told of each one let go (a cache keyed by the
+  // surface - the lighting's masks - forgets it)
+  static void trimSources();
+  // (owner: who set it; an empty hook clears it only if it's still theirs)
+  static void setFrameFreedHook(const void *owner, std::function<void(SDL_Surface *)> hook);
+  // ours: every animation's textures let go, to be made again when next
+  // drawn - for a check that drew with a renderer of its own, before that
+  // renderer goes (the textures made on it would go with it, and be freed
+  // a second time on the way out)
+  static void releaseAllTextures();
   void setBlackIsBody(bool value){blackIsBody=value;}
 
 private:
@@ -156,12 +182,27 @@ private:
   // roots they were made from (HdArt::generation: made again on a change)
   std::unordered_map<std::string, std::vector<SDL_Texture *>> textures_hi;
   int hi_generation = -1;
+  // ours: their size (and the lit sets'), and the frame they were last
+  // drawn in - for keeping them all within a budget (trimZoomedIn)
+  size_t hi_bytes = 0;
+  uint32_t hi_drawn = 0;
+  void releaseHi();
+  // ours: its HD frames come from the background loader (HdArt::
+  // requestFrames) under this number; each zoomed-in direction's level
+  // (2 or 4; 0: no HD frames in it, any level will do), by its set ("L" for
+  // the lit set) and direction
+  uint64_t loaderId = nextLoaderId();
+  std::unordered_map<std::string, int> hiLevel;
+  static uint64_t nextLoaderId();
   // Whether map art draws from its zoomed-in set now
   bool usesHi() const;
 
+  // (wanted: the frame about to be drawn - plain map art makes its frames
+  // one at a time as they're first drawn, so a new animation coming into
+  // view costs one frame's texture, not all of them at once; -1 all)
   std::vector<SDL_Texture *> *frameTextures(SDL_Renderer *renderer,
                                             CompassDirection direction,
-                                            bool hi);
+                                            bool hi, int wanted = -1);
 
   int current_frame = 0;
   CompassDirection last_direction = CompassDirection::N;
@@ -172,7 +213,33 @@ private:
   bool has_background = 0;
   int frame_count = 0;
 
-  std::unordered_map<std::string, std::vector<SDL_Surface *>> surfaces;
+  // Its frames, unpacked (null: packed - sourceFrame unpacks it - or no
+  // such frame). Each direction keeps a place for every frame.
+  mutable std::unordered_map<std::string, std::vector<SDL_Surface *>> surfaces;
+  // ours: its frames packed as they load - each row's clear gaps skipped,
+  // its colours a byte each, indices into its direction's own table of at
+  // most 256 (the art's palette), or four bytes where a direction has more -
+  // and unpacked when asked for (sourceFrame), let go again when they
+  // haven't been for a while (trimSources). Kept unpacked for good, every
+  // animal in a zoo with them all held 6 GB of mostly clear pixels.
+  struct PackedFrame {
+    bool present = false;
+    int w = 0, h = 0;
+    std::vector<uint8_t> data;
+  };
+  struct PackedDirection {
+    bool indexed = true;
+    std::vector<uint32_t> colours;
+    std::vector<PackedFrame> frames;
+  };
+  mutable std::unordered_map<std::string, PackedDirection> packed;
+  mutable size_t src_bytes = 0;  // (its unpacked frames')
+  mutable uint32_t src_used = 0; // (the frame one was last asked for in)
+  void packAll();
+  SDL_Surface *sourceFrame(const std::string &direction, size_t frame) const;
+  bool sourceSize(const std::string &direction, size_t frame, int &w, int &h) const;
+  void releaseSources() const;
+  void dropSources(const std::string &direction);
   std::unordered_map<std::string, std::vector<SDL_Texture *>> textures;
   // addition: the untouched original and shadow-free art have separate caches.
   bool paletteShadows=false,blackIsBody=false;
@@ -199,7 +266,9 @@ private:
   struct AnchorMemo { int8_t state = 0; SDL_RendererFlip flip = SDL_FLIP_NONE; SDL_Point anchor{}; };
   AnchorMemo anchorMemo[10];
   const AnchorMemo *anchorFor(CompassDirection direction);
-  struct FramesMemo { uint32_t gen = 0; bool setsFlip = false; SDL_RendererFlip flip = SDL_FLIP_NONE; std::vector<SDL_Texture *> *frames = nullptr; };
+  struct FramesMemo { uint32_t gen = 0; bool setsFlip = false; SDL_RendererFlip flip = SDL_FLIP_NONE; std::vector<SDL_Texture *> *frames = nullptr; uint32_t levelGen = 0; std::string key; };
+  // (a plain map-art frame made when first drawn: frameTextures' wanted)
+  void makeLazyFrame(SDL_Renderer *renderer, std::vector<SDL_Texture *> &frames, const std::string &direction, bool relight, int wanted);
   FramesMemo framesMemo[4][10];
   uint32_t textureGen = 1;
   void loadSurfaces(std::string direction_string, AnimationData *data);

@@ -30,6 +30,9 @@ constexpr float kTickMs = 1000.0f;
 constexpr int kHabitatCheck = 20, kCaptivityCheck = 20, kSocialCheck = 30, kOtherCheck = 40,
               kHungerCheck = 30, kZapCheck = 5;
 constexpr float kRateEveryMs = 7000.0f;
+// (ai.ztd animals.ai cMatePickDelay 3, zoo.exe 0x639454: reproduction checks
+// before a cMatingType 1 animal takes a new mate)
+constexpr int kMatePickDelay = 3;
 // (animals.ai cDefenseRadius 3, zoo.exe 0x641560: how near two that both
 // cPreattack get before their stand-off)
 constexpr float kDefenseRadius = 3.0f;
@@ -209,6 +212,8 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.reproductionChance = num("creproductionchance", 0);
     t.reproductionInterval = num("creproductioninterval", 0);
     t.happyReproduceThreshold = num("chappyreproducethreshold", 100);
+    t.matingType = num("cmatingtype", 0);
+    t.noMateChange = num("cnomatechange", -19);
     t.offspring = std::max(1, num("coffspring", 1));
     t.babyToAdult = num("cbabytoadult", 0);
     t.smallPoo = num("csmallzoodoo", 0) != 0;
@@ -289,6 +294,20 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.minTestFenceChance = num("cmintestfencechance", 0);
     t.zapHappinessChange = num("czaphappinesschange", 0);
     t.testFenceOffset = num("ctestfenceoffset", 1);
+    {
+      // (the young's section over the grown one's values)
+      const std::string yInts = "y/characteristics/integers";
+      auto young = [&](const char *key, int grown) { return ai->getInt(yInts, key, grown); };
+      t.young.slow = ai->get(yInts, "cslowrate", "").empty() ? t.slow : young("cslowrate", 30) / 60.0f;
+      t.young.medium = ai->get(yInts, "cmediumrate", "").empty() ? t.medium : young("cmediumrate", 45) / 60.0f;
+      t.young.fast = ai->get(yInts, "cfastrate", "").empty() ? t.fast : young("cfastrate", 66) / 60.0f;
+      t.young.attractiveness = young("cattractiveness", t.attractiveness);
+      t.young.chaseAnimalChance = young("cchaseanimalchance", t.chaseAnimalChance);
+      t.young.bash = young("cbashstrength", t.bash);
+      t.young.testFenceChance = young("ctestfencechance", t.testFenceChance);
+      t.young.jumper = young("cisjumper", t.jumper ? 1 : 0) == 1;
+      t.young.climber = young("cisclimber", t.climber ? 1 : 0) == 1;
+    }
     t.laysEggs = num("clayseggs", 0) != 0;
     t.eatsEggs = num("ceatseggs", 0) != 0;
     t.timeToHatch = num("ctimetohatch", 0);
@@ -539,7 +558,8 @@ bool Animals::breakOut(Member &m, const WorldMap &map, const Fences &fences) {
         continue;
       Fences::Edge e = dd[0] ? Fences::Edge{false, std::max(x, nx), y} : Fences::Edge{true, x, std::max(y, ny)};
       // (a gap where a piece was taken away, or a broken one: any animal)
-      if (!fences.passable(e, t.climber, t.jumper, t.bash, t.crush))
+      const Type::Age age = t.forAge(m.baby);
+      if (!fences.passable(e, age.climber, age.jumper, age.bash, t.crush))
         continue;
       float dist = std::hypot(x + 0.5f - m.x, y + 0.5f - m.y);
       if (dist < best) {
@@ -562,18 +582,25 @@ bool Animals::breakOut(Member &m, const WorldMap &map, const Fences &fences) {
   // through a broken one); a bash, or a jump by an animal with any bash
   // strength, breaks it (0x613a1c)
   bool broken = !fences.at(way) || fences.broken(way);
-  bool jump = !broken && t.jumper && fences.passable(way, false, true, 0, 0);
-  bool climb = !broken && !jump && t.climber && fences.passable(way, true, false, 0, 0);
+  const Type::Age age = t.forAge(m.baby);
+  bool jump = !broken && age.jumper && fences.passable(way, false, true, 0, 0);
+  bool climb = !broken && !jump && age.climber && fences.passable(way, true, false, 0, 0);
   m.crossAnim = jump ? "jump_high" : climb ? "climb_up" : "";
   m.crossAt = static_cast<int>(m.path.size()) - 1;
-  m.breaks = !broken && t.bash > 0 && !climb;
+  m.breaks = !broken && age.bash > 0 && !climb;
   return true;
 }
 
 bool Animals::hunts(const Member &predator, const Member &prey) const {
-  if (predator.baby || predator.id == prey.id)
+  if (predator.id == prey.id)
     return false;
   const Type &t = this->typeList[predator.type];
+  // (an egg: only by one that eats eggs, of another kind - zoo.exe
+  // 0x43971c, cEatsEggs)
+  if (prey.egg)
+    return !prey.eaten && t.eatsEggs && predator.type != prey.type;
+  if (predator.baby)
+    return false;
   return t.preyIds[sub(predator)].count(this->typeList[prey.type].nameId) > 0;
 }
 
@@ -613,7 +640,7 @@ bool Animals::standingOff(const Member &m) const {
 void Animals::moveOf(const Member &m, const std::string &setName, std::string &anim, float &speed) const {
   const Type &t = this->typeList[m.type];
   anim = "run";
-  speed = t.fast;
+  speed = t.forAge(m.baby).fast;
   if (const std::vector<Step> *steps = this->set(m, setName))
     for (const Step &s : *steps)
       if (s.fn == "fmove" && s.args.size() >= 4) {
@@ -1100,6 +1127,7 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   m.health = static_cast<float>(t.maxHits);
   m.life = t.timeDeath - 1;
   m.ready = t.reproductionInterval; // (ready at once, as the original)
+  m.matePick = kMatePickDelay - 1;   // (zoo.exe setup 0x453d63)
   // Each check's countdown starts somewhere in its interval
   auto start = [&](int interval) { return std::uniform_int_distribution<int>(0, interval - 1)(this->rng); };
   m.habitatCheck = start(kHabitatCheck);
@@ -1430,9 +1458,14 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
     play(m, "stand", Member::Mode::Loop, 1.0f);
     return;
   }
-  // (an egg sits there, unless it's hatching)
+  // (an egg sits there, unless it's hatching; an eaten one stays broken)
   if (m.egg && m.stack.empty()) {
-    play(m, "egg_idle", Member::Mode::Loop, 3600.0f);
+    if (m.eaten) {
+      play(m, "egg_break", Member::Mode::Once); // (held on its last frame)
+      m.animTime = m.playFor;
+      m.playFor += 3600.0f;
+    } else
+      play(m, "egg_idle", Member::Mode::Loop, 3600.0f);
     return;
   }
   if (m.stack.empty() && m.showTank >= 0) {
@@ -1567,10 +1600,10 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
                    : command == Command::Trot ? (hasTrot ? "trot" : "run")
                    : asMove && !arg(2).empty() ? arg(2)
                                                : "walk";
-      m.speed = command == Command::Run ? t.fast
-                : command == Command::Trot ? t.medium
+      m.speed = command == Command::Run ? t.forAge(m.baby).fast
+                : command == Command::Trot ? t.forAge(m.baby).medium
                 : asMove && !arg(3).empty() ? std::atoi(arg(3).c_str()) / 60.0f
-                                            : t.slow;
+                                            : t.forAge(m.baby).slow;
       if (command == Command::MoveWithSound && !arg(4).empty())
         playSound(m, arg(4));
       bool walking = false;
@@ -1905,7 +1938,7 @@ void Animals::waterTick(Member &m, const WorldMap &map, const Fences &fences) {
       auto [x,y]=(*to)[std::uniform_int_distribution<size_t>(0,to->size()-1)(this->rng)];
       bool previous=m.waterMode;
       m.waterMode=to!=&land;
-      m.stack.clear();m.moveAnim="walk";m.speed=t.slow;
+      m.stack.clear();m.moveAnim="walk";m.speed=t.forAge(m.baby).slow;
       int targetTank=tankAt?tankAt(x+0.5f,y+0.5f):-1;
       const auto *pool=fences.exhibit(currentTank>=0?currentTank:targetTank);
       if(pool)m.swimTo=static_cast<float>(fences.waterLevel(*pool));
@@ -1918,7 +1951,7 @@ void Animals::waterTick(Member &m, const WorldMap &map, const Fences &fences) {
     bool kin = false;
     for (const Member &o : this->list)
       kin = kin || (o.id != m.id && o.exhibit == m.exhibit && o.type == m.type);
-    int chase = kin ? t.chaseAnimalChance : 0;
+    int chase = kin ? t.forAge(m.baby).chaseAnimalChance : 0;
     // (zoo.exe 0x438ad7: a drink against a game of tag with one of its own
     // kind - the nearest adult within 5 - not when hungry; harmless, over
     // when they touch or after cChaseTimeOut 10 s)
@@ -1979,7 +2012,7 @@ void Animals::waterTick(Member &m, const WorldMap &map, const Fences &fences) {
           m.stack.clear();
           m.foodItem = -1;
           m.moveAnim = "walk";
-          m.speed = t.slow;
+          m.speed = t.forAge(m.baby).slow;
           if (walkTo(m, gx, gy, map, fences)) {
             pushSet(m, "beat");
             m.drinkX = bx + 0.5f;
@@ -1991,10 +2024,33 @@ void Animals::waterTick(Member &m, const WorldMap &map, const Fences &fences) {
   }
 }
 
+bool Animals::warmOne() {
+  while (!this->warmQueue.empty()) {
+    const std::string path = this->warmQueue.front();
+    this->warmQueue.pop_front();
+    if (this->artCache.count(path))
+      continue;
+    this->artCache[path] = this->rm && this->rm->hasResource(path + ".ani") ? this->rm->getAnimation(path) : nullptr;
+    return true;
+  }
+  return false;
+}
+
 void Animals::update(float seconds, double simSeconds, const WorldMap &map, const Fences &fences) {
   this->now = simSeconds;
   this->mapRef = &map;
   this->fencesRef = &fences;
+  // (each species in the zoo: its animations queued to load ahead, warmOne)
+  if (this->typeWarmed.size() != this->typeList.size())
+    this->typeWarmed.assign(this->typeList.size(), 0);
+  for (const Member &m : this->list)
+    if (m.type >= 0 && m.type < static_cast<int>(this->typeList.size()) && !this->typeWarmed[m.type]) {
+      this->typeWarmed[m.type] = 1;
+      for (const auto &set : this->typeList[m.type].anims)
+        for (const auto &entry : set)
+          if (!this->artCache.count(entry.second) && this->warmQueued.insert(entry.second).second)
+            this->warmQueue.push_back(entry.second);
+    }
   // Prey caught last time: gone
   {
     std::vector<int> kills;
@@ -2100,6 +2156,25 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
         if (m.tag) {
           m.huntAnimal = -1;
           m.tag = false;
+        } else if (p->egg) {
+          // An egg: it breaks (its bEatenEgg) and is left a shell for 15
+          // ticks; the hunter plays its bCaughtEgg (zoo.exe 0x4a6043,
+          // 0x5a5606) - no dust ball
+          ZT_STEP("0x4a6043", "Eats an egg", {"egg", p->name});
+          p->eaten = true;
+          p->hatchIn = 15;
+          p->stack.clear();
+          p->stepping = false;
+          if (this->set(*p, "beatenegg"))
+            pushSet(*p, "beatenegg");
+          m.huntAnimal = -1;
+          m.path.clear();
+          m.pathAt = 0;
+          m.stack.clear();
+          m.stepping = false;
+          if (this->set(m, "bcaughtegg"))
+            pushSet(m, "bcaughtegg");
+          continue;
         } else {
           ZT_STEP("0x4a6043", "Catches its prey: under a dust ball", {"prey", p->name},
                   {"chased for (s)", this->now - m.huntStart});
@@ -2232,7 +2307,7 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
           // (landed: on at its run)
           m.crossAt = -1;
           m.anim = m.moveAnim;
-          m.speed = t.fast;
+          m.speed = t.forAge(m.baby).fast;
         }
         m.pathAt++;
       } else {
@@ -2506,7 +2581,7 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
         if(!this->onlySurface && under)a=under;
         float sx,sy,depth;
         view.worldToScreenF(preview.x,preview.y,groundAt(map,preview.x,preview.y)+preview.swimZ,sx,sy,depth);
-        const SDL_Color tint=this->previewFit==Fences::Fit::Ok?SDL_Color{0,255,0,255}:SDL_Color{255,60,60,255};
+        const SDL_Color tint=this->previewFit==Fences::Fit::Ok && !this->previewPoor?SDL_Color{0,255,0,255}:SDL_Color{255,60,60,255};
         out.push_back({depth,sx,sy,a,CompassDirection::SE,tint,true});
       }
     }
@@ -3229,10 +3304,17 @@ void Animals::becomeEgg(Member &m) {
 // it's time, its bHatch (the egg cracks, then fHatch: a baby)
 void Animals::eggTick(Member &m) {
   const Type &t = this->typeList[m.type];
+  // (eaten: the shell's gone when its countdown's out - zoo.exe 0x437860)
+  if (m.eaten) {
+    if (m.hatchIn-- < 1 && std::find(this->kills.begin(), this->kills.end(), m.id) == this->kills.end())
+      this->kills.push_back(m.id);
+    return;
+  }
   int need = t.minHatchHits ? t.minHatchHits : (t.maxHits - t.minHits) * 60 / 100;
   if (m.health < need)
     return;
-  if (--m.hatchIn >= 1 || m.exhibit < 0 || !m.stack.empty())
+  // (the countdown's last tick: 0x437860 hatches when it was under 1)
+  if (m.hatchIn-- >= 1 || m.exhibit < 0 || !m.stack.empty())
     return;
   ZT_FN("0x437860", "The egg hatches");
   ZT_STEP("0x437860", "Time to hatch", {"health", m.health}, {"it needs", need});
@@ -3253,18 +3335,21 @@ void Animals::eggTick(Member &m) {
 // cMinTestFenceChance there's none left, it's learnt (0x59c4ba)
 void Animals::testFence(Member &m, const Fences &fences) {
   const Type &t = this->typeList[m.type];
-  if (m.fenceTests < 0)
-    m.fenceTests = t.testFenceChance;
+  // (a young one whose [y/...] has no chance doesn't test: its chance is
+  // taken up once it's grown)
+  const int chance = t.forAge(m.baby).testFenceChance;
+  if (m.fenceTests < 0 && chance > 0)
+    m.fenceTests = chance;
   if (--m.zapCheck >= 0)
     return;
   m.zapCheck = kZapCheck - 1;
-  if (m.fenceTests == 0 || t.testFenceChance <= 0 || m.exhibit < 0 || m.escaped || m.boxed || m.tranquilised ||
+  if (m.fenceTests <= 0 || chance <= 0 || m.exhibit < 0 || m.escaped || m.boxed || m.tranquilised ||
       m.dying || m.sleeping || m.building >= 0 || m.huntAnimal >= 0 || m.fleeFrom >= 0 || m.caughtBy >= 0 ||
       m.crossing.x >= 0 || !this->set(m, "btestfence"))
     return;
   ZT_FN("0x438ebc", "Tests an electric fence");
   int roll = std::uniform_int_distribution<int>(0, 99)(this->rng);
-  if (roll >= t.testFenceChance)
+  if (roll >= chance)
     return;
   static const int dirs[4][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}}; // N E S W (zoo.exe 0, 2, 4, 6)
   static const char *names[4] = {"N", "E", "S", "W"};
@@ -3291,7 +3376,7 @@ void Animals::testFence(Member &m, const Fences &fences) {
     float was = m.pending;
     m.pending += t.zapHappinessChange;
     ZT_STEP("0x438ebc", "Zapped testing the fence", {"facing", names[d]}, {"roll", roll},
-            {"cTestFenceChance", t.testFenceChance}, {"chance left", had, m.fenceTests},
+            {"cTestFenceChance", chance}, {"chance left", had, m.fenceTests},
             {"cZapHappinessChange", t.zapHappinessChange}, {"pending", was, m.pending});
     return;
   }
@@ -3383,6 +3468,15 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
         }
   }
   testFence(m, fences);
+  // Eating (zoo.exe animalUpdate 0x437620 -> animalEatFood 0x4fd951 each
+  // tick while it eats): at the food, in its bEat, a mouthful every tick -
+  // cKeeperFoodUnitsEaten, no more than is left (0x4fdb3a), each unit
+  // cFoodUnitValue less hunger - till its hunger is down to its least (type
+  // +0x244, 0 - setDefaults 0x4b659e) or the food's gone. (A bEat's 9 s of
+  // eat_down is 9 mouthfuls; before, ours took one a bEat and stayed hungry)
+  if (m.foodItem >= 0 && m.hunger > 0 &&
+      std::any_of(m.stack.begin(), m.stack.end(), [](const auto &f) { return f.first == "beat"; }))
+    consumeFood(m);
   // Hunger (zoo.exe 0x438a79): hungrier each check; hungry with no food,
   // the first time nothing, after that "%s can't find any food." and, at
   // 100, unhappier and less healthy. And the dung meter: full, a pile.
@@ -3493,20 +3587,45 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
         pushSet(m, "bdie");
       ZT_STEP("0x4385e5", "Old age: it's dying", {"life", m.life}, {"cDeathChance", t.deathChance});
     }
-    // A happy grown male with a grown female of his kind: a baby
-    if (!m.female && !m.baby && m.exhibit >= 0 && t.reproductionChance > 0 &&
-        m.ready >= t.reproductionInterval && m.happiness >= t.happyReproduceThreshold) {
-      for (Member &mate : this->list)
-        if (mate.female && !mate.baby && mate.type == m.type && mate.exhibit == m.exhibit &&
-            pct(this->rng) < t.reproductionChance) {
-          for (int i = 0; i < t.offspring; i++)
-            this->births.push_back({mate.id, m.type});
-          m.ready = 0;
-          ZT_STEP("0x4385e5", "A baby on the way", {"mother", mate.name}, {"cOffspring", t.offspring},
-                  {"cReproductionChance", t.reproductionChance}, {"happiness", m.happiness},
-                  {"cHappyReproduceThreshold", t.happyReproduceThreshold});
-          break;
+    // A grown one keeps one mate (zoo.exe 0x4385e5): none, it looks for
+    // one; its mate gone or in another exhibit, it takes another - at once,
+    // or (cMatingType 1) after cMatePickDelay checks, unhappier at first by
+    // cNoMateChange - and has no baby this check
+    bool lostMate = false;
+    if (!m.baby && !m.dying) {
+      lostMate = this->mateLost(m);
+      if (!lostMate && m.mate < 0) {
+        this->findMate(m);
+      } else if (lostMate) {
+        if (t.matingType == 1) {
+          if (m.matePick == kMatePickDelay - 1) {
+            m.pending += t.noMateChange;
+            ZT_STEP("0x4385e5", "Lost its mate", {"cNoMateChange", t.noMateChange});
+          }
+          if (m.matePick-- == 0) {
+            this->findMate(m);
+            m.matePick = kMatePickDelay - 1;
+          }
+        } else {
+          this->findMate(m);
+          m.matePick = kMatePickDelay - 1;
         }
+      }
+    }
+    // A happy grown male, ready again, with his mate: cReproductionChance in
+    // 100 of a baby by her (zoo.exe 0x4385e5, animalCheckReproduction
+    // 0x43103b - one try a check, whatever else is in the exhibit)
+    if (!lostMate && !m.female && !m.baby && !m.dying && m.exhibit >= 0 && t.reproductionChance > 0 &&
+        m.ready >= t.reproductionInterval && m.happiness >= t.happyReproduceThreshold) {
+      Member *mate = this->findMate(m);
+      if (mate && t.reproductionChance > pct(this->rng)) {
+        for (int i = 0; i < t.offspring; i++)
+          this->births.push_back({mate->id, m.id, m.type});
+        m.ready = 0;
+        ZT_STEP("0x4385e5", "A baby on the way", {"mother", mate->name}, {"cOffspring", t.offspring},
+                {"cReproductionChance", t.reproductionChance}, {"happiness", m.happiness},
+                {"cHappyReproduceThreshold", t.happyReproduceThreshold});
+      }
     }
   }
   waterTick(m, map, fences);
@@ -3564,11 +3683,11 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       } else {
         m.fleeFrom = -1;
       }
-      if (m.fleeFrom < 0 && (m.huntAnimal < 0 || m.tag) && !m.baby && !t.preyIds[sub(m)].empty()) {
+      if (m.fleeFrom < 0 && (m.huntAnimal < 0 || m.tag) && !m.baby && (!t.preyIds[sub(m)].empty() || t.eatsEggs)) {
         const Member *best = nullptr;
         float bestD = 1e30f;
         for (const Member &o : this->list) {
-          if (o.exhibit != m.exhibit || o.egg || o.boxed || o.dying || o.caughtBy >= 0 || o.id == this->carried ||
+          if (o.exhibit != m.exhibit || o.boxed || o.dying || o.caughtBy >= 0 || o.id == this->carried ||
               o.claimedBy >= 0 || !hunts(m, o))
             continue;
           if (std::fabs(o.x - m.x) > 5.0f || std::fabs(o.y - m.y) > 5.0f)
@@ -3626,7 +3745,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       } else {
         m.stack.clear();
         m.moveAnim = "run";
-        m.speed = t.fast;
+        m.speed = t.forAge(m.baby).fast;
         walkTo(m, px, py, map, fences);
       }
     } else if (--m.preyCheck <= 0) {
@@ -3638,7 +3757,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
         m.chaseStart = this->now;
         m.stack.clear();
         m.moveAnim = "run";
-        m.speed = t.fast;
+        m.speed = t.forAge(m.baby).fast;
         walkTo(m, px, py, map, fences);
       }
     }
@@ -3667,8 +3786,79 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   }
 }
 
+// zoo.exe 0x4219fb: its mate is no more, or is in another exhibit (both
+// let go then) - not when the mate's got out
+bool Animals::mateLost(Member &m) {
+  if (m.mate < 0)
+    return false;
+  Member *p = this->member(m.mate);
+  if (p) {
+    if (p->exhibit < 0 || p->exhibit == m.exhibit)
+      return false;
+    m.mate = -1;
+    p->mate = -1;
+  }
+  return true;
+}
+
+// zoo.exe 0x430a19: its mate; with none (or lost), one picked at random in
+// its exhibit - grown, of its kind, the other sex, without a mate, and not
+// its mother, father or young - and the two paired
+Animals::Member *Animals::findMate(Member &m) {
+  if (!this->mateLost(m) && m.mate >= 0)
+    if (Member *p = this->member(m.mate))
+      return p;
+  if (m.exhibit < 0)
+    return nullptr;
+  m.mate = -1;
+  std::vector<Member *> free;
+  for (Member &o : this->list)
+    if (o.id != m.id && o.exhibit == m.exhibit && o.type == m.type && !o.baby && o.female != m.female &&
+        o.mate < 0 && o.mother != m.id && o.father != m.id && o.id != m.mother && o.id != m.father)
+      free.push_back(&o);
+  if (free.empty())
+    return nullptr;
+  Member *p = free[std::uniform_int_distribution<size_t>(0, free.size() - 1)(this->rng)];
+  m.mate = p->id;
+  p->mate = m.id;
+  ZT_STEP("0x430a19", "Took a mate", {"mate", p->name}, {"choices", static_cast<int>(free.size())});
+  return p;
+}
+
 void Animals::lifeEvents(const WorldMap &map, const Fences &fences) {
-  (void)map;
+  // Where a mother lays her egg (zoo.exe animalLayEgg 0x60da6b): on rings
+  // outward from 3 tiles away (|dx| + |dy| = 3, 4, ... 50) the first tile
+  // of her exhibit that's dry ground (not water, not a tank) with nothing
+  // standing on it. (The original also scores a tile's objects; ours takes
+  // the first free one.) None: by her, as before
+  auto eggSpot = [&](const Member &mum, float &ex, float &ey) {
+    const int mx = static_cast<int>(std::floor(mum.x)), my = static_cast<int>(std::floor(mum.y));
+    const Type &t = this->typeList[mum.type];
+    for (int r = 3; r <= 50; r++)
+      for (int dx = -r; dx <= r; dx++)
+        for (int side = 0; side < 2; side++) {
+          const int dy = side == 0 ? -(r - std::abs(dx)) : r - std::abs(dx);
+          const int x = mx + dx, y = my + dy;
+          if (x < 0 || y < 0 || x >= map.getWidth() || y >= map.getHeight())
+            continue;
+          int at = fences.exhibitAt(x, y);
+          if (at < 0 || isWater(map, x, y) || (this->tankAt && this->tankAt(x + 0.5f, y + 0.5f) >= 0))
+            continue;
+          if (t.underwater && !t.onlyUnderwater)
+            at = fences.habitatRoot(at, map);
+          if (at != mum.exhibit)
+            continue;
+          bool taken = false;
+          for (const Member &o : this->list)
+            taken = taken || (static_cast<int>(std::floor(o.x)) == x && static_cast<int>(std::floor(o.y)) == y);
+          if (taken)
+            continue;
+          ex = x + 0.5f;
+          ey = y + 0.5f;
+          return true;
+        }
+    return false;
+  };
   auto say = [&](int sid, const std::string &name, int kind, int animal) {
     if (!this->rm)
       return;
@@ -3679,35 +3869,38 @@ void Animals::lifeEvents(const WorldMap &map, const Fences &fences) {
     this->notices.push_back({s, kind, animal});
   };
   // Born: a young one by its mother ("Congratulations! %s has given birth.")
-  std::vector<std::pair<int, int>> births;
+  std::vector<Birth> births;
   births.swap(this->births);
-  for (auto [mother, kind] : births) {
+  for (auto [mother, father, kind] : births) {
     const Member *mum = this->member(mother);
     if (!mum)
       continue;
-    Member b = *mum;
     const Type &t = this->typeList[kind];
-    b.id = this->nextId++;
-    b.baby = true;
-    b.female = std::uniform_int_distribution<int>(0, 1)(this->rng) == 1;
-    b.name = (!t.displayName.empty() ? t.displayName : this->rm ? this->rm->getString(t.nameId) : t.key) + " " +
-             std::to_string(++this->counts[kind]);
-    b.x += 0.3f;
-    b.happiness = static_cast<float>(std::clamp(t.initialHappiness, -100, 100));
-    b.health = static_cast<float>(t.maxHits);
-    b.hunger = b.energy = b.dirty = 0;
-    b.grow = 0;
-    b.life = t.timeDeath - 1;
-    b.stack.clear();
-    b.path.clear();
-    b.faces.clear();
-    b.sick = false;
-    // (an egg-layer's young: an egg by its mother - zoo.exe 0x60da6b)
+    const std::string mumName = mum->name;
+    const int mumId = mum->id;
+    // A new one by its mother, made as any other (not a copy of her: none
+    // of what she was doing - asleep, in a shelter, hunting - comes with it)
+    float bx = mum->x + 0.3f, by = mum->y;
+    const bool egg = t.laysEggs && eggSpot(*mum, bx, by);
+    const bool female = std::uniform_int_distribution<int>(0, 1)(this->rng) == 1;
+    const int id = this->adopt(kind, female, bx, by, map, fences, true);
+    Member *b = this->member(id);
+    if (!b)
+      continue;
+    b->baby = true;
+    b->grow = 0;
+    if (!egg && (mum = this->member(mumId))) {
+      b->fx = mum->fx;
+      b->fy = mum->fy;
+    }
+    // (its mother and father, no mate yet - zoo.exe 0x47f14b)
+    b->mother = mother;
+    b->father = father;
+    // (an egg-layer's young: an egg near its mother - zoo.exe 0x60da6b)
     if (t.laysEggs)
-      becomeEgg(b);
-    this->list.push_back(b);
-    say(10032, mum->name, 1, mum->id); // (good news)
-    this->markDirty(b.exhibit);
+      becomeEgg(*b);
+    say(10032, mumName, 1, mumId); // (good news)
+    this->markDirty(b->exhibit);
   }
   // Died of old age ("%s has died of old age."); the others in its exhibit
   // grieve (cDeathChange -20)
@@ -3771,7 +3964,7 @@ bool Animals::useShelter(Member &m, const WorldMap &map, const Fences &fences) {
     }
   std::sort(spots.begin(), spots.end());
   m.moveAnim = "walk";
-  m.speed = t.slow;
+  m.speed = t.forAge(m.baby).slow;
   m.stack.clear();
   bool going = false;
   for (const auto &sp : spots)

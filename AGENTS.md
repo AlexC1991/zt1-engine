@@ -117,8 +117,10 @@ SDL_AUDIODRIVER=dummy ZT_FLAT_LAB=1 <mode>=1 build-x64/Release/zt1-engine.exe --
 ```
 
 - No mode: the full panel walk-through. Every line of `<out>/timings.txt`
-  should end in `ok`.
-- `ZT_FLAT_LAB=1`: makes the zoo flat grass (keep it on for most checks).
+  should end in `ok`. Run it on the real map, **without** `ZT_FLAT_LAB`: its
+  checks need the map's paths and its measured rating (on the flat lab, six
+  of them fail by design).
+- `ZT_FLAT_LAB=1`: makes the zoo flat grass (keep it on for the other checks).
 - `ZT_FINANCE_CHECKS`: money rules, emergency grant, goal states in saves, the
   advisor's messages.
 - `ZT_SHOW_CHECKS`, `ZT_SHOW_ALL`: Marine Mania shows.

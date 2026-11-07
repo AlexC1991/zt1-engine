@@ -2,6 +2,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <list>
+#include <shared_mutex>
+#include <tuple>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -16,12 +20,26 @@
 #include <iomanip>
 #include <sstream>
 #include "LightingAssets.hpp"
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include "SDL_image.h"
 
 #include "Animation.hpp"
+#include "ArtScaler.hpp"
+#include "GpuCompressed.hpp"
 #include "Mods.hpp"
+#include "Settings.hpp"
 #include "ResourceManager.hpp"
+#include "Utils.hpp"
+#include "ZtdFile.hpp"
 
 namespace fs = std::filesystem;
 
@@ -29,8 +47,48 @@ namespace HdArt {
 
 namespace {
 std::vector<std::string> g_roots;
+std::vector<std::string> g_hdMods; // (the mods among them, by folder: their setting)
+// (Graphics > Art Sharpness, as RCAS stops - 0 the sharpest, 2 light - read
+// at each refresh, used by the loader's threads)
+std::atomic<float> g_sharpStops{0.2f};
+// (the first HD art mod's graphics card setting, read at each refresh: a
+// setting read is a read of zoo.ini from the disk - asked on every draw,
+// it was thousands a frame)
+std::atomic<int> g_compression{1};
+// ours: each root's packed art folders ("animals/lion/") and their archives
+std::vector<std::map<std::string, std::string>> g_packed;
 int g_generation = 0;
-bool g_read = false;
+std::atomic<bool> g_read{false};
+// ours: the roots and their archives - read by load on the loader's
+// threads, changed by refresh on the main thread
+std::shared_mutex g_rootsLock;
+
+// The art folder a frame or light map belongs to: its first two levels, or
+// for a light map those after _lighting/<fingerprint>/<profile>/<view>/
+std::string folderOf(const std::string &path) {
+  std::vector<std::string> parts;
+  std::stringstream in(path);
+  for (std::string part; std::getline(in, part, '/');)
+    parts.push_back(part);
+  const size_t at = !parts.empty() && parts[0] == "_lighting" ? 4 : 0;
+  return parts.size() >= at + 3 ? Utils::string_to_lower(parts[at] + "/" + parts[at + 1] + "/") : std::string();
+}
+// The archive in root i holding this file, if it's packed there
+const std::string *packedIn(size_t i, const std::string &file) {
+  if (i >= g_packed.size() || g_packed[i].empty())
+    return nullptr;
+  auto at = g_packed[i].find(folderOf(file));
+  return at != g_packed[i].end() && ZtdFile::hasFile(at->second, file) ? &at->second : nullptr;
+}
+SDL_Surface *packedImage(const std::string &archive, const std::string &file) {
+  int size = 0;
+  void *data = ZtdFile::tryFileContent(archive, file, &size);
+  if (!data)
+    return nullptr;
+  SDL_Surface *s = IMG_Load_RW(SDL_RWFromConstMem(data, size), 1);
+  free(data);
+  return s;
+}
 
 void ensure() {
   if (!g_read)
@@ -84,17 +142,37 @@ void bleed(SDL_Surface *s, int passes = 4) {
 }
 } // namespace
 
+void dropLoaderWork();
 void refresh() {
+  dropLoaderWork(); // (frames from the old roots: not wanted)
+  std::unique_lock<std::shared_mutex> lock(g_rootsLock);
   g_read = true;
   g_roots.clear();
+  g_hdMods.clear();
   std::error_code ec;
   for (const std::string &m : Mods::enabledPaths()) {
     fs::path hd = fs::path(m) / "hd";
-    if (fs::is_directory(hd, ec))
+    if (fs::is_directory(hd, ec)) {
       g_roots.push_back(hd.string() + "/");
+      g_hdMods.push_back(fs::path(m).filename().string());
+    }
   }
   if (fs::is_directory("hd", ec))
     g_roots.push_back("hd/");
+  g_packed.assign(g_roots.size(), {});
+  for (size_t i = 0; i < g_roots.size(); i++)
+    for (const fs::directory_entry &top : fs::directory_iterator(g_roots[i], ec))
+      if (top.is_directory(ec))
+        for (const fs::directory_entry &z : fs::directory_iterator(top.path(), ec)) {
+          std::string ext = Utils::string_to_lower(z.path().extension().string());
+          if (ext == ".ztd" && z.is_regular_file(ec))
+            g_packed[i][Utils::string_to_lower(top.path().filename().string() + "/" + z.path().stem().string() + "/")] =
+                z.path().string();
+        }
+  g_sharpStops = std::clamp(static_cast<float>(std::atof(Settings::get("user", "artsharpness", "0.2").c_str())), 0.0f, 2.0f);
+  if (std::getenv("ZT_HD_NO_SHARPEN")) // (the checks: compared without it)
+    g_sharpStops = -1.0f;
+  g_compression = g_hdMods.empty() ? 1 : Mods::hdCompression(g_hdMods.front());
   g_generation++;
   SDL_Log("[HdArt] %d HD art folder(s) at work", static_cast<int>(g_roots.size()));
 }
@@ -104,23 +182,38 @@ bool active() {
   return !g_roots.empty();
 }
 
+int compression() {
+  ensure();
+  return g_compression;
+}
+
 int generation() {
   ensure();
   return g_generation;
 }
 
 namespace {
-int g_found = 0, g_missed = 0;
+std::atomic<int> g_found{0}, g_missed{0};
+std::mutex g_missedMutex; // (loadMany's threads)
 std::string g_lastMissed;
 } // namespace
 
 SDL_Surface *load(const std::string &path) {
   ensure();
+  std::shared_lock<std::shared_mutex> lock(g_rootsLock);
   std::error_code ec;
-  for (const std::string &root : g_roots) {
-    std::string file = root + path + ".png";
-    if (!fs::exists(file, ec))
+  for (size_t i = 0; i < g_roots.size(); i++) {
+    std::string file = g_roots[i] + path + ".png";
+    if (!fs::exists(file, ec)) {
+      if (const std::string *archive = packedIn(i, path + ".png")) {
+        SDL_Surface *s = packedImage(*archive, path + ".png");
+        if (!s)
+          SDL_Log("[HdArt] could not load %s from %s", (path + ".png").c_str(), archive->c_str());
+        g_found++;
+        return s;
+      }
       continue;
+    }
     SDL_Surface *s = IMG_Load(file.c_str());
     if (!s)
       SDL_Log("[HdArt] could not load %s: %s", file.c_str(), IMG_GetError());
@@ -129,18 +222,329 @@ SDL_Surface *load(const std::string &path) {
   }
   if (!g_roots.empty()) {
     g_missed++;
+    std::lock_guard<std::mutex> lock(g_missedMutex);
     g_lastMissed = path;
   }
   return nullptr;
 }
 
+namespace {
+// One frame for the loader: read, and halved for the 2x level
+SDL_Surface *loadAt(const std::string &path, int level) {
+  SDL_Surface *s = load(path);
+  if (s && level == 2) {
+    SDL_Surface *half = halve(s);
+    SDL_FreeSurface(s);
+    s = half;
+  }
+  // ours: Graphics > Art Sharpness on HD art too, at the level it's drawn
+  // at (after halving: where the softness is) - FSR's RCAS, as the game's
+  // own art gets it
+  if (const float stops = g_sharpStops; s && stops >= 0.0f) {
+    if (s->format->format != SDL_PIXELFORMAT_RGBA32) {
+      SDL_Surface *c = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_RGBA32, 0);
+      SDL_FreeSurface(s);
+      s = c;
+    }
+    ArtScaler::sharpen(s, stops);
+  }
+  return s;
+}
+} // namespace
+
+std::vector<SDL_Surface *> loadMany(const std::vector<std::string> &paths, int level) {
+  std::vector<SDL_Surface *> out(paths.size(), nullptr);
+  ensure(); // (the roots read here, not on the threads)
+  if (g_roots.empty() || paths.empty())
+    return out;
+  IMG_Init(IMG_INIT_PNG); // (its decoder set up here, once, not by two threads at once)
+  // (the archives' reads take turns - ZtdFile's lock - the decoding doesn't)
+  const unsigned n = std::min<unsigned>(std::max(1u, std::thread::hardware_concurrency()), unsigned(paths.size()));
+  if (n <= 1) {
+    for (size_t i = 0; i < paths.size(); i++)
+      out[i] = loadAt(paths[i], level);
+    return out;
+  }
+  std::atomic<size_t> next{0};
+  std::vector<std::thread> workers;
+  for (unsigned t = 0; t < n; t++)
+    workers.emplace_back([&] {
+      for (size_t i; (i = next++) < paths.size();)
+        out[i] = loadAt(paths[i], level);
+    });
+  for (std::thread &w : workers)
+    w.join();
+  return out;
+}
+
+SDL_Surface *halve(SDL_Surface *s) {
+  SDL_Surface *in = s->format->format == SDL_PIXELFORMAT_RGBA32 ? s : rgba(s);
+  if (!in)
+    return nullptr;
+  const int w = in->w / 2, h = in->h / 2;
+  SDL_Surface *out = w > 0 && h > 0 ? SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32) : nullptr;
+  if (out) {
+    SDL_LockSurface(in);
+    for (int y = 0; y < h; y++) {
+      const uint8_t *r0 = static_cast<const uint8_t *>(in->pixels) + static_cast<size_t>(2 * y) * in->pitch;
+      const uint8_t *r1 = r0 + in->pitch;
+      uint8_t *o = static_cast<uint8_t *>(out->pixels) + static_cast<size_t>(y) * out->pitch;
+      for (int x = 0; x < w; x++, o += 4) {
+        const uint8_t *q[4] = {r0 + 8 * x, r0 + 8 * x + 4, r1 + 8 * x, r1 + 8 * x + 4};
+        // (by alpha: a clear pixel's colour doesn't darken the edge; all
+        // four clear, their plain average, for the smooth scaling's edge)
+        int a = 0, c[3] = {0, 0, 0}, plain[3] = {0, 0, 0};
+        for (const uint8_t *p : q) {
+          a += p[3];
+          for (int k = 0; k < 3; k++) {
+            c[k] += p[k] * p[3];
+            plain[k] += p[k];
+          }
+        }
+        for (int k = 0; k < 3; k++)
+          o[k] = static_cast<uint8_t>(a ? (c[k] + a / 2) / a : plain[k] / 4);
+        o[3] = static_cast<uint8_t>((a + 2) / 4);
+      }
+    }
+    SDL_UnlockSurface(in);
+  }
+  if (in != s)
+    SDL_FreeSurface(in);
+  return out;
+}
+
+namespace {
+// ours: the background loader (requestFrames)
+using LoadKey = std::tuple<uint64_t, std::string, int>; // owner, its key, the level
+// (the loader used yet, and gone: an animation freed after it, at exit,
+// doesn't reach for it)
+std::atomic<bool> g_loaderUsed{false}, g_loaderGone{false};
+struct LoadJob {
+  LoadKey key;
+  std::vector<std::string> paths;
+  uint32_t wanted = 0;
+  int encode = 0; // (requestFrames)
+};
+struct Loader {
+  std::mutex m;
+  std::condition_variable cv;
+  // (the jobs waiting, in the order they were last asked for - the latest
+  // at the back, where the workers take from - and each one's place in it:
+  // asked again, a job moves to the back at once. Scanned on every ask, a
+  // long queue - a slow loader in a busy zoo - cost the game's thread more
+  // than drawing)
+  std::list<LoadJob> queue;
+  std::map<LoadKey, std::list<LoadJob>::iterator> queued;
+  std::map<LoadKey, uint32_t> pending;                                        // queued or being made
+  std::map<LoadKey, std::pair<std::vector<SDL_Surface *>, uint32_t>> ready; // and when made
+  std::vector<std::thread> workers;
+  bool stop = false;
+  uint32_t now = 0; // (frames: loaderTick)
+  static void free(std::vector<SDL_Surface *> &frames) {
+    for (SDL_Surface *f : frames)
+      freeFrame(f);
+    frames.clear();
+  }
+  void start() { // (with m held)
+    if (!workers.empty())
+      return;
+    // (one a physical core but one - the game's thread keeps a core of its
+    // own: on a 4-core CPU with 8 threads, 6 workers made it share one)
+    const unsigned cores = std::thread::hardware_concurrency();
+    const unsigned n = std::clamp(cores / 2 > 1 ? cores / 2 - 1 : 1u, 1u, 6u);
+    for (unsigned i = 0; i < n; i++)
+      workers.emplace_back([this] {
+        // (below the game's own thread: decoding, sharpening and encoding
+        // for the graphics card only use what it leaves)
+#ifdef _WIN32
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#endif
+        run();
+      });
+  }
+  void run() {
+    for (;;) {
+      LoadJob job;
+      {
+        std::unique_lock<std::mutex> lock(m);
+        cv.wait(lock, [&] { return stop || !queue.empty(); });
+        if (stop)
+          return;
+        job = std::move(queue.back());
+        queue.pop_back();
+        queued.erase(job.key);
+      }
+      std::vector<SDL_Surface *> frames;
+      frames.reserve(job.paths.size());
+      for (const std::string &path : job.paths)
+        frames.push_back(loadAt(path, std::get<2>(job.key)));
+      // (encoded for the graphics card here too, off the game's thread: the
+      // game only hands the blocks over - GpuCompressed::upload)
+      if (job.encode > 0)
+        for (SDL_Surface *f : frames)
+          if (f) {
+            auto *b = new GpuCompressed::Blocks;
+            if (GpuCompressed::encode(f, job.encode == 2, *b, 1))
+              f->userdata = b;
+            else
+              delete b;
+          }
+      std::lock_guard<std::mutex> lock(m);
+      auto it = pending.find(job.key);
+      if (it == pending.end()) { // (cancelled meanwhile)
+        free(frames);
+        continue;
+      }
+      pending.erase(it);
+      ready[job.key] = {std::move(frames), now};
+    }
+  }
+  ~Loader() {
+    g_loaderGone = true;
+    {
+      std::lock_guard<std::mutex> lock(m);
+      stop = true;
+    }
+    cv.notify_all();
+    for (std::thread &t : workers)
+      t.join();
+    for (auto &[key, made] : ready)
+      free(made.first);
+  }
+};
+Loader &loader() {
+  static Loader l;
+  return l;
+}
+} // namespace
+
+void dropLoaderWork() {
+  if (!g_loaderUsed || g_loaderGone)
+    return;
+  Loader &l = loader();
+  std::lock_guard<std::mutex> lock(l.m);
+  l.queue.clear();
+  l.queued.clear();
+  l.pending.clear(); // (what's being made now is freed when it's done)
+  for (auto &[key, made] : l.ready)
+    Loader::free(made.first);
+  l.ready.clear();
+}
+
+const GpuCompressed::Blocks *encodedOf(SDL_Surface *frame) {
+  return frame ? static_cast<const GpuCompressed::Blocks *>(frame->userdata) : nullptr;
+}
+
+void freeFrame(SDL_Surface *frame) {
+  if (!frame)
+    return;
+  delete static_cast<GpuCompressed::Blocks *>(frame->userdata);
+  frame->userdata = nullptr;
+  SDL_FreeSurface(frame);
+}
+
+void requestFrames(uint64_t owner, const std::string &key, int level, const std::vector<std::string> &paths,
+                   int encode) {
+  ensure(); // (the roots read here, on the main thread)
+  if (g_loaderGone)
+    return;
+  g_loaderUsed = true;
+  Loader &l = loader();
+  std::lock_guard<std::mutex> lock(l.m);
+  l.start();
+  const LoadKey k{owner, key, level};
+  if (l.ready.count(k))
+    return;
+  if (auto it = l.pending.find(k); it != l.pending.end()) {
+    it->second = l.now;
+    // (still waiting: to the back, the latest asked for)
+    if (auto q = l.queued.find(k); q != l.queued.end()) {
+      q->second->wanted = l.now;
+      l.queue.splice(l.queue.end(), l.queue, q->second);
+    }
+    return;
+  }
+  l.pending[k] = l.now;
+  l.queue.push_back({k, paths, l.now, encode});
+  l.queued[k] = std::prev(l.queue.end());
+  l.cv.notify_one();
+}
+
+bool framesReady(uint64_t owner, const std::string &key, int level) {
+  if (!g_loaderUsed || g_loaderGone)
+    return false;
+  Loader &l = loader();
+  std::lock_guard<std::mutex> lock(l.m);
+  return l.ready.count({owner, key, level}) > 0;
+}
+
+bool takeFrames(uint64_t owner, const std::string &key, int level, std::vector<SDL_Surface *> &out) {
+  if (!g_loaderUsed || g_loaderGone)
+    return false;
+  Loader &l = loader();
+  std::lock_guard<std::mutex> lock(l.m);
+  auto it = l.ready.find({owner, key, level});
+  if (it == l.ready.end())
+    return false;
+  out = std::move(it->second.first);
+  l.ready.erase(it);
+  return true;
+}
+
+void cancelFrames(uint64_t owner) {
+  if (!g_loaderUsed || g_loaderGone)
+    return;
+  Loader &l = loader();
+  std::lock_guard<std::mutex> lock(l.m);
+  l.queue.remove_if([&](const LoadJob &j) {
+    if (std::get<0>(j.key) != owner)
+      return false;
+    l.queued.erase(j.key);
+    return true;
+  });
+  for (auto it = l.pending.begin(); it != l.pending.end();)
+    it = std::get<0>(it->first) == owner ? l.pending.erase(it) : std::next(it);
+  for (auto it = l.ready.begin(); it != l.ready.end();) {
+    if (std::get<0>(it->first) == owner) {
+      Loader::free(it->second.first);
+      it = l.ready.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void loaderTick() {
+  if (!g_loaderUsed || g_loaderGone)
+    return;
+  Loader &l = loader();
+  std::lock_guard<std::mutex> lock(l.m);
+  l.now++;
+  // (not asked for again in 2 seconds: off the screen, not made - the
+  // oldest asked for are at the front)
+  while (!l.queue.empty() && l.queue.front().wanted + 120 < l.now) {
+    l.pending.erase(l.queue.front().key);
+    l.queued.erase(l.queue.front().key);
+    l.queue.pop_front();
+  }
+  // (made but not taken in 10 seconds: freed)
+  for (auto it = l.ready.begin(); it != l.ready.end();) {
+    if (it->second.second + 600 < l.now) {
+      Loader::free(it->second.first);
+      it = l.ready.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 std::string stats() {
   ensure();
-  std::string s = std::to_string(g_found) + " HD frames in use, " + std::to_string(g_missed) + " looked for and not in the mod";
+  std::string s = std::to_string(g_found.load()) + " HD frames in use, " + std::to_string(g_missed.load()) + " looked for and not in the mod";
   if (!g_lastMissed.empty())
     s += " (last: " + g_lastMissed + ")";
-  for (const std::string &r : g_roots)
-    s += "\n  from " + r;
+  for (size_t i = 0; i < g_roots.size(); i++)
+    s += "\n  from " + g_roots[i] + (i < g_packed.size() && !g_packed[i].empty() ? " (" + std::to_string(g_packed[i].size()) + " packed folders)" : "");
   return s;
 }
 
@@ -158,12 +562,33 @@ void setResources(ResourceManager *rm) {
   g_ownPalette.clear();g_ownGeneration=-1;g_rm=rm;
 }
 
+// addition: a mod item's light map (SpriteLighting): a PNG among the
+// resources, read where the mod's other files are (null if there's none)
+SDL_Surface *loadModLight(const std::string &resource) {
+  if (!g_rm || !g_rm->hasResource(resource + ".png"))
+    return nullptr;
+  int size = 0;
+  void *bytes = g_rm->getFileBytes(resource + ".png", &size);
+  if (!bytes)
+    return nullptr;
+  SDL_Surface *s = size > 0 ? IMG_Load_RW(SDL_RWFromConstMem(bytes, size), 1) : nullptr;
+  free(bytes);
+  return s;
+}
+
 // addition: a baked material belongs to the same enabled root as its colour
 // frame. A lower-priority pack must not light a different replacement's art.
 SDL_Surface *loadEmission(const std::string &path,const std::string &material) {
   ensure();std::error_code ec;
-  for(const auto &root:g_roots)if(fs::exists(root+path+".png",ec)) {
-    const auto file=root+material+".png";return fs::exists(file,ec)?IMG_Load(file.c_str()):nullptr;
+  for(size_t i=0;i<g_roots.size();i++) {
+    const auto &root=g_roots[i];
+    if(fs::exists(root+path+".png",ec)) {
+      const auto file=root+material+".png";
+      if(fs::exists(file,ec))return IMG_Load(file.c_str());
+      const std::string *archive=packedIn(i,material+".png");return archive?packedImage(*archive,material+".png"):nullptr;
+    }
+    // (packed: its light map from the same root's archives)
+    if(packedIn(i,path+".png")){const std::string *archive=packedIn(i,material+".png");return archive?packedImage(*archive,material+".png"):nullptr;}
   }return nullptr;
 }
 
@@ -242,7 +667,7 @@ SDL_Surface *recolour(SDL_Surface *hd, SDL_Surface *painted, const std::string &
     SDL_FreeSurface(out);
     return hd;
   }
-  SDL_FreeSurface(hd);
+  freeFrame(hd); // (its blocks, if any, were of the frame before recolouring)
   return out;
 }
 

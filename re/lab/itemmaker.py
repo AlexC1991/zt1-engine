@@ -292,10 +292,53 @@ def save(req):
         text = am.join([(nm, ls) for nm, ls in am.sections(text)
                         if nm.lower() not in ('colorrep', 'cr_color')])
         text = set_value(text, 'Characteristics/Integers', 'cIsColorReplaced', 0)
+    if row['kind'] in LIT_KINDS:
+        text = night_lights(text, done)
     entries[row['file']] = text.encode('latin1')
     files.z and files.z.close()
     artmaker.write_entries(req['ztd'], entries)
-    return {'ok': True, 'colours': colours, 'merged': merged, 'animations': done, 'wrote': sorted(entries)}
+    return {'ok': True, 'colours': colours, 'merged': merged, 'animations': done,
+            'lit': sum(d.get('lit', 0) for d in done), 'wrote': sorted(k for k, v in entries.items() if v is not None)}
+
+
+# The items the engine's day and night lighting draws (placed objects: not
+# paths, fences, tank walls, staff or ground)
+LIT_KINDS = ('building', 'scenery', 'filter', 'foliage', 'rock', 'shelter', 'toy', 'entrance', 'food')
+# measured: the street lamp's lantern is drawn about 62 px above its ground
+# point (LightingAssets: lantern glass at y -65..-58) and lights from height
+# 3.9, so a height unit is about 16 px of art
+PX_PER_HEIGHT = 16
+
+
+def night_lights(text, done):
+    """Its [lighting] section from what's drawn: lightmap = 1 while any of
+    its animations has a Night light layer or a lamp point, and a light line
+    for each lamp point (DayNightLighting::typeOf reads them)"""
+    lamps, seen = [], set()
+    for d in done:
+        lamp = d.get('lamp')
+        if not lamp:
+            continue
+        r, g, b = [int(lamp.get('color', '#ffe29f')[i:i + 2], 16) for i in (1, 3, 5)]
+        z = max(0.0, min(12.0, float(lamp.get('height', 0)) / PX_PER_HEIGHT))
+        line = '0, 0, %.2f, %d, %d, %d, %.2f, %.1f' % (z, r, g, b, float(lamp.get('power', 1)), float(lamp.get('radius', 4)))
+        if line not in seen:
+            seen.add(line)
+            lamps.append(line)
+    on = any(d.get('lit') for d in done) or bool(lamps)
+    secs = [(nm, ls) for nm, ls in am.sections(text) if nm.lower() != 'lighting' or on]
+    for nm, ls in secs:
+        if nm.lower() == 'lighting':
+            ls[:] = [ln for ln in ls if not ('=' in ln and ln.split('=', 1)[0].strip().lower() in ('lightmap', 'light'))]
+    text = am.join(secs)
+    if not on:
+        return text
+    text = set_value(text, 'lighting', 'lightmap', 1)
+    secs = am.sections(text)
+    for nm, ls in secs:
+        if nm.lower() == 'lighting':
+            ls.extend('light = ' + ln for ln in lamps)
+    return am.join(secs)
 
 
 def link(req):

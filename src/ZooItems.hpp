@@ -15,7 +15,7 @@ class WorldRenderer;
 
 // What lies about the zoo for staff to deal with: food a keeper put down
 // (food/<kind>/full, mid, small as it goes), dung in exhibits
-// (objects/poo), litter on the grounds (items/trash). For now these come
+// (objects/poo), litter on the grounds (objects/trash). For now these come
 // from the TEST PANEL (fake stats, no animals or guests): an exhibit's fake
 // animal count eats its food down a little every hour, nothing more.
 class ZooItems {

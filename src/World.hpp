@@ -182,6 +182,21 @@ public:
     void setStaffTool(int type);
     int getStaffTool() const { return staffTool; }
     Staff &getStaff() { return staff; }
+    // The object being placed fits but costs more than the cash: shown red
+    // (zoo.exe 0x5ce19f; the checks)
+    bool objectPreviewPoor() const { return ghostPoor; }
+    // The bulldozer being dragged: its rectangle (tiles) and what's in it
+    // (the checks)
+    bool bulldozeDragging() const { return bulldozeDrag.dragging; }
+    size_t bulldozeDragCount() const { return dragPaths.size() + dragDecks.size() + dragObjects.size() + dragFences.size(); }
+    // A tank's walls taken by their top at screen height pressY, as a press
+    // there does (mouseDown; the checks start one with it)
+    void beginWallDrag(int tank, int pressY) {
+      this->wallDrag.tank = tank;
+      this->wallDrag.pressY = pressY;
+      this->wallDrag.steps = 0;
+      this->hoverPrice = 0;
+    }
     Shows &getShows() { return shows; }
     // The terraform tabs' tool (picked while a tab of the page is up)
     TerrainTool &getTerrainTool() { return terrain; }
@@ -387,6 +402,7 @@ private:
     float ghostX = 0, ghostY = 0;
     int ghostFacing = 0;
     Fences::Fit ghostFit = Fences::Fit::Ok;
+    bool ghostPoor = false; // (it fits, but costs more than the cash: red)
     std::map<std::string, std::pair<int, int>> footprints; // half tiles
     std::map<std::string, int> rubbleKeys; // (file|key: cRubbleable, cUsesTreeRubble)
     std::pair<int, int> footprintOf(const std::string &file);
@@ -484,6 +500,23 @@ private:
       int pressY = 0;
       int steps = 0;
     } wallDrag;
+    // ours, as the original's bulldozer (bulldozeDrag 0x509605, bulldozeRect
+    // 0x5092f4; watched in the original, 2026-11-06): pressed, nothing's
+    // taken yet; moved more than 16 pixels (0x4ec0b4), a rectangle of tiles
+    // from where it was pressed to the cursor, what's on them lit red with
+    // the money back for it all; let go, a click takes what's under it, a
+    // drag the rectangle's
+    struct BulldozeDrag {
+      bool pressed = false, dragging = false, onMap = false;
+      int pressX = 0, pressY = 0, tx0 = 0, ty0 = 0, tx1 = 0, ty1 = 0;
+    } bulldozeDrag;
+    std::vector<std::pair<int, int>> dragPaths, dragDecks;
+    std::vector<int> dragObjects; // (indices of placedObjects' list)
+    std::vector<Fences::Edge> dragFences;
+    std::vector<Fences::Edge> pendingFences; // (a drag's walls waiting on the escape question)
+    void gatherBulldozeRect();
+    ToolResult bulldozeClick(int x, int y);
+    ToolResult bulldozeRectRelease();
     int wallDragCost() const;
     Fences fences;                  // Fences, exhibits and tanks
     int fenceTool = -1;

@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <map>
+#include <algorithm>
 #include <string>
 #include <random>
 #include <unordered_map>
@@ -153,6 +154,11 @@ public:
   // first), drawn red; taken away
   int pick(float px, float py, const WorldRenderer &view, const WorldMap &map) const;
   int highlight = -1;
+  // (the bulldozer's drag: these lit red too)
+  std::vector<int> highlights;
+  bool lit(int index) const {
+    return index == this->highlight || std::find(this->highlights.begin(), this->highlights.end(), index) != this->highlights.end();
+  }
   void remove(int index);
   // One taken away put back as it was (Undo)
   void restore(const Object &o) { this->list.push_back(o); }

@@ -9,8 +9,6 @@
 #include <unordered_map>
 #include <array>
 using LightingAssets::Point;
-namespace FrameProfile {extern bool active;void record(const char *,double);double ms(Uint64);}
-namespace {struct ProfScope{const char *n;Uint64 t;explicit ProfScope(const char *m):n(m),t(FrameProfile::active?SDL_GetPerformanceCounter():0){}~ProfScope(){if(t)FrameProfile::record(n,FrameProfile::ms(t));}};}
 // addition: people, animals, trees and scenery cast their shadow from their
 // own sprite, pixel by pixel along the sun's line (Animation::drawCastShadow,
 // in drawShadows), in its current pose: their real outline - leaves, legs,
@@ -103,7 +101,7 @@ void DayNightLighting::startSunJob(const WorldMap &map,double time,float left,fl
 // (the job's map for map k, if it was made from what is there now)
 bool DayNightLighting::takeSunJob(int k,double time,float left,float top,float extent,const WorldMap &map) {
   if(!sunJob.valid())return false;
-  std::shared_ptr<SunJob> job;{ProfScope wait("ls job wait");job=sunJob.get();} // (made 0.6 s ago: done; if not, waited for rather than made twice)
+  auto job=sunJob.get(); // (made 0.6 s ago: done; if not, waited for rather than made twice)
   if(!job || std::abs(job->time-time)>.000001 || job->left!=left || job->top!=top || job->extent!=extent ||
      job->scene->scene!=sceneHash || job->scene->projection!=projectionSerial || job->terrain->generation!=map.getGeneration() ||
      job->scene->facePoints.size()!=projectedFaces.size() || job->opacity!=casterOpacity)return false;
@@ -172,7 +170,6 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
     atlas.opacity=&casterOpacity;
     if((changed || std::abs(atlas.hour-time)>.000001 || atlas.x0!=left || atlas.y0!=top || atlas.span!=extent) &&
        !(!changed && takeSunJob(k,time,left,top,extent,map))) {
-      ProfScope rebuild("ls map rebuild");
       const auto sun=skyAt(time);const float n=std::max(.001f,std::hypot(sun.dx,sun.dy));
       atlas.reset(std::min(1024,int(extent*8)),left,top,extent,time,sun.dx/n*sun.shadowLength*.5f,sun.dy/n*sun.shadowLength*.5f);
       atlas.soften=shadowSoften(time);
@@ -185,12 +182,10 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
       atlas.seal();++counters.sunBuilds;
     }
     if(projectedSunStamp[k]!=atlas.stamp) {
-      ProfScope faces("ls face samples");
       projectedSunStamp[k]=atlas.stamp;
       // addition: back-facing surfaces still cast; only drawn faces need receiver samples.
       for(auto &f:projectedFaces)if(f.visible)for(int n=0;n<4;++n)f.sun[k][n]=atlas.shadow(f.world[n],f.normal,uint32_t(f.instance+1),true);
     }
-    ProfScope actorsScope("ls actor raster");
     atlas.beginActors();
     for(const auto &o:actors) {
       if(spriteShadow(o,map,true))continue;
@@ -208,7 +203,7 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
     counters.memoryBytes+=atlas.bytes();
   }
   // (the map after next, made ahead while the zoo plays)
-  if(!sunJob.valid()){ProfScope start("ls job start");startSunJob(map,h0+2*interval,left,top,extent);}
+  if(!sunJob.valid())startSunJob(map,h0+2*interval,left,top,extent);
   gpuSunReady=gpu.uploadSun(frameRenderer,sunMaps,sunBlend,sky.shadow);
 }
 float DayNightLighting::sunShadow(Point p,Point normal,uint32_t receiver)const {
@@ -312,7 +307,6 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
   if(receiverSampleFrame!=receiverFrame) {
     receiverSampleFrame=receiverFrame;
     for(int k=0;k<2;++k)if(receiverSunStamp[k]!=sunMaps[k].stamp) {
-      ProfScope ground("ls ground samples");
       receiverSunStamp[k]=sunMaps[k].stamp;
       for(auto &p:receiverPoints)p.sun[k]=sunMaps[k].shadow(p.p,p.normal,0xFFFFFFFFu,true);
     }

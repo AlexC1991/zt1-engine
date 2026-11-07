@@ -711,7 +711,7 @@ int Guests::pickExhibit(Guest &g, int &vx, int &vy) {
     for (const Animals::Member &m : this->animals->members())
       if (m.exhibit == ex.id) {
         any = true;
-        attract += static_cast<float>(this->animals->types()[m.type].attractiveness);
+        attract += static_cast<float>(this->animals->types()[m.type].forAge(m.baby).attractiveness); // (a young one's own: its [y/...])
         favourite = favourite || m.type == g.favourite;
       }
     if (!any)
@@ -1006,7 +1006,7 @@ void Guests::gawk(Guest &g) {
   for (const Animals::Member &m : this->animals->members())
     if (m.exhibit == g.target) {
       sum += m.happiness;
-      attract += static_cast<float>(this->animals->types()[m.type].attractiveness);
+      attract += static_cast<float>(this->animals->types()[m.type].forAge(m.baby).attractiveness); // (a young one's own: its [y/...])
       n++;
     }
   float h = n ? sum / n : 0;

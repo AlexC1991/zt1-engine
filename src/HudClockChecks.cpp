@@ -107,9 +107,19 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
   check(world.getClock()>clock && label()==calendar+"   "+DayNightLighting::formatTime(DayNightLighting::hourAt(world.getClock())),
         "running clock follows saved world time");
   pause(true);
-  Features::showGameTime=false;lighting.previewHour=0;capture("clock-hidden-night");
-  check(label()==calendar && Features::dayNightLighting && lighting.displayedHour()==0,
-        "clock can be hidden while the day/night cycle remains active");
+  // (the day/night cycle and the speed control show the clock whatever its
+  // own switch says, and turning one off leaves it while the other needs it:
+  // Features::gameTimeShown)
+  Features::showGameTime=false;lighting.previewHour=0;capture("clock-kept-night");
+  check(label()==calendar+"   "+DayNightLighting::formatTime(0) && Features::dayNightLighting && lighting.displayedHour()==0,
+        "the day/night cycle keeps the clock shown with its own switch off");
+  const bool wasSpeed=Features::fastForward;
+  Features::fastForward=true;Features::dayNightLighting=false;capture("clock-kept-speed");
+  check(label()==calendar+"   "+DayNightLighting::formatTime(DayNightLighting::hourAt(world.getClock())),
+        "the speed control keeps the clock when the day/night cycle goes off");
+  Features::fastForward=false;capture("clock-hidden");
+  check(label()==calendar,"the clock goes with the last switch that showed it");
+  Features::fastForward=wasSpeed;Features::dayNightLighting=true;
   Features::dayNightLighting=false;Features::showGameTime=true;capture("clock-without-lighting");
   check(label()==calendar+"   "+DayNightLighting::formatTime(DayNightLighting::hourAt(world.getClock())),
         "clock works independently with the original daylight rendering");

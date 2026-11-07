@@ -59,6 +59,8 @@ const ICONS = {
   outline: '<path d="M6 18c0-5 2.5-8 6-8s6 3 6 8z" stroke-dasharray="2.2 1.8"/><circle cx="12" cy="6" r="2.5" stroke-dasharray="2 1.6"/>',
   inside: '<path d="M5 19c0-6 3-10 7-10s7 4 7 10z"/><path d="M9 16l2-2M11.5 17l3-3"/><circle cx="12" cy="5.5" r="2.2"/>',
   bucket: '<path d="M5 11l7-7 7 7-7 7z"/><path d="M5 11h14"/><path d="M20 15c0 1.5-1 2.5-1 3.5a1 1 0 0 0 2 0c0-1-1-2-1-3.5z"/>',
+  bulb: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>',
+  moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
   stencil: '<rect x="3.5" y="3.5" width="17" height="17" rx="3" stroke-dasharray="3 2.2"/><path d="M7.5 16c1.5-3 3-4.5 4.5-4.5s3 1.5 4.5 4.5"/><circle cx="12" cy="8" r="1.6"/>',
 };
 const ic = (name) =>

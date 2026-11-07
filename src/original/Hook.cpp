@@ -1015,7 +1015,11 @@ LONG CALLBACK onWatch(EXCEPTION_POINTERS *e) {
 POINT g_fakeAt{};
 DWORD g_fakeUntil = 0;
 bool g_fakeLeft = false, g_fakeRight = false;
-bool faking() { return g_fakeUntil && GetTickCount() < g_fakeUntil; }
+// ours: the left button held by the Lab's "press" until its "release" - the
+// fake cursor and button kept up meanwhile, so a drag can be looked at
+// before it ends (the bulldozer's rectangle, a fence being drawn)
+bool g_fakeHeld = false;
+bool faking() { return g_fakeHeld || (g_fakeUntil && GetTickCount() < g_fakeUntil); }
 
 using GetCursorPosFn = BOOL(WINAPI *)(LPPOINT);
 GetCursorPosFn realGetCursorPos = nullptr;
@@ -1231,9 +1235,27 @@ void command(const char *line) {
     if (g_game)
       labClick(x, y, true);
     reply("done rclick");
-  } else if (std::sscanf(line, "move %d %d", &x, &y) == 2) {
-    if (g_game)
+  } else if (std::sscanf(line, "press %d %d", &x, &y) == 2) {
+    // The left button down here, and held (until "release")
+    if (g_game) {
       fakeMouse(x, y, WM_MOUSEMOVE, 0);
+      Sleep(80);
+      g_fakeLeft = g_fakeHeld = true;
+      fakeMouse(x, y, WM_LBUTTONDOWN, MK_LBUTTON);
+    }
+    reply("done press");
+  } else if (std::sscanf(line, "release %d %d", &x, &y) == 2) {
+    if (g_game) {
+      fakeMouse(x, y, WM_MOUSEMOVE, g_fakeLeft ? MK_LBUTTON : 0);
+      Sleep(60);
+      g_fakeLeft = g_fakeHeld = false;
+      fakeMouse(x, y, WM_LBUTTONUP, 0);
+    }
+    reply("done release");
+  } else if (std::sscanf(line, "move %d %d", &x, &y) == 2) {
+    // (with the button held when a "press" holds it: a drag)
+    if (g_game)
+      fakeMouse(x, y, WM_MOUSEMOVE, g_fakeLeft ? MK_LBUTTON : 0);
     reply("done move");
   } else if (char type[16], value[64]; std::sscanf(line, "scan %15s %63s", type, value) == 2) {
     scan(type[0] == 'f' ? 'f' : type[0] == 'd' ? 'd' : 'i', std::atof(value));

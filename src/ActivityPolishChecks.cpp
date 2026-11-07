@@ -391,7 +391,8 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
   }
   check("off-screen sprite pruning preserves pixels at four zooms, four rotations and five view positions",cullPixels && cullSawPixels && cullCases==80);
   check("sprite pruning preserves the parent clip and renderer scale",cullState && probe);
-  Features::tankClip=oldTankClip;if(probe){GpuTankLayer::releasePool(probe);SDL_DestroyRenderer(probe);}if(canvas)SDL_FreeSurface(canvas);
+  // (the art drawn on the probe made its textures there: let them go first)
+  Features::tankClip=oldTankClip;if(probe){GpuTankLayer::releasePool(probe);Animation::releaseAllTextures();SDL_DestroyRenderer(probe);}if(canvas)SDL_FreeSurface(canvas);
   const Fences::Edge sides[4]={{true,37,30},{false,40,31},{true,37,34},{false,36,31}};
   // Full save/load deliberately does not persist fake Lab animal counts.
   // Use a real occupant so the specialist still has work after restoration.
@@ -629,7 +630,7 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
   Animals::Member egg;egg.type=dino;egg.exhibit=land;egg.x=30.5f;egg.y=32.5f;
   a.becomeEgg(egg);egg.hatchIn=1;egg.health=0;a.eggTick(egg);
   check("unhealthy dinosaur egg waits to hatch",egg.egg && egg.stack.empty() && egg.hatchIn==1);
-  egg.health=static_cast<float>(a.typeList[dino].maxHits);a.eggTick(egg);
+  egg.health=static_cast<float>(a.typeList[dino].maxHits);egg.hatchIn=0;a.eggTick(egg); // (0x437860: its last tick)
   check("healthy egg starts its original hatching sequence",!egg.egg || (!egg.stack.empty() && egg.stack.back().first=="bhatch"));
   step(egg,{{"fhatch",{}},{"fplay",{"stand"}}});
   check("hatching creates a live baby",!egg.egg && egg.baby);
@@ -654,6 +655,134 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
   a.heal(sleeper);a.update(0.05f,a.now+0.05,map,f);
   check("reloaded sick animal accepts treatment",a.member(sleeper)&&!a.member(sleeper)->sick);
   a.clear();
+
+  // Breeding as the original's (zoo.exe 0x4385e5, 0x430a19): a grown one
+  // keeps one mate; only a male tries, once a check, and only with her; no
+  // mother or father with its young
+  {
+    const int zebra=a.typeOfFile("animals/zebra.ai");
+    check("zebra definition for breeding",zebra>=0);
+    if(zebra>=0) {
+      Animals::Type &zt=a.typeList[zebra];const Animals::Type keep=zt;
+      zt.reproductionChance=100;zt.happyReproduceThreshold=-100;zt.offspring=1;
+      const int dad=a.adopt(zebra,false,30.5f,32.5f,map,f,true);
+      const int mumA=a.adopt(zebra,true,31.5f,32.5f,map,f,true);
+      const int mumB=a.adopt(zebra,true,32.5f,32.5f,map,f,true);
+      auto check20=[&](int id){if(auto *m=a.member(id)){m->reproductionCheck=0;a.tick(*m,map,f);}};
+      check20(mumA);check20(mumB);
+      const int pairedA=a.member(mumA)?a.member(mumA)->mate:-2,pairedB=a.member(mumB)?a.member(mumB)->mate:-2;
+      check("two females, one male: one female takes him as her mate, the other has none",
+            (pairedA==dad)!=(pairedB==dad) && (pairedA<0||pairedA==dad) && (pairedB<0||pairedB==dad));
+      const int mate=pairedA==dad?mumA:mumB;
+      check20(dad);
+      check("a ready male with every chance: one baby, by his mate only",
+            a.births.size()==1 && a.births[0].mother==mate && a.births[0].father==dad);
+      a.lifeEvents(map,f);
+      int baby=-1;for(const auto &m:a.members())if(m.baby)baby=m.id;
+      check("the young one knows its mother and father",a.member(baby)&&a.member(baby)->mother==mate&&
+            a.member(baby)->father==dad&&a.member(baby)->mate<0);
+      check20(dad);
+      check("just after: not ready again (cReproductionInterval)",a.births.empty());
+      fileRoundTrip("breeding pair");
+      check("mates, mothers and fathers survive saving",a.member(dad)&&a.member(dad)->mate==mate&&a.member(baby)&&
+            a.member(baby)->mother==mate&&a.member(baby)->father==dad);
+      // (the young grown: not with its mother, the other female free)
+      if(auto *y=a.member(baby)){y->baby=false;y->female=false;y->mate=-1;}
+      a.remove(dad);
+      const int other=mate==mumA?mumB:mumA;
+      for(int k=0;k<4;++k){check20(mate);check20(baby);}
+      check("a grown son never takes his mother; he pairs with the other female",
+            a.member(baby)&&a.member(baby)->mate==other&&a.member(mate)&&a.member(mate)->mate!=baby);
+      zt=keep;a.births.clear();a.clear();
+    }
+  }
+
+  // Eggs as the original's: laid on a free tile from 3 away (zoo.exe
+  // 0x60da6b); a newborn isn't a copy of its mother; an egg-eater of
+  // another kind takes an egg - it breaks and is gone (0x43971c, 0x4a6043);
+  // an egg hatches on its countdown's last tick (0x437860)
+  {
+    const int lambeo=a.typeOfFile("animals/lambeo.ai");
+    check("lambeosaurus and allosaurus for eggs",lambeo>=0 && allosaur>=0);
+    if(lambeo>=0 && allosaur>=0) {
+      const int mum=a.adopt(lambeo,true,30.5f,32.5f,map,f,true);
+      if(auto *m=a.member(mum)){m->sleeping=true;m->huntAnimal=12345;}
+      a.births.push_back({mum,-1,lambeo});a.lifeEvents(map,f);
+      const Animals::Member *egg=nullptr;for(const auto &m:a.members())if(m.egg)egg=&m;
+      const Animals::Member *mother=a.member(mum);
+      const int far=egg&&mother?std::abs(int(std::floor(egg->x))-int(std::floor(mother->x)))+
+                                std::abs(int(std::floor(egg->y))-int(std::floor(mother->y))):-1;
+      check("a laid egg lies on a free tile 3 from its mother ("+std::to_string(far)+")",egg && far==3 &&
+            egg->exhibit==land);
+      check("the young one doesn't take on what its mother was doing",egg && !egg->sleeping && egg->huntAnimal<0 &&
+            egg->mother==mum);
+      const int eggId=egg?egg->id:-1;
+      // (hatching: cTimeToHatch ticks, then bHatch on the next)
+      if(auto *e=a.member(eggId)) {
+        const int ticks=a.typeList[lambeo].timeToHatch;int started=-1;
+        for(int k=0;k<=ticks+1 && started<0;++k){a.eggTick(*e);if(!e->stack.empty())started=k+1;}
+        check("an egg starts hatching on tick cTimeToHatch + 1 ("+std::to_string(started)+" of "+std::to_string(ticks)+")",
+              started==ticks+1);
+        e->stack.clear();e->stepping=false;e->hatchIn=ticks;
+      }
+      // (an allosaurus eats it: the egg breaks, its shell gone 15 ticks on)
+      const int allo=a.adopt(allosaur,false,30.5f,34.5f,map,f,true);
+      Animals::Member *e=a.member(eggId),*hunter=a.member(allo);
+      check("an allosaurus hunts another kind's egg, a lambeosaurus doesn't hunt its own kind's",
+            e&&hunter&&a.hunts(*hunter,*e)&&a.member(mum)&&!a.hunts(*a.member(mum),*e));
+      if(e&&hunter){hunter->x=e->x;hunter->y=e->y;hunter->huntAnimal=eggId;hunter->stack.clear();hunter->stepping=false;}
+      for(int k=0;k<3 && a.member(eggId) && !a.member(eggId)->eaten;++k)a.update(0.05f,a.now+0.05,map,f);
+      e=a.member(eggId);
+      check("caught, the egg breaks (bEatenEgg) and can't be hunted again",e && e->eaten && a.member(allo) &&
+            !a.hunts(*a.member(allo),*e));
+      for(int k=0;k<20 && a.member(eggId);++k)if(auto *g=a.member(eggId))a.eggTick(*g),a.update(0.0f,a.now,map,f);
+      check("the broken shell's gone after its 15 ticks",!a.member(eggId));
+      a.clear();
+    }
+  }
+
+  // Eating as the original's (animalEatFood 0x4fd951 every tick while it
+  // eats): a hungry zebra at its food eats a mouthful a tick through its
+  // bEat, its hunger right down - not one mouthful a meal
+  {
+    const int zebra=a.typeOfFile("animals/zebra.ai");
+    if(zebra>=0) {
+      auto &items=world.getItems();
+      const int eater=a.adopt(zebra,false,30.5f,32.5f,map,f,true);
+      const int pile=items.addFood(land,31.5f,32.5f,1,"herbchow");
+      Animals::Member *z=a.member(eater);
+      const float before=items.item(pile)?items.item(pile)->units:0;
+      if(z){z->hunger=90;z->foodItem=pile;z->stack.clear();z->stepping=false;a.pushSet(*z,"beat");}
+      for(int k=0;k<400 && (z=a.member(eater)) && !z->stack.empty();++k)a.update(0.05f,a.now+0.05,map,f);
+      z=a.member(eater);
+      const float after=items.item(pile)?items.item(pile)->units:0;
+      const auto &zt=a.typeList[zebra];
+      check("a hungry zebra eats its fill in one bEat (hunger 90 -> "+std::to_string(int(z?z->hunger:-1))+
+            ", food "+std::to_string(int(before-after))+" eaten)",
+            z && z->hunger<=std::max(0,90-zt.foodEaten*zt.foodUnitValue*3) && before-after>=zt.foodEaten*3);
+      items.remove(pile);a.clear();
+    }
+  }
+
+  // A young one's own numbers (its [y/Characteristics/Integers] over the
+  // grown one's): a young T. rex walks at 30 not 60, doesn't jump fences, is
+  // more attractive (120 to 100); a young lambeosaurus doesn't test fences
+  {
+    const int rex=a.typeOfFile("animals/trex.ai"),lambeo=a.typeOfFile("animals/lambeo.ai");
+    if(rex>=0 && lambeo>=0) {
+      const auto &rt=a.typeList[rex],&lt=a.typeList[lambeo];
+      check("a young T. rex: half the walking pace, no jumping, more attractive",
+            std::abs(rt.forAge(true).slow-30/60.0f)<1e-4f && std::abs(rt.forAge(false).slow-60/60.0f)<1e-4f &&
+            !rt.forAge(true).jumper && rt.forAge(false).jumper &&
+            rt.forAge(true).attractiveness==120 && rt.forAge(false).attractiveness==100);
+      const int y=a.adopt(lambeo,false,30.5f,32.5f,map,f,true);
+      if(auto *m=a.member(y)){m->baby=true;for(int k=0;k<60;++k)a.testFence(*m,f);}
+      check("a young lambeosaurus never tests the fence, its chance kept for when it's grown",
+            lt.forAge(true).testFenceChance==0 && lt.forAge(false).testFenceChance==50 &&
+            a.member(y) && a.member(y)->fenceTests<0);
+      a.clear();
+    }
+  }
 
   // Tour recruitment, movement, both talks, effects, interruption and removal.
   const int guideType=st.typeOfFile("staff/tour.ai");
@@ -747,6 +876,48 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     for(int k=0;k<500 && !w->path.empty();++k)a.update(0.05f,k*0.05,map,f);
     check("walrus completes its pool-to-land route",back && f.exhibitAt(static_cast<int>(w->x),static_cast<int>(w->y))==shore);
   }
+  // The sea dinosaurs (Plesiosaurus, Deinosuchus, Meiolania: cSwims,
+  // cWaterNeeded/cLandNeeded, cUnderwater with an underwater section) on
+  // the same shore and pool: in and out of the water, counted in the shore
+  // (their habitat), which a scientist looks after
+  for(const char *file:{"animals/plesio.ai","animals/deino.ai","animals/meiolan.ai"}) {
+    a.clear();st.clear();world.reindex();
+    const int kind=a.typeOfFile(file);
+    const std::string name=std::string(file).substr(8,std::string(file).size()-11);
+    check(name+" definition",kind>=0);
+    if(kind<0)continue;
+    const int dino=a.adopt(kind,false,46.5f,34.5f,map,f,true);
+    auto *d=a.member(dino);
+    check(name+" adopted on the shore, in its habitat",d && d->exhibit==shore);
+    if(!d)continue;
+    d->waterCheck=9999;d->boredCheck=9999;
+    const bool into=a.walkTo(*d,51.5f,34.5f,map,f);
+    for(int k=0;k<800 && (d=a.member(dino)) && !d->path.empty();++k)a.update(0.05f,k*0.05,map,f);
+    d=a.member(dino);
+    check(name+" swims from the shore into the pool",into && d && f.exhibitAt(int(d->x),int(d->y))==pool && d->exhibit==shore);
+    const bool back=d && a.walkTo(*d,46.5f,34.5f,map,f);
+    for(int k=0;k<800 && (d=a.member(dino)) && !d->path.empty();++k)a.update(0.05f,k*0.05,map,f);
+    d=a.member(dino);
+    check(name+" climbs back out onto the shore",back && d && f.exhibitAt(int(d->x),int(d->y))==shore);
+    if(auto *e=f.exhibit(shore)){e->animals=a.countIn(shore);e->dinosaurs=a.dinosaursIn(shore);}
+    const int sci=st.hire(st.typeOfFile("staff/scient.ai"),40.5f,30.5f,map,f);
+    const int sciSays=sci>=0?st.assign(sci,shore,f):-1;
+    check(name+": a scientist can be assigned to its shore ("+std::to_string(sci)+", "+std::to_string(sciSays)+")",
+          sci>=0 && sciSays==0);
+    const int keeper=st.hire(st.typeOfFile("staff/keeper.ai"),40.5f,31.5f,map,f);
+    const int keeperSays=keeper>=0?st.assign(keeper,shore,f):-1;
+    check(name+": a zookeeper can't ("+std::to_string(keeperSays)+")",keeperSays==10320);
+    // (an egg-layer's egg goes on the shore's dry ground, never in the pool -
+    // the mother out in the water: 0x60da6b's tiles are dry land)
+    if(a.typeList[kind].laysEggs) {
+      const int mum=a.adopt(kind,true,51.5f,34.5f,map,f,true);
+      a.births.push_back({mum,-1,kind});a.lifeEvents(map,f);
+      const Animals::Member *egg=nullptr;for(const auto &m:a.members())if(m.egg)egg=&m;
+      check(name+": its egg is laid on the dry shore, not in the pool",egg && f.exhibitAt(int(egg->x),int(egg->y))==shore &&
+            egg->exhibit==shore);
+    }
+  }
+  a.clear();st.clear();
   // A free destination before another swimmer must not be avoided because
   // prediction incorrectly continues beyond the end of the route.
   a.clear();

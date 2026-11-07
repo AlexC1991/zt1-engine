@@ -49,9 +49,19 @@ struct Mod {
 void setSetting(const std::string &folder, const std::string &name, float value);
 // A mod's setting as it is now (its value, else its mod.json's, else fallback)
 float setting(const std::string &folder, const std::string &name, float fallback = 0);
+// ours: an HD art mod's own setting, added by the game to any mod switched
+// on with an hd/ folder (HdArt.hpp) - how its pictures are kept on the
+// graphics card: 0 full size, 1 compressed, quick to make, 2 compressed,
+// closer to full size but slower to make (GpuCompressed.hpp). The same for
+// every HD art mod (set on one, it's set on all); 1 unless picked
+constexpr const char *kHdCompression = "hdcompression";
+int hdCompression(const std::string &folder);
 // The folder mods are looked for in (mods.cfg "folder=", else "mods")
 std::string folder();
 void setFolder(const std::string &path);
+// ours: the old copies of mods moved to a new folder (the Mod Menu's
+// Folder...) removed - once, at the start, before any of them is opened
+void cleanupMoved();
 // Every mod found there, with whether it's on
 std::vector<Mod> list();
 bool setEnabled(const std::string &folder, bool on);

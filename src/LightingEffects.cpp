@@ -50,9 +50,16 @@ void DayNightLighting::actorEmission(Animation *art,int frame,LightingAssets::Po
   for(const auto &patch:art->emissionPatches(frameRenderer,side,frame,profile)) {
     if(!patch.pixels)continue;SDL_RendererFlip flip;auto box=art->emissionRect(patch,x,y,side,&flip);
     Light e{p.x,p.y,p.z,0,0,owner,0};e.distance=(x-logicalW*.5f)*(x-logicalW*.5f)+(y-logicalH*.5f)*(y-logicalH*.5f);
-    e.sx=x+(flip==SDL_FLIP_HORIZONTAL?-patch.offset.x:patch.offset.x);e.sy=y+patch.offset.y;e.patch=box;e.texture=patch.texture;e.flip=flip;e.depth=depth;e.kind=profile;e.energy=std::clamp(intensity,0.0f,1.0f);emitters.push_back(e);visible=true;
+    e.sx=x+(flip==SDL_FLIP_HORIZONTAL?-patch.offset.x:patch.offset.x);e.sy=y+patch.offset.y;e.patch=box;e.texture=patch.texture;e.flip=flip;e.depth=depth;e.kind=profile;e.energy=std::clamp(intensity,0.0f,1.0f);e.glow=patch.glow;e.glowPad=patch.glowPad;emitters.push_back(e);visible=true;
   }
-  if(visible && profile>=1000 && profile<=1004 && transientLights.size()<8) {
-    Light l{p.x,p.y,p.z+1.5f,profile<=1002?2.2f:3.0f,1.5f,owner,0};l.energy=(profile<=1002?.9f:.5f)*intensity;l.colour=profile<=1002?SDL_Color{245,240,215,255}:SDL_Color{210,226,255,255};transientLights.push_back(l);
+  // (an aircraft's flashing red beacon - aircraftProfile's layer 1 - lights a
+  // little round it as it flashes; a shock's sparks a little more than they
+  // did, which hardly showed)
+  const bool beacon=profile==2001 || profile==2003 || profile==2005 || profile==2007;
+  if(visible && ((profile>=1000 && profile<=1004) || beacon) && transientLights.size()<8) {
+    const bool camera=profile<=1002;
+    Light l{p.x,p.y,beacon?p.z:p.z+1.5f,camera?2.2f:beacon?3.0f:3.5f,1.5f,owner,0};
+    l.energy=(camera?.9f:beacon?.8f:.9f)*intensity;
+    l.colour=camera?SDL_Color{245,240,215,255}:beacon?SDL_Color{255,70,55,255}:SDL_Color{210,226,255,255};transientLights.push_back(l);
   }
 }

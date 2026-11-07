@@ -3,9 +3,7 @@
 #include <vector>
 #include "RenderSettings.hpp"
 
-namespace FrameProfile {extern bool active;void record(const char *,double);double ms(Uint64);}
 namespace {
-struct ProfScope{const char *n;Uint64 t;explicit ProfScope(const char *m):n(m),t(FrameProfile::active?SDL_GetPerformanceCounter():0){}~ProfScope(){if(t)FrameProfile::record(n,FrameProfile::ms(t));}};
 size_t liveBytes=0;
 // ours: zoom-out renders at native size before shrinking. A 1080p view at
 // half zoom needs about 32 MiB, so the earlier 8 MiB cap rejected this path
@@ -56,7 +54,6 @@ bool GpuTankLayer::draw(SDL_Renderer *renderer,const std::function<void(SDL_Rend
     if(need>layerLimit || !SDL_RenderTargetSupported(renderer))return false;
     const SDL_BlendMode over=SDL_ComposeCustomBlendMode(SDL_BLENDFACTOR_ONE,SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,SDL_BLENDOPERATION_ADD,
         SDL_BLENDFACTOR_ONE,SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,SDL_BLENDOPERATION_ADD);
-    {ProfScope pc("tl create");
     for(auto &p:pool)if(!p.busy && p.renderer==renderer && p.w==width && p.h==height){p.busy=true;texture=p.texture;break;}
     if(!texture) {
       // (idle ones of another size made way first)
@@ -67,7 +64,7 @@ bool GpuTankLayer::draw(SDL_Renderer *renderer,const std::function<void(SDL_Rend
       if(!texture)return false;
       if(SDL_SetTextureBlendMode(texture,over)!=0){SDL_DestroyTexture(texture);texture=nullptr;return false;}
       liveBytes+=need;pool.push_back({texture,renderer,width,height,true});
-    }}
+    }
     bytes=need;
     counters.peakBytes=std::max(counters.peakBytes,liveBytes);
     SDL_BlendMode blend;Uint8 red,green,blue,alpha;
@@ -78,7 +75,7 @@ bool GpuTankLayer::draw(SDL_Renderer *renderer,const std::function<void(SDL_Rend
     }
     SDL_RenderSetViewport(renderer,&viewport);SDL_RenderSetScale(renderer,1,1);SDL_RenderSetClipRect(renderer,nullptr);
     SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);
-    {ProfScope pp("tl paint");paint(renderer);}
+    paint(renderer);
     ++counters.builds;
     SDL_SetRenderTarget(renderer,target);SDL_RenderSetViewport(renderer,&viewport);
     SDL_RenderSetScale(renderer,sx,sy);SDL_RenderSetClipRect(renderer,clipped?&clip:nullptr);
@@ -88,6 +85,6 @@ bool GpuTankLayer::draw(SDL_Renderer *renderer,const std::function<void(SDL_Rend
   // The layer uses physical target coordinates; compensate the view's origin
   // while retaining the original viewport and strip clip for centred layouts.
   const SDL_Rect destination{-viewport.x,-viewport.y,width,height};
-  {ProfScope pc("tl copy");if(SDL_RenderCopy(renderer,texture,nullptr,&destination)!=0)return false;}
+  if(SDL_RenderCopy(renderer,texture,nullptr,&destination)!=0)return false;
   ++counters.copies;return true;
 }

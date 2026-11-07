@@ -663,6 +663,8 @@ def flatten(proj, frame):
         if c.size != (w, h):
             c = c.crop((0, 0, w, h))
         a = c.getchannel('A').point(lambda v: 255 if v >= 128 else 0)
+        if layer.get('light'):
+            continue
         if layer.get('shadow'):
             shadow.paste(255, mask=a)
         else:
@@ -670,6 +672,38 @@ def flatten(proj, frame):
             solid.putalpha(a)
             img.alpha_composite(solid)
     return img, shadow
+
+
+def flatten_light(proj, frame):
+    """A frame's Night light layers as one picture (RGBA, see-through where
+    nothing glows), or None: what the item gives off at night"""
+    w, h = proj['w'], proj['h']
+    img = None
+    for i, layer in enumerate(proj['layers']):
+        if not layer.get('light') or not layer.get('visible', True):
+            continue
+        cell = frame['cells'][i] if i < len(frame['cells']) else None
+        if not cell:
+            continue
+        c = Image.open(io.BytesIO(base64.b64decode(cell))).convert('RGBA')
+        if c.size != (w, h):
+            c = c.crop((0, 0, w, h))
+        if img is None:
+            img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        img.alpha_composite(c)
+    return img if img is not None and img.getbbox() else None
+
+
+def light_png(img, ax, ay):
+    """A light map as the engine reads it (src/SpriteLighting.cpp): the
+    picture on a canvas with the art's ground point at its middle"""
+    w, h = img.size
+    W, H = 2 * max(ax, w - ax, 1), 2 * max(ay, h - ay, 1)
+    out = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    out.paste(img, (W // 2 - ax, H // 2 - ay))
+    buf = io.BytesIO()
+    out.save(buf, 'PNG')
+    return buf.getvalue()
 
 
 def compile_all(req, t, files):
@@ -763,7 +797,20 @@ def compile_all(req, t, files):
         ani += ['animation = ' + d for d in directions if d in per]
         ani += ['x0 = %d' % (box[0] or 0), 'y0 = %d' % (box[1] or 0), 'x1 = %d' % (box[2] or 0), 'y1 = %d' % (box[3] or 0)]
         entries[folder + '/' + anim + '.ani'] = ('\r\n'.join(ani) + '\r\n').encode('latin1')
-        done.append({'sub': sub, 'anim': anim, 'path': folder + '/' + anim})
+        # Its light maps (a Night light layer's pixels), folder/light/<dir>_<frame>.png;
+        # ones an earlier save made that it no longer has are taken out (None)
+        lit = 0
+        prefix = (folder + '/light/').lower()
+        for name in getattr(files, 'names', {}):
+            if name.startswith(prefix):
+                entries[name] = None
+        for d in per:
+            for i, fr in enumerate((proj.get('dirs') or {}).get(d) or []):
+                light = flatten_light(proj, fr)
+                if light:
+                    entries[prefix + d.lower() + '_' + str(i) + '.png'] = light_png(light, ax, ay)
+                    lit += 1
+        done.append({'sub': sub, 'anim': anim, 'path': folder + '/' + anim, 'lit': lit, 'lamp': proj.get('lamp')})
     return entries, done, len(colours), merged
 
 

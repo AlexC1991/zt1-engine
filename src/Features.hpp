@@ -44,15 +44,22 @@ inline bool infiniteMoney = false;
 // addition: visual day/night cycle, lamp pools and directional ground shadows.
 // Off by default: the original game's constant daylight, with no lighting pass.
 inline bool dayNightLighting = false;
-// addition: the optional 24-hour HUD clock is independent of scene lighting.
+// addition: the 24-hour HUD clock on its own - not a player's switch any more
+// (the clock comes with the day/night cycle and the speed control,
+// gameTimeNeeded); kept for the HUD checks that draw it alone
 inline bool showGameTime = false;
 // addition: attached 1x/2x/5x HUD control; off restores the original controls.
 inline bool fastForward = false;
+// addition: the clock is shown while its own switch is on, and while the
+// day/night cycle or the speed control is (you need the time with them).
+// Each switch keeps its own setting: turning one off never hides the clock
+// another still needs, and off all three is the original's date alone
+inline bool gameTimeNeeded() { return dayNightLighting || fastForward; }
+inline bool gameTimeShown() { return showGameTime || gameTimeNeeded(); }
 
 inline std::vector<Switch> &all() {
   static std::vector<Switch> list = {
       {"daynight", "a twelve-minute day and night cycle, lights at dusk and directional scenery shadows; visual only (off: the original's constant daylight)", &dayNightLighting},
-      {"gametime", "show a 24-hour clock beside the date; runs and pauses with the zoo, independently of day/night lighting (off: the original date only)", &showGameTime},
       {"fastforward", "an attached speed button cycles normal, double and five-times speed without changing pause (off: original controls and normal speed)", &fastForward},
       {"allunlocked", "freeform items all available from the start (off: released month by month)", &allUnlocked},
       {"fencemodes", "fence drag modes, Tab to cycle (off: the fence follows the mouse)", &fenceModes},

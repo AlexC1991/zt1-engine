@@ -518,6 +518,19 @@ public:
   std::function<void(int tank, float depth, std::vector<Drawable> &out)> collectPlatformStaff;
   // The exhibit gate under the cursor: lit, as an animal is
   Edge hoverGate{false, -1, -1};
+  // addition: the land fence pieces collect drew whose art has lights of its
+  // own (LightingAssets: the electrified bars' warning beacons) - their art,
+  // pose and place, for the day and night lighting's glow and light
+  struct LitPiece {
+    Animation *art;
+    int frame;
+    CompassDirection side;
+    float sx, sy, depth; // (logical screen, as drawn)
+    float x, y, z;       // (the piece's middle on the ground)
+    std::string key;     // (its type: fences/<key>.ai)
+  };
+  const std::vector<LitPiece> &litPieces() const { return this->lit; }
+  mutable std::vector<LitPiece> lit;
   // Draws some tiles' ground again (the world's terrain), over a tank's
   // inside where the ground in front of it hides the pit
   std::function<void(SDL_Renderer *, const std::vector<std::pair<int, int>> &)> redrawGround; // (sorted)

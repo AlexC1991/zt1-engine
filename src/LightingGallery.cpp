@@ -6,6 +6,7 @@
 // files containing it. The pictures hold the original art: never distribute.
 #include "World.hpp"
 #include "ItemCatalog.hpp"
+#include "HdArt.hpp"
 #include "Features.hpp"
 #include "SDL_image.h"
 #include <algorithm>
@@ -192,6 +193,6 @@ int runLightingGallery(World &world, ResourceManager *, SDL_Renderer *renderer, 
   light.previewHour = -1;
   Features::dayNightLighting = lightingWas;
   std::ofstream(out + "/gallery-checks.txt") << "buildings " << files.size() << " placed " << placed.size()
-                                              << " pictures " << saved << "\n";
+                                              << " pictures " << saved << "\n" << "HD art: " << HdArt::stats() << "\n";
   return placed.empty() ? 1 : 0;
 }

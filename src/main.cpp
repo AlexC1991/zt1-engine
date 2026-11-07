@@ -13,7 +13,9 @@
 
 #include "Animation.hpp"
 #include "ArtScaler.hpp"
+#include "GpuCompressed.hpp"
 #include "GpuFsr.hpp"
+#include "GraphicsEffects.hpp"
 #include "ItemCatalog.hpp"
 #include "Embed.hpp"
 #include "Lab.hpp"
@@ -42,6 +44,7 @@
 #include "DisplaySettings.hpp"
 #include "HdArt.hpp"
 #include "ModImport.hpp"
+#include "ModRepo.hpp"
 #include "Mods.hpp"
 #include "ShaderMods.hpp"
 #include "Pathfinder.hpp"
@@ -516,7 +519,7 @@ static void updateHudDate(ResourceManager *rm) {
   // addition: use the exact hour prepared for this frame's sky, including
   // developer previews. The original calendar remains untouched.
   std::string time;
-  if (Features::showGameTime && g_world)
+  if (Features::gameTimeShown() && g_world)
     time = DayNightLighting::formatTime(Features::dayNightLighting
         ? g_world->getLighting().displayedHour() : DayNightLighting::hourAt(g_world->getClock()));
   g_hud->setDateTime(rm->getString(22101 + g_sim.month()) + ", Year " + std::to_string(g_sim.year()), time);
@@ -1425,8 +1428,9 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
   }
   // addition: developer preview of the visual clock; never saved to settings.
   if (!w.empty() && w[0] == "lighting" && g_world) {
-    if(w.size()!=2)return "lighting <hour 0-24> | lighting auto";
+    if(w.size()!=2)return "lighting <hour 0-24> | lighting auto | lighting lights";
     if(w[1]=="auto") { g_world->getLighting().previewHour=-1; return "Lighting follows zoo time."; }
+    if(w[1]=="lights") return g_world->getLighting().describeLights(); // ours: what's lit this frame
     char *end=nullptr;double hour=std::strtod(w[1].c_str(),&end);
     if(!end || *end || !std::isfinite(hour) || hour<0 || hour>24)return "Choose an hour from 0 to 24, or auto.";
     Features::dayNightLighting=true;g_world->getLighting().previewHour=hour;
@@ -3501,6 +3505,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       SDL_RenderClear(renderer);
       world->setView(gameViewRect(renderer), getUiTransform(renderer).scale);
       world->draw(renderer);
+      GraphicsEffects::applyMap(renderer); // (as the game's loop: GraphicsEffects.hpp)
       drawHud(renderer, rm);
       drawToolCost(renderer, rm);
       // (the Options window over it, as the game's loop draws it)
@@ -3602,6 +3607,50 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       for (const auto &m : Mods::list())
         if (m.folder == mods[0].folder)
           report << "     put back: " << (m.enabled ? "on" : "off") << "\n";
+    }
+    // (the sizes, worked out in the background, then at the rows' right)
+    for (int i = 0; i < 100; i++) {
+      ModMenu::tick(layout, rm);
+      SDL_Delay(50);
+    }
+    shot("modmenu_sizes");
+    // (a mod with its own picture, mod.json "picture", picked: it shows)
+    for (const auto &m : mods)
+      if (!m.picture.empty() && list) {
+        for (int i = 0; i < static_cast<int>(list->getItemCount()); i++) {
+          list->setSelectedIndex(i);
+          if (list->getSelectedData() == m.folder)
+            break;
+        }
+        ModMenu::selectionChanged(layout, rm);
+        report << "     picture of " << m.folder << ": " << m.picture << "\n";
+        shot("modmenu_picture");
+        break;
+      }
+    // The repository's view, where the installed game has its client: each
+    // part, and whether it's counted as in your mods (downloaded, or the
+    // same mod's files there already)
+    if (ModRepo::available()) {
+      ModMenu::repository(layout, rm);
+      for (int i = 0; i < 400; i++) {
+        ModMenu::tick(layout, rm);
+        const ModRepo::State st = ModRepo::state();
+        if (st == ModRepo::State::Ready || st == ModRepo::State::Failed)
+          break;
+        SDL_Delay(50);
+      }
+      ModMenu::tick(layout, rm);
+      report << "     repository: " << ModRepo::status() << "\n";
+      for (const ModRepo::Mod &m : ModRepo::mods())
+        for (const ModRepo::Part &p : m.parts) {
+          const std::string v = ModRepo::installedVersion(m, p);
+          report << "     repo " << m.id << "/" << p.id << ": " << (v.empty() ? "not in your mods" : "in your mods, " + v)
+                 << "\n";
+        }
+      shot("modmenu_repo");
+      ModMenu::repository(layout, rm);
+    } else {
+      report << "     (no repository client in this copy)\n";
     }
     delete layout;
     if(timings)std::fclose(timings);return 0;
@@ -4005,6 +4054,65 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       g_ZoomLevel = saved;
       world->getRenderer().getCamera().zoom = saved;
     }
+    // ours: a check. ZT_VIEW_TOUR=<zoom>: each kind of animal in turn, the
+    // view centred on one at that zoom with the zoo running for two seconds
+    // (it walks, swims and animates), then a picture (tour_<n>_<key>); then
+    // the frame times and the HD art in use - for art mods, close up
+    if (const char *tour = std::getenv("ZT_VIEW_TOUR")) {
+      const float zoom = std::max(0.5f, static_cast<float>(std::atof(tour)));
+      world->edgeScroll = false;
+      world->setPaused(false);
+      world->setView(gameViewRect(renderer), getUiTransform(renderer).scale);
+      Animation::setGradualZoomedIn(true); // (as in play)
+      const Uint8 *keys = SDL_GetKeyboardState(nullptr);
+      const std::vector<Animals::Member> members = world->getAnimals().members(); // (they move)
+      std::set<int> seen;
+      int n = 0, frames = 0;
+      double total = 0, worst = 0;
+      // (ZT_VIEW_TOUR_KINDS=<n>: only the first n kinds - a shorter run to
+      // compare settings by)
+      const size_t kindsMax = std::getenv("ZT_VIEW_TOUR_KINDS") ? std::max(1, std::atoi(std::getenv("ZT_VIEW_TOUR_KINDS"))) : SIZE_MAX;
+      for (const Animals::Member &m : members) {
+        if (!seen.insert(m.type).second)
+          continue;
+        if (seen.size() > kindsMax)
+          break;
+        g_ZoomLevel = zoom;
+        world->getRenderer().getCamera().zoom = zoom;
+        for (int i = 0; i < 60; i++) {
+          const Uint64 f0 = SDL_GetPerformanceCounter();
+          world->update(keys, 1.0f / 30.0f);
+          world->centreOnAnimal(m.id);
+          SDL_RenderClear(renderer);
+          world->draw(renderer);
+          SDL_RenderPresent(renderer);
+          const double ms = (SDL_GetPerformanceCounter() - f0) * 1000.0 / SDL_GetPerformanceFrequency();
+          total += ms;
+          worst = std::max(worst, ms);
+          frames++;
+        }
+        const auto &types = world->getAnimals().types();
+        const std::string key = m.type >= 0 && m.type < static_cast<int>(types.size()) ? types[m.type].key : "unknown";
+        char nm[96];
+        std::snprintf(nm, sizeof nm, "tour_%02d_%s.png", n++, key.c_str());
+        // (the map alone, as the last frame drew it: no interface or messages over it)
+        SDL_RenderClear(renderer);
+        world->draw(renderer);
+        int pw = 0, ph = 0;
+        SDL_GetRendererOutputSize(renderer, &pw, &ph);
+        if (SDL_Surface *shot = SDL_CreateRGBSurfaceWithFormat(0, pw, ph, 32, SDL_PIXELFORMAT_RGBA32)) {
+          if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGBA32, shot->pixels, shot->pitch) == 0)
+            IMG_SavePNG(shot, (outDir + "/" + nm).c_str());
+          SDL_FreeSurface(shot);
+        }
+        SDL_RenderPresent(renderer);
+      }
+      SDL_Log("[ViewSave] tour: %d kinds of animal at zoom %.1f, %d frames, %.1f ms a frame, worst %.1f", n, zoom,
+              frames, frames ? total / frames : 0.0, worst);
+      SDL_Log("[ViewSave] HD art: %s", HdArt::stats().c_str());
+      SDL_Log("[ViewSave] zoomed-in frames kept: %zu MB", Animation::zoomedInBytes() >> 20);
+      SDL_Log("[ViewSave] memory: %s", Animation::memoryStats().c_str());
+    }
     return 0;
   }
   // A new zoo's rating, worked out as the original does: 37 (measured)
@@ -4056,6 +4164,13 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   g_hud->showTab(14, 4104);
   capture("zoo_info2");
   click(4053);
+  {
+    // (ours: compressed HD textures - GpuCompressed.hpp)
+    const std::string why = GpuCompressed::selfCheck(renderer);
+    if (!why.empty())
+      SDL_Log("[PanelShots] compressed textures: %s", why.c_str());
+    check("compressed HD textures: encoded close, drawn as decoded", why.empty());
+  }
   check("marketing + gives $200 min", textOf(4054) == "$200 min" &&
                                           !g_hud->getElementById(4052)->isDisabled());
   // (its benefit, +5, goes on the rating that picks how often guests come)
@@ -5202,7 +5317,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     world->vertexToWindow(tx + 2, ty, bx, by);
     world->vertexToWindow(tx + 2, ty + 1, bx2, by2);
     world->mouseMove((bx + bx2) / 2, (by + by2) / 2);
-    handleToolResult(world->mouseDown((bx + bx2) / 2, (by + by2) / 2), rm);
+    handleToolResult(world->mouseDown((bx + bx2) / 2, (by + by2) / 2), rm); handleToolResult(world->mouseUp((bx + bx2) / 2, (by + by2) / 2), rm);
     capture("fence_drain_ask");
     check("a drained tank's wall asks first", g_hud->hasDialog());
     double cashBefore = g_sim.cash();
@@ -5794,6 +5909,13 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         if (h)
           world->centreOn(h->x, h->y);
         capture("staff_drt");
+        // (let go again: its pad blocks the ground under it, and since it
+        // lands on grid-aligned level ground it took the flat strip the
+        // walkway and terraform tests below need)
+        if (h) {
+          st.fire(at);
+          world->reindex();
+        }
       }
     } else {
       check("open ground for staff", false);
@@ -5895,7 +6017,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           g_hud->setWorldTip("");
           size_t before = objs.size();
           double cash0 = g_sim.cash();
-          handleToolResult(world->mouseDown(px, py), rm);
+          handleToolResult(world->mouseDown(px, py), rm); handleToolResult(world->mouseUp(px, py), rm);
           check(("bulldozed: the rock gone, $" + std::to_string(std::lround(g_sim.cash() - cash0)) + " back").c_str(),
                 world->getObjects().objects().size() == before - 1 && std::lround(g_sim.cash() - cash0) == refund);
           world->setBulldozer(false);
@@ -5917,7 +6039,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       g_hud->setMouse(-1, -1, 0);
       g_hud->setWorldTip("");
       cash = g_sim.cash();
-      handleToolResult(world->mouseDown(px, py), rm);
+      handleToolResult(world->mouseDown(px, py), rm); handleToolResult(world->mouseUp(px, py), rm);
       world->setBulldozer(false);
       check(("bulldozer lifts a path tile (+$" + std::to_string(std::lround(g_sim.cash() - cash)) + ")").c_str(),
             !map.isPath(x0 + 2, y0) && std::lround(g_sim.cash() - cash) == 8);
@@ -6603,7 +6725,9 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         if (Animals::Member *m = an.member(id1))
           m->hunger = 90;
         auto [fx, fy] = inside[inside.size() - 1];
-        int food = world->getItems().addFood(penId, fx + 0.5f, fy + 0.5f, 2, "grass");
+        // (what its keeper puts down: zebra.ai cKeeperFoodType 0, herbchow -
+        // "grass" isn't a food type, and a save holding it is refused)
+        int food = world->getItems().addFood(penId, fx + 0.5f, fy + 0.5f, 2, "herbchow");
         float before = world->getItems().foodIn(penId);
         double ateBefore = an.member(id1)->lastAte;
         bool shotEating = false;
@@ -6762,7 +6886,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         world->mouseMove(px, py - 20);
         capture("object_bulldoze_hover");
         double cash = g_sim.cash();
-        handleToolResult(world->mouseDown(px, py - 20), rm);
+        handleToolResult(world->mouseDown(px, py - 20), rm); handleToolResult(world->mouseUp(px, py - 20), rm);
         world->setBulldozer(false);
         check(("bulldozing the acacia in the exhibit: gone, $" + std::to_string(std::lround(g_sim.cash() - cash)) + " back").c_str(),
               world->getObjects().objects().size() == n - 1 && std::lround(g_sim.cash() - cash) == acacia->cost * 8 / 10);
@@ -6807,7 +6931,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         // (straight at it, if the point missed)
         World::ToolResult r;
       }
-      handleToolResult(world->mouseDown(px, py), rm);
+      handleToolResult(world->mouseDown(px, py), rm); handleToolResult(world->mouseUp(px, py), rm);
       capture("wall_delete_ask");
       bool asked = g_hud->hasDialog();
       check("bulldozing its wall asks first (animals would escape)", onIt && asked);
@@ -6956,7 +7080,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         world->mouseMove(px, py);
         Fences::Edge picked;
         bool onIt = world->pickFence(px, py, picked) && picked == mid;
-        handleToolResult(world->mouseDown(px, py), rm);
+        handleToolResult(world->mouseDown(px, py), rm); handleToolResult(world->mouseUp(px, py), rm);
         capture("merge_ask");
         bool asked = g_hud->hasDialog();
         {
@@ -7441,7 +7565,17 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                   world->reindex();
                   // (some guests set down at its door: on hilly ground the
                   // ring's sides can be different heights, not walked round)
-                  std::vector<std::pair<int, int>> at = world->getGuests().doorTiles(world->getObjects().objects().back());
+                  // (a step off the door, on the path beside it: one standing
+                  // on the door itself has no walk to it, and never goes in)
+                  const std::vector<std::pair<int, int>> doors = world->getGuests().doorTiles(world->getObjects().objects().back());
+                  std::vector<std::pair<int, int>> at;
+                  for (auto [dx, dy] : doors)
+                    for (auto [rx, ry] : ring)
+                      if (std::abs(rx - dx) + std::abs(ry - dy) == 1 && map.isPath(rx, ry) &&
+                          std::find(doors.begin(), doors.end(), std::make_pair(rx, ry)) == doors.end())
+                        at.push_back({rx, ry});
+                  if (at.empty())
+                    at = doors;
                   if (at.empty())
                     at = ring;
                   int k = 0;
@@ -9358,10 +9492,12 @@ int main(int argc, char *argv[]) {
   }
 
   for (int i = 1; i + 1 < argc; i++) {
-    if (std::string(argv[i]) == "--panel-shots")
+    if (std::string(argv[i]) == "--panel-shots") {
+      Animation::setGradualZoomedIn(false); // (the checks' pictures: every frame complete)
       return runPanelShots(window.renderer, &resource_manager,
                            g_scenarioManager, g_world, argv[i + 1],
                            i + 2 < argc ? argv[i + 2] : "deathmtn");
+    }
     if (std::string(argv[i]) == "--render-maps") {
       if (i + 2 < argc)
         g_world->getRenderer().setElevationScale(std::atoi(argv[i + 2]));
@@ -9642,6 +9778,10 @@ int main(int argc, char *argv[]) {
     case UiAction::MOD_FOLDER:
       if (g_currentState == LayoutState::MOD_MENU)
         ModMenu::chooseFolder(layout, &resource_manager);
+      break;
+    case UiAction::MOD_SORT:
+      if (g_currentState == LayoutState::MOD_MENU)
+        ModMenu::sort(layout, &resource_manager);
       break;
     case UiAction::MOD_RESTART:
       // Switches apply automatically between frames, including embedded Play.
@@ -9994,6 +10134,9 @@ int main(int argc, char *argv[]) {
       // extra's whole steps)
       g_world->setView(gameViewRect(window.renderer), getUiTransform(window.renderer).scale);
       g_world->draw(window.renderer);
+      // addition: the graphics effects picked (GraphicsEffects.hpp), on the
+      // map only - before the bars and windows go over it
+      GraphicsEffects::applyMap(window.renderer);
       if (g_snapshot == 1) { // (the map alone)
         g_snapshot = 0;
         takeSnapshot(window.renderer, &resource_manager);
@@ -10038,6 +10181,16 @@ int main(int argc, char *argv[]) {
     }
 
     FrameProfile::phase("rendering");
+    // ours: the frame's spare time (it waits for the frame limit anyway)
+    // loads one of the zoo's species' animations ahead (Animals::warmOne);
+    // with no limit, one every fourth frame
+    if (g_world && g_currentState == LayoutState::GAME_LOOP) {
+      static unsigned warmTick = 0;
+      const float limit = Display::frameDelayMs();
+      const float slack = limit - static_cast<float>(SDL_GetTicks() - window.start_frame);
+      if ((limit > 0 && slack > 10) || (limit <= 0 && ++warmTick % 4 == 0))
+        g_world->getAnimals().warmOne();
+    }
     if(gameBenchmark.enabled())gameBenchmark.beforePresent(*g_world,window.renderer);
     window.present();FrameProfile::phase("present");
     if(gameBenchmark.enabled() && gameBenchmark.afterPresent(*g_world,g_speedClock.pending(),g_speedClock.discarded()))running=0;

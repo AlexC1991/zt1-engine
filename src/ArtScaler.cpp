@@ -10,6 +10,7 @@
 
 #include "SDL_image.h"
 
+#include "GpuCompressed.hpp"
 #include "HdArt.hpp"
 
 namespace ArtScaler {
@@ -69,17 +70,66 @@ int worldFactor() {
 // data, so any texture can report the size of the art it stands for
 // ----------------------------------------------------------------------------
 
+// ours: a texture's marks, in its user data: its scale (the low 8 bits),
+// then the columns and rows added to make it up to whole blocks (2 bits
+// each) and whether it's compressed (GpuCompressed)
+namespace {
+intptr_t marksOf(SDL_Texture *texture) {
+  return texture ? reinterpret_cast<intptr_t>(SDL_GetTextureUserData(texture)) : 0;
+}
+} // namespace
+
 int scaleOf(SDL_Texture *texture) {
-  if (!texture)
-    return 1;
-  intptr_t s = reinterpret_cast<intptr_t>(SDL_GetTextureUserData(texture));
+  const intptr_t s = marksOf(texture) & 0xFF;
   return s > 1 ? static_cast<int>(s) : 1;
+}
+
+void markPadded(SDL_Texture *texture, int scale, int padX, int padY, bool compressed) {
+  if (texture)
+    SDL_SetTextureUserData(texture, reinterpret_cast<void *>(intptr_t(std::clamp(scale, 1, 255)) |
+                                                             (intptr_t(padX & 3) << 8) | (intptr_t(padY & 3) << 10) |
+                                                             (compressed ? intptr_t(1) << 12 : 0)));
+}
+
+bool contentRect(SDL_Texture *texture, SDL_Rect *rect) {
+  const intptr_t m = marksOf(texture);
+  const int padX = int((m >> 8) & 3), padY = int((m >> 10) & 3);
+  if (!padX && !padY)
+    return false;
+  int tw = 0, th = 0;
+  SDL_QueryTexture(texture, nullptr, nullptr, &tw, &th);
+  *rect = {0, 0, tw - padX, th - padY};
+  return true;
+}
+
+bool contentUV(SDL_Texture *texture, float *u, float *v) {
+  SDL_Rect r;
+  if (!contentRect(texture, &r))
+    return false;
+  int tw = 0, th = 0;
+  SDL_QueryTexture(texture, nullptr, nullptr, &tw, &th);
+  *u = tw > 0 ? float(r.w) / float(tw) : 1.0f;
+  *v = th > 0 ? float(r.h) / float(th) : 1.0f;
+  return true;
+}
+
+size_t textureBytes(SDL_Texture *texture) {
+  int tw = 0, th = 0;
+  if (texture)
+    SDL_QueryTexture(texture, nullptr, nullptr, &tw, &th);
+  const size_t pixels = size_t(std::max(0, tw)) * size_t(std::max(0, th));
+  return (marksOf(texture) >> 12) & 1 ? pixels : pixels * 4;
 }
 
 void querySize(SDL_Texture *texture, int *w, int *h) {
   int tw = 0, th = 0;
   if (texture)
     SDL_QueryTexture(texture, nullptr, nullptr, &tw, &th);
+  SDL_Rect content;
+  if (contentRect(texture, &content)) {
+    tw = content.w;
+    th = content.h;
+  }
   int s = scaleOf(texture);
   if (w)
     *w = tw / s;
@@ -403,13 +453,13 @@ static void easu(const std::vector<Px> &in, int w, int h, std::vector<Px> &out,
 }
 
 static void rcas(const std::vector<Px> &in, int w, int h, std::vector<Px> &out,
-                 float sharpness, bool wrap) {
+                 float sharpness, bool wrap, bool parallel = true) {
   const float limit = 0.25f - 1.0f / 16.0f;
   const float con = std::exp2(-sharpness);
   auto at = [&](int x, int y) -> const Px & {
     return in[edgeIndex(y, h, wrap) * w + edgeIndex(x, w, wrap)];
   };
-  forRows(h, [&](int y) {
+  auto row = [&](int y) {
     for (int x = 0; x < w; x++) {
       //    b
       //  d e f
@@ -436,7 +486,12 @@ static void rcas(const std::vector<Px> &in, int w, int h, std::vector<Px> &out,
       p.b = (lobe * (b.b + d.b + hh.b + f.b) + e.b) * rcpL;
       p.a = e.a; // alpha passes through
     }
-  });
+  };
+  if (parallel)
+    forRows(h, row);
+  else
+    for (int y = 0; y < h; y++)
+      row(y);
 }
 
 // ----------------------------------------------------------------------------
@@ -510,6 +565,42 @@ static SDL_Surface *upscale(SDL_Surface *surface, int k, bool wrap) {
   return out;
 }
 
+void sharpen(SDL_Surface *s, float stops) {
+  if (!s || s->format->format != SDL_PIXELFORMAT_RGBA32 || s->w < 3 || s->h < 3)
+    return;
+  const int w = s->w, h = s->h;
+  std::vector<Px> in(static_cast<size_t>(w) * h), out(in.size());
+  if (SDL_MUSTLOCK(s))
+    SDL_LockSurface(s);
+  for (int y = 0; y < h; y++) {
+    const uint8_t *row = static_cast<const uint8_t *>(s->pixels) + static_cast<size_t>(y) * s->pitch;
+    for (int x = 0; x < w; x++) {
+      const uint8_t *p = row + x * 4;
+      const float a = p[3] / 255.0f;
+      in[static_cast<size_t>(y) * w + x] = {p[0] / 255.0f * a, p[1] / 255.0f * a, p[2] / 255.0f * a, a};
+    }
+  }
+  rcas(in, w, h, out, stops, false, false);
+  for (int y = 0; y < h; y++) {
+    uint8_t *row = static_cast<uint8_t *>(s->pixels) + static_cast<size_t>(y) * s->pitch;
+    for (int x = 0; x < w; x++) {
+      const Px &p = out[static_cast<size_t>(y) * w + x];
+      uint8_t *o = row + x * 4;
+      if (o[3] == 0)
+        continue; // (a clear pixel keeps its colour, for the smooth draw's edge)
+      const float a = std::clamp(p.a, 0.0f, 1.0f);
+      auto ch = [&](float v) {
+        return static_cast<uint8_t>(std::lround(std::clamp(a > 0.0f ? v / a : 0.0f, 0.0f, 1.0f) * 255.0f));
+      };
+      o[0] = ch(p.r);
+      o[1] = ch(p.g);
+      o[2] = ch(p.b);
+    }
+  }
+  if (SDL_MUSTLOCK(s))
+    SDL_UnlockSurface(s);
+}
+
 void markScale(SDL_Texture *t, int scale) {
   if (t && scale > 1) {
     SDL_SetTextureUserData(t, reinterpret_cast<void *>(intptr_t(scale)));
@@ -550,6 +641,20 @@ SDL_Texture *createHdTexture(SDL_Renderer *renderer, SDL_Surface *hd, int w,
             "original %dx%d - ignored",
             path.c_str(), hd->w, hd->h, w, h);
     return nullptr;
+  }
+  // ours: held compressed on the GPU where it can be, as the HD art mod's
+  // setting says (GpuCompressed.hpp, Mods::kHdCompression)
+  if (const int how = HdArt::compression(); how > 0 && scale > 1) {
+    // (encoded already, by the loader, as it is now: only handed over)
+    const GpuCompressed::Blocks *made = HdArt::encodedOf(hd);
+    if (made && made->best == (how == 2) && made->w == hd->w && made->h == hd->h)
+      if (SDL_Texture *t = GpuCompressed::upload(renderer, *made, scale))
+        return t;
+    // (made here, on the game's own thread - a recoloured or relit frame:
+    // the fast way whatever's picked, so a busy zoo's guests and keepers
+    // don't hold the game up; best quality is the loader's, off it)
+    if (SDL_Texture *t = GpuCompressed::create(renderer, hd, scale, false))
+      return t;
   }
   return makeTexture(renderer, hd, scale);
 }

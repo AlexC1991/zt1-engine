@@ -12,6 +12,11 @@
 #include "Paths.hpp"
 #include "Settings.hpp"
 #include "Utils.hpp"
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 #include <cmath>
 #include <cstdio>
@@ -252,6 +257,25 @@ std::vector<Mod> list() {
       m.settings = settingsOf(m.folder, j["settings"]);
     }
     m.enabled = c.loadMods && c.enabled.count(m.folder) > 0;
+    // (an HD art mod switched on: its graphics card setting - kHdCompression)
+    std::error_code hdEc;
+    if (m.enabled && fs::is_directory(d.path() / "hd", hdEc) &&
+        std::none_of(m.settings.begin(), m.settings.end(), [](const Setting &t) { return t.name == kHdCompression; })) {
+      Setting t;
+      t.name = kHdCompression;
+      t.label = "Graphics card memory";
+      t.about = "How this mod's pictures are kept on the graphics card. Full size: as they are, in four times the "
+                "memory. Compressed (fast): a quarter of the memory, quick to load as you zoom in. Compressed (best "
+                "quality): a quarter of the memory and closer to full size, but slower to load. The same for every HD "
+                "art mod.";
+      t.type = "choice";
+      t.choices = {"Full size", "Compressed (fast)", "Compressed (best quality)"};
+      t.min = 0;
+      t.max = 2;
+      t.standard = 1;
+      t.value = static_cast<float>(hdCompression(m.folder));
+      m.settings.push_back(t);
+    }
     out.push_back(m);
   }
   }
@@ -297,6 +321,11 @@ void setSetting(const std::string &mod, const std::string &name, float value) {
   Settings::set(section(mod), name, b);
 }
 
+int hdCompression(const std::string &folder) {
+  const std::string kept = Settings::get(section(folder), kHdCompression, "");
+  return kept.empty() ? 1 : std::clamp(static_cast<int>(std::lround(std::atof(kept.c_str()))), 0, 2);
+}
+
 float setting(const std::string &mod, const std::string &name, float fallback) {
   for (const Mod &m : list())
     if (m.folder == mod)
@@ -306,7 +335,44 @@ float setting(const std::string &mod, const std::string &name, float fallback) {
   return fallback;
 }
 
+void cleanupMoved() {
+  static bool done = false;
+  if (done)
+    return;
+  done = true;
+  std::error_code ec;
+  const fs::path list = fs::path(Paths::dataDir()) / "mods-cleanup.txt";
+  std::ifstream in(list);
+  if (!in)
+    return;
+  std::string line;
+  while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
+    if (line.empty())
+      continue;
+    const fs::path old = fs::u8path(line);
+    // (only an old copy whose mod is in the mods folder now - never the one
+    // in use)
+    const fs::path now = fs::path(folder()) / old.filename();
+    if (!fs::exists(old, ec) || !fs::exists(now, ec) || fs::equivalent(old, now, ec))
+      continue;
+#ifdef _WIN32
+    // (a linked folder: the link alone, never what it points at)
+    const DWORD a = GetFileAttributesW(old.wstring().c_str());
+    if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT)) {
+      RemoveDirectoryW(old.wstring().c_str());
+      continue;
+    }
+#endif
+    fs::remove_all(old, ec);
+  }
+  in.close();
+  fs::remove(list, ec);
+}
+
 std::vector<std::string> enabledPaths() {
+  cleanupMoved();
   std::vector<std::string> out;
   if (!Features::mods)
     return out;

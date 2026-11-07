@@ -272,6 +272,7 @@ private:
   SDL_Rect dateTimeWell = {};
   int selectedSpeed = 1;
   bool speedDown = false;
+  Uint32 speedPressUntil = 0; // (a click shown pressed in for a moment, however quick)
   SDL_Rect speedRect = {};
   SDL_Texture *speedArtwork = nullptr;
   SDL_Texture *speedNativeFaces[4] = {}; // Pause/Play, each native N/H face

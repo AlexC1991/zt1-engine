@@ -76,7 +76,9 @@ The Lab helps:
 
 **Shaders** change how the zoomed-in art looks. `mods/zt1-toon` is a complete example with a guide.
 
-**HD art** adds bigger frames for the zoomed-in map. The Lab's **HD art** experiment makes them with an AI upscaler.
+**HD art** adds bigger frames for the zoomed-in map. The Lab's **HD art** experiment makes them with an AI upscaler. The frames go in `hd/` as loose files (`hd/<the .ani's folder>/<direction>_<frame>.png`) or packed: one `.ztd` per art folder, `hd/<top>/<name>.ztd`, holding `<top>/<name>/...` and that art's light maps. A loose file wins over a packed one. Packed is the way to share a big pack: a million loose frames are too many files to check and unpack. A mod with an `hd/` folder gets a **Graphics card memory** setting from the game once it is switched on (Full size, Compressed (fast), Compressed (best quality)): the player picks how its frames are kept on the graphics card. Don't add one of your own named `hdcompression`.
+
+**A big mod in parts.** A mod's `mod.json` can list `"parts"`: `[{"id": "animals-1", "name": "Animals", "files": ["hd/animals/lion.ztd", ...]}]`. The Lab uploads each part as its own download. They all unpack into the same mod folder, each with the mod's top-level files (`mod.json`, its picture). Keep each part under 4 GB.
 
 ## Build buildings, fences, people and objects
 
@@ -111,6 +113,37 @@ same file. An earlier mod folder can take precedence. For example, disable
 **Lemonade Stands** when testing **Park Workshop Tutorial**'s replacement of
 `scenery/building/drkstnd.ai`. Local **Publish → Check it** is a package rules
 check, not an upload or a complete behavior test.
+
+### Night lights
+
+Buildings, scenery, shelters, toys and other placed items can light up at
+night when the player has **Day and night** on (Game Options > Graphics).
+In the drawing editor:
+
+- **A Night light layer** (the bulb button on the Layers card) is what glows.
+  Paint the windows, bulbs, signs or flames in the colour they shine. That
+  layer is not part of the daytime picture. Each frame can have its own glow,
+  for a flickering flame or flashing sign; a frame without one uses frame 1's.
+- **The night view** (the moon on the View card) shows the drawing as the zoo
+  does after dark.
+- **A lamp point** (✺, or P) is where the light the item casts comes from, in
+  the pen colour. The Night card sets how far it reaches, in tiles, and how
+  bright it is (the street lamp is 1.8). The game lights the ground and the
+  things around the item from that height above the item's middle.
+
+Saving writes the glow as light maps beside the art,
+`<art folder>/light/<direction>_<frame>.png` (the art's ground point at the
+middle of each picture), and adds a `[lighting]` section to the item's file:
+
+```ini
+[lighting]
+lightmap = 1
+; x, y (tiles from its middle), height, red, green, blue, brightness, reach
+light = 0, 0, 3.88, 255, 226, 159, 1.8, 5
+```
+
+You can write these by hand too: `light` can be repeated, one line per light.
+An item with no `lightmap = 1` is lit as the game's own items are, or not at all.
 
 ## Import external animal art in the new studio
 

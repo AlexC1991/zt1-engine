@@ -36,6 +36,10 @@ void DayNightLighting::drawFluorescence(SDL_Renderer *r,Animation *a,float x,flo
     if(cue.art!=a || std::abs(cue.x-x)>.1f || std::abs(cue.y-y)>.1f || cue.strength<=.002f)continue;
     for(const auto &patch:a->emissionPatches(r,side,frame,cue.profile)) {
       SDL_RendererFlip flip;auto rect=a->emissionRect(patch,x,y,side,&flip);
+      // (its soft glow round it, as strong as it's lit: the material's own
+      // light spilling into the water, never a light of its own)
+      if(patch.glow){const float pad=float(patch.glowPad);const SDL_FRect around{rect.x-pad,rect.y-pad,rect.w+2*pad,rect.h+2*pad};
+        SDL_SetTextureAlphaMod(patch.glow,Uint8(std::clamp(170*cue.strength,0.0f,255.0f)));SDL_RenderCopyExF(r,patch.glow,nullptr,&around,0,nullptr,flip);}
       SDL_SetTextureBlendMode(patch.texture,SDL_BLENDMODE_ADD);SDL_SetTextureAlphaMod(patch.texture,Uint8(255*cue.strength));
       SDL_RenderCopyExF(r,patch.texture,nullptr,&rect,0,nullptr,flip);SDL_SetTextureAlphaMod(patch.texture,255);
     }break;

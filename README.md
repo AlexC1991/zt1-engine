@@ -113,7 +113,7 @@ The base game's **freeform** mode is the focus, and most of it works as in the o
 - **The zoo's business:** zoo rating, admissions, marketing, finances, graphs, research and conservation, freeform goals and awards.
 - **Sound:** music, ambience, crowds, guests, animals and buildings.
 
-**Marine Mania** (Complete Collection) has started: tanks, marine animals, tank filters, and Marine Specialists who climb in, feed and clean underwater as in the original. Its animal shows aren't in yet. **Dinosaur Digs** isn't playable yet.
+**Marine Mania** (Complete Collection) is in: tanks, marine animals, tank filters, Marine Specialists who climb in, feed and clean underwater as in the original, and scheduled animal shows with their tricks, audiences and income. **Dinosaur Digs** has started: dinosaurs, eggs and DRT capture work, and the rest is still being checked against the original.
 
 | | |
 |---|---|
@@ -122,9 +122,29 @@ The base game's **freeform** mode is the focus, and most of it works as in the o
 | ![The Zoo Status finances](docs/screenshots/zoo_status.jpg) | ![The research panel](docs/screenshots/research.jpg) |
 | The original's panels: Zoo Status, finances, graphs | Research and conservation |
 
+### Graphics and Game Options
+
+**Game Options** is a window with every setting, opened from the in-game disk button or the main menu. Each page is one list you scroll, with the setting under the mouse explained at its foot. Switch it off (Controls › Game Options) to get the original's side panel back.
+
+- **Display:** window, borderless or full screen at any resolution, a frame rate limit, vertical sync and brightness.
+- **Interface size:** menus and panels scaled to suit a big screen, from 0.5x up.
+- **Art upscaling:** how the 2001 art looks when drawn bigger: FSR (AMD's upscaler, on the graphics card), Stylized, Sharp, Smooth or MMPX pixel-art scaling, with an Art Sharpness slider.
+- **Effects:** anti-aliasing (FXAA), bloom, a tilt-shift miniature look, contrast and vibrance, a vignette and film grain. They apply to the zoo only, never the menus, and all are off unless you pick them.
+- **Day and night:** an optional twelve-minute day with sunrise and sunset, sun shadows in each object's real shape, and buildings, lamps, signs and fires that light up at night.
+- **Game speed:** an optional button beside Pause for normal, 2x and 5x speed, and an optional 24-hour clock.
+- **Accessibility:** colour-blind filters and a bigger mouse pointer.
+- **HD art (optional mods):** zoomed in, the map's art can be drawn from much bigger HD pictures. See [Modding](#modding).
+
+The game draws with Direct3D 11 by default, which is the fastest on Windows, and switches to OpenGL when a setting needs its shaders.
+
+| | |
+|---|---|
+| ![Marine Mania tanks](docs/screenshots/tanks.jpg) | ![Raised walkways](docs/screenshots/walkways.jpg) |
+| Marine Mania tanks | Raised walkways, an optional extra |
+
 ### Optional extras
 
-Each is a switch; off means the original's behaviour. Flip them in **Game Options › Extras** (or the dev console: `features`, `set <name> on|off`).
+Each is a switch; off means the original's behaviour. They're on the Gameplay, Controls, Graphics and Mods pages of **Game Options** (or in the dev console: `features`, `set <name> on|off`). Among them:
 
 | Switch | What it does |
 |---|---|
@@ -133,16 +153,26 @@ Each is a switch; off means the original's behaviour. Flip them in **Game Option
 | `elevatedPaths` | raised walkways and stairs, from the original's path art |
 | `staffPaths` / `smoothRoutes` | staff keep to paths; walkers take straighter routes |
 | `mapTooltips` | hints over the map, not only on buttons |
-| `hotkeys` | Esc / right-click put tools away, Ctrl+Z undoes, Q/E rotate |
-| `mods` | load mods from the `mods` folder |
+| `hotkeys` | Esc / right-click put tools away, Ctrl+Z undoes, Q/E rotate, F11 full screen |
+| `daynight` | the day and night cycle and its lighting |
+| `fastforward` / `gametime` | the game speed button; the 24-hour clock |
+| `dragwindows` / `smartstack` | drag any window by its title; windows step aside instead of covering each other |
+| `tankclip` / `tankgroundback` / `nofenceonpath` | tank animals cut off at the glass; the ground put back when a tank goes; no fences across paths |
+| `mods` / `modmenu` / `custommaps` | load mods; the Mod Menu; freeform maps made in the Lab |
+| `infinitemoney` | a cheat: buy anything, whatever your cash |
 
 ---
 
 ## Modding
 
-Mods use the game's own kind of files. A mod is a folder in `mods/` with a `mod.json` (`name`, `author`, `version`, `about`, `replaces`) and `.ztd` archives holding files under their game paths. They take the place of the originals while switched on, the same way the original game's own patches work. The in-game mod menu turns them on and off.
+Mods use the game's own kind of files. A mod is a folder in `mods/` with a `mod.json` (`name`, `author`, `version`, `about`, `replaces`) and `.ztd` archives holding files under their game paths. They take the place of the originals while switched on, the same way the original game's own patches work. The full guide is [docs/MODDING.md](docs/MODDING.md).
 
-More modding is coming: documented formats, small engine scripts (`src/scripts/` has examples), and guides written for people who are new to it.
+- **The Mod Menu** turns your mods on and off, shows each one's details and pictures, and browses the **mod repository**: mods other players have uploaded, checked (the rules and a virus scan) and ready to download in the game. Big mods download in parts, so a dropped connection only costs one part.
+- **Old Zoo Tycoon downloads** (`.ztd` files from fan sites) can be added straight from the Mod Menu.
+- **Mods can have settings**, shown on their own page in Game Options › Mods.
+- **Shader mods** bring their own looks: art shaders for the map's art and screen shaders for the whole picture. The bundled **Toon** mod is one.
+- **HD art mods** replace the map's art with pictures four times the size, used when you zoom in. Three are in the repository, one each for Zoo Tycoon, Marine Mania and Dinosaur Digs. Their art is the game's own, enlarged on the author's PC by Real-ESRGAN, an open-source upscaler; that's why they carry the AI tag. An HD art mod adds a **Graphics card memory** setting: kept compressed (the default), its pictures take a quarter of the graphics card's memory.
+- **The ZT1 Lab** makes mods without code: new animals from your own art, buildings, scenery, fences, staff and guest looks, freeform maps, theme packs and HD art, then checks and uploads them to the repository.
 
 ---
 
@@ -186,10 +216,11 @@ You're also free to fork it and take it your own way. That's what open source is
 ## Roadmap
 
 1. **Base Zoo Tycoon freeform, one to one with the original.** Every system checked against `zoo.exe`, function by function.
-2. ~~An options menu for the extras~~ (done: Game Options › Extras), and a friendlier mod menu.
+2. ~~An options menu for the extras, and a friendlier mod menu~~ (done: the Game Options window, the Mod Menu and the mod repository).
 3. **Scenarios:** every scenario's goals and events.
 4. **Marine Mania and Dinosaur Digs:** tanks, marine animals, specialists, scheduled shows, dinosaur eggs and DRT capture are implemented; wider expansion parity remains in progress.
 5. **The original's `.zoo` saves:** imports and shared original-compatible export are implemented. Exact AI/task continuation and remaining state conversion still need work.
+6. **Graphics for today's PCs, always optional:** more of what a modern game's graphics page offers, such as smoother zoomed-out art and ambient occlusion, each one a switch that's off unless you pick it.
 
 ---
 
@@ -197,7 +228,7 @@ You're also free to fork it and take it your own way. That's what open source is
 
 The original's rules are recovered by reading `zoo.exe`'s machine code (in Ghidra) and by watching the original run side by side with this engine. That's slow, detailed work. AI tools are part of the toolset alongside Ghidra and the ZT1 Lab, above all for reading and decoding the original binary, and as a coding assistant.
 
-- **There's no AI-generated content in the game.** No AI art, audio or text: everything you see and hear comes from your own copy of Zoo Tycoon.
+- **There's no AI-generated content in the game.** No AI art, audio or text: everything you see and hear comes from your own copy of Zoo Tycoon. The optional HD art mods are separate downloads; their pictures are the game's own art enlarged by an open-source upscaler, not made by an image generator.
 - **Every rule is traceable.** The code comments cite the address in `zoo.exe` each rule was copied from, or say it was measured from the original, or mark it as our own. Anyone can check the work.
 
 For a one-person project, that's what makes an engine like this possible. You're free to contribute with whatever tools you like, or to fork and do it your way.
@@ -219,6 +250,9 @@ Almost everyone wants `ZT1-Engine-Setup`. It's small, needs no admin rights, fin
 
 **Will it change my Zoo Tycoon install?**
 No. The installer version reads your game where it is and never writes to that folder.
+
+**Will it run well on my PC?**
+It's made for Windows 10 and 11 on ordinary PCs. Everything beyond the original look (effects, day and night, HD art) is off unless you switch it on, and each setting in Game Options says what it does. The HD art mods are the heaviest: they need more memory, and their Graphics card memory setting keeps that down.
 
 **Can I load my old saves, or play scenarios?**
 Original `.zoo` saves can be imported. New shared `.zoo` saves contain a compatible stock world for the original game and the full engine state in the same file; engine-only `.zt1save` files remain available. Compatibility is incomplete, especially exact AI/task continuation and scenarios. Resaving in the original removes engine-only data from that copy, so keep a separate engine copy and older backups.
@@ -269,7 +303,7 @@ Yes. A mod is a folder in `mods/` with a `mod.json` and `.ztd` archives that rep
 ### The project
 
 **Is AI used to make the game?**
-Nothing in the game is AI-generated: no art, audio or text. Everything you see and hear comes from your own copy of Zoo Tycoon. AI tools are part of how the engine is built, mainly for reading and decoding `zoo.exe` alongside Ghidra, and as a coding assistant. Every rule still cites where it came from, so the work can be checked. You're free to use whatever tools you like when you contribute.
+Nothing in the game is AI-generated: no art, audio or text. Everything you see and hear comes from your own copy of Zoo Tycoon. The optional HD art mods, which you download separately, are the game's own art enlarged by Real-ESRGAN, an open-source upscaler. AI tools are part of how the engine is built, mainly for reading and decoding `zoo.exe` alongside Ghidra, and as a coding assistant. Every rule still cites where it came from, so the work can be checked. You're free to use whatever tools you like when you contribute.
 
 **Is this affiliated with Microsoft or Blue Fang?**
 No. It's a hobby project made out of love for the game.

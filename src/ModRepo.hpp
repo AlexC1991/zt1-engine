@@ -52,6 +52,11 @@ std::vector<Mod> mods();
 // 0-1 while it goes
 void install(const std::string &mod, const std::string &part);
 double progress();
+// ours: the part downloading ("<mod>/<part>", "" when none) and how much of
+// it has come so far, of how much (bytes) - for the Mod Menu's list
+std::string downloading();
+long long downloadedBytes();
+long long downloadTotal();
 // The version of a part already in the mods folder ("" if it isn't)
 std::string installedVersion(const Mod &mod, const Part &part);
 

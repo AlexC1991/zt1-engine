@@ -13197,11 +13197,11 @@
    "summary": "Sells what the mouse is over (+0x434) - or, if that's the selected thing, removeSelected"
   },
   "0x5092f4": {
-   "by": "batty251 (read its code, from the recordings it alone ran in: deleting an object, hiring a zookeeper)",
+   "by": "batty251",
    "confidence": "likely",
    "name": "bulldozeRect",
    "provisional": false,
-   "summary": "The bulldozer's drag: every map tile in the dragged rectangle (corners +0xc..+0x1c), what's on each gathered, the price shown (0x443d97)"
+   "summary": "The bulldozer's drag rectangle (corners +0xc..+0x1c): gathers paths, scenery and fences on its tiles - not buildings, the zoo wall or what's outside the zoo - lit red with the refund total by the cursor (preview), or each sold (release). Seen in the original 2026-11-06: removed on release; one escape question per exhibit, No keeps only those walls."
   },
   "0x509605": {
    "by": "batty251 (read its code, from the recordings it alone ran in: deleting an object, hiring a zookeeper)",
@@ -30988,6 +30988,11 @@
    "by": "Claude",
    "on": "2026-11-01",
    "what": "Note at 0x595022: Normal goal (class 0x635510) loadState: one int to +0x40 while before the block's end; 0..3 kept and restored quietly (slot 0x10, 0x595083). Saved by 0x47a7d6. The scenario's own goal (class 0x6354e4) uses 0x5950ab / 0x47a04c at +4."
+  },
+  {
+   "by": "batty251",
+   "on": "2026-11-06",
+   "what": "Named 0x5092f4 bulldozeRect"
   }
  ],
  "notes": {

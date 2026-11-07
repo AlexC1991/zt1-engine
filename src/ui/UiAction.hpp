@@ -23,6 +23,7 @@ enum class UiAction {
     MOD_RESTART=7143,
     MOD_REPOSITORY=7144,            // Your mods / Mod repository (ModRepo.hpp)
     MOD_ADD=7145,                   // Add a mod... (ModImport.hpp: for this game only)
+    MOD_SORT=7146,                  // Sort: the list's order (ours)
     
     // [PATCH] Starting cash spinner buttons (using button IDs)
     CASH_SPINNER_UP=11511,          // Increase starting cash

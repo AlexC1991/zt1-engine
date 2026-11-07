@@ -3,6 +3,7 @@
 #include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <thread>
@@ -43,6 +44,8 @@ State g_state = State::Idle;
 std::string g_status;
 std::vector<Mod> g_mods;
 std::atomic<double> g_progress{0.0};
+std::atomic<long long> g_done{0}, g_total{0};
+std::string g_downloading; // (under g_lock)
 
 // modrepo.dll beside the exe, once
 Client &client() {
@@ -162,6 +165,12 @@ std::vector<Mod> mods() {
 }
 
 double progress() { return g_progress.load(); }
+std::string downloading() {
+  std::lock_guard<std::mutex> g(g_lock);
+  return g_state == State::Installing ? g_downloading : "";
+}
+long long downloadedBytes() { return g_done.load(); }
+long long downloadTotal() { return g_total.load(); }
 
 void fetch() {
   if (!available())
@@ -202,13 +211,18 @@ void install(const std::string &mod, const std::string &part) {
       return;
     g_state = State::Installing;
     g_status = "Downloading...";
+    g_downloading = mod + "/" + part;
   }
   g_progress = 0.0;
+  g_done = 0;
+  g_total = 0;
   std::string folder = Mods::folder();
   std::thread([mod, part, folder] {
     auto onProgress = [](void *, long long done, long long total) {
       if (total > 0)
         g_progress = static_cast<double>(done) / static_cast<double>(total);
+      g_done = done;
+      g_total = total;
     };
     int r = client().install(mod.c_str(), part.c_str(), folder.c_str(), onProgress, nullptr);
     std::lock_guard<std::mutex> g(g_lock);
@@ -218,11 +232,59 @@ void install(const std::string &mod, const std::string &part) {
   }).detach();
 }
 
+namespace {
+// ours: a copy of a repository mod that didn't come through the repository
+// (made on this PC, or copied in by hand) counts as yours when its own
+// mod.json is the same mod (same id) and every file of that part is there -
+// otherwise the repository offers to download what's already in your mods.
+// mod.json read once per change of it (the list asks for every row)
+struct LocalCopy {
+  fs::file_time_type stamp{};
+  std::string id, version;
+  std::map<std::string, std::vector<std::string>> parts;
+};
+std::string localVersion(const fs::path &dir, const Mod &mod, const Part &part) {
+  static std::map<std::string, LocalCopy> cache;
+  std::error_code ec;
+  const fs::path json = dir / "mod.json";
+  const fs::file_time_type stamp = fs::last_write_time(json, ec);
+  if (ec)
+    return "";
+  LocalCopy &c = cache[json.string()];
+  if (c.stamp != stamp) {
+    c = LocalCopy{};
+    c.stamp = stamp;
+    std::ifstream in(json);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    const Json j = Json::parse(ss.str());
+    c.id = j["id"].str();
+    c.version = j["version"].str("?");
+    const Json &ps = j["parts"];
+    for (size_t i = 0; i < ps.size(); i++) {
+      std::vector<std::string> &files = c.parts[ps[i]["id"].str()];
+      for (size_t f = 0; f < ps[i]["files"].size(); f++)
+        files.push_back(ps[i]["files"][f].str());
+    }
+  }
+  if (c.id != mod.id)
+    return "";
+  auto it = c.parts.find(part.id);
+  if (it == c.parts.end() || it->second.empty())
+    return "";
+  for (const std::string &f : it->second)
+    if (f.empty() || !fs::exists(dir / f, ec))
+      return "";
+  return c.version;
+}
+} // namespace
+
 std::string installedVersion(const Mod &mod, const Part &part) {
   std::error_code ec;
-  fs::path marker = fs::path(Mods::folder()) / mod.folder / ".modrepo" / (part.id + ".json");
+  const fs::path dir = fs::path(Mods::folder()) / mod.folder;
+  fs::path marker = dir / ".modrepo" / (part.id + ".json");
   if (!fs::exists(marker, ec))
-    return "";
+    return localVersion(dir, mod, part);
   std::ifstream in(marker);
   std::stringstream ss;
   ss << in.rdbuf();

@@ -22,12 +22,16 @@ class PlacedObjects;
 class WorldMap;
 class WorldRenderer;
 class World;
+class Fences;
 
 // addition: optional map lighting over solid volumes reconstructed from the
 // original four sprite views. Static local irradiance uses 3D voxel rays;
 // directional sun shadows project the reconstructed surface mesh.
 class DayNightLighting {
 public:
+  // ours: a frame let go (Animation::trimSources): its mask forgotten, so
+  // another frame made later at the same address isn't taken for it
+  void forgetSurface(SDL_Surface *s) { nativeMasks.erase(s); }
   static constexpr int maxLights = 96, maxEmissives = 160;
   static constexpr int maxMapWidth = 640, maxModelFaces=60000, maxActorFaces=16000, maxActors=160, maxActorModels=256;
   struct Sky { SDL_Color ambient; float lamps, sun, shadowLength; float dx, dy; float shadow=1; };
@@ -65,16 +69,23 @@ public:
   void drawFluorescence(SDL_Renderer *,Animation *,float,float,CompassDirection,int);
   int diagnosticLightLimit=maxLights; // check-mode source scaling; normal play keeps the default
 
+  // ours: the lights this frame, for the Test Zoo console (lighting lights)
+  std::string describeLights() const;
 private:
   friend int runLightingProjectionChecks(World &,ResourceManager *,SDL_Renderer *,const std::string &,const std::function<void()> &);
   friend int runLightingBeaconChecks(World &,ResourceManager *,SDL_Renderer *,const std::string &,const std::function<void()> &);
   friend int runLightingDetailChecks(World &,ResourceManager *,SDL_Renderer *,const std::string &,const std::function<void()> &);
   struct Type { float halfX = .25f, halfY = .25f; bool casts = false; int profile=0; bool foliage=false; };
   struct Light { float x, y, z, radius, lift; uint64_t owner; float distance;
-    float sx=0,sy=0,energy=1,depth=0;SDL_FRect patch{};SDL_Texture *texture=nullptr;SDL_Color colour{255,218,154,255};SDL_RendererFlip flip=SDL_FLIP_NONE;int kind=0;LightingAssets::Point normal{},axis{};bool reflective=false;float cone=0,sweep=0; };
+    float sx=0,sy=0,energy=1,depth=0;SDL_FRect patch{};SDL_Texture *texture=nullptr;SDL_Color colour{255,218,154,255};SDL_RendererFlip flip=SDL_FLIP_NONE;int kind=0;LightingAssets::Point normal{},axis{};bool reflective=false;float cone=0,sweep=0;
+    // addition: a light on the ground only (not on surfaces), shown this much
+    // this frame - a blinking beacon's - without its cached light changing
+    bool groundOnly=false;float shown=1;
+    SDL_Texture *glow=nullptr;int glowPad=6; }; // (an emitter's soft light round it: Animation::EmissionPatch::glow)
   std::map<std::string, Type> types;
   std::vector<Light> lights;
   std::vector<Light> emitters,transientLights;
+  float glowStrength=120; // (the soft light round emitters: its alpha at full night)
   SDL_Renderer *frameRenderer=nullptr;
   const WorldRenderer *frameView=nullptr;
   const WorldMap *frameMap=nullptr;
@@ -84,7 +95,10 @@ private:
   void finishEmitters();
   struct EmissionClip {size_t hash=0,used=0;std::vector<SDL_Rect> rectangles;};
   std::map<std::pair<uint64_t,SDL_Texture*>,EmissionClip> emissionClips;
-  struct Instance {const LightingAssets::Model *model;const LightingAssets::Definition *asset;LightingAssets::Point position;float cosine,sine,distance;uint64_t owner;Animation *artwork=nullptr;int frame=0;float opacity=1;bool sprite=false;bool shaded=true;};
+  struct Instance {const LightingAssets::Model *model;const LightingAssets::Definition *asset;LightingAssets::Point position;float cosine,sine,distance;uint64_t owner;Animation *artwork=nullptr;int frame=0;float opacity=1;bool sprite=false;bool shaded=true;
+    // addition: lit by lamps and beams once the sun's shadows have gone (a
+    // fence, a solid tank wall: by day their own shadow blackened their art)
+    bool nightReceiver=false;};
   std::vector<Instance> instances,actors;
   struct ActorModel {LightingAssets::Model model;size_t used=0;};
   std::map<std::pair<std::string,int>,ActorModel> actorModels;
@@ -113,6 +127,11 @@ private:
   const std::vector<LightingAssets::Source> &windowSources(const LightingAssets::Model &,const LightingAssets::Definition &);
   float sourceEnergy(const Light &,LightingAssets::Point,LightingAssets::Point,uint64_t,bool angular=true)const;
   float sourceDirection(const Light &,LightingAssets::Point)const;
+  // addition: light on a tank's water - its surface's height there, or
+  // -1e9 for none (Fences' tanks); the light mostly taken in by the water,
+  // and glints coming and going on its surface (drawEmission)
+  const Fences *frameFences=nullptr;
+  float waterLevelAt(float x,float y)const;
   void prepareBeamShapes();
   void drawBeamHaze(SDL_Renderer *,WorldRenderer &,float);
   std::array<float,3> projectedIrradiance(size_t,size_t,int,LightingAssets::Point,std::array<float,3>)const;

@@ -5,10 +5,12 @@
 //   paid with the cash below zero (zoo.exe 0x41f2ae, 0x41f1ba);
 // - research pays only while a program's being worked on, and makes no
 //   progress on a tick it couldn't pay for (0x41f1ba);
-// - nothing costing more than the cash can be bought - an object, an
-//   animal, a keeper, a fence or a path dragged: refused with 10002 "This
-//   purchase cannot be made at this time due to insufficient funds."
-//   (0x4fb08c, 0x48b843); with the money, the same click buys it.
+// - nothing costing more than the cash can be bought. An object, an animal
+//   or a keeper (the buy panels' items) shows its preview red with its
+//   price, and a click is refused with no message (zoo.exe 0x5ce19f); a
+//   fence or a path dragged is refused with 10002 "This purchase cannot be
+//   made at this time due to insufficient funds." (0x4fb08c, 0x48b843).
+//   With the money, the same click buys it.
 // <out>/finance-checks.txt is the report.
 #include "World.hpp"
 #include "Research.hpp"
@@ -171,11 +173,15 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       world.mouseMove(px, py);
       const size_t before = world.getObjects().objects().size();
       world.cash = 10;
+      world.mouseMove(px, py);
+      check("a $500 bench with $10: its preview red", world.objectPreviewPoor());
       World::ToolResult r = world.mouseDown(px, py);
       world.mouseUp(px, py);
-      check("a $500 bench with $10: refused, insufficient funds (message " + std::to_string(r.messageId) + ")",
-            r.messageId == World::kInsufficientFunds && r.cost == 0 && world.getObjects().objects().size() == before);
+      check("a $500 bench with $10: refused, no message (message " + std::to_string(r.messageId) + ")",
+            r.messageId == 0 && r.cost == 0 && world.getObjects().objects().size() == before);
       world.cash = 1000;
+      world.mouseMove(px, py);
+      check("with $1,000 its preview isn't red for the price", !world.objectPreviewPoor());
       r = world.mouseDown(px, py);
       world.mouseUp(px, py);
       check("with $1,000 the same click buys it ($" + std::to_string(r.cost) + ")",
@@ -229,10 +235,12 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       centre(fx + 2, fy + 2, px, py);
       world.mouseMove(px, py);
       world.cash = 1;
+      world.mouseMove(px, py);
+      check("a zebra with $1: its preview red", a.previewPoor);
       r = world.mouseDown(px, py);
       world.mouseUp(px, py);
-      check("a zebra with $1: refused, insufficient funds (message " + std::to_string(r.messageId) + ")",
-            r.messageId == World::kInsufficientFunds && r.animalCost == 0 && a.members().empty());
+      check("a zebra with $1: refused, no message (message " + std::to_string(r.messageId) + ")",
+            r.messageId == 0 && r.animalCost == 0 && a.members().empty());
       world.cash = 1e6;
       world.mouseMove(px, py);
       r = world.mouseDown(px, py);
@@ -240,6 +248,128 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       check("with the money it's adopted ($" + std::to_string(r.animalCost) + ")", r.animalCost > 0 && a.members().size() == 1);
       world.setAnimalTool(-1, false);
     }
+  }
+
+  // A tank's walls dragged up by their top: only as far as the cash covers
+  // the whole drag (measured in the original: $764 with $627 a step, one
+  // step however far the mouse goes; $100, none), and that's charged (#72)
+  {
+    int tankType = -1;
+    for (size_t i = 0; i < f.types().size(); i++)
+      if (f.types()[i].tank) {
+        tankType = static_cast<int>(i);
+        break;
+      }
+    check("a tank wall to build with", tankType >= 0);
+    const int tx = X + 14, ty = Y;
+    int drag = 800;
+    for (int i = tx; i < tx + 3; ++i) {
+      f.place({true, i, ty}, tankType, drag, map);
+      f.place({true, i, ty + 3}, tankType, drag + 1, map);
+    }
+    for (int j = ty; j < ty + 3; ++j) {
+      f.place({false, tx, j}, tankType, drag + 2, map);
+      f.place({false, tx + 3, j}, tankType, drag + 3, map);
+    }
+    for (int id : f.updateExhibits(map, 1, 0, 1))
+      f.finishExhibit(id, "Test tank", map);
+    const int tank = f.exhibitAt(tx + 1, ty + 1);
+    const Fences::Exhibit *ex = tank >= 0 ? f.exhibit(tank) : nullptr;
+    check("a test tank", ex && ex->tank);
+    if (ex && ex->tank) {
+      const double step = f.wallStepCost(tank);
+      const int pressY = 400;
+      auto dragUp = [&](double cash, int steps) {
+        world.cash = cash;
+        world.beginWallDrag(tank, pressY);
+        world.mouseMove(px, pressY - steps * 200); // (far further than the steps)
+        return world.mouseUp(px, pressY - steps * 200);
+      };
+      const int sub0 = ex->wallSub;
+      World::ToolResult r = dragUp(1, 3);
+      check("tank walls dragged up with $1: they don't move, nothing charged ($" + std::to_string(r.cost) + ")",
+            r.cost == 0 && f.exhibit(tank)->wallSub == sub0);
+      r = dragUp(step * 1.5, 3);
+      check("with one step's price and a half: one step, that step charged ($" + std::to_string(r.cost) + ", a step $" +
+                money(step) + ")",
+            r.cost == std::lround(step) && f.exhibit(tank)->wallSub == sub0 + 1);
+      const int sub1 = f.exhibit(tank)->wallSub;
+      r = dragUp(1e6, 2);
+      const int moved = f.exhibit(tank)->wallSub - sub1;
+      check("with the money: as far as the mouse goes, each step charged (" + std::to_string(moved) + " steps, $" +
+                std::to_string(r.cost) + ")",
+            moved > 1 && r.cost == moved * std::lround(step));
+    }
+  }
+
+  // The bulldozer, as the original's (watched 2026-11-06): a click takes
+  // what's under it on letting go, not on the press; a drag over 16 pixels
+  // makes a rectangle whose paths and scenery are taken together with their
+  // money back - not a building among the structures
+  {
+    const int bx = X + 4, by = Y + 8;
+    const std::string pathType = map.getPathTypes().empty() ? "" : map.getPathTypes().front();
+    for (int i = 0; i < 4; i++)
+      map.setPath(bx + i, by, pathType);
+    const CatalogItem *scenery = nullptr, *building = nullptr;
+    for (const CatalogItem &c : ItemCatalog::get().all()) {
+      if (c.cost <= 0)
+        continue;
+      if (!c.members.count("structures") && c.file == "scenery/other/trshcan.ai" &&
+          (!scenery || scenery->file.find("trash") == std::string::npos))
+        scenery = &c;
+      if (!building && c.file == "scenery/building/vendfood.ai")
+        building = &c;
+    }
+    check("a trash can and a snack stand to place (" + std::string(scenery ? scenery->file : "none") + ", " +
+              std::string(building ? building->file : "none") + (building && building->members.count("structures") ? ", a structure" : "") + ")",
+          scenery && building && building->members.count("structures"));
+    world.cash = 1e6;
+    auto place = [&](const CatalogItem *c, int tx, int ty) {
+      world.setObjectTool(c->file, c->cost, 0);
+      centre(tx, ty, px, py);
+      world.mouseMove(px, py);
+      world.mouseDown(px, py);
+      world.mouseUp(px, py);
+      world.setObjectTool("", 0, 0);
+    };
+    if (scenery && building) {
+      place(scenery, bx, by + 2);
+      place(scenery, bx + 2, by + 2);
+      place(building, bx + 1, by + 4);
+    }
+    const size_t objects = world.getObjects().objects().size();
+    world.setBulldozer(true);
+    // (a click: pressed on a path tile it stays; let go, it's gone)
+    centre(bx + 3, by, px, py);
+    world.mouseMove(px, py);
+    world.mouseDown(px, py);
+    const bool stayed = map.isPath(bx + 3, by);
+    World::ToolResult r = world.mouseUp(px, py);
+    check("the bulldozer: a press leaves the path tile, letting go takes it ($" + std::to_string(r.refund) + " back)",
+          stayed && !map.isPath(bx + 3, by) && r.refund > 0);
+    // (a drag from the paths' first tile to beyond the snack stand)
+    int qx, qy;
+    centre(bx, by, px, py);
+    centre(bx + 3, by + 5, qx, qy);
+    world.mouseMove(px, py);
+    world.mouseDown(px, py);
+    world.mouseMove((px + qx) / 2, (py + qy) / 2);
+    world.mouseMove(qx, qy);
+    const bool dragging = world.bulldozeDragging();
+    const size_t lit = world.bulldozeDragCount();
+    const int shown = world.hoverCost();
+    r = world.mouseUp(qx, qy);
+    int pathsLeft = 0;
+    for (int i = 0; i < 3; i++)
+      pathsLeft += map.isPath(bx + i, by) ? 1 : 0;
+    check("a drag: a rectangle, its 3 paths and 2 trash cans lit (" + std::to_string(lit) + "), $" + std::to_string(shown) +
+              " back shown",
+          dragging && lit == 5 && shown > 0);
+    check("let go: the paths and scenery taken, the snack stand left, the money shown paid back ($" +
+              std::to_string(r.refund) + ")",
+          pathsLeft == 0 && world.getObjects().objects().size() == objects - 2 && r.refund == shown);
+    world.setBulldozer(false);
   }
 
   // A keeper
@@ -251,10 +381,12 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       centre(X, Y + 3, px, py);
       world.mouseMove(px, py);
       world.cash = 1;
+      world.mouseMove(px, py);
+      check("a keeper with $1: its preview red", st.previewPoor);
       World::ToolResult r = world.mouseDown(px, py);
       world.mouseUp(px, py);
-      check("a keeper with $1: not hired, insufficient funds (message " + std::to_string(r.messageId) + ")",
-            r.messageId == World::kInsufficientFunds && r.wage == 0 && st.members().empty());
+      check("a keeper with $1: not hired, no message (message " + std::to_string(r.messageId) + ")",
+            r.messageId == 0 && r.wage == 0 && st.members().empty());
       world.setStaffTool(-1);
     }
   }

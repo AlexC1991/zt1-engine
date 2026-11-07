@@ -439,10 +439,23 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
             SDL_Color color = item.hasColor && item_index != selected_index ? item.color : *fg;
             SDL_Texture* text_texture = resource_manager->getStringTexture(renderer,font_id,label,color,font_size_id);
 
+            // (ours: the right-edge text first, whole; the rest is left for the row's text)
+            int right_w = 0;
+            if (!item.right.empty()) {
+                SDL_Texture* rt = resource_manager->getStringTexture(renderer, font_id, item.right, color, font_size_id);
+                if (rt) {
+                    int rh = 0;
+                    resource_manager->getTextSize(rt, &right_w, &rh);
+                    SDL_Rect rr = {item_rect.x + item_rect.w - 3 - right_w, item_rect.y + (item_height - rh) / 2, right_w, rh};
+                    if (RenderSettings::drawsUiText())
+                        SDL_RenderCopy(renderer, rt, nullptr, &rr);
+                    right_w += 10;
+                }
+            }
             if (text_texture) {
                 int tex_w, tex_h;
                 resource_manager->getTextSize(text_texture, &tex_w, &tex_h);
-                int available = std::max(0,item_rect.w-text_x_offset-2);
+                int available = std::max(0,item_rect.w-text_x_offset-2-right_w);
                 if (tex_w > available) {
                     // Keep native-resolution glyphs. Shrinking the destination
                     // rectangle squeezed long show names into blurry lettering.

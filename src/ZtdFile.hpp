@@ -22,6 +22,11 @@ public:
                         const std::function<void(const std::string &,
                                                  const char *, int)> &got);
     static SDL_Surface * getImageSurface(const std::string &ztd_file, const std::string &file_name);
+  // ours: for a mod's own archives (HD art packs). Whether the archive has
+  // the file, and its content (free() it) - a missing or unreadable archive
+  // is simply nothing, never the game stopping as getFileContent does
+  static bool hasFile(const std::string &ztd_file, const std::string &file_name);
+  static void *tryFileContent(const std::string &ztd_file, const std::string &file_name, int *size);
     static Mix_Music * getMusic(const std::string &ztd_file, const std::string &file_name);
     static IniReader * getIniReader(const std::string &ztd_file, const std::string &file_name);
 private:
