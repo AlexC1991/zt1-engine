@@ -2656,7 +2656,13 @@ ipcMain.handle('gamemods:list', () => {
   const out = [];
   try {
     for (const d of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!d.isDirectory()) continue;
+      // (ours: a mod can be a link to a folder elsewhere - a junction to
+      // another drive, as the game's own Folder... move makes - and the game
+      // lists those; Node calls them links, not folders)
+      let isDir = d.isDirectory();
+      if (!isDir && d.isSymbolicLink())
+        try { isDir = fs.statSync(path.join(root, d.name)).isDirectory(); } catch {}
+      if (!isDir) continue;
       let info = {};
       try {
         info = JSON.parse(fs.readFileSync(path.join(root, d.name, 'mod.json'), 'utf8'));
@@ -2743,14 +2749,15 @@ function coderookToken() {
     } catch {}
   return '';
 }
-async function repoCall(method, route, body, raw) {
+async function repoCall(method, route, body, raw, timeoutMs = 120000) {
   const token = coderookToken();
   if (!token) throw new Error('Sign in to CodeRook first (Your uploads > Sign in).');
   const headers = { Authorization: 'Bearer ' + token, 'User-Agent': 'ZT1-Lab/1' };
   if (body !== undefined && !raw) headers['Content-Type'] = 'application/json';
   // (Electron's own net.fetch - Chromium's network, the PC's proxy and
-  // certificates; Node's fetch failed here)
-  const r = await require('electron').net.fetch(MODREPO + route, { method, headers, body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
+  // certificates; Node's fetch failed here. ours: never waits for ever - a
+  // connection that hangs mid-upload once froze a 30 GB upload with no error)
+  const r = await require('electron').net.fetch(MODREPO + route, { method, headers, body: body === undefined ? undefined : raw ? body : JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
   const text = await r.text();
   let json = null;
   try {
@@ -2760,8 +2767,8 @@ async function repoCall(method, route, body, raw) {
 }
 // (everyone's own mods, the owner's too: /my - CodeRook checks each upload
 // and signs the catalogue the games are shown itself)
-function repoMine(method, route, body, raw) {
-  return repoCall(method, '/my' + route, body, raw);
+function repoMine(method, route, body, raw, timeoutMs) {
+  return repoCall(method, '/my' + route, body, raw, timeoutMs);
 }
 const repoError = (r) => (r.json && (r.json.message || r.json.error)) || `The mod repository answered ${r.status}.`;
 // One mod as Your uploads shows it: its name, version, and where its checks are
@@ -3475,8 +3482,23 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
           const buf = Buffer.alloc(len);
           fs.readSync(fd, buf, 0, len, (n - 1) * chunkBytes);
           modkitLog(`${label}sending ${n} of ${chunks}...`);
-          const c = await repoMine('PUT', `/mods/${entry.id}/parts/${part.id}/chunks/${n}?upload=${encodeURIComponent(upload)}`, buf, true);
-          if (c.status !== 200) throw new Error(`${label}piece ${n} wasn't taken (${c.status}).`);
+          // (ours: a piece that hangs, drops or meets a busy server is sent
+          // again - up to five tries, waiting longer each time - rather than
+          // the whole upload stopping; 15 minutes each covers a slow line)
+          let c = null;
+          for (let attempt = 1; attempt <= 5; attempt++) {
+            try {
+              c = await repoMine('PUT', `/mods/${entry.id}/parts/${part.id}/chunks/${n}?upload=${encodeURIComponent(upload)}`, buf, true, 15 * 60 * 1000);
+            } catch (e) {
+              c = { status: 0, error: e && e.name === 'TimeoutError' ? 'it timed out' : String((e && e.message) || e) };
+            }
+            if (c.status === 200 || (c.status >= 400 && c.status < 500 && c.status !== 408 && c.status !== 429)) break;
+            if (attempt < 5) {
+              modkitLog(`${label}piece ${n} didn't go through (${c.error || c.status}): trying again (${attempt + 1} of 5)...`);
+              await new Promise((done) => setTimeout(done, 5000 * attempt * attempt));
+            }
+          }
+          if (c.status !== 200) throw new Error(`${label}piece ${n} wasn't taken (${c.error || c.status}).`);
         }
       } finally {
         fs.closeSync(fd);
