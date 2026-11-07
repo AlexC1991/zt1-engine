@@ -3446,6 +3446,7 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
     const before = await repoMine('GET', '/mods/' + encodeURIComponent(entry.id));
     const had = new Map(((before.status === 200 && before.json && before.json.parts) || []).map((p) => [p.id, p]));
     const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    const waiting = []; // (parts the repository is still checking: left for now)
     for (let k = 0; k < parts.length; k++) {
       const part = parts[k];
       const label = parts.length > 1 ? `Part ${k + 1} of ${parts.length} (${part.name}): ` : '';
@@ -3473,7 +3474,17 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
         continue;
       }
       r = await repoMine('PUT', `/mods/${entry.id}/parts/${part.id}`, { size, sha256 });
-      if (r.status !== 201 && r.status !== 200) throw new Error((r.json && (r.json.message || r.json.error)) || `The mod repository answered ${r.status}.`);
+      // (ours: a part whose last upload the repository is still checking is
+      // left for now and the rest sent, rather than one part stopping a mod
+      // of many; it's named at the end, to send again once checked)
+      const refusal = (r.json && (r.json.message || r.json.error)) || '';
+      if (r.status !== 201 && r.status !== 200 && /still being checked/i.test(String(refusal))) {
+        modkitLog(`${label}its last upload is still being checked there: left for now.`);
+        waiting.push(part.name);
+        fs.rmSync(zip, { force: true });
+        continue;
+      }
+      if (r.status !== 201 && r.status !== 200) throw new Error(refusal || `The mod repository answered ${r.status}.`);
       const { upload, chunkBytes, chunks } = r.json;
       const fd = fs.openSync(zip, 'r');
       try {
@@ -3503,16 +3514,21 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
       } finally {
         fs.closeSync(fd);
       }
-      r = await repoMine('POST', `/mods/${entry.id}/parts/${part.id}/complete`, { upload });
+      // (the repository puts a part of gigabytes together before it answers:
+      // minutes, so this one waits up to half an hour)
+      r = await repoMine('POST', `/mods/${entry.id}/parts/${part.id}/complete`, { upload }, false, 30 * 60 * 1000);
       if (r.status !== 202 && r.status !== 200) throw new Error(repoError(r));
       fs.rmSync(zip, { force: true });
     }
+    if (waiting.length)
+      return { ok: true, message: `The rest is sent. Still being checked there, so not sent again: ${waiting.join(', ')}. Upload it again once Your uploads shows those checks have finished.`, check };
     // Its checks over there (the rules, every file sniffed, a virus scan):
     // live when they pass, else turned down with the reasons
     modkitLog('Checking it over there (rules and a virus scan)...');
     for (let i = 0; i < 360; i++) {
       await new Promise((res) => setTimeout(res, 5000));
-      const g = await repoMine('GET', '/mods/' + encodeURIComponent(entry.id));
+      // (a slow or dropped answer here is asked again, not the end)
+      const g = await repoMine('GET', '/mods/' + encodeURIComponent(entry.id)).catch(() => ({ status: 0 }));
       if (g.status !== 200) continue;
       const row = uploadRow(g.json);
       const states = (g.json.parts || []).map((part) => ({ state: (part.check || {}).state, live: part.live && !part.uploading }));
