@@ -270,11 +270,11 @@ const char *startupRenderer() {
   const std::string pick = Settings::get("user", "renderer", "auto");
   if (pick == "opengl" || pick == "direct3d11")
     return pick == "opengl" ? "opengl" : "direct3d11";
-  // (what needs OpenGL's shaders, as saved)
-  const float bright = static_cast<float>(std::atof(Settings::get("user", "brightness", "1").c_str()));
-  bool needs = std::fabs(bright - 1.0f) > 0.001f || Settings::get("user", "colorfilter", "off") != "off" ||
-               parseArt(Settings::get("user", "artupscale", "fsr")) == Art::Stylized ||
-               SDL_getenv("ZT_LIGHTING_GPU") != nullptr || GraphicsEffects::anyOn();
+  // (what needs OpenGL, as saved: mods' shaders, written in GLSL. FSR,
+  // Stylized, brightness, the colour filter and the graphics effects run on
+  // Direct3D 11 too - GpuFsrD3D11.cpp - so they no longer switch the game
+  // to the slower OpenGL renderer)
+  bool needs = SDL_getenv("ZT_LIGHTING_GPU") != nullptr;
   for (const Shaders::Shader &s : Shaders::all())
     needs = needs || s.on;
   if (needs)
@@ -285,6 +285,6 @@ const char *startupRenderer() {
   return "opengl";
 #endif
 }
-bool openGlNextStart() { return g_autoDirect3d && !GpuFsr::available(); }
+bool openGlNextStart() { return g_autoDirect3d && !GpuFsr::modShaders(); }
 
 } // namespace Display

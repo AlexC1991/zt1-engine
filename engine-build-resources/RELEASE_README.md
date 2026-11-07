@@ -158,7 +158,7 @@ set SDL_AUDIODRIVER=wasapi
 This only affects that one launch. It doesn't change anything else on your PC.
 
 **The game runs slowly or the picture looks wrong**
-Open Game Options › Display and set **Frame Rate Limit** to 60 (None makes the game draw as fast as it can and keeps your PC busy). If you turned on Graphics effects, Brightness, the colour filter or a shader mod, the game switches to OpenGL at its next start; turn them off to go back to Direct3D 11.
+Open Game Options › Display and set **Frame Rate Limit** to 60 (None makes the game draw as fast as it can and keeps your PC busy). A shader mod switches the game to OpenGL at its next start, which is slower; turn it off to go back to Direct3D 11.
 
 **Settings went wrong**
 Delete `%LocalAppData%\zt1-engine\zoo.ini`: the next start makes a fresh one. Your saved zoos in `Documents` are not touched.

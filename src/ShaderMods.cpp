@@ -122,7 +122,7 @@ std::vector<Shader> &all() {
 
 bool artActive() {
   ensure();
-  if (!GpuFsr::available())
+  if (!GpuFsr::modShaders())
     return false;
   for (const Shader &s : g_shaders)
     if (s.on && s.stage == "art" && !s.failed)

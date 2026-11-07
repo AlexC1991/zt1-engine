@@ -22,16 +22,21 @@
 // over the map. Text is not part of the layer: it is drawn afterwards at the
 // window's resolution so it stays sharp.
 //
-// Needs SDL's OpenGL renderer (shaders); available() is false otherwise and
+// Runs on SDL's Direct3D 11 renderer (GpuFsrD3D11.cpp, ours: the same
+// passes in HLSL) or its OpenGL one; available() is false otherwise and
 // callers draw the normal way (with load-time upscaling, see ArtScaler).
+// Mods' own shaders are GLSL, so they need the OpenGL one (modShaders()).
 // ============================================================================
 namespace GpuFsr {
 
 enum class Layer { World = 0, Ui = 1 };
 
-// Sets up the shaders on an OpenGL renderer. Returns whether GPU FSR works.
+// Sets up the shaders on a Direct3D 11 or OpenGL renderer. Returns whether
+// GPU FSR works.
 bool init(SDL_Renderer *renderer, float sharpness);
 bool available();
+// Whether mods' GLSL shaders can run (the OpenGL renderer only)
+bool modShaders();
 // RCAS's sharpening, in stops (0 the sharpest): at once, the next frame
 // (the Game Options' Art sharpness)
 void setSharpness(float sharpness);
@@ -59,6 +64,11 @@ void finishFrame(SDL_Renderer *renderer);
 // Mods' shaders (ShaderMods.hpp). A fragment shader of theirs linked with
 // ours; 0 and log when it won't compile or link
 unsigned compileShader(const std::string &fragment, std::string &log);
+// ours: one of the engine's own screen effects (GraphicsEffects.cpp), in
+// both languages - GLSL for OpenGL, HLSL (ps_4_0, reading the constants
+// p0..p3 in params' order) for Direct3D 11 - for screenPass
+unsigned compileEffect(const std::string &glsl, const std::string &hlsl, const std::vector<std::string> &params,
+                       std::string &log);
 // An art pass: prog run over w x h - uColor (unit 0) the frame's colour,
 // uNormal (unit 1) its normals (rgb, 0.5 is 0) and height (a), uSize,
 // uTime and the shader's settings - written into out (a target texture)

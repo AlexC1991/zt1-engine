@@ -16,9 +16,8 @@
 //   vignette   0/1   the view's corners a little darker
 //   grain      0/1   a fine moving film grain
 // They run on the map's picture only, as it's finished and before the
-// game's windows and bars go over it, on the graphics card (OpenGL's
-// shaders: GpuFsr). On Direct3D they wait for the next start (the game
-// picks OpenGL when one's on: DisplaySettings' startupRenderer).
+// game's windows and bars go over it, on the graphics card (GpuFsr's
+// passes: Direct3D 11's HLSL or OpenGL's GLSL, whichever the game runs on).
 namespace GraphicsEffects {
 
 struct Settings {

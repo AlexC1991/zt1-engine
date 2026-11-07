@@ -6,6 +6,8 @@
 
 #include <SDL2/SDL_opengl.h>
 
+#include "GpuFsrD3D11.hpp"
+
 // The shaders are the float path of ffx_fsr1.h, written for GLSL 1.20:
 //   Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
 //   MIT license. https://github.com/GPUOpen-Effects/FidelityFX-FSR
@@ -48,6 +50,11 @@ struct Gl {
 
 static Gl gl;
 static bool g_available = false;
+// ours: which renderer the passes run on - OpenGL (this file's), or
+// Direct3D 11 (GpuFsrD3D11.cpp: the same passes, without the switch to the
+// much slower OpenGL renderer)
+enum class Backend { None, Gl, D3d };
+static Backend g_backend = Backend::None;
 static bool g_upscaling = true; // (FSR picked for the art)
 static float g_con = 1.0f; // RCAS sharpness, as 2^-stops
 static GLuint g_easu = 0, g_rcas = 0, g_colour = 0, g_style = 0;
@@ -389,8 +396,15 @@ static GLuint link(const char *fragment, const char *what) {
 
 bool init(SDL_Renderer *renderer, float sharpness) {
   g_available = false;
+  g_backend = Backend::None;
   g_con = std::exp2(-std::max(0.0f, sharpness));
   SDL_RendererInfo info;
+  if (renderer && SDL_GetRendererInfo(renderer, &info) == 0 && std::strcmp(info.name, "direct3d11") == 0) {
+    g_available = (info.flags & SDL_RENDERER_TARGETTEXTURE) && D3D11::init(renderer);
+    g_backend = g_available ? Backend::D3d : Backend::None;
+    SDL_Log("[GpuFsr] GPU FSR 1 on Direct3D 11 %s (sharpness %.2f)", g_available ? "ready" : "unavailable", sharpness);
+    return g_available;
+  }
   if (!renderer || SDL_GetRendererInfo(renderer, &info) != 0 ||
       std::strcmp(info.name, "opengl") != 0) {
     SDL_Log("[GpuFsr] needs the OpenGL renderer (have %s)",
@@ -419,12 +433,15 @@ bool init(SDL_Renderer *renderer, float sharpness) {
   g_colour = link(kColour, "colour");
   g_style = link(kStyle, "stylized");
   g_available = g_easu && g_rcas;
+  g_backend = g_available ? Backend::Gl : Backend::None;
   SDL_Log("[GpuFsr] GPU FSR 1 %s (sharpness %.2f)",
           g_available ? "ready" : "unavailable", sharpness);
   return g_available;
 }
 
 bool available() { return g_available; }
+
+bool modShaders() { return g_available && g_backend == Backend::Gl; }
 
 void setSharpness(float sharpness) { g_con = std::exp2(-std::max(0.0f, sharpness)); }
 
@@ -464,6 +481,11 @@ void setColour(int filter, float strength, float brightness) {
 }
 
 void finishFrame(SDL_Renderer *renderer) {
+  if (g_backend == Backend::D3d) {
+    if (g_colourOn && renderer)
+      D3D11::colourPass(renderer, g_matrix, g_gamma);
+    return;
+  }
   if (!g_available || !g_colour || !g_colourOn || !renderer)
     return;
   SDL_Texture *was = SDL_GetRenderTarget(renderer);
@@ -507,8 +529,8 @@ void finishFrame(SDL_Renderer *renderer) {
 // with our full-window vertex shader
 unsigned compileShader(const std::string &fragment, std::string &log) {
   log.clear();
-  if (!g_available)
-    return log = "needs OpenGL on the graphics card", 0;
+  if (!modShaders())
+    return log = "mods' shaders need the OpenGL renderer", 0;
   const char *src = fragment.c_str();
   GLuint vs = compile(GL_VERTEX_SHADER, kVertex, "mod vertex");
   GLuint fs = gl.CreateShader(GL_FRAGMENT_SHADER);
@@ -570,9 +592,16 @@ void setUniforms(GLuint prog, float w, float h, const std::vector<std::pair<std:
 }
 } // namespace
 
+unsigned compileEffect(const std::string &glsl, const std::string &hlsl, const std::vector<std::string> &params,
+                       std::string &log) {
+  if (g_backend == Backend::D3d)
+    return D3D11::compile(hlsl, params, log);
+  return compileShader(glsl, log);
+}
+
 bool artPass(SDL_Renderer *renderer, unsigned prog, SDL_Texture *color, SDL_Texture *aux, SDL_Texture *out, int w,
              int h, const std::vector<std::pair<std::string, float>> &uniforms) {
-  if (!g_available || !prog || !color || !aux || !out || !gl.ActiveTexture)
+  if (!modShaders() || !prog || !color || !aux || !out || !gl.ActiveTexture)
     return false;
   Kept k;
   k.keep(renderer);
@@ -616,6 +645,8 @@ bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pa
                 bool smooth) {
   if (!g_available || !prog || !renderer)
     return false;
+  if (g_backend == Backend::D3d)
+    return D3D11::screenPass(renderer, prog, uniforms, smooth);
   SDL_Texture *was = SDL_GetRenderTarget(renderer);
   SDL_SetRenderTarget(renderer, nullptr);
   int w = 0, h = 0;
@@ -708,6 +739,11 @@ void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
   LayerTargets &lt = g_layers[static_cast<int>(layer)];
   if (!lt.low || SDL_GetRenderTarget(renderer) != lt.low)
     return;
+  if (g_backend == Backend::D3d) {
+    D3D11::endLayer(renderer, static_cast<int>(layer), lt.low, lt.lowW, lt.lowH, viewW, viewH, blend, dstRect, g_styled,
+                    g_con, std::clamp(g_con * 1.15f, 0.0f, 1.0f));
+    return;
+  }
 
   // Window size (asked with the window as the target)
   SDL_Texture *low = lt.low;

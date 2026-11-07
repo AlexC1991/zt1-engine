@@ -128,7 +128,7 @@ The base game's **freeform** mode is the focus, and most of it works as in the o
 - **Accessibility:** colour-blind filters and a bigger mouse pointer.
 - **HD art (optional mods):** zoomed in, the map's art can be drawn from much bigger HD pictures. See [Modding](#modding).
 
-The game draws with Direct3D 11 by default, which is the fastest on Windows, and switches to OpenGL when a setting needs its shaders.
+The game draws with Direct3D 11, the fastest on Windows, with every setting above. Only shader mods, which are written for OpenGL, switch it to OpenGL.
 
 | | |
 |---|---|

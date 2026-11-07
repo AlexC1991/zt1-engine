@@ -1284,11 +1284,9 @@ void UiOptions::tick(SDL_Renderer *renderer) {
     else if (HdArt::active() && mapBigger)
       note = "An HD art mod is on: zoomed in, the map's art is its own redrawn art (the menus as picked here).";
     else if ((a == Display::Art::Fsr || a == Display::Art::Stylized) && !GpuFsr::available())
-      note = !Display::openGlNextStart()
-                 ? "FSR on the graphics card needs OpenGL, which isn't available here: the art was upscaled as it loaded."
-             : a == Display::Art::Stylized
-                 ? "The Stylized look needs OpenGL: the game switches to it the next time it starts."
-                 : "The game draws with Direct3D 11, which is faster: the art was upscaled by FSR as it loaded.";
+      note = a == Display::Art::Stylized
+                 ? "The Stylized look needs shaders on the graphics card, which aren't available here."
+                 : "FSR on the graphics card isn't available here: the art was upscaled by FSR as it loaded.";
     else if (ui <= 1.001f && !mapBigger)
       note = std::string("Nothing is drawn bigger right now (Interface Size 1x") + (this->inGame ? ", the map at 1x" : "") +
              "), so every choice looks the same. Raise Interface Size" + (this->inGame ? " or zoom in" : "") +
@@ -1510,10 +1508,8 @@ void UiOptions::wire() {
       };
     }
     describe({pageId(kDisplay, kBrightLabel), pageId(kDisplay, kBrightBar)},
-             GpuFsr::available()        ? "Lightens or darkens the whole picture: 100% is as the game draws it."
-             : Display::openGlNextStart() ? "Lightens or darkens the whole picture. Changed, it works from the next time "
-                                            "the game starts (it needs OpenGL)."
-                                          : "Needs OpenGL on your graphics card, which isn't available here.");
+             GpuFsr::available() ? "Lightens or darkens the whole picture: 100% is as the game draws it."
+                                 : "Needs shaders on the graphics card, which aren't available here.");
   }
   onOff(kDisplay, kFps, "Show the frame rate (F3)", g_showDiagnostics, [](bool on) { g_showDiagnostics = on; });
   describe({pageId(kDisplay, kFps), pageId(kDisplay, kFps + 1)},
@@ -1567,7 +1563,7 @@ void UiOptions::wire() {
   // Effects (GraphicsEffects.hpp): each changed at once and kept
   {
     auto need = [](const std::string &what) {
-      return GpuFsr::available() ? what : what + " Needs OpenGL: picked, it works from the next start.";
+      return GpuFsr::available() ? what : what + " Needs shaders on the graphics card, which aren't available here.";
     };
     auto change = [](std::function<void(GraphicsEffects::Settings &)> f) {
       GraphicsEffects::Settings s = GraphicsEffects::settings();
@@ -1724,10 +1720,8 @@ void UiOptions::wire() {
   choices(kAccess, {kFilterOff, kFilterP, kFilterD, kFilterT}, {"Off", "Protanopia", "Deuteranopia", "Tritanopia"},
           static_cast<int>(Display::filter()), [](int i) { Display::setFilter(static_cast<Display::Filter>(i)); });
   describe({pageId(kAccess, kFilterLabel), pageId(kAccess, kFilterOff), pageId(kAccess, kFilterOff + 1)},
-           GpuFsr::available()        ? "Moves colours you may not tell apart into ones you can. Off: as the game draws them."
-           : Display::openGlNextStart() ? "Moves colours you may not tell apart into ones you can. Picked, it works "
-                                          "from the next time the game starts (it needs OpenGL)."
-                                        : "Needs OpenGL on your graphics card, which isn't available here.");
+           GpuFsr::available() ? "Moves colours you may not tell apart into ones you can. Off: as the game draws them."
+                               : "Needs shaders on the graphics card, which aren't available here.");
   describe({pageId(kAccess, kFilterP), pageId(kAccess, kFilterP + 1)},
            "Protanopia: reds look dark and close to greens. Red-green differences move into blue and brightness.");
   describe({pageId(kAccess, kFilterD), pageId(kAccess, kFilterD + 1)},

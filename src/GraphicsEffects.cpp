@@ -8,7 +8,8 @@
 #include "Settings.hpp"
 
 // addition: GraphicsEffects.hpp. Each effect a fragment shader (GLSL 1.20,
-// as mods' screen shaders: GpuFsr::screenPass) run over the map's picture.
+// as mods' screen shaders: GpuFsr::screenPass) run over the map's picture -
+// and the same in HLSL for the Direct3D 11 renderer.
 namespace GraphicsEffects {
 namespace {
 
@@ -117,18 +118,107 @@ void main() {
 }
 )";
 
+// ours: the same four in HLSL, for Direct3D 11 (GpuFsr::compileEffect).
+// Their settings fill p0.x, p0.y, ... in the order Pass lists them;
+// Direct3D's frame runs top-down, the effects are the same either way up
+const char *kFxaaHlsl = R"(
+float4 main(float4 pos : SV_Position) : SV_Target {
+  float2 px = 1.0 / uSize, uv = pos.xy * px;
+  float3 nw = src.SampleLevel(samp, uv + float2(-1.0, -1.0) * px, 0).rgb;
+  float3 ne = src.SampleLevel(samp, uv + float2(1.0, -1.0) * px, 0).rgb;
+  float3 sw = src.SampleLevel(samp, uv + float2(-1.0, 1.0) * px, 0).rgb;
+  float3 se = src.SampleLevel(samp, uv + float2(1.0, 1.0) * px, 0).rgb;
+  float3 m = src.SampleLevel(samp, uv, 0).rgb;
+  float3 luma = float3(0.299, 0.587, 0.114);
+  float lNW = dot(nw, luma), lNE = dot(ne, luma), lSW = dot(sw, luma), lSE = dot(se, luma), lM = dot(m, luma);
+  float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+  float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+  float2 dir = float2(-((lNW + lNE) - (lSW + lSE)), (lNW + lSW) - (lNE + lSE));
+  float reduce = max((lNW + lNE + lSW + lSE) * 0.25 * (1.0 / 8.0), 1.0 / 128.0);
+  float rcpMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+  dir = clamp(dir * rcpMin, -8.0, 8.0) * px;
+  float3 a = 0.5 * (src.SampleLevel(samp, uv + dir * (1.0 / 3.0 - 0.5), 0).rgb + src.SampleLevel(samp, uv + dir * (2.0 / 3.0 - 0.5), 0).rgb);
+  float3 b = a * 0.5 + 0.25 * (src.SampleLevel(samp, uv - dir * 0.5, 0).rgb + src.SampleLevel(samp, uv + dir * 0.5, 0).rgb);
+  float lB = dot(b, luma);
+  return float4((lB < lMin || lB > lMax) ? a : b, 1.0);
+}
+)";
+
+const char *kBloomHlsl = R"(
+#define strength p0.x
+float3 bright(float2 uv) {
+  float3 c = src.SampleLevel(samp, uv, 0).rgb;
+  return max(c - 0.68, 0.0);
+}
+float4 main(float4 pos : SV_Position) : SV_Target {
+  float2 px = 1.0 / uSize, uv = pos.xy * px;
+  float3 c = src.SampleLevel(samp, uv, 0).rgb, glow = 0.0;
+  for (int i = 0; i < 12; i++) {
+    float a = float(i) * 0.5236;
+    float2 d = float2(cos(a), sin(a));
+    glow += bright(uv + d * 4.0 * px) * 0.6 + bright(uv + d * 9.0 * px) * 0.4;
+  }
+  return float4(saturate(c + glow / 12.0 * strength * 2.2), 1.0);
+}
+)";
+
+const char *kTiltShiftHlsl = R"(
+#define strength p0.x
+float4 main(float4 pos : SV_Position) : SV_Target {
+  float2 px = 1.0 / uSize, uv = pos.xy * px;
+  float away = smoothstep(0.18, 0.5, abs(uv.y - 0.5));
+  float r = away * strength * 6.0;
+  float3 c = src.SampleLevel(samp, uv, 0).rgb;
+  if (r < 0.25)
+    return float4(c, 1.0);
+  float3 sum = c;
+  float n = 1.0;
+  for (int i = 0; i < 16; i++) {
+    float a = float(i) * 2.39996;
+    float d = sqrt(float(i) + 0.5) / 4.0;
+    sum += src.SampleLevel(samp, uv + float2(cos(a), sin(a)) * d * r * px, 0).rgb;
+    n += 1.0;
+  }
+  return float4(sum / n, 1.0);
+}
+)";
+
+const char *kGradeHlsl = R"(
+#define contrast p0.x
+#define vibrance p0.y
+#define vignette p0.z
+#define grain p0.w
+float4 main(float4 pos : SV_Position) : SV_Target {
+  float2 uv = pos.xy / uSize;
+  float3 c = src.SampleLevel(samp, uv, 0).rgb;
+  float l = dot(c, float3(0.299, 0.587, 0.114));
+  float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+  c = lerp(l.xxx, c, 1.0 + vibrance * (1.0 - sat));
+  c = (c - 0.5) * (1.0 + contrast) + 0.5;
+  float2 q = uv - 0.5;
+  c *= 1.0 - vignette * smoothstep(0.35, 0.85, length(q * float2(1.0, uSize.y / uSize.x) * 1.4));
+  float n = frac(sin(dot(pos.xy + floor(uTime * 24.0) * 37.0, float2(12.9898, 78.233))) * 43758.5453);
+  c += (n - 0.5) * grain;
+  return float4(saturate(c), 1.0);
+}
+)";
+
 struct Pass {
   const char *source;
+  const char *hlsl;
+  std::vector<std::string> params; // (the HLSL's p0.x, p0.y ...)
   unsigned program = 0;
   bool tried = false;
 };
-Pass g_fxaa{kFxaa}, g_bloom{kBloom}, g_tilt{kTiltShift}, g_grade{kGrade};
+Pass g_fxaa{kFxaa, kFxaaHlsl, {}}, g_bloom{kBloom, kBloomHlsl, {"strength"}},
+    g_tilt{kTiltShift, kTiltShiftHlsl, {"strength"}},
+    g_grade{kGrade, kGradeHlsl, {"contrast", "vibrance", "vignette", "grain"}};
 
 unsigned programOf(Pass &p) {
   if (!p.tried) {
     p.tried = true;
     std::string log;
-    p.program = GpuFsr::compileShader(p.source, log);
+    p.program = GpuFsr::compileEffect(p.source, p.hlsl, p.params, log);
     if (!p.program)
       SDL_Log("[GraphicsEffects] a shader didn't compile: %s", log.c_str());
   }
