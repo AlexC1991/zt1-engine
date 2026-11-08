@@ -85,7 +85,7 @@ size_t DayNightLighting::collectStructures(World &world) {
   auto mix=[&](size_t n){hash^=n;hash*=1099511628211ull;};
   mix(map.getGeneration());mix(Features::elevatedPaths);
   for(const auto &[e,p]:fences.pieces()) {
-    mix(e.x);mix(e.y);mix(e.alongX);mix(p.type);mix(p.gate);mix(p.facing);mix(p.life<=0?0:p.type>=0 && p.type<int(fences.types().size()) && p.life<=fences.types()[p.type].decayedLife?1:2);mix(int(p.open));mix(p.tank);mix(p.tank2);
+    mix(e.x);mix(e.y);mix(e.alongX);mix(p.type);mix(p.gate);mix(p.facing);mix(p.life<=0?0:p.type>=0 && p.type<int(fences.types().size()) && p.life<=fences.types()[p.type].decayedLife?1:2);mix(p.gate && p.open>0);mix(p.tank);mix(p.tank2);
   }
   for(const auto &ex:fences.exhibits())if(ex.tank){mix(ex.id);mix(ex.floorHeight);mix(ex.wallSub);}
   for(const auto &[xy,d]:decks.all()){mix(xy.first);mix(xy.second);for(int h:d.h)mix(h);}
@@ -121,7 +121,11 @@ size_t DayNightLighting::collectStructures(World &world) {
           if(p.life<=0 && t.broke[0])art=t.broke[0];else if(p.life<=t.decayedLife && t.det[0])art=t.det[0];
         }
         if(!art)continue;
-        const int pose=p.gate?std::clamp(int(p.open),0,std::max(0,art->frameCount()-1)):0;
+        // ours: a gate's shape in two poses, shut and open (open from the
+        // moment it starts to swing until it is shut again): every frame of
+        // its swing as its own shape remade the whole zoo's lighting, several
+        // times as a keeper walked through
+        const int pose=p.gate && p.open>0?std::max(0,art->frameCount()-1):0;
         const bool glass=t.key=="glass" || t.key=="smglass" || t.key=="dglas";
         const std::string key="fence:"+art->lightingKey()+":"+std::to_string(pose)+":"+std::to_string(t.height)+":"+std::to_string(h1-h0);
         const size_t before=structureInstances.size();
