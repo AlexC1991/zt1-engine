@@ -38,7 +38,20 @@ int runLightingDetailChecks(World &world,ResourceManager *rm,SDL_Renderer *rende
   check("native fence course includes ordinary and gate artwork",normal>=35 && gates>=10);
   report<<"Structure totals native="<<normal<<" gates="<<gates<<" instances="<<light.structureInstances.size()<<" pieces="<<fences.pieces().size()<<"\n";
   for(const auto &[k,m]:light.structureModels)if(m.faces.empty())report<<"Empty structure "<<k<<"\n";
-  check("native fence and raised-path structure geometry is nonempty",light.structureInstances.size()>=size_t(normal+gates+4));
+  // (the land gates are moving shapes, with the animals and guests: collectGates)
+  auto gateShapes=[&]{size_t n=0;for(const auto &o:light.actors)if(((o.owner>>56)&1) && ((o.owner>>48)&1))++n;return n;};
+  check("native fence and raised-path structure geometry is nonempty",light.structureInstances.size()+gateShapes()>=size_t(normal+gates+4));
+  check("every land gate is a moving shape",gateShapes()==size_t(gates));
+  {
+    // ours: a gate swinging changes its own shape only, not the scenery's
+    const auto scene=light.structureHash;
+    for(const auto &[edge,piece]:fences.pieces())if(auto *p=const_cast<Fences::Piece*>(fences.at(edge)))if(p->gate)p->open=0;
+    draw();
+    check("a gate's swing doesn't remake the scenery's lighting",light.structureHash==scene && gateShapes()==size_t(gates));
+    for(const auto &[edge,piece]:fences.pieces())if(auto *p=const_cast<Fences::Piece*>(fences.at(edge))){const auto &t=fences.types()[p->type];
+      if(p->gate && t.art[1][0])p->open=float(std::max(0,t.art[1][0]->frameCount()/2));}
+    draw();
+  }
   bool glass=false,rail=false;
   for(const auto &o:light.structureInstances){if(o.model->faces.size()>6)rail=true;}
   for(const auto &[key,m]:light.structureModels)if(key.find("fence:")!=std::string::npos && !m.faces.empty())glass=true;

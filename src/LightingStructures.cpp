@@ -77,6 +77,41 @@ Model fencePlane(Animation &art,int frame,float height,bool glass,bool mullion,f
 }
 }
 
+// ours: the land gates as moving shapes (collectActors), each at its swing's
+// pose: the same shape the scenery gave it, drawn into the sun's map each
+// frame where it is - as scenery, every swing remade the whole zoo's lighting
+void DayNightLighting::collectGates(World &world) {
+  auto &fences=world.getFences();auto &map=world.getMap();uint64_t serial=0;
+  for(const auto &[e,p]:fences.pieces()) {
+    if(!p.gate || p.tank>=0 || p.type<0 || p.type>=int(fences.types().size()))continue;
+    if(actors.size()>=maxActors)break;
+    const auto &t=fences.types()[p.type];Animation *art=t.art[1][0];if(!art)continue;
+    int ax,ay,bx,by,h0,h1;fences.edgeGeometry(e,p,map,ax,ay,bx,by,h0,h1);
+    const Point position{(ax+bx)*.5f,(ay+by)*.5f,(h0+h1)*.5f};
+    const float angle=p.facing*.7853981634f;
+    const int pose=std::clamp(int(p.open),0,std::max(0,art->frameCount()-1));
+    const bool glass=t.key=="glass" || t.key=="smglass" || t.key=="dglas";
+    const std::string key="fence:"+art->lightingKey()+":"+std::to_string(pose)+":"+std::to_string(t.height)+":"+std::to_string(h1-h0);
+    auto found=gateModels.find(key);
+    if(found==gateModels.end()) {
+      Model m=fencePlane(*art,pose,float(t.height),glass,t.key=="dglas",t.key=="buoyrope"?-1.0f:0);
+      const float slope=float(h1-h0);const float sign=e.alongX?std::cos(angle):std::sin(angle);
+      for(auto &f:m.faces)for(auto &v:f.p)v.z+=v.x*slope*sign;
+      if(m.solid.empty() && !m.faces.empty()) {
+        Point lo{1e20f,1e20f,1e20f},hi{-1e20f,-1e20f,-1e20f};
+        for(const auto &f:m.faces)for(auto v:f.p){lo={std::min(lo.x,v.x),std::min(lo.y,v.y),std::min(lo.z,v.z)};hi={std::max(hi.x,v.x),std::max(hi.y,v.y),std::max(hi.z,v.z)};}
+        m.minimum=lo;m.step={std::max(.001f,hi.x-lo.x),std::max(.001f,hi.y-lo.y),std::max(.001f,hi.z-lo.z)};m.nx=m.ny=m.nz=1;
+      }
+      found=gateModels.emplace(key,std::move(m)).first;
+    }
+    if(found->second.faces.empty())continue;
+    actors.push_back({&found->second,nullptr,position,std::cos(angle),std::sin(angle),0,(uint64_t(1)<<56)|(uint64_t(1)<<48)|serial++});
+    auto &o=actors.back();o.shaded=false;
+    // (lit at night through its own art: a lamp or a beam on the gate)
+    if(!glass){o.artwork=art;o.frame=pose;o.nightReceiver=true;}
+  }
+}
+
 // addition: shared structures use the same native type, damage/open frame,
 // tank heights and raised-path dimensions as the visible game geometry.
 size_t DayNightLighting::collectStructures(World &world) {
@@ -85,7 +120,7 @@ size_t DayNightLighting::collectStructures(World &world) {
   auto mix=[&](size_t n){hash^=n;hash*=1099511628211ull;};
   mix(map.getGeneration());mix(Features::elevatedPaths);
   for(const auto &[e,p]:fences.pieces()) {
-    mix(e.x);mix(e.y);mix(e.alongX);mix(p.type);mix(p.gate);mix(p.facing);mix(p.life<=0?0:p.type>=0 && p.type<int(fences.types().size()) && p.life<=fences.types()[p.type].decayedLife?1:2);mix(p.gate && p.open>0);mix(p.tank);mix(p.tank2);
+    mix(e.x);mix(e.y);mix(e.alongX);mix(p.type);mix(p.gate);mix(p.facing);mix(p.life<=0?0:p.type>=0 && p.type<int(fences.types().size()) && p.life<=fences.types()[p.type].decayedLife?1:2);mix(p.tank);mix(p.tank2);
   }
   for(const auto &ex:fences.exhibits())if(ex.tank){mix(ex.id);mix(ex.floorHeight);mix(ex.wallSub);}
   for(const auto &[xy,d]:decks.all()){mix(xy.first);mix(xy.second);for(int h:d.h)mix(h);}
@@ -116,16 +151,13 @@ size_t DayNightLighting::collectStructures(World &world) {
       Point position{(ax+bx)*.5f,(ay+by)*.5f,(h0+h1)*.5f};
       const float angle=p.facing*.7853981634f;
       if(p.tank<0) {
-        Animation *art=t.art[p.gate?1:0][0];
-        if(!p.gate && !t.indestructible && p.life>=0) {
+        if(p.gate)continue; // (a moving shape: collectGates)
+        Animation *art=t.art[0][0];
+        if(!t.indestructible && p.life>=0) {
           if(p.life<=0 && t.broke[0])art=t.broke[0];else if(p.life<=t.decayedLife && t.det[0])art=t.det[0];
         }
         if(!art)continue;
-        // ours: a gate's shape in two poses, shut and open (open from the
-        // moment it starts to swing until it is shut again): every frame of
-        // its swing as its own shape remade the whole zoo's lighting, several
-        // times as a keeper walked through
-        const int pose=p.gate && p.open>0?std::max(0,art->frameCount()-1):0;
+        const int pose=0;
         const bool glass=t.key=="glass" || t.key=="smglass" || t.key=="dglas";
         const std::string key="fence:"+art->lightingKey()+":"+std::to_string(pose)+":"+std::to_string(t.height)+":"+std::to_string(h1-h0);
         const size_t before=structureInstances.size();

@@ -225,6 +225,11 @@ private:
   std::map<std::string,LightingAssets::Model> structureModels;
   std::vector<Instance> structureInstances;
   size_t collectStructures(World &);
+  // ours: the land gates as moving shapes, with the animals and guests (in
+  // actors, at the pose of their swing), not the scenery: as scenery, a gate
+  // swinging open or shut remade the whole zoo's lighting
+  std::map<std::string,LightingAssets::Model> gateModels;
+  void collectGates(World &);
   LightingAssets::Point toWorld(const Instance &,LightingAssets::Point)const;
   bool blocked(LightingAssets::Point,LightingAssets::Point,uint64_t ignoreOwner,uint64_t receiverOwner=uint64_t(-1))const;
   std::array<float,3> irradiance(LightingAssets::Point,LightingAssets::Point normal,uint64_t receiverOwner,bool transientOnly=false,bool includeProjectors=true)const;

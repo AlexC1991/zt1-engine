@@ -159,6 +159,7 @@ void DayNightLighting::collectActors(World &world) {
   }
   std::stable_sort(poses.begin(),poses.end(),[](const auto &a,const auto &b){return a.distance<b.distance;});
   for(const auto &p:poses)addActor(p.art,p.frame,p.p,p.fx,p.fy,p.hx,p.hy,p.id);
+  collectGates(world);
   // Only evict entries which no actor in this frame borrows.
   while(actorModels.size()>maxActorModels) {
     auto oldest=actorModels.end();for(auto i=actorModels.begin();i!=actorModels.end();++i)
@@ -177,7 +178,8 @@ void DayNightLighting::collectActors(World &world) {
       for(auto p:d.p){l=std::min(l,p.x);r=std::max(r,p.x);t=std::min(t,p.y);b=std::max(b,p.y);}
       d.bounds={l,t,r-l,b-t};
       const float gx[]={-1,-1,1,1},gy[]={1,-1,-1,1};
-      d.visible=d.outward.x*gx[view.getRotation()]+d.outward.y*gy[view.getRotation()]+d.outward.z*2>0;
+      // (a gate, as a fence, is not shaded itself, but lit at night - LightingStructures)
+      d.visible=(o.shaded || (o.nightReceiver && sky.shadow<.02f)) && d.outward.x*gx[view.getRotation()]+d.outward.y*gy[view.getRotation()]+d.outward.z*2>0;
       actorFaces.push_back(d);
     }
   }
