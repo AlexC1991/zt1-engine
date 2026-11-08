@@ -267,7 +267,10 @@ bool g_autoDirect3d = false;
 }
 const char *startupRenderer() {
 #ifdef _WIN32
-  const std::string pick = Settings::get("user", "renderer", "auto");
+  // (ours: ZT_RENDERER=opengl|direct3d11 for one run - the benchmarks'
+  // comparisons - over what's saved)
+  const char *forced = SDL_getenv("ZT_RENDERER");
+  const std::string pick = forced && *forced ? forced : Settings::get("user", "renderer", "auto");
   if (pick == "opengl" || pick == "direct3d11")
     return pick == "opengl" ? "opengl" : "direct3d11";
   // (what needs OpenGL, as saved: mods' shaders, written in GLSL. FSR,
