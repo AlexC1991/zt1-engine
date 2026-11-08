@@ -2,6 +2,7 @@
 #include "DayNightLighting.hpp"
 #include "GpuSurfacesD3D11.hpp"
 #include "GpuSunD3D11.hpp"
+#include "ParallelFor.hpp"
 #include "WorldRenderer.hpp"
 #include "WorldMap.hpp"
 #include <algorithm>
@@ -131,9 +132,14 @@ void DayNightLighting::buildIrradiance(const WorldMap &map) {
     groundIrradianceCache[stamp]={grid,irradianceTick};groundLight.push_back(std::move(grid));
   }
   surfaceLight.resize(instances.size());int budget=maxModelFaces;
+  // (the shapes whose samples aren't kept: their rays cast side by side on
+  // the processor's cores, then kept in the shapes' order - ours, the same
+  // samples as one loop)
+  struct Miss {size_t instance;uint64_t stamp;std::vector<SurfaceSamples> samples;std::vector<std::vector<BeamSamples>> beams;};
+  std::vector<Miss> misses;
   for(size_t i=0;i<instances.size();++i) {
     const auto &o=instances[i];if(int(o.model->faces.size())>budget)continue;
-    budget-=int(o.model->faces.size());auto &cache=surfaceLight[i];cache.reserve(o.model->faces.size());
+    budget-=int(o.model->faces.size());auto &cache=surfaceLight[i];
     uint64_t stamp=1469598103934665603ull;hashInstance(stamp,o);stamp^=o.owner;stamp*=1099511628211ull;
     const auto &m=*o.model;
     const float bound=std::hypot(std::max(std::abs(m.minimum.x),std::abs(m.minimum.x+m.step.x*m.nx)),std::max(std::abs(m.minimum.y),std::abs(m.minimum.y+m.step.y*m.ny)));
@@ -144,7 +150,12 @@ void DayNightLighting::buildIrradiance(const WorldMap &map) {
     auto found=surfaceIrradianceCache.find(stamp);
     if(found!=surfaceIrradianceCache.end()){found->second.used=irradianceTick;cache=found->second.samples;
       if(found->second.beams.size()==beamLights.size())for(size_t b=0;b<beamLights.size();++b)beamSurface[b][i]=found->second.beams[b];continue;}
-    std::vector<std::vector<BeamSamples>> beamCache(beamLights.size());
+    misses.push_back({i,stamp,{},{}});
+  }
+  parallelFor(misses.size(),[&](size_t first,size_t last){for(size_t at=first;at<last;++at) {
+    auto &miss=misses[at];const auto &o=instances[miss.instance];
+    auto &cache=miss.samples;cache.reserve(o.model->faces.size());
+    auto &beamCache=miss.beams;beamCache.assign(beamLights.size(),{});
     for(const auto &face:o.model->faces) {
       Point n{face.normal.x*o.cosine-face.normal.y*o.sine,face.normal.x*o.sine+face.normal.y*o.cosine,face.normal.z};
       // addition: sample receiver corners once, not a single flat value for
@@ -157,8 +168,11 @@ void DayNightLighting::buildIrradiance(const WorldMap &map) {
         for(size_t b=0;b<beamLights.size();++b)energy[b][k]=sourceEnergy(lights[beamLights[b]],p,n,o.owner,false);}
       cache.push_back(values);for(size_t b=0;b<beamLights.size();++b)beamCache[b].push_back(energy[b]);
     }
-    for(size_t b=0;b<beamLights.size();++b)beamSurface[b][i]=beamCache[b];
-    surfaceIrradianceCache[stamp]={cache,irradianceTick,std::move(beamCache)};
+  }},1);
+  for(auto &miss:misses) {
+    surfaceLight[miss.instance]=miss.samples;
+    for(size_t b=0;b<beamLights.size();++b)beamSurface[b][miss.instance]=miss.beams[b];
+    surfaceIrradianceCache[miss.stamp]={std::move(miss.samples),irradianceTick,std::move(miss.beams)};
   }
   auto prune=[&](auto &cache,size_t limit){if(cache.size()>limit)for(auto it=cache.begin();it!=cache.end();) {
     if(it->second.used!=irradianceTick)it=cache.erase(it);else ++it;
@@ -179,9 +193,14 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
   projectionHash=geometryHash;projectionRotation=view.getRotation();projectionUnit=view.getHeightUnitPixels();projectedFaces.clear();projectedSunStamp[0]=projectedSunStamp[1]=0;++projectionSerial;
   float ox,oy,od;view.worldToScreenF(0,0,0,ox,oy,od);
   int budget=maxModelFaces;
-  {size_t total=0;for(const auto &o:instances)total+=o.model->faces.size();projectedFaces.reserve(std::min(total,size_t(budget)));}
-  for(size_t i=0;i<instances.size();++i) {
-    const auto &o=instances[i];if(int(o.model->faces.size())>budget)continue;budget-=int(o.model->faces.size());
+  // (each shape's place in the list first, then the shapes projected side by
+  // side on the processor's cores - ours, the same faces in the same order)
+  std::vector<size_t> start(instances.size()+1,0),taken;
+  for(size_t i=0;i<instances.size();++i){const int faces=int(instances[i].model->faces.size());start[i+1]=start[i];
+    if(faces>budget)continue;budget-=faces;start[i+1]+=size_t(faces);taken.push_back(i);}
+  projectedFaces.resize(start.back());
+  parallelFor(taken.size(),[&](size_t first,size_t last){for(size_t at=first;at<last;++at) {
+    const size_t i=taken[at];const auto &o=instances[i];
     for(size_t j=0;j<o.model->faces.size();++j) {
       const auto &f=o.model->faces[j];ProjectedFace d{};d.instance=i;d.localIndex=j;
       auto rotate=[&](Point p){return Point{p.x*o.cosine-p.y*o.sine,p.x*o.sine+p.y*o.cosine,p.z};};
@@ -200,10 +219,15 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
       // (at night, with no sun shadow to fall on itself, it is lit as any
       // wall: a lamp or the lighthouse's beam on a fence, a solid tank wall)
       d.visible=(o.shaded || (o.nightReceiver && sky.shadow<.02f)) && d.outward.x*gx[view.getRotation()]+d.outward.y*gy[view.getRotation()]+d.outward.z*2>0;
-      projectedFaces.push_back(d);
+      projectedFaces[start[i]+j]=d;
     }
-  }
-  std::stable_sort(projectedFaces.begin(),projectedFaces.end(),[](const auto &a,const auto &b){return a.depth<b.depth;});
+  }},1);
+  // (sorted by index, then moved into that order once: the same order as a
+  // stable sort of the faces, which moved each large face about many times)
+  std::vector<uint32_t> order(projectedFaces.size());for(size_t i=0;i<order.size();++i)order[i]=uint32_t(i);
+  std::stable_sort(order.begin(),order.end(),[this](uint32_t a,uint32_t b){return projectedFaces[a].depth<projectedFaces[b].depth;});
+  std::vector<ProjectedFace> sorted;sorted.reserve(projectedFaces.size());for(uint32_t i:order)sorted.push_back(std::move(projectedFaces[i]));
+  projectedFaces.swap(sorted);
 }
 
 void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer &view,float scale,float mapMiddle) {

@@ -2,6 +2,7 @@
 #include <limits>
 #include <cstdlib>
 #include "DayNightLighting.hpp"
+#include "ParallelFor.hpp"
 #include "GpuSunD3D11.hpp"
 #include "GpuSurfacesD3D11.hpp"
 #include "WorldRenderer.hpp"
@@ -13,18 +14,6 @@
 #include <future>
 #include <thread>
 using LightingAssets::Point;
-namespace {
-// ours: a loop over n items split over the processor's cores (fn(begin,end)
-// for each part; the parts write apart). The same work as one loop, in less
-// time: the sun maps' samples were made on one core while the game waited.
-template <typename F> void parallelFor(size_t n,F &&fn) {
-  const size_t threads=std::clamp<size_t>(std::thread::hardware_concurrency(),1,8);
-  if(n<4096 || threads<2){fn(size_t(0),n);return;}
-  const size_t chunk=(n+threads-1)/threads;std::vector<std::future<void>> parts;
-  for(size_t b=chunk;b<n;b+=chunk)parts.push_back(std::async(std::launch::async,[&fn,b,chunk,n]{fn(b,std::min(n,b+chunk));}));
-  fn(size_t(0),std::min(n,chunk));for(auto &part:parts)part.get();
-}
-}
 // addition: people, animals, trees and scenery cast their shadow from their
 // own sprite, pixel by pixel along the sun's line (Animation::drawCastShadow,
 // in drawShadows), in its current pose: their real outline - leaves, legs,
