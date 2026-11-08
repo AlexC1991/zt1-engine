@@ -33,7 +33,9 @@ public:
   // another frame made later at the same address isn't taken for it
   void forgetSurface(SDL_Surface *s) { nativeMasks.erase(s); }
   static constexpr int maxLights = 96, maxEmissives = 160;
-  static constexpr int maxMapWidth = 640, maxModelFaces=60000, maxActorFaces=16000, maxActors=160, maxActorModels=256;
+  // (maxModelFaces: the whole zoo's scenery faces - camera-independent, so
+  // panning reuses everything worked out for them; about 220 bytes each)
+  static constexpr int maxMapWidth = 640, maxModelFaces=250000, maxActorFaces=16000, maxActors=160, maxActorModels=256;
   struct Sky { SDL_Color ambient; float lamps, sun, shadowLength; float dx, dy; float shadow=1; };
   struct Stats { int lights = 0, shadows = 0, rays = 0, width = 0, height = 0, emissives = 0, modelFaces=0,models=0, actors=0, actorFaces=0, actorBuilds=0, actorFallbacks=0, sunBuilds=0;size_t memoryBytes=0; };
   ~DayNightLighting();

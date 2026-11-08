@@ -228,22 +228,12 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
   // The scene hash is independent of the camera: a pan reuses 3D irradiance.
   // Keep source selection stable for normal zoos; the cap bounds extreme maps.
   mix(collectStructures(world));
-  // addition: over the shape budget, the ones nearest the screen's middle.
-  // (projectModels took them in the zoo's object order: in a big zoo every
-  // building after the first ~60 thousand faces had no shadow or shading,
-  // however close to the camera.) Under the budget nothing changes.
-  {
-    size_t total=0;for(const auto &o:instances)total+=o.model->faces.size();
-    if(total>size_t(maxModelFaces)) {
-      std::vector<size_t> order(instances.size());for(size_t k=0;k<order.size();++k)order[k]=k;
-      std::stable_sort(order.begin(),order.end(),[&](size_t a,size_t b){return instances[a].distance<instances[b].distance;});
-      std::vector<char> keep(instances.size(),0);int budget=maxModelFaces;
-      for(size_t k:order){const int faces=int(instances[k].model->faces.size());if(faces>budget)continue;budget-=faces;keep[k]=1;}
-      std::vector<Instance> kept;kept.reserve(instances.size());
-      for(size_t k=0;k<instances.size();++k)if(keep[k]){kept.push_back(instances[k]);mix(size_t(instances[k].owner));}
-      instances.swap(kept);
-    }
-  }
+  // ours: every shape is kept - none chosen by its distance from the
+  // screen's middle. (Choosing the nearest ~60 thousand faces made the scene
+  // depend on the camera: in a zoo past that size every pan remade all the
+  // lamps' rays, the faces' projection and the sun's samples, and the game
+  // slowed with each building. maxModelFaces is now big enough for a whole
+  // zoo; drawing skips what's off the screen.)
   // addition: fence pieces with lights of their own (Fences::litPieces: the
   // electrified bars' beacons) - their glow as the piece's pose shows it, and
   // a small light on the ground under it, there while it glows

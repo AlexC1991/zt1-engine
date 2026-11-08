@@ -170,7 +170,8 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
   if(projectionHash==sceneHash && projectionRotation==view.getRotation() && projectionUnit==view.getHeightUnitPixels())return;
   projectionHash=sceneHash;projectionRotation=view.getRotation();projectionUnit=view.getHeightUnitPixels();projectedFaces.clear();projectedSunStamp[0]=projectedSunStamp[1]=0;++projectionSerial;
   float ox,oy,od;view.worldToScreenF(0,0,0,ox,oy,od);
-  int budget=maxModelFaces;projectedFaces.reserve(budget);
+  int budget=maxModelFaces;
+  {size_t total=0;for(const auto &o:instances)total+=o.model->faces.size();projectedFaces.reserve(std::min(total,size_t(budget)));}
   for(size_t i=0;i<instances.size();++i) {
     const auto &o=instances[i];if(int(o.model->faces.size())>budget)continue;budget-=int(o.model->faces.size());
     for(size_t j=0;j<o.model->faces.size();++j) {
