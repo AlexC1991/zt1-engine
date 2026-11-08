@@ -2,6 +2,7 @@
 #define LIGHTING_ASSETS_HPP
 #include <SDL2/SDL.h>
 #include <array>
+#include <memory>
 #include <string>
 #include <vector>
 class Animation;
@@ -66,5 +67,14 @@ struct Model {
 // the fountain's water jet are explicitly non-solid. No game art or derived
 // mesh is distributed; the model is built from the player's local assets.
 Model build(Animation &,const Definition &,float halfX,float halfY,int frame=-1,bool actor=false);
+// ours: build in three steps, so the slow middle one can run on a worker
+// thread: what it's made from read from the art (and the model from the disk
+// cache when it's there: hit), on the main thread; the solid and its faces,
+// on any thread; the cache written, on the main thread again. build is the
+// three in a row.
+struct BuildJob;
+std::shared_ptr<const BuildJob> prepareBuild(Animation &,const Definition &,float halfX,float halfY,int frame,bool actor,Model &cached,bool &hit);
+Model runBuild(const BuildJob &);
+void finishBuild(const BuildJob &,const Model &);
 }
 #endif

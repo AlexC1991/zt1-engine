@@ -103,10 +103,18 @@ private:
   std::vector<Instance> instances,actors;
   struct ActorModel {LightingAssets::Model model;size_t used=0;};
   std::map<std::pair<std::string,int>,ActorModel> actorModels;
+  // ours: a pose's shape being made on a worker thread (LightingAssets::
+  // runBuild) - a new animal's or guest's first sight of a pose cost up to
+  // half a second on a weak laptop - its nearest made pose shown meanwhile
+  struct PendingActorModel {std::shared_ptr<const LightingAssets::BuildJob> job;std::future<LightingAssets::Model> result;};
+  std::map<std::pair<std::string,int>,PendingActorModel> pendingActorModels;
   size_t actorTick=0;
   void addActor(Animation *,int,LightingAssets::Point,float fx,float fy,float halfX,float halfY,uint64_t id);
 
   std::map<std::tuple<Animation*,int,std::string>,LightingAssets::Model> models;
+  // (the same for the scenery's shapes: a big building's took up to a tenth
+  // of a second on a weak laptop; it has none until it's made)
+  std::map<std::tuple<Animation*,int,std::string>,PendingActorModel> pendingModels;
   struct Irradiance {LightingAssets::Point position;SDL_Color colour;float energy=0;};
   struct CachedGround {std::vector<Irradiance> samples;size_t used=0;};
   using SurfaceSamples=std::array<float,3>;

@@ -1,6 +1,7 @@
 #include "DayNightLighting.hpp"
 #include "World.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <cstdlib>
@@ -11,7 +12,22 @@ void DayNightLighting::addActor(Animation *art,int frame,Point position,float fx
   const int count=std::max(1,art->frameCount()),raw=std::max(0,frame)%count;
   const int pose=count<=12?raw:(raw*12/count)*count/12;
   auto found=actorModels.find({key,pose});
-  if(found==actorModels.end() && counters.actorBuilds<2) {
+  // ours: an animal's, a guest's or a keeper's pose made on a worker thread
+  // (the check modes make it at once, so their pictures don't depend on
+  // timing); litter and food at once, as before (small, and their flat
+  // stand-in below reads the art)
+  static const bool atOnce=std::getenv("ZT_LIGHTING_CHECKS") || std::getenv("ZT_SHADOW_CHECKS") || std::getenv("ZT_LIGHTING_BENCH") || std::getenv("ZT_LIGHTING_GALLERY");
+  if(found==actorModels.end() && counters.actorBuilds<2 && !atOnce && !(id&(uint64_t(1)<<53))) {
+    const std::pair<std::string,int> slot{key,pose};
+    if(!pendingActorModels.count(slot) && pendingActorModels.size()<4) {
+      LightingAssets::Definition body{0,"animated body"};LightingAssets::Model cached;bool hit=false;
+      auto job=LightingAssets::prepareBuild(*art,body,halfX,halfY,pose,true,cached,hit);++counters.actorBuilds;
+      if(hit)found=actorModels.emplace(slot,ActorModel{std::move(cached),actorTick}).first;
+      else if(job)pendingActorModels.emplace(slot,PendingActorModel{job,std::async(std::launch::async,[job]{return LightingAssets::runBuild(*job);})});
+      else found=actorModels.emplace(slot,ActorModel{{},actorTick}).first; // (no art for a view: as build's empty model)
+    }
+  }
+  if(found==actorModels.end() && counters.actorBuilds<2 && (atOnce || (id&(uint64_t(1)<<53)))) {
     LightingAssets::Definition body{0,"animated body"};
     auto model=LightingAssets::build(*art,body,halfX,halfY,pose,true);
     // Tiny food/litter sprites may contain only a single ground-facing view,
@@ -47,6 +63,12 @@ void DayNightLighting::addActor(Animation *art,int frame,Point position,float fx
 }
 void DayNightLighting::collectActors(World &world) {
   actors.clear();actorFaces.clear();++actorTick;
+  // (the poses made on a worker since the last frame, kept as made at once)
+  for(auto i=pendingActorModels.begin();i!=pendingActorModels.end();) {
+    if(i->second.result.wait_for(std::chrono::seconds(0))!=std::future_status::ready){++i;continue;}
+    auto model=i->second.result.get();LightingAssets::finishBuild(*i->second.job,model);
+    actorModels.emplace(i->first,ActorModel{std::move(model),actorTick});i=pendingActorModels.erase(i);
+  }
   if(sky.sun<=.001f && sky.lamps<=.001f)return;
   struct Pose {Animation *art;int frame;Point p;float fx,fy,hx,hy,distance;uint64_t id;};std::vector<Pose> poses;
   auto &map=world.getMap();auto &view=world.getRenderer();

@@ -9,6 +9,7 @@
 #include "WorldMap.hpp"
 #include "WorldRenderer.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -145,6 +146,25 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
   auto mix=[&](size_t value){hash^=value;hash*=1099511628211ULL;};
   const auto &all=objects.objects();int coldBuilds=0;const Uint64 coldStart=SDL_GetPerformanceCounter();
   auto mayBuild=[&]{return coldBuilds<2 && (!coldBuilds || 1000.0*(SDL_GetPerformanceCounter()-coldStart)/SDL_GetPerformanceFrequency()<3);};
+  // ours: a shape is made on a worker thread (none until it's made, as one
+  // past the frame's two); the check modes make it at once, as before
+  static const bool atOnce=std::getenv("ZT_LIGHTING_CHECKS") || std::getenv("ZT_SHADOW_CHECKS") || std::getenv("ZT_LIGHTING_BENCH") || std::getenv("ZT_LIGHTING_GALLERY");
+  for(auto i=pendingModels.begin();i!=pendingModels.end();) {
+    if(i->second.result.wait_for(std::chrono::seconds(0))!=std::future_status::ready){++i;continue;}
+    auto model=i->second.result.get();LightingAssets::finishBuild(*i->second.job,model);
+    SDL_Log("[LightingModel] %s: %d solid cells, %zu surface quads",std::get<2>(i->first).c_str(),model.occupied,model.faces.size());
+    models.emplace(i->first,std::move(model));i=pendingModels.erase(i);
+  }
+  auto buildModel=[&](const std::tuple<Animation*,int,std::string> &key,Animation &art,const LightingAssets::Definition &definition,float halfX,float halfY,int frame,bool actor) {
+    if(atOnce)return models.emplace(key,LightingAssets::build(art,definition,halfX,halfY,frame,actor)).first;
+    if(pendingModels.count(key) || pendingModels.size()>=4)return models.end();
+    LightingAssets::Model cached;bool hit=false;
+    const auto job=LightingAssets::prepareBuild(art,definition,halfX,halfY,frame,actor,cached,hit);
+    if(hit)return models.emplace(key,std::move(cached)).first;
+    if(!job)return models.emplace(key,LightingAssets::Model{}).first;
+    pendingModels.emplace(key,PendingActorModel{job,std::async(std::launch::async,[job]{return LightingAssets::runBuild(*job);})});
+    return models.end();
+  };
   for(size_t i=0;i<all.size();++i) {
     const auto &o=all[i];if(o.fence || !o.art || objects.hiddenNow(o))continue;
 
@@ -159,8 +179,8 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
       auto key=std::make_tuple(o.art,t.profile,PlacedObjects::fileOf(o));auto found=models.find(key);
       if(found==models.end() && mayBuild()) {
         ++coldBuilds;LightingAssets::Definition plain{0,"solid scenery"};
-        found=models.emplace(key,LightingAssets::build(*o.art,asset?*asset:plain,t.halfX,t.halfY)).first;
-        SDL_Log("[LightingModel] %s: %d solid cells, %zu surface quads",o.typeName.c_str(),found->second.occupied,found->second.faces.size());
+        found=buildModel(key,*o.art,asset?*asset:plain,t.halfX,t.halfY,-1,false);
+        if(found!=models.end())SDL_Log("[LightingModel] %s: %d solid cells, %zu surface quads",o.typeName.c_str(),found->second.occupied,found->second.faces.size());
       }
       if(found!=models.end() && !found->second.faces.empty()) {
         instances.push_back({&found->second,asset,{o.x,o.y,z},c,s,distance,i});
@@ -174,7 +194,7 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
     }
     for(auto *layer:{o.bg,o.underIdle})if(layer) {
       const auto key=std::make_tuple(layer,0,PlacedObjects::fileOf(o)+":secondary");auto found=models.find(key);
-      if(found==models.end() && mayBuild()){++coldBuilds;LightingAssets::Definition plain{0,"secondary scenery layer"};found=models.emplace(key,LightingAssets::build(*layer,plain,t.halfX,t.halfY,-1,layer==o.underIdle)).first;}
+      if(found==models.end() && mayBuild()){++coldBuilds;LightingAssets::Definition plain{0,"secondary scenery layer"};found=buildModel(key,*layer,plain,t.halfX,t.halfY,-1,layer==o.underIdle);}
       if(found!=models.end() && !found->second.faces.empty()){
         instances.push_back({&found->second,nullptr,{o.x,o.y,z},c,s,distance,i});
         if(t.foliage)instances.back().opacity=kFoliageShadow;

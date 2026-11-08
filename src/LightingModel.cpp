@@ -63,9 +63,14 @@ bool Model::ray(Point from,Point to)const {
 // addition: intersection of the four measured orthographic silhouettes gives
 // a 3D visual hull. This is a solid volume; the sun projects its surfaces,
 // never stretches the 2D picture onto the ground.
-Model build(Animation &art,const Definition &asset,float halfX,float halfY,int pose,bool actor) {
+struct BuildJob {
   struct View {int w,h;float ax,ay;std::vector<unsigned char> mask;};
-  std::array<View,4> views{};
+  std::array<View,4> views{};float halfX=0,halfY=0,top=0;int assetId=0;bool actor=false;uint64_t cacheKey=0;
+};
+std::shared_ptr<const BuildJob> prepareBuild(Animation &art,const Definition &asset,float halfX,float halfY,int pose,bool actor,Model &cached,bool &hit) {
+  hit=false;
+  auto job=std::make_shared<BuildJob>();
+  using View=BuildJob::View;auto &views=job->views;
   const char *names[]={"NE","SE","SW","NW"};
   const CompassDirection sides[]={CompassDirection::NE,CompassDirection::SE,CompassDirection::SW,CompassDirection::NW};
   float top=0;
@@ -107,7 +112,14 @@ Model build(Animation &art,const Definition &asset,float halfX,float halfY,int p
   constexpr uint32_t algorithm=2;hash(&algorithm,sizeof algorithm);hash(&asset.id,sizeof asset.id);
   hash(&halfX,sizeof halfX);hash(&halfY,sizeof halfY);hash(&pose,sizeof pose);hash(&actor,sizeof actor);
   for(const auto &v:views){hash(&v.w,sizeof v.w);hash(&v.h,sizeof v.h);hash(&v.ax,sizeof v.ax);hash(&v.ay,sizeof v.ay);hash(v.mask.data(),v.mask.size());}
-  Model model;if(loadModelCache(cacheKey,model))return model;
+  job->halfX=halfX;job->halfY=halfY;job->top=top;job->assetId=asset.id;job->actor=actor;job->cacheKey=cacheKey;
+  if(loadModelCache(cacheKey,cached))hit=true;
+  return job;
+}
+Model runBuild(const BuildJob &job) {
+  using View=BuildJob::View;const auto &views=job.views;
+  float halfX=job.halfX,halfY=job.halfY;const float top=job.top;const bool actor=job.actor;
+  Model model;
   halfX+=.08f;halfY+=.08f;
   const float floor=actor?-std::min(8.0f,halfX+halfY):0;
   const float height=std::clamp(top/16+halfX+halfY,.5f,24.0f);
@@ -130,7 +142,7 @@ Model build(Animation &art,const Definition &asset,float halfX,float halfY,int p
     const float sx[]={32*(px-py),-32*(px+py),32*(-px+py),32*(px+py)};
     const float sy[]={16*(px+py)-16*pz,16*(px-py)-16*pz,-16*(px+py)-16*pz,16*(-px+py)-16*pz};
     bool occupied=true;for(int k=0;k<4;++k)if(!solidPixel(views[k],sx[k],sy[k])){occupied=false;break;}
-    if(occupied && asset.id==104) {
+    if(occupied && job.assetId==104) {
       // addition: the carousel is an open frame, not a solid cone. The four
       // silhouettes cannot recover the air behind painted horses, so author
       // the canopy thickness, centre mast and support ring explicitly.
@@ -148,7 +160,7 @@ Model build(Animation &art,const Definition &asset,float halfX,float halfY,int p
     }
     if(occupied){model.solid[(z*model.ny+y)*model.nx+x]=1;++model.occupied;}
   }
-  if(asset.id==101) {
+  if(job.assetId==101) {
     // addition: authored eight-sided lamp post, glass housing and cap. A
     // small mesh keeps rows of lamps cheap while retaining their real height.
     const float profile[][2]={{0,.16f},{.10f,.16f},{.28f,.10f},{.44f,.065f},
@@ -163,7 +175,7 @@ Model build(Animation &art,const Definition &asset,float halfX,float halfY,int p
       face.normal={std::cos((a+b)*.5f)/length,std::sin((a+b)*.5f)/length,slope/length};
       face.outward=face.normal;model.faces.push_back(face);
     }
-    saveModelCache(cacheKey,model);return model;
+    return model;
   }
   Model mesh;mesh.minimum=model.minimum;
   const int lod=actor?1:2;
@@ -228,6 +240,14 @@ Model build(Animation &art,const Definition &asset,float halfX,float halfY,int p
       }
     }
   }
-  saveModelCache(cacheKey,model);return model;
+  return model;
+}
+void finishBuild(const BuildJob &job,const Model &model){saveModelCache(job.cacheKey,model);}
+Model build(Animation &art,const Definition &asset,float halfX,float halfY,int pose,bool actor) {
+  Model model;bool hit=false;
+  const auto job=prepareBuild(art,asset,halfX,halfY,pose,actor,model,hit);
+  if(!job)return {};
+  if(hit)return model;
+  model=runBuild(*job);finishBuild(*job,model);return model;
 }
 }
