@@ -1,4 +1,5 @@
 #include "DayNightLighting.hpp"
+#include "GraphicsQuality.hpp"
 #include "World.hpp"
 #include <algorithm>
 #include <chrono>
@@ -158,6 +159,10 @@ void DayNightLighting::collectActors(World &world) {
     add(a,frame,p,g.fx,g.fy,.35f,.35f,((uint64_t(1)<<54)|(uint64_t(uint32_t(g.id))<<3)|2));
   }
   std::stable_sort(poses.begin(),poses.end(),[](const auto &a,const auto &b){return a.distance<b.distance;});
+  // (the graphics quality's animals and guests: off, none of their light or
+  // shadows; simple, their shadows only - not lit in 3D, below)
+  const int creatureLight=GraphicsQuality::creatureLight();
+  if(creatureLight==0)poses.clear();
   for(const auto &p:poses)addActor(p.art,p.frame,p.p,p.fx,p.fy,p.hx,p.hy,p.id);
   collectGates(world);
   // Only evict entries which no actor in this frame borrows.
@@ -168,7 +173,9 @@ void DayNightLighting::collectActors(World &world) {
   }
   float ox,oy,od;view.worldToScreenF(0,0,0,ox,oy,od);int budget=maxActorFaces;
   for(size_t i=0;i<actors.size();++i) {
-    const auto &o=actors[i];if(int(o.model->faces.size())>budget)continue;budget-=int(o.model->faces.size());
+    const auto &o=actors[i];if(int(o.model->faces.size())>budget)continue;
+    if(creatureLight<2 && !(((o.owner>>56)&1) && ((o.owner>>48)&1)))continue; // (a creature, simple: its sprite's shadow only; a gate always)
+    budget-=int(o.model->faces.size());
     const auto local=irradiance({o.position.x,o.position.y,o.position.z+1},{0,0,1},uint64_t(-1));
     for(const auto &f:o.model->faces) {
       ProjectedFace d{};d.instance=instances.size()+i;d.local=local;

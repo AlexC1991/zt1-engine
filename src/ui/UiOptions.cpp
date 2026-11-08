@@ -15,6 +15,7 @@
 #include "../Features.hpp"
 #include "../GpuFsr.hpp"
 #include "../GraphicsEffects.hpp"
+#include "../GraphicsQuality.hpp"
 #include "../HdArt.hpp"
 #include "../ShaderMods.hpp"
 #include "../IniReader.hpp"
@@ -235,6 +236,7 @@ enum : int {
   kModeLabel = 1, kModeWin, kModeBorder = 4, kModeFull = 6, kModeSet = 8,
   kResLabel, kResBar, kFpsLimLabel, kFpsLimBar, kVsync, kVsyncText = 14,
   kBrightLabel, kBrightBar, kFps, kFpsText = 18,
+  kApiLabel = 19, kApiAuto = 20, kApiD3d = 22, kApiGl = 24, kApiSet = 26, kApiNote = 27,
 }; // Display
 enum : int {
   kScaleLabel = 1, kScaleBar, kScaleAuto, kScaleNote,
@@ -244,6 +246,14 @@ enum : int {
   kFxaa = 40, kBloomLabel = 44, kBloomOff = 45, kBloomSoft = 47, kBloomStrong = 49, kBloomSet = 51,
   kTiltLabel = 52, kTiltOff = 53, kTiltLight = 55, kTiltStrong = 57, kTiltSet = 59,
   kContrastLabel = 60, kContrastBar, kVibranceLabel, kVibranceBar, kVignette = 64, kGrain = 66,
+  // (the quality: GraphicsQuality.hpp)
+  kPresetLabel = 70, kPresetLow = 71, kPresetMed = 73, kPresetHigh = 75, kPresetUltra = 77, kPresetSet = 79,
+  kDetect = 80, kDetectNote = 81,
+  kShadowLabel = 84, kShadowLow = 85, kShadowMed = 87, kShadowHigh = 89, kShadowUltra = 91, kShadowSet = 93,
+  kRangeLabel = 94, kRangeNear = 95, kRangeMed = 97, kRangeFar = 99, kRangeFarthest = 101, kRangeSet = 103,
+  kCreatureLabel = 104, kCreatureOff = 105, kCreatureSimple = 107, kCreatureFull = 109, kCreatureSet = 111,
+  kLampLabel = 112, kLampLow = 113, kLampMed = 115, kLampHigh = 117, kLampSet = 119,
+  kDeviceLabel = 120, kDeviceGpu = 121, kDeviceCpu = 123, kDeviceSet = 125, kLightNote = 126,
 }; // Graphics
 enum : int { kVolumeLabel = 1, kVolumeBar, kMusicLabel, kMusicBar }; // Sound
 enum : int {
@@ -518,6 +528,15 @@ std::string optionsLayout() {
   y += kRow;
   toggle(pageId(kDisplay, kVsync), y);
   y += kRow;
+  // (the graphics API the game draws with: DisplaySettings' startupRenderer)
+  label(pageId(kDisplay, kApiLabel), y);
+  choice(pageId(kDisplay, kApiAuto), kControlX, y, 30);
+  choice(pageId(kDisplay, kApiD3d), kControlX + 62, y, 70);
+  choice(pageId(kDisplay, kApiGl), kControlX + 164, y, 56);
+  t += radioSet(pageId(kDisplay, kApiSet), {pageId(kDisplay, kApiAuto), pageId(kDisplay, kApiD3d), pageId(kDisplay, kApiGl)});
+  y += kRow;
+  t += bodyText(pageId(kDisplay, kApiNote), kLabelX, y, kW - 222);
+  y += 22;
   t += heading(pageId(kDisplay, kHeadFirst + 2), y, "Picture");
   y += kHeadH;
   label(pageId(kDisplay, kBrightLabel), y);
@@ -527,6 +546,24 @@ std::string optionsLayout() {
 
   // Graphics
   y = kRowsY;
+  // (four across: Low, Medium, High, Ultra - or Near ... Farthest)
+  auto fourWay = [&](int labelK, int k0, int k1, int k2, int k3, int setK, int w1, int w3) {
+    label(pageId(kGraphics, labelK), y);
+    choice(pageId(kGraphics, k0), kControlX, y, 30);
+    choice(pageId(kGraphics, k1), kControlX + 58, y, 48);
+    choice(pageId(kGraphics, k2), kControlX + 132, y, w1);
+    choice(pageId(kGraphics, k3), kControlX + 132 + 26 + w1 + 4, y, w3);
+    t += radioSet(pageId(kGraphics, setK),
+                  {pageId(kGraphics, k0), pageId(kGraphics, k1), pageId(kGraphics, k2), pageId(kGraphics, k3)});
+    y += kRow;
+  };
+  // Quality (GraphicsQuality.hpp): the preset, and the one for this PC
+  t += heading(pageId(kGraphics, kHeadFirst + 4), y, "Quality");
+  y += kHeadH;
+  fourWay(kPresetLabel, kPresetLow, kPresetMed, kPresetHigh, kPresetUltra, kPresetSet, 30, 34);
+  t += goldButton(pageId(kGraphics, kDetect), kControlX, y);
+  t += bodyText(pageId(kGraphics, kDetectNote), kLabelX, y + 2, 150, "40");
+  y += 44;
   t += heading(pageId(kGraphics, kHeadFirst), y, "Interface");
   y += kHeadH;
   label(pageId(kGraphics, kScaleLabel), y);
@@ -554,6 +591,34 @@ std::string optionsLayout() {
   label(pageId(kGraphics, kSharpLabel), y);
   t += slider(pageId(kGraphics, kSharpBar), kControlX, y, kControlW - 30);
   y += kRow + 6;
+  // Day and night lighting (GraphicsQuality.hpp)
+  t += heading(pageId(kGraphics, kHeadFirst + 5), y, "Day and night lighting");
+  y += kHeadH;
+  t += bodyText(pageId(kGraphics, kLightNote), kLabelX, y, kW - 222);
+  y += 22;
+  fourWay(kShadowLabel, kShadowLow, kShadowMed, kShadowHigh, kShadowUltra, kShadowSet, 30, 34);
+  fourWay(kRangeLabel, kRangeNear, kRangeMed, kRangeFar, kRangeFarthest, kRangeSet, 24, 50);
+  {
+    label(pageId(kGraphics, kCreatureLabel), y);
+    choice(pageId(kGraphics, kCreatureOff), kControlX, y, 30);
+    choice(pageId(kGraphics, kCreatureSimple), kControlX + 76, y, 50);
+    choice(pageId(kGraphics, kCreatureFull), kControlX + 162, y, 56);
+    t += radioSet(pageId(kGraphics, kCreatureSet), {pageId(kGraphics, kCreatureOff), pageId(kGraphics, kCreatureSimple),
+                                                    pageId(kGraphics, kCreatureFull)});
+    y += kRow;
+    label(pageId(kGraphics, kLampLabel), y);
+    choice(pageId(kGraphics, kLampLow), kControlX, y, 30);
+    choice(pageId(kGraphics, kLampMed), kControlX + 76, y, 50);
+    choice(pageId(kGraphics, kLampHigh), kControlX + 162, y, 56);
+    t += radioSet(pageId(kGraphics, kLampSet),
+                  {pageId(kGraphics, kLampLow), pageId(kGraphics, kLampMed), pageId(kGraphics, kLampHigh)});
+    y += kRow;
+    label(pageId(kGraphics, kDeviceLabel), y);
+    choice(pageId(kGraphics, kDeviceGpu), kControlX, y, 84);
+    choice(pageId(kGraphics, kDeviceCpu), kControlX + 132, y, 70);
+    t += radioSet(pageId(kGraphics, kDeviceSet), {pageId(kGraphics, kDeviceGpu), pageId(kGraphics, kDeviceCpu)});
+    y += kRow + 6;
+  }
   // Effects (GraphicsEffects.hpp): each a row, off unless picked
   t += heading(pageId(kGraphics, kHeadFirst + 3), y, "Effects");
   y += kHeadH;
@@ -877,18 +942,22 @@ int UiOptions::updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const s
                    IMG_SavePNG(image, file.c_str()) == 0;
       if (image) SDL_FreeSurface(image);
       check(saved, "capture " + file);
-      // (a long page scrolled, too: Graphics' effects, under the fold)
+      // (a long page scrolled, too: Graphics' lighting and effects, under the
+      // fold - a picture every 150 down)
       if (page == kGraphics) {
-        options.scrollBy(150);
-        SDL_RenderClear(renderer);
-        options.draw(renderer, &screen);
-        SDL_Surface *more = SDL_CreateRGBSurfaceWithFormat(0, 800, 600, 32, SDL_PIXELFORMAT_ARGB8888);
-        const std::string scrolled = out + "/options-" + (inGame ? "zoo-" : "menu-") + shotName + "-scrolled.png";
-        check(more && SDL_RenderReadPixels(renderer, &screen, SDL_PIXELFORMAT_ARGB8888, more->pixels, more->pitch) == 0 &&
-                  IMG_SavePNG(more, scrolled.c_str()) == 0,
-              "capture " + scrolled);
-        if (more) SDL_FreeSurface(more);
-        options.scrollBy(-150);
+        for (int part = 1; part <= 4; part++) {
+          options.scrollBy(150);
+          SDL_RenderClear(renderer);
+          options.draw(renderer, &screen);
+          SDL_Surface *more = SDL_CreateRGBSurfaceWithFormat(0, 800, 600, 32, SDL_PIXELFORMAT_ARGB8888);
+          const std::string scrolled = out + "/options-" + (inGame ? "zoo-" : "menu-") + shotName + "-scrolled" +
+                                       (part > 1 ? std::to_string(part) : std::string()) + ".png";
+          check(more && SDL_RenderReadPixels(renderer, &screen, SDL_PIXELFORMAT_ARGB8888, more->pixels, more->pitch) == 0 &&
+                    IMG_SavePNG(more, scrolled.c_str()) == 0,
+                "capture " + scrolled);
+          if (more) SDL_FreeSurface(more);
+        }
+        options.scrollBy(-600);
       }
       SDL_RenderPresent(renderer);
     }
@@ -1256,6 +1325,48 @@ void UiOptions::tick(SDL_Renderer *renderer) {
       Display::setResolution({p.x, p.y});
       this->showResolutions();
     }
+  // The quality's ticks as the settings are (a preset ticks its rows; a row
+  // changed: the preset Custom, none ticked)
+  {
+    const GraphicsQuality::Settings &q = GraphicsQuality::settings();
+    auto keep = [L](std::initializer_list<int> ks, int now) {
+      int i = 0;
+      for (int k : ks) {
+        if (UiButton *b = dynamic_cast<UiButton *>(L->getElementById(pageId(kGraphics, k)))) {
+          if (i == now && !b->isToggledOn())
+            b->choose();
+          else if (i != now && b->isToggledOn())
+            b->setToggledOn(false);
+        }
+        i++;
+      }
+    };
+    keep({kPresetLow, kPresetMed, kPresetHigh, kPresetUltra}, q.preset);
+    keep({kShadowLow, kShadowMed, kShadowHigh, kShadowUltra}, q.shadows);
+    keep({kRangeNear, kRangeMed, kRangeFar, kRangeFarthest}, q.range);
+    keep({kCreatureOff, kCreatureSimple, kCreatureFull}, q.creatures);
+    keep({kLampLow, kLampMed, kLampHigh}, q.lamps);
+    keep({kDeviceGpu, kDeviceCpu}, q.device);
+    if (UiText *t = dynamic_cast<UiText *>(L->getElementById(pageId(kGraphics, kPresetLabel + 0)))) {
+      const std::string want = q.preset == GraphicsQuality::Custom ? "Preset: Custom" : "Preset";
+      if (t->getText() != want)
+        t->setText(want);
+    }
+    if (UiText *t = dynamic_cast<UiText *>(L->getElementById(pageId(kGraphics, kLightNote)))) {
+      const std::string want = !Features::dayNightLighting ? "Day and night is off (Gameplay): nothing here applies."
+                               : q.device == 0 && std::string(Display::rendererAtStart()) == "opengl"
+                                   ? "On OpenGL the processor works the lighting out."
+                                   : "Day and night is on.";
+      if (t->getText() != want)
+        t->setText(want);
+    }
+    if (UiText *t = dynamic_cast<UiText *>(L->getElementById(pageId(kDisplay, kApiNote)))) {
+      const char *running = std::string(Display::rendererAtStart()) == "direct3d11" ? "Direct3D 11" : "OpenGL";
+      const std::string want = std::string("Running now: ") + running + ".";
+      if (t->getText() != want)
+        t->setText(want);
+    }
+  }
   // Rows that only apply sometimes
   this->hideRow({pageId(kGraphics, kSharpLabel), pageId(kGraphics, kSharpBar)},
                 !(((Display::art() == Display::Art::Fsr || Display::art() == Display::Art::Stylized) &&
@@ -1494,6 +1605,16 @@ void UiOptions::wire() {
         [](bool on) { Display::setVsync(on); });
   describe({pageId(kDisplay, kVsync), pageId(kDisplay, kVsync + 1)},
            "On, each frame waits for the monitor's refresh: no tearing lines. Off, frames show as soon as they're drawn.");
+  // The graphics API (DisplaySettings' startupRenderer): from the next start
+  {
+    text(pageId(kDisplay, kApiLabel), "Graphics API");
+    choices(kDisplay, {kApiAuto, kApiD3d, kApiGl}, {"Auto", "Direct3D 11", "OpenGL"}, Display::rendererChoice(),
+            [](int i) { Display::setRendererChoice(i); });
+    describe({pageId(kDisplay, kApiLabel), pageId(kDisplay, kApiAuto), pageId(kDisplay, kApiAuto + 1),
+              pageId(kDisplay, kApiD3d), pageId(kDisplay, kApiD3d + 1), pageId(kDisplay, kApiGl), pageId(kDisplay, kApiGl + 1)},
+             "What the game draws with. Auto: Direct3D 11 (the faster), or OpenGL while a shader mod is on (they need "
+             "it). Used from the next time the game starts.");
+  }
   // Brightness: a gamma, 0.5 to 2 (the slider's middle as drawn)
   {
     auto name = [](float b) { return "Brightness: " + std::to_string(static_cast<int>(std::lround(b * 100))) + "%"; };
@@ -1618,6 +1739,84 @@ void UiOptions::wire() {
           [change](bool on) { change([on](GraphicsEffects::Settings &s) { s.grain = on; }); });
     describe({pageId(kGraphics, kGrain), pageId(kGraphics, kGrain + 1)},
              need("A fine, moving grain over the map, like film."));
+  }
+  // Quality and the day and night lighting (GraphicsQuality.hpp): each
+  // changed at once and kept; the ticks follow the settings (tick: a preset
+  // ticks the rows under it, a row changed makes the preset Custom)
+  {
+    namespace Q = GraphicsQuality;
+    auto change = [](std::function<void(Q::Settings &)> f) {
+      Q::Settings s = Q::settings();
+      f(s);
+      Q::set(s);
+    };
+    auto every = [&](int page, std::initializer_list<int> ks) {
+      std::vector<int> ids;
+      for (int k : ks) {
+        ids.push_back(pageId(page, k));
+        ids.push_back(pageId(page, k + 1));
+      }
+      return ids;
+    };
+    auto say = [this](const std::vector<int> &ids, const std::string &words) {
+      for (int id : ids)
+        this->about[id] = words;
+    };
+    const Q::Settings &now = Q::settings();
+    text(pageId(kGraphics, kPresetLabel), "Preset");
+    choices(kGraphics, {kPresetLow, kPresetMed, kPresetHigh, kPresetUltra}, {"Low", "Medium", "High", "Ultra"}, now.preset,
+            [](int i) { Q::set(Q::preset(i, Q::settings())); });
+    std::vector<int> presetIds = every(kGraphics, {kPresetLow, kPresetMed, kPresetHigh, kPresetUltra});
+    presetIds.push_back(pageId(kGraphics, kPresetLabel));
+    say(presetIds, "Sets the day and night lighting's settings below together. Low and Medium for laptops and integrated "
+                   "graphics, High for a graphics card (the lighting as it always was), Ultra for a fast one. Change one "
+                   "below and the preset is Custom.");
+    std::string why;
+    const int recommended = Q::recommend(&why);
+    static const char *kNames[] = {"Low", "Medium", "High", "Ultra"};
+    if (UiButton *b = button(pageId(kGraphics, kDetect))) {
+      b->setLabel("Auto-detect");
+      b->onClick = [recommended] { Q::set(Q::preset(recommended, Q::settings())); };
+    }
+    text(pageId(kGraphics, kDetectNote), std::string("Recommended here: ") + kNames[recommended]);
+    say({pageId(kGraphics, kDetect), pageId(kGraphics, kDetectNote)},
+        std::string("Picks the preset for this PC's graphics: ") + why + " - " + kNames[recommended] + ".");
+
+    text(pageId(kGraphics, kShadowLabel), "Shadow quality");
+    choices(kGraphics, {kShadowLow, kShadowMed, kShadowHigh, kShadowUltra}, {"Low", "Medium", "High", "Ultra"}, now.shadows,
+            [change](int i) { change([i](Q::Settings &q) { q.shadows = i; }); });
+    std::vector<int> ids = every(kGraphics, {kShadowLow, kShadowMed, kShadowHigh, kShadowUltra});
+    ids.push_back(pageId(kGraphics, kShadowLabel));
+    say(ids, "How sharp the sun's shadows are, and their soft edges. Low: coarse with hard edges. Ultra: the sharpest. "
+             "Cost: medium (the processor, and the graphics card's memory).");
+    text(pageId(kGraphics, kRangeLabel), "Shadow range");
+    choices(kGraphics, {kRangeNear, kRangeMed, kRangeFar, kRangeFarthest}, {"Near", "Medium", "Far", "Farthest"}, now.range,
+            [change](int i) { change([i](Q::Settings &q) { q.range = i; }); });
+    ids = every(kGraphics, {kRangeNear, kRangeMed, kRangeFar, kRangeFarthest});
+    ids.push_back(pageId(kGraphics, kRangeLabel));
+    say(ids, "How many buildings, trees and rocks around the view cast shadows and are lit in 3D - in a big zoo, the "
+             "furthest go without. Cost: high in big zoos (the processor as you move around; Farthest the graphics card too).");
+    text(pageId(kGraphics, kCreatureLabel), "Animals and guests");
+    choices(kGraphics, {kCreatureOff, kCreatureSimple, kCreatureFull}, {"Off", "Simple", "Full"}, now.creatures,
+            [change](int i) { change([i](Q::Settings &q) { q.creatures = i; }); });
+    ids = every(kGraphics, {kCreatureOff, kCreatureSimple, kCreatureFull});
+    ids.push_back(pageId(kGraphics, kCreatureLabel));
+    say(ids, "Animals', guests' and keepers' light. Full: their shadows, and lit in 3D by the sun and lamps. Simple: their "
+             "shadows only. Off: neither. Cost: high in a busy zoo (the processor).");
+    text(pageId(kGraphics, kLampLabel), "Lamp light");
+    choices(kGraphics, {kLampLow, kLampMed, kLampHigh}, {"Low", "Medium", "High"}, now.lamps,
+            [change](int i) { change([i](Q::Settings &q) { q.lamps = i; }); });
+    ids = every(kGraphics, {kLampLow, kLampMed, kLampHigh});
+    ids.push_back(pageId(kGraphics, kLampLabel));
+    say(ids, "How finely the lamps' pools of light are worked out at night, and how many lamps count (32, 64 or 96). "
+             "Cost: low (the processor, as lamps are placed).");
+    text(pageId(kGraphics, kDeviceLabel), "Lighting on");
+    choices(kGraphics, {kDeviceGpu, kDeviceCpu}, {"Graphics card", "Processor"}, now.device,
+            [change](int i) { change([i](Q::Settings &q) { q.device = i; }); });
+    ids = every(kGraphics, {kDeviceGpu, kDeviceCpu});
+    ids.push_back(pageId(kGraphics, kDeviceLabel));
+    say(ids, "Where the light on buildings and the ground's shadows are worked out. The graphics card is faster on most "
+             "PCs (with Direct3D 11); on some laptops, whose graphics share the processor's power, the processor can be.");
   }
   describe({pageId(kGraphics, kSharpBar), pageId(kGraphics, kSharpLabel)},
            "How crisp the enlarged art is kept: further right is sharper. FSR's own, and an HD art mod's pictures "
@@ -2059,6 +2258,10 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
       }
     int bottom = 0;
     for (UiElement *e : rows) {
+      // (a text scrolled above the view isn't drawn: drawing its lines
+      // lets go of the clip, and a long one was drawn over the title)
+      if (dynamic_cast<UiText *>(e) && shifted.y + std::atoi(this->ini->get(e->getName(), "y").c_str()) < clip.y - 2)
+        continue;
       SDL_RenderSetClipRect(renderer, &clip); // (again for each: drawing can reset it)
       e->draw(renderer, &shifted);
       SDL_Rect er = e->getLastRect();

@@ -264,7 +264,17 @@ void setEdgeScroll(bool on) {
 // ------------------------------------------------------------------ renderer
 namespace {
 bool g_autoDirect3d = false;
+const char *g_atStart = "opengl";
+const char *picked(const char *r) { return g_atStart = r; }
 }
+int rendererChoice() {
+  const std::string pick = Settings::get("user", "renderer", "auto");
+  return pick == "direct3d11" ? 1 : pick == "opengl" ? 2 : 0;
+}
+void setRendererChoice(int choice) {
+  Settings::set("user", "renderer", choice == 1 ? "direct3d11" : choice == 2 ? "opengl" : "auto");
+}
+const char *rendererAtStart() { return g_atStart; }
 const char *startupRenderer() {
 #ifdef _WIN32
   // (ours: ZT_RENDERER=opengl|direct3d11 for one run - the benchmarks'
@@ -272,7 +282,7 @@ const char *startupRenderer() {
   const char *forced = SDL_getenv("ZT_RENDERER");
   const std::string pick = forced && *forced ? forced : Settings::get("user", "renderer", "auto");
   if (pick == "opengl" || pick == "direct3d11")
-    return pick == "opengl" ? "opengl" : "direct3d11";
+    return picked(pick == "opengl" ? "opengl" : "direct3d11");
   // (what needs OpenGL, as saved: mods' shaders, written in GLSL. FSR,
   // Stylized, brightness, the colour filter and the graphics effects run on
   // Direct3D 11 too - GpuFsrD3D11.cpp - so they no longer switch the game
@@ -281,11 +291,11 @@ const char *startupRenderer() {
   for (const Shaders::Shader &s : Shaders::all())
     needs = needs || s.on;
   if (needs)
-    return "opengl";
+    return picked("opengl");
   g_autoDirect3d = true;
-  return "direct3d11";
+  return picked("direct3d11");
 #else
-  return "opengl";
+  return picked("opengl");
 #endif
 }
 bool openGlNextStart() { return g_autoDirect3d && !GpuFsr::modShaders(); }

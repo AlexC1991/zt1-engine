@@ -1,3 +1,4 @@
+#include "GraphicsQuality.hpp"
 #include "World.hpp"
 #include "Features.hpp"
 #include "ItemCatalog.hpp"
@@ -274,6 +275,30 @@ int runLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,co
   const double beforeTime=world.getClock();world.update(SDL_GetKeyboardState(nullptr),.5f);
   check("running zoo advances the lighting clock",std::abs(world.getClock()-beforeTime-.5)<.0001 && L::hourAt(world.getClock())>L::hourAt(beforeTime));
   capture("lighting_live_clock");world.setPaused(true);capture("lighting_paused_clock");
+  // ours: the graphics quality's presets (GraphicsQuality.hpp) change what the
+  // lighting makes, and High again is as it was
+  {
+    namespace Q=GraphicsQuality;
+    world.setPaused(true);lighting.previewHour=12;for(int i=0;i<20;++i)world.draw(renderer);
+    const int highSize=lighting.sunMaps[0].size,highFaces=lighting.stats().modelFaces;const size_t highActorFaces=lighting.actorFaces.size();
+    report<<"Quality High: sun map "<<highSize<<", "<<highFaces<<" shape faces, "<<highActorFaces<<" actor faces.\n";
+    Q::forThisRun(Q::Low);for(int i=0;i<30;++i)world.draw(renderer);capture("lighting_quality_low");
+    report<<"Quality Low: sun map "<<lighting.sunMaps[0].size<<", "<<lighting.stats().modelFaces<<" shape faces, "<<lighting.actorFaces.size()<<" actor faces.\n";
+    check("Low makes smaller, hard-edged sun maps",lighting.sunMaps[0].size>0 && lighting.sunMaps[0].size<highSize && lighting.sunMaps[0].soften==0);
+    check("Low lights no more shapes than its budget",lighting.stats().modelFaces<=Q::shapeFaceBudget());
+    bool creaturesFlat=true;
+    for(const auto &f:lighting.actorFaces)if(f.instance>=lighting.instances.size()){const auto &o=lighting.actors[f.instance-lighting.instances.size()];
+      if(!(((o.owner>>56)&1) && ((o.owner>>48)&1)))creaturesFlat=false;}
+    check("Low's animals and guests are not lit in 3D",creaturesFlat);
+    Q::forThisRun(Q::Ultra);for(int i=0;i<30;++i)world.draw(renderer);capture("lighting_quality_ultra");
+    report<<"Quality Ultra: sun map "<<lighting.sunMaps[0].size<<".\n";
+    check("Ultra makes larger sun maps",lighting.sunMaps[0].size>highSize);
+    Q::forThisRun(Q::High);for(int i=0;i<30;++i)world.draw(renderer);
+    report<<"Quality High again: sun map "<<lighting.sunMaps[0].size<<", "<<lighting.stats().modelFaces<<" shape faces, "<<lighting.actorFaces.size()<<" actor faces.\n";
+    // (the shapes within 1%: a scenery item's animation can change one between the two)
+    check("High again is as it was",lighting.sunMaps[0].size==highSize && lighting.stats().modelFaces<=Q::shapeFaceBudget() &&
+          std::abs(lighting.stats().modelFaces-highFaces)<=highFaces/100 && lighting.actorFaces.size()==highActorFaces);
+  }
   Features::dayNightLighting=enabledWas;lighting.previewHour=-1;
   report<<"Failures: "<<failures<<"\n";
   std::ofstream(out+"/lighting-checks.txt")<<report.str();SDL_Log("[LightingChecks] %s",report.str().c_str());

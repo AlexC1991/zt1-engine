@@ -100,6 +100,12 @@ const char *startupRenderer();
 // Picked automatically and not OpenGL: a setting that needs OpenGL, turned
 // on now, works from the next time the game starts
 bool openGlNextStart();
+// ours: the graphics API picked on Game Options > Display (zoo.ini [user]
+// renderer): 0 auto, 1 Direct3D 11, 2 OpenGL - used from the next start -
+// and the one the game started with ("direct3d11" or "opengl")
+int rendererChoice();
+void setRendererChoice(int choice);
+const char *rendererAtStart();
 
 } // namespace Display
 

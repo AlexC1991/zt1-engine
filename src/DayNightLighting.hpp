@@ -34,7 +34,7 @@ public:
   // another frame made later at the same address isn't taken for it
   void forgetSurface(SDL_Surface *s) { nativeMasks.erase(s); }
   static constexpr int maxLights = 96, maxEmissives = 160;
-  static constexpr int maxMapWidth = 640, maxModelFaces=60000, maxActorFaces=16000, maxActors=160, maxActorModels=256;
+  static constexpr int maxMapWidth = 640, maxModelFaces=80000, maxActorFaces=16000, maxActors=160, maxActorModels=256;
   struct Sky { SDL_Color ambient; float lamps, sun, shadowLength; float dx, dy; float shadow=1; };
   struct Stats { int lights = 0, shadows = 0, rays = 0, width = 0, height = 0, emissives = 0, modelFaces=0,models=0, actors=0, actorFaces=0, actorBuilds=0, actorFallbacks=0, sunBuilds=0;size_t memoryBytes=0; };
   ~DayNightLighting();
@@ -76,6 +76,7 @@ private:
   friend int runLightingProjectionChecks(World &,ResourceManager *,SDL_Renderer *,const std::string &,const std::function<void()> &);
   friend int runLightingBeaconChecks(World &,ResourceManager *,SDL_Renderer *,const std::string &,const std::function<void()> &);
   friend int runLightingDetailChecks(World &,ResourceManager *,SDL_Renderer *,const std::string &,const std::function<void()> &);
+  friend int runLightingChecks(World &,ResourceManager *,SDL_Renderer *,const std::string &,const std::function<void(const char*)> &,const SDL_Rect &);
   struct Type { float halfX = .25f, halfY = .25f; bool casts = false; int profile=0; bool foliage=false; };
   struct Light { float x, y, z, radius, lift; uint64_t owner; float distance;
     float sx=0,sy=0,energy=1,depth=0;SDL_FRect patch{};SDL_Texture *texture=nullptr;SDL_Color colour{255,218,154,255};SDL_RendererFlip flip=SDL_FLIP_NONE;int kind=0;LightingAssets::Point normal{},axis{};bool reflective=false;float cone=0,sweep=0;

@@ -39,6 +39,7 @@
 #include "Features.hpp"
 #include "GameSpeedClock.hpp"
 #include "GameBenchmark.hpp"
+#include "GraphicsQuality.hpp"
 #include "SampleProfiler.hpp"
 #include "ModMenu.hpp"
 #include "DisplaySettings.hpp"
@@ -9494,6 +9495,7 @@ int main(int argc, char *argv[]) {
   for (int i = 1; i + 1 < argc; i++) {
     if (std::string(argv[i]) == "--panel-shots") {
       Animation::setGradualZoomedIn(false); // (the checks' pictures: every frame complete)
+      GraphicsQuality::forThisRun(GraphicsQuality::High); // (the same pictures on every PC)
       return runPanelShots(window.renderer, &resource_manager,
                            g_scenarioManager, g_world, argv[i + 1],
                            i + 2 < argc ? argv[i + 2] : "deathmtn");
@@ -9517,6 +9519,7 @@ int main(int argc, char *argv[]) {
   // ours: opt-in long benchmarks use this same Play loop and presentation.
   GameBenchmark gameBenchmark;
   if (std::getenv("ZT_GAME_BENCH_OUT")) {
+    GraphicsQuality::forThisRun(GraphicsQuality::High); // (or ZT_GRAPHICS_PRESET's)
     ItemCatalog::get().load(&resource_manager);Research::get().load(&resource_manager);
     if (!gameBenchmark.start(*g_world,&resource_manager,window.renderer)) return 1;
     createHud(&resource_manager,g_world,1000000);

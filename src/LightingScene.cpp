@@ -3,6 +3,7 @@
 #include "GpuSurfacesD3D11.hpp"
 #include "GpuSunD3D11.hpp"
 #include "ParallelFor.hpp"
+#include "GraphicsQuality.hpp"
 #include "WorldRenderer.hpp"
 #include "WorldMap.hpp"
 #include <algorithm>
@@ -112,7 +113,8 @@ void DayNightLighting::buildIrradiance(const WorldMap &map) {
     sourceStamps.push_back(stamp);
   }
   for(size_t li=0;li<lights.size();++li) {
-    const auto &l=lights[li];const int cells=l.sweep!=0 && l.cone>0?48:l.cone>0?32:20;
+    // (as finely as the graphics quality's lamps have it: High, as always)
+    const auto &l=lights[li];const int cells=std::max(8,int(std::lround((l.sweep!=0 && l.cone>0?48:l.cone>0?32:20)*GraphicsQuality::lampDetail())));
     std::vector<Irradiance> grid;grid.reserve((cells+1)*(cells+1));
     uint64_t stamp=sourceStamps[li];
     auto mix=[&](uint64_t n){stamp^=n;stamp*=1099511628211ull;};
@@ -131,7 +133,7 @@ void DayNightLighting::buildIrradiance(const WorldMap &map) {
     }
     groundIrradianceCache[stamp]={grid,irradianceTick};groundLight.push_back(std::move(grid));
   }
-  surfaceLight.resize(instances.size());int budget=maxModelFaces;
+  surfaceLight.resize(instances.size());int budget=std::min(maxModelFaces,GraphicsQuality::shapeFaceBudget());
   // (the shapes whose samples aren't kept: their rays cast side by side on
   // the processor's cores, then kept in the shapes' order - ours, the same
   // samples as one loop)
@@ -192,7 +194,7 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
   if(projectionHash==geometryHash && projectionRotation==view.getRotation() && projectionUnit==view.getHeightUnitPixels())return;
   projectionHash=geometryHash;projectionRotation=view.getRotation();projectionUnit=view.getHeightUnitPixels();projectedFaces.clear();projectedSunStamp[0]=projectedSunStamp[1]=0;++projectionSerial;
   float ox,oy,od;view.worldToScreenF(0,0,0,ox,oy,od);
-  int budget=maxModelFaces;
+  int budget=std::min(maxModelFaces,GraphicsQuality::shapeFaceBudget());
   // (each shape's place in the list first, then the shapes projected side by
   // side on the processor's cores - ours, the same faces in the same order)
   std::vector<size_t> start(instances.size()+1,0),taken;
@@ -269,7 +271,7 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
     SDL_Texture *atlas=nullptr;bool oneAtlas=true;
     for(const auto &m:masks)if(m.texture){if(!atlas)atlas=m.texture;else if(m.texture!=atlas)oneAtlas=false;}
     const bool perCornerLight=sky.lamps>.001f && (!beamLights.empty() || !transientLights.empty());
-    if(!useGpu && atlas && oneAtlas && !perCornerLight && !LightingDiagnostics::fullReceiverClip && GpuSurfacesD3D11::available(renderer)) {
+    if(!useGpu && atlas && oneAtlas && !perCornerLight && !LightingDiagnostics::fullReceiverClip && GraphicsQuality::lightingOnGraphicsCard() && GpuSurfacesD3D11::available(renderer)) {
       namespace G=GpuSurfacesD3D11;
       // (the faces' shapes kept until they're projected again; their light -
       // a new sun map several times a game hour, a lamp coming or going -

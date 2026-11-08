@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include "DayNightLighting.hpp"
 #include "ParallelFor.hpp"
+#include "GraphicsQuality.hpp"
 #include "GpuSunD3D11.hpp"
 #include "GpuSurfacesD3D11.hpp"
 #include "WorldRenderer.hpp"
@@ -33,6 +34,10 @@ bool DayNightLighting::spriteShadow(const Instance &o,const WorldMap &map,bool a
 // addition: how far a building's shadow edge spreads in the sun's map: a
 // little at midday, more in the softer light of morning and evening
 static float shadowSoften(double time){return 1.0f+2.5f*(1-DayNightLighting::skyAt(time).shadow);}
+// ours: the sun maps' size and edges as the graphics quality has them
+// (GraphicsQuality: High is 1024 and soft, as always)
+static int sunMapSize(float extent){return std::min(GraphicsQuality::sunMapSize(),int(extent*GraphicsQuality::sunTexelsPerTile()));}
+static float sunMapSoften(double time){return GraphicsQuality::softShadows()?shadowSoften(time):0.0f;}
 
 struct DayNightLighting::SunScene {
   size_t scene=0;uint64_t projection=0;
@@ -46,14 +51,14 @@ struct DayNightLighting::SunJob {
   // (what it was made from)
   double time=0;float left=0,top=0,extent=0;
   std::shared_ptr<const SunScene> scene;std::shared_ptr<const SunGround> ground;std::shared_ptr<const SunTerrain> terrain;
-  std::vector<float> opacity;
+  std::vector<float> opacity;int size=0;float soften=0;
   // (what it made)
   LightingAssets::SunDepth map;std::vector<std::array<float,4>> faceSun;std::vector<float> receiverSun;
   LightingAssets::ActorCells faceCells,receiverCells;
   void run() {
     const auto sun=DayNightLighting::skyAt(time);const float n=std::max(.001f,std::hypot(sun.dx,sun.dy));
-    map.reset(std::min(1024,int(extent*8)),left,top,extent,time,sun.dx/n*sun.shadowLength*.5f,sun.dy/n*sun.shadowLength*.5f);
-    map.soften=shadowSoften(time);
+    map.reset(size,left,top,extent,time,sun.dx/n*sun.shadowLength*.5f,sun.dy/n*sun.shadowLength*.5f);
+    map.soften=soften;
     // (as SunDepth::terrain and updateSun's own rebuild, in the same order)
     if(terrain->flat)std::fill(map.depth.begin(),map.depth.end(),terrain->flatHeight);
     else for(const auto &q:terrain->quads)map.quad(q);
@@ -100,6 +105,7 @@ void DayNightLighting::startSunJob(const WorldMap &map,double time,float left,fl
   auto job=std::make_shared<SunJob>();
   job->time=time;job->left=left;job->top=top;job->extent=extent;
   job->scene=sunScene;job->ground=sunGround;job->terrain=sunTerrain;job->opacity=casterOpacity;
+  job->size=sunMapSize(extent);job->soften=sunMapSoften(time);
   sunJob=std::async(std::launch::async,[job]{job->run();return job;});
 }
 
@@ -153,7 +159,7 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
     for(int k=0;k<2;++k){
       auto &atlas=parameters[k];atlas.hour=h0+k*interval;const auto sun=skyAt(atlas.hour);
       const float n=std::max(.001f,std::hypot(sun.dx,sun.dy));
-      atlas.size=std::min(1024,int(extent*8));atlas.x0=left;atlas.y0=top;atlas.span=extent;
+      atlas.size=sunMapSize(extent);atlas.x0=left;atlas.y0=top;atlas.span=extent;
       atlas.dx=sun.dx/n*sun.shadowLength*.5f;atlas.dy=sun.dy/n*sun.shadowLength*.5f;
     }
     const float base=map.getMinHeight()==map.getMaxHeight()?float(map.getMinHeight()):-std::numeric_limits<float>::infinity();
@@ -183,8 +189,8 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
   auto build=[&](int k) {
     auto &atlas=sunMaps[k];const double time=h0+k*interval;
     const auto sun=skyAt(time);const float n=std::max(.001f,std::hypot(sun.dx,sun.dy));
-    atlas.reset(std::min(1024,int(extent*8)),left,top,extent,time,sun.dx/n*sun.shadowLength*.5f,sun.dy/n*sun.shadowLength*.5f);
-    atlas.soften=shadowSoften(time);
+    atlas.reset(sunMapSize(extent),left,top,extent,time,sun.dx/n*sun.shadowLength*.5f,sun.dy/n*sun.shadowLength*.5f);
+    atlas.soften=sunMapSoften(time);
     atlas.terrain(map);
     for(const auto &f:projectedFaces) {
       if(-f.outward.x*atlas.dx-f.outward.y*atlas.dy+f.outward.z*.5f<=0)continue;
@@ -342,7 +348,7 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
   // frame sends which points ask the sun maps now, a pass which quads it draws
   // (on the screen and its own: the map's or a tank's)
   bool groundDrawn=false;
-  if(GpuSurfacesD3D11::available(renderer)) {
+  if(GraphicsQuality::lightingOnGraphicsCard() && GpuSurfacesD3D11::available(renderer)) {
     namespace G=GpuSurfacesD3D11;
     float ox,oy,od;view.worldToScreenF(0,0,0,ox,oy,od);
     if(d3dGroundFrame!=receiverFrame) {

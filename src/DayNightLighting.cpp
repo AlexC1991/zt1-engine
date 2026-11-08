@@ -1,4 +1,5 @@
 #include "DayNightLighting.hpp"
+#include "GraphicsQuality.hpp"
 #include "Fences.hpp"
 #include "Animation.hpp"
 #include "World.hpp"
@@ -144,6 +145,7 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
   const float zoom=view.getCamera().zoom,w=width/zoom,h=height/zoom;logicalW=w;logicalH=h;
   covers.clear();size_t hash=1469598103934665603ULL;
   auto mix=[&](size_t value){hash^=value;hash*=1099511628211ULL;};
+  mix(size_t(GraphicsQuality::serial())); // (a graphics quality change: the lighting made again)
   const auto &all=objects.objects();int coldBuilds=0;const Uint64 coldStart=SDL_GetPerformanceCounter();
   auto mayBuild=[&]{return coldBuilds<2 && (!coldBuilds || 1000.0*(SDL_GetPerformanceCounter()-coldStart)/SDL_GetPerformanceFrequency()<3);};
   // ours: a shape is made on a worker thread (none until it's made, as one
@@ -264,14 +266,18 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
   {
     size_t total=0,candidates=1469598103934665603ULL;
     for(const auto &o:instances){total+=o.model->faces.size();candidates^=o.owner*1099511628211ULL+size_t(o.model);candidates*=1099511628211ULL;}
-    if(total>size_t(maxModelFaces)) {
+    // (the budget as the graphics quality's shadow range has it - maxModelFaces
+    // at most - chosen again when it changes)
+    const int faceBudget=std::min(maxModelFaces,GraphicsQuality::shapeFaceBudget());
+    candidates^=size_t(faceBudget);candidates*=1099511628211ULL;
+    if(total>size_t(faceBudget)) {
       float cx=0,cy=0;view.screenToWorldAt(w*.5f,h*.5f,0,cx,cy);
       float lx=0,ly=0,ld=0;view.worldToScreenF(keptCentre[0],keptCentre[1],0,lx,ly,ld);
       const bool moved=std::hypot(lx-w*.5f,ly-h*.5f)>std::max(w,h)*.25f;
       if(moved || keptCandidates!=candidates || keptRotation!=view.getRotation() || keptZoom!=zoom || keptOwners.empty()) {
         std::vector<size_t> order(instances.size());for(size_t k=0;k<order.size();++k)order[k]=k;
         std::stable_sort(order.begin(),order.end(),[&](size_t a,size_t b){return instances[a].distance<instances[b].distance;});
-        int budget=maxModelFaces;keptOwners.clear();
+        int budget=faceBudget;keptOwners.clear();
         for(size_t k:order){const int faces=int(instances[k].model->faces.size());if(faces>budget)continue;budget-=faces;keptOwners.insert({instances[k].owner,instances[k].model});}
         keptCentre[0]=cx;keptCentre[1]=cy;keptCandidates=candidates;keptRotation=view.getRotation();keptZoom=zoom;
       }
@@ -317,7 +323,7 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
     // while the aircraft is away (the unoccupied body has a single dark pose).
     if(const auto *asset=LightingAssets::find("helibase"))actorEmission(art,world.getStaff().baseFrame(m,art),{m.x,m.y,LightingAssets::terrainHeight(map,m.x,m.y)},0,-1,(uint64_t(1)<<54)|(uint64_t(uint32_t(m.id))<<3)|3,asset->id);
   }
-  const size_t limit=size_t(std::clamp(diagnosticLightLimit,1,512));
+  const size_t limit=size_t(std::clamp(std::min(diagnosticLightLimit,GraphicsQuality::lampLimit()),1,512)); // (the graphics quality's lamps)
   // addition: reserve the bounded projector slots before ordinary fixtures.
   std::stable_partition(lights.begin(),lights.end(),[](const Light &l){return l.cone>0 && l.sweep!=0;});
   int projectors=0;lights.erase(std::remove_if(lights.begin(),lights.end(),[&](const Light &l){return l.cone>0 && l.sweep!=0 && ++projectors>4;}),lights.end());
