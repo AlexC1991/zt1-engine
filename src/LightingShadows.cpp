@@ -351,18 +351,39 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
       for(size_t i=0;i<receiverNear.size();++i)if(receiverNear[i])d3dGroundLive[i>>5]|=1u<<(i&31);
       // (the quads on the screen that may have a shadow: one in either map
       // at a corner, or an actor's near one - the CPU's shown, and a few the
-      // graphics card finds have none)
-      d3dGroundShown.clear();
-      for(size_t j=0;j<receivers.size();++j) {
-        const auto &f=receivers[j];
-        bool any=false;
-        for(int k=0;k<4 && !any;++k){const auto &p=receiverPoints[f.sample[k]];any=p.sun[0]>0 || p.sun[1]>0 || receiverNear[f.sample[k]];}
-        if(!any)continue;
+      // graphics card finds have none. The maps' kept until a map changes;
+      // an actor's found from its near points, by the quads at each point)
+      if(d3dGroundLitKey!=sunKey) {
+        d3dGroundLitKey=sunKey;d3dGroundLit.clear();d3dGroundLitFlag.assign(receivers.size(),0);
+        for(size_t j=0;j<receivers.size();++j) {
+          const auto &f=receivers[j];bool any=false;
+          for(int k=0;k<4 && !any;++k){const auto &p=receiverPoints[f.sample[k]];any=p.sun[0]>0 || p.sun[1]>0;}
+          if(any){d3dGroundLit.push_back(uint32_t(j));d3dGroundLitFlag[j]=1;}
+        }
+      }
+      if(d3dGroundAtKey!=key) {
+        d3dGroundAtKey=key;d3dGroundAtStart.assign(receiverPoints.size()+1,0);
+        for(const auto &f:receivers)for(int k=0;k<4;++k)++d3dGroundAtStart[f.sample[k]+1];
+        for(size_t i=0;i<receiverPoints.size();++i)d3dGroundAtStart[i+1]+=d3dGroundAtStart[i];
+        d3dGroundAt.resize(d3dGroundAtStart.back());std::vector<uint32_t> fill(d3dGroundAtStart.begin(),d3dGroundAtStart.end()-1);
+        for(size_t j=0;j<receivers.size();++j)for(int k=0;k<4;++k)d3dGroundAt[fill[receivers[j].sample[k]]++]=uint32_t(j);
+        d3dGroundSeen.assign(receivers.size(),0);d3dGroundSerial=0;
+      }
+      auto onScreen=[&](const Receiver &f) {
         float l=f.screen[0].x+ox,r=l,t=f.screen[0].y+oy,b=t;
         for(auto p:f.screen){l=std::min(l,p.x+ox);r=std::max(r,p.x+ox);t=std::min(t,p.y+oy);b=std::max(b,p.y+oy);}
-        if(r<0 || l>logicalW || b<0 || t>logicalH)continue;
-        d3dGroundShown.push_back(uint32_t(j));
-      }
+        return !(r<0 || l>logicalW || b<0 || t>logicalH);
+      };
+      d3dGroundShown.clear();
+      for(uint32_t j:d3dGroundLit)if(onScreen(receivers[j]))d3dGroundShown.push_back(j);
+      if(++d3dGroundSerial==0){std::fill(d3dGroundSeen.begin(),d3dGroundSeen.end(),0);d3dGroundSerial=1;}
+      bool added=false;
+      for(size_t i=0;i<receiverNear.size();++i)if(receiverNear[i])
+        for(uint32_t at=d3dGroundAtStart[i];at<d3dGroundAtStart[i+1];++at) {
+          const uint32_t j=d3dGroundAt[at];if(d3dGroundLitFlag[j] || d3dGroundSeen[j]==d3dGroundSerial)continue;
+          d3dGroundSeen[j]=d3dGroundSerial;if(onScreen(receivers[j])){d3dGroundShown.push_back(j);added=true;}
+        }
+      if(added)std::sort(d3dGroundShown.begin(),d3dGroundShown.end()); // (the CPU's order)
       d3dGroundReady=G::groundKey()==key && G::groundSunKey()==sunKey && G::setGroundLive(d3dGroundLive) && GpuSunD3D11::upload(sunMaps,&casterOpacity,receiverFrame);
     }
     if(d3dGroundReady) {

@@ -184,6 +184,9 @@ private:
   // ours: the ground's shadow on Direct3D 11 (GpuSurfacesD3D11): the frame
   // its points were last brought up to date, the quads on the screen, a pass's
   size_t d3dGroundFrame=size_t(-1);bool d3dGroundReady=false;std::vector<uint32_t> d3dGroundShown,d3dGroundQuads,d3dGroundLive;
+  // (the quads with a shadow in either map; the quads at each point)
+  uint64_t d3dGroundLitKey=~0ull,d3dGroundAtKey=~0ull;std::vector<uint32_t> d3dGroundLit,d3dGroundAtStart,d3dGroundAt,d3dGroundSeen;
+  std::vector<uint8_t> d3dGroundLitFlag;uint32_t d3dGroundSerial=0;
   std::vector<GpuLighting::SurfaceFace> gpuSurfaceFaces;
   std::vector<GpuLighting::SurfaceBatch> gpuSurfaceBatches;
   bool gpuSurfaceFailed=false;
