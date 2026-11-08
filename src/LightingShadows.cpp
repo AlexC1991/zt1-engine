@@ -10,7 +10,21 @@
 #include <cmath>
 #include <unordered_map>
 #include <array>
+#include <future>
+#include <thread>
 using LightingAssets::Point;
+namespace {
+// ours: a loop over n items split over the processor's cores (fn(begin,end)
+// for each part; the parts write apart). The same work as one loop, in less
+// time: the sun maps' samples were made on one core while the game waited.
+template <typename F> void parallelFor(size_t n,F &&fn) {
+  const size_t threads=std::clamp<size_t>(std::thread::hardware_concurrency(),1,8);
+  if(n<4096 || threads<2){fn(size_t(0),n);return;}
+  const size_t chunk=(n+threads-1)/threads;std::vector<std::future<void>> parts;
+  for(size_t b=chunk;b<n;b+=chunk)parts.push_back(std::async(std::launch::async,[&fn,b,chunk,n]{fn(b,std::min(n,b+chunk));}));
+  fn(size_t(0),std::min(n,chunk));for(auto &part:parts)part.get();
+}
+}
 // addition: people, animals, trees and scenery cast their shadow from their
 // own sprite, pixel by pixel along the sun's line (Animation::drawCastShadow,
 // in drawShadows), in its current pose: their real outline - leaves, legs,
@@ -61,9 +75,9 @@ struct DayNightLighting::SunJob {
     map.seal();map.opacity=&opacity;
     const auto &faces=scene->facePoints;
     faceSun.assign(faces.size(),{0,0,0,0});
-    for(size_t i=0;i<faces.size();++i)if(scene->faceVisible[i])for(int k=0;k<4;++k)faceSun[i][k]=map.shadow(faces[i][k],scene->faceNormals[i],scene->faceIds[i],true);
+    parallelFor(faces.size(),[&](size_t b,size_t e){for(size_t i=b;i<e;++i)if(scene->faceVisible[i])for(int k=0;k<4;++k)faceSun[i][k]=map.shadow(faces[i][k],scene->faceNormals[i],scene->faceIds[i],true);});
     receiverSun.resize(ground->points.size());
-    for(size_t i=0;i<ground->points.size();++i)receiverSun[i]=map.shadow(ground->points[i],ground->normals[i],0xFFFFFFFFu,true);
+    parallelFor(ground->points.size(),[&](size_t b,size_t e){for(size_t i=b;i<e;++i)receiverSun[i]=map.shadow(ground->points[i],ground->normals[i],0xFFFFFFFFu,true);});
     faceCells.sort(map,scene->projection,faces.size()*4,[&](size_t i){return faces[i/4][i%4];});
     receiverCells.sort(map,ground->generation,ground->points.size(),[&](size_t i){return ground->points[i];});
   }
@@ -167,27 +181,43 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
   // (how much each caster stops: foliage some, everything else all)
   casterOpacity.assign(instances.size()+actors.size()+1,1.0f);
   for(size_t k=0;k<instances.size();++k)casterOpacity[k+1]=instances[k].opacity;
+  // (which maps are made here - the scene changed, or no made-ahead one fits;
+  // asked in order, as takeSunJob takes the job's map - then made side by
+  // side, each on its own core: they share nothing but what they read)
+  bool rebuild[2]={false,false};
   for(int k=0;k<2;++k) {
     auto &atlas=sunMaps[k];const double time=h0+k*interval;
     atlas.opacity=&casterOpacity;
-    if((changed || std::abs(atlas.hour-time)>.000001 || atlas.x0!=left || atlas.y0!=top || atlas.span!=extent) &&
-       !(!changed && takeSunJob(k,time,left,top,extent,map))) {
-      const auto sun=skyAt(time);const float n=std::max(.001f,std::hypot(sun.dx,sun.dy));
-      atlas.reset(std::min(1024,int(extent*8)),left,top,extent,time,sun.dx/n*sun.shadowLength*.5f,sun.dy/n*sun.shadowLength*.5f);
-      atlas.soften=shadowSoften(time);
-      atlas.terrain(map);
-      for(const auto &f:projectedFaces) {
-        if(-f.outward.x*atlas.dx-f.outward.y*atlas.dy+f.outward.z*.5f<=0)continue;
-        if(f.instance<instances.size() && instances[f.instance].sprite)continue; // (cast from its sprite)
-        atlas.caster=uint32_t(f.instance+1);atlas.quad({f.world[0],f.world[1],f.world[2],f.world[3]});
-      }
-      atlas.seal();++counters.sunBuilds;
+    rebuild[k]=(changed || std::abs(atlas.hour-time)>.000001 || atlas.x0!=left || atlas.y0!=top || atlas.span!=extent) &&
+       !(!changed && takeSunJob(k,time,left,top,extent,map));
+  }
+  auto build=[&](int k) {
+    auto &atlas=sunMaps[k];const double time=h0+k*interval;
+    const auto sun=skyAt(time);const float n=std::max(.001f,std::hypot(sun.dx,sun.dy));
+    atlas.reset(std::min(1024,int(extent*8)),left,top,extent,time,sun.dx/n*sun.shadowLength*.5f,sun.dy/n*sun.shadowLength*.5f);
+    atlas.soften=shadowSoften(time);
+    atlas.terrain(map);
+    for(const auto &f:projectedFaces) {
+      if(-f.outward.x*atlas.dx-f.outward.y*atlas.dy+f.outward.z*.5f<=0)continue;
+      if(f.instance<instances.size() && instances[f.instance].sprite)continue; // (cast from its sprite)
+      atlas.caster=uint32_t(f.instance+1);atlas.quad({f.world[0],f.world[1],f.world[2],f.world[3]});
     }
+    atlas.seal();
+  };
+  if(rebuild[0] && rebuild[1]){auto second=std::async(std::launch::async,[&]{build(1);});build(0);second.get();}
+  else for(int k=0;k<2;++k)if(rebuild[k])build(k);
+  for(int k=0;k<2;++k)if(rebuild[k])++counters.sunBuilds;
+  for(int k=0;k<2;++k) {
+    auto &atlas=sunMaps[k];
     if(projectedSunStamp[k]!=atlas.stamp) {
       projectedSunStamp[k]=atlas.stamp;
       // addition: back-facing surfaces still cast; only drawn faces need receiver samples.
-      for(auto &f:projectedFaces)if(f.visible)for(int n=0;n<4;++n)f.sun[k][n]=atlas.shadow(f.world[n],f.normal,uint32_t(f.instance+1),true);
+      parallelFor(projectedFaces.size(),[&](size_t b,size_t e){for(size_t i=b;i<e;++i){auto &f=projectedFaces[i];
+        if(f.visible)for(int n=0;n<4;++n)f.sun[k][n]=atlas.shadow(f.world[n],f.normal,uint32_t(f.instance+1),true);}});
     }
+  }
+  for(int k=0;k<2;++k) {
+    auto &atlas=sunMaps[k];
     atlas.beginActors();
     for(const auto &o:actors) {
       if(spriteShadow(o,map,true))continue;
@@ -311,7 +341,7 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
   auto samplePoints=[&]{
     for(int k=0;k<2;++k)if(receiverSunStamp[k]!=sunMaps[k].stamp) {
       receiverSunStamp[k]=sunMaps[k].stamp;
-      for(auto &p:receiverPoints)p.sun[k]=sunMaps[k].shadow(p.p,p.normal,0xFFFFFFFFu,true);
+      parallelFor(receiverPoints.size(),[&](size_t b,size_t e){for(size_t i=b;i<e;++i){auto &p=receiverPoints[i];p.sun[k]=sunMaps[k].shadow(p.p,p.normal,0xFFFFFFFFu,true);}});
     }
     // (an actor's shadow near it: asked in the cells an actor reached only)
     const auto at=[this](size_t i){return receiverPoints[i].p;};
