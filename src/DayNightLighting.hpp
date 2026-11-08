@@ -181,6 +181,9 @@ private:
   uint64_t gpuReceiverGeneration=0;
   std::vector<GpuLighting::GroundPoint> gpuGroundPoints;
   std::vector<uint32_t> gpuGroundIndices;
+  // ours: the ground's shadow on Direct3D 11 (GpuSurfacesD3D11): the frame
+  // its points were last brought up to date, the quads on the screen, a pass's
+  size_t d3dGroundFrame=size_t(-1);bool d3dGroundReady=false;std::vector<uint32_t> d3dGroundShown,d3dGroundQuads,d3dGroundLive;
   std::vector<GpuLighting::SurfaceFace> gpuSurfaceFaces;
   std::vector<GpuLighting::SurfaceBatch> gpuSurfaceBatches;
   bool gpuSurfaceFailed=false;

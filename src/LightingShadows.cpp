@@ -2,6 +2,8 @@
 #include <limits>
 #include <cstdlib>
 #include "DayNightLighting.hpp"
+#include "GpuSunD3D11.hpp"
+#include "GpuSurfacesD3D11.hpp"
 #include "WorldRenderer.hpp"
 #include "WorldMap.hpp"
 #include <algorithm>
@@ -304,8 +306,9 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
       counters.shadows=int(gpuGroundIndices.size()/6);return;
     }
   }
-  if(receiverSampleFrame!=receiverFrame) {
-    receiverSampleFrame=receiverFrame;
+  // (each point's shadow from the sun maps as made, and which an actor's
+  // shadow may reach: once a frame, for the CPU's pass or the graphics card's)
+  auto samplePoints=[&]{
     for(int k=0;k<2;++k)if(receiverSunStamp[k]!=sunMaps[k].stamp) {
       receiverSunStamp[k]=sunMaps[k].stamp;
       for(auto &p:receiverPoints)p.sun[k]=sunMaps[k].shadow(p.p,p.normal,0xFFFFFFFFu,true);
@@ -314,6 +317,65 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
     const auto at=[this](size_t i){return receiverPoints[i].p;};
     receiverNear.assign(receiverPoints.size(),0);
     for(int k=0;k<2;++k){receiverCells[k].sort(sunMaps[k],gpuReceiverGeneration,receiverPoints.size(),at);receiverCells[k].mark(sunMaps[k],at,receiverNear);}
+  };
+  // ours: on Direct3D 11, the same on the graphics card (GpuSurfacesD3D11):
+  // the points and quads kept there, sent again only when they change; a
+  // frame sends which points ask the sun maps now, a pass which quads it draws
+  // (on the screen and its own: the map's or a tank's)
+  bool groundDrawn=false;
+  if(GpuSurfacesD3D11::available(renderer)) {
+    namespace G=GpuSurfacesD3D11;
+    float ox,oy,od;view.worldToScreenF(0,0,0,ox,oy,od);
+    if(d3dGroundFrame!=receiverFrame) {
+      d3dGroundFrame=receiverFrame;
+      samplePoints();
+      auto hash=[](std::initializer_list<uint64_t> values){uint64_t key=1469598103934665603ULL;for(uint64_t v:values){key^=v;key*=1099511628211ULL;}return key;};
+      const uint64_t key=hash({uint64_t(gpuReceiverGeneration),uint64_t(receiverPoints.size()),uint64_t(receivers.size())});
+      if(G::groundKey()!=key) {
+        std::vector<G::GroundPoint> points(receiverPoints.size());std::vector<std::array<uint32_t,4>> quads(receivers.size());
+        for(size_t i=0;i<receiverPoints.size();++i){const auto &p=receiverPoints[i];auto &g=points[i];
+          g.world[0]=p.p.x;g.world[1]=p.p.y;g.world[2]=p.p.z;g.normal[0]=p.normal.x;g.normal[1]=p.normal.y;g.normal[2]=p.normal.z;}
+        for(size_t j=0;j<receivers.size();++j)for(int k=0;k<4;++k){const auto &f=receivers[j];quads[j][k]=uint32_t(f.sample[k]);
+          points[f.sample[k]].screen[0]=f.screen[k].x;points[f.sample[k]].screen[1]=f.screen[k].y;}
+        G::setGround(points,quads,key);
+      }
+      // (each point's shadow in the two maps as made: sent apart, as a new
+      // map comes several times a game hour)
+      const uint64_t sunKey=hash({key,receiverSunStamp[0],receiverSunStamp[1]});
+      if(G::groundSunKey()!=sunKey) {
+        std::vector<std::array<float,2>> sun(receiverPoints.size());
+        for(size_t i=0;i<receiverPoints.size();++i)sun[i]={receiverPoints[i].sun[0],receiverPoints[i].sun[1]};
+        G::setGroundSun(sun,sunKey);
+      }
+      d3dGroundLive.assign((receiverPoints.size()+31)/32,0);
+      for(size_t i=0;i<receiverNear.size();++i)if(receiverNear[i])d3dGroundLive[i>>5]|=1u<<(i&31);
+      // (the quads on the screen that may have a shadow: one in either map
+      // at a corner, or an actor's near one - the CPU's shown, and a few the
+      // graphics card finds have none)
+      d3dGroundShown.clear();
+      for(size_t j=0;j<receivers.size();++j) {
+        const auto &f=receivers[j];
+        bool any=false;
+        for(int k=0;k<4 && !any;++k){const auto &p=receiverPoints[f.sample[k]];any=p.sun[0]>0 || p.sun[1]>0 || receiverNear[f.sample[k]];}
+        if(!any)continue;
+        float l=f.screen[0].x+ox,r=l,t=f.screen[0].y+oy,b=t;
+        for(auto p:f.screen){l=std::min(l,p.x+ox);r=std::max(r,p.x+ox);t=std::min(t,p.y+oy);b=std::max(b,p.y+oy);}
+        if(r<0 || l>logicalW || b<0 || t>logicalH)continue;
+        d3dGroundShown.push_back(uint32_t(j));
+      }
+      d3dGroundReady=G::groundKey()==key && G::groundSunKey()==sunKey && G::setGroundLive(d3dGroundLive) && GpuSunD3D11::upload(sunMaps,&casterOpacity,receiverFrame);
+    }
+    if(d3dGroundReady) {
+      d3dGroundQuads.clear();
+      for(uint32_t j:d3dGroundShown){const auto &f=receivers[j];if(accept && !accept((f.p[0].x+f.p[2].x)*.5f,(f.p[0].y+f.p[2].y)*.5f))continue;d3dGroundQuads.push_back(j);}
+      G::GroundFrame frame;frame.originX=ox;frame.originY=oy;frame.strength=100*sky.shadow;frame.sunBlend=sunBlend;
+      groundDrawn=G::drawGround(renderer,d3dGroundQuads,frame);
+    }
+  }
+  if(!groundDrawn) {
+  if(receiverSampleFrame!=receiverFrame) {
+    receiverSampleFrame=receiverFrame;
+    samplePoints();
     for(size_t i=0;i<receiverPoints.size();++i) {
       auto &p=receiverPoints[i];
       const bool affected=receiverNear[i]!=0;
@@ -348,6 +410,7 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
   SDL_BlendMode was;SDL_GetRenderDrawBlendMode(renderer,&was);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
   if(!vertices.empty())SDL_RenderGeometry(renderer,nullptr,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));
   SDL_SetRenderDrawBlendMode(renderer,was);
+  }
   // addition: the shadows cast from sprites (spriteShadow), over the ground's.
   // (where the foot already stands in a building's or tree's shadow, less of
   // it: a shadow inside a shadow is no darker)
@@ -412,5 +475,5 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
     for(const auto &o:instances)if(spriteShadow(o,map,false))cast(o);
     for(const auto &o:actors)if(spriteShadow(o,map,true))cast(o);
   }
-  counters.shadows=int(indices.size()/6);counters.memoryBytes+=receivers.capacity()*sizeof(Receiver)+receiverPoints.capacity()*sizeof(ReceiverPoint);
+  counters.shadows=groundDrawn?int(d3dGroundQuads.size()):int(shadowIndices.size()/6);counters.memoryBytes+=receivers.capacity()*sizeof(Receiver)+receiverPoints.capacity()*sizeof(ReceiverPoint);
 }

@@ -1,5 +1,7 @@
 #include <string_view>
 #include "DayNightLighting.hpp"
+#include "GpuSurfacesD3D11.hpp"
+#include "GpuSunD3D11.hpp"
 #include "WorldRenderer.hpp"
 #include "WorldMap.hpp"
 #include <algorithm>
@@ -222,6 +224,7 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
   // lighting hull is not visible artwork and must not draw its own outline.
   std::vector<ReceiverMask> masks;masks.reserve(instances.size()+actors.size());
   for(const auto *group:{&instances,&actors})for(const auto &o:*group)masks.push_back(receiverMask(o,view));
+  timer.mark("surface masks");
   // (a building face's corners an actor's shadow may reach: asked in the
   // cells an actor reached only)
   if(sky.sun>.001f) {
@@ -229,8 +232,85 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
     faceNear.assign(projectedFaces.size()*4,0);
     for(int k=0;k<2;++k){faceCells[k].sort(sunMaps[k],projectionSerial,projectedFaces.size()*4,at);faceCells[k].mark(sunMaps[k],at,faceNear);}
   }
+  timer.mark("surface near");
   const bool useGpu=gpu.available(renderer) && std::string_view(SDL_getenv("ZT_LIGHTING_GPU"))!="ground" && !gpuSurfaceFailed && (sky.sun<=.001f || gpuSunReady);
   if(useGpu){gpuSurfaceFaces.clear();gpuSurfaceBatches.clear();gpuSurfaceFaces.reserve(projectedFaces.size()+actorFaces.size());}
+  // ours: on Direct3D 11, the same arithmetic on the graphics card
+  // (GpuSurfacesD3D11): the scenery faces kept there, sent again only when
+  // they change; a frame sends what's drawn in what order, each shape's sky
+  // colour and outline, and the corners an actor's shadow may reach. A
+  // lighthouse beam or a light's pulse at night (their light worked out per
+  // corner every frame), or masks on more than one atlas page: the CPU's.
+  {
+    SDL_Texture *atlas=nullptr;bool oneAtlas=true;
+    for(const auto &m:masks)if(m.texture){if(!atlas)atlas=m.texture;else if(m.texture!=atlas)oneAtlas=false;}
+    const bool perCornerLight=sky.lamps>.001f && (!beamLights.empty() || !transientLights.empty());
+    if(!useGpu && atlas && oneAtlas && !perCornerLight && !LightingDiagnostics::fullReceiverClip && GpuSurfacesD3D11::available(renderer)) {
+      namespace G=GpuSurfacesD3D11;
+      // (the faces' shapes kept until they're projected again; their light -
+      // a new sun map several times a game hour, a lamp coming or going -
+      // sent on its own, a sixth of the size)
+      auto hash=[](std::initializer_list<uint64_t> values){uint64_t key=1469598103934665603ULL;for(uint64_t v:values){key^=v;key*=1099511628211ULL;}return key;};
+      const uint64_t key=hash({uint64_t(projectionSerial),uint64_t(projectedFaces.size())});
+      if(G::facesKey()!=key) {
+        std::vector<G::Face> faces(projectedFaces.size());
+        for(size_t i=0;i<projectedFaces.size();++i) {
+          const auto &f=projectedFaces[i];auto &g=faces[i];
+          for(int k=0;k<4;++k){g.world[k][0]=f.world[k].x;g.world[k][1]=f.world[k].y;g.world[k][2]=f.world[k].z;g.world[k][3]=f.terrain[k];
+            g.screen[k][0]=f.p[k].x;g.screen[k][1]=f.p[k].y;}
+          g.normal[0]=f.normal.x;g.normal[1]=f.normal.y;g.normal[2]=f.normal.z;g.normal[3]=f.visible?1.0f:0.0f;
+          g.info[0]=uint32_t(f.instance);
+        }
+        G::setFaces(faces,key);
+      }
+      const uint64_t lightKey=hash({key,uint64_t(sceneHash),projectedSunStamp[0],projectedSunStamp[1]});
+      if(G::faceLightKey()!=lightKey) {
+        std::vector<G::FaceLight> light(projectedFaces.size());
+        for(size_t i=0;i<projectedFaces.size();++i) {
+          const auto &f=projectedFaces[i];auto &g=light[i];
+          for(int k=0;k<4;++k){g.sun0[k]=f.sun[0][k];g.sun1[k]=f.sun[1][k];}
+          const bool lit=f.instance<surfaceLight.size() && f.localIndex<surfaceLight[f.instance].size();
+          for(int c=0;c<3;++c)g.local[c]=lit?surfaceLight[f.instance][f.localIndex][c]:0.0f;
+        }
+        G::setFaceLight(light,lightKey);
+      }
+      timer.mark("surface upload");
+      std::vector<G::Shape> shapes(masks.size());
+      for(size_t i=0;i<masks.size();++i){const auto &m=masks[i];auto &s=shapes[i];
+        s.ambient[0]=ambient[i].r;s.ambient[1]=ambient[i].g;s.ambient[2]=ambient[i].b;
+        s.bounds[0]=m.bounds.x;s.bounds[1]=m.bounds.y;s.bounds[2]=m.bounds.w;s.bounds[3]=m.bounds.h;
+        s.uv[0]=m.uv.x;s.uv[1]=m.uv.y;s.uv[2]=m.uv.w;s.uv[3]=m.uv.h;
+        s.flags[0]=m.texture?1u:0u;s.flags[1]=m.required?1u:0u;s.flags[2]=m.mirrored?1u:0u;}
+      std::vector<G::Draw> order;order.reserve(projectedFaces.size()/4+actorFaces.size());
+      std::vector<G::Face> moving;moving.reserve(actorFaces.size());
+      const bool sunUp=sky.sun>.001f;
+      auto onScreen=[&](const ProjectedFace &f){return f.visible && !(f.bounds.x+f.bounds.w<left || f.bounds.x>right || f.bounds.y+f.bounds.h<top || f.bounds.y>bottom) && masks[f.instance].texture;};
+      size_t i=0,j=0;
+      while(i<projectedFaces.size() || j<actorFaces.size()) {
+        if(j==actorFaces.size() || (i<projectedFaces.size() && projectedFaces[i].depth<actorFaces[j].depth)) {
+          const auto &f=projectedFaces[i];const uint32_t index=uint32_t(i++);if(!onScreen(f))continue;
+          uint32_t live=0;
+          if(sunUp){const size_t at=size_t(index)*4;for(int k=0;k<4;++k)if(faceNear[at+k])live|=1u<<k;}
+          order.push_back({index,live});
+        } else {
+          const auto &f=actorFaces[j++];if(!onScreen(f))continue;
+          G::Face g;
+          for(int k=0;k<4;++k){g.world[k][0]=f.world[k].x;g.world[k][1]=f.world[k].y;g.world[k][2]=f.world[k].z;g.world[k][3]=f.terrain[k];
+            g.screen[k][0]=f.p[k].x;g.screen[k][1]=f.p[k].y;}
+          g.normal[0]=f.normal.x;g.normal[1]=f.normal.y;g.normal[2]=f.normal.z;g.normal[3]=1.0f;
+          for(int c=0;c<3;++c)g.local[c]=f.local[c];
+          g.info[0]=uint32_t(f.instance);
+          order.push_back({0x80000000u|uint32_t(moving.size()),sunUp?0xFu:0u});moving.push_back(g);
+        }
+      }
+      timer.mark("surface order");
+      G::Frame frame;frame.originX=ox;frame.originY=oy;frame.scale=scale;frame.lamps=sky.lamps;
+      frame.sun[0]=sun.x;frame.sun[1]=sun.y;frame.sun[2]=sun.z;frame.direct=direct;frame.reference=reference;
+      frame.shadow=sky.sun>.001f?sky.shadow:0.0f;frame.sunBlend=sunBlend;frame.targetW=textureW;frame.targetH=textureH;
+      const bool sunSent=!sunUp || GpuSunD3D11::upload(sunMaps,&casterOpacity,receiverFrame);
+      if(sunSent && G::draw(renderer,atlas,order,moving,shapes,frame)){timer.mark("surface project");timer.mark("surface geometry queue");return;}
+    }
+  }
   SDL_Texture *batch=nullptr;
   auto flush=[&]{if(!vertices.empty())SDL_RenderGeometry(renderer,batch,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));vertices.clear();indices.clear();};
   struct ClipVertex {SDL_Vertex v;float terrain;};std::vector<ClipVertex> polygon,clipped;polygon.reserve(12);clipped.reserve(12);
