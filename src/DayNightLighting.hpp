@@ -3,6 +3,7 @@
 
 #include <SDL2/SDL.h>
 #include <map>
+#include <set>
 #include <functional>
 #include <string>
 #include <tuple>
@@ -33,9 +34,7 @@ public:
   // another frame made later at the same address isn't taken for it
   void forgetSurface(SDL_Surface *s) { nativeMasks.erase(s); }
   static constexpr int maxLights = 96, maxEmissives = 160;
-  // (maxModelFaces: the whole zoo's scenery faces - camera-independent, so
-  // panning reuses everything worked out for them; about 220 bytes each)
-  static constexpr int maxMapWidth = 640, maxModelFaces=250000, maxActorFaces=16000, maxActors=160, maxActorModels=256;
+  static constexpr int maxMapWidth = 640, maxModelFaces=60000, maxActorFaces=16000, maxActors=160, maxActorModels=256;
   struct Sky { SDL_Color ambient; float lamps, sun, shadowLength; float dx, dy; float shadow=1; };
   struct Stats { int lights = 0, shadows = 0, rays = 0, width = 0, height = 0, emissives = 0, modelFaces=0,models=0, actors=0, actorFaces=0, actorBuilds=0, actorFallbacks=0, sunBuilds=0;size_t memoryBytes=0; };
   ~DayNightLighting();
@@ -200,6 +199,13 @@ private:
   bool spriteShadow(const Instance &,const WorldMap &,bool actor)const; // addition: cast from its sprite, not the sun's map
 
   size_t projectionHash=0;int projectionRotation=-1;float projectionUnit=0;
+  // ours: sceneHash's shapes part only (and whether night's on), not its
+  // lights - what projectModels' faces depend on
+  size_t geometryHash=0;
+  // ours: prepare's choice of the shapes nearest the middle, kept until the
+  // view moves a quarter of the screen, turns, zooms or the shapes change
+  std::set<std::pair<uint64_t,const LightingAssets::Model*>> keptOwners;
+  float keptCentre[2]={0,0},keptZoom=0;int keptRotation=-1;size_t keptCandidates=0;
   void projectModels(const WorldRenderer &);
   size_t sceneHash=0,structureHash=0;
   std::map<std::string,LightingAssets::Model> structureModels;

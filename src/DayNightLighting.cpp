@@ -228,12 +228,40 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
   // The scene hash is independent of the camera: a pan reuses 3D irradiance.
   // Keep source selection stable for normal zoos; the cap bounds extreme maps.
   mix(collectStructures(world));
-  // ours: every shape is kept - none chosen by its distance from the
-  // screen's middle. (Choosing the nearest ~60 thousand faces made the scene
-  // depend on the camera: in a zoo past that size every pan remade all the
-  // lamps' rays, the faces' projection and the sun's samples, and the game
-  // slowed with each building. maxModelFaces is now big enough for a whole
-  // zoo; drawing skips what's off the screen.)
+  // ours: the shapes' part, for the faces' projection (the lights mixed in
+  // below only change the lamps' light on them); and whether it's night,
+  // when fences and solid tank walls are shaded too (projectModels' visible)
+  geometryHash=hash^(sky.shadow<.02f?0x9e3779b97f4a7c15ull:0);
+  // addition: over the shape budget, the ones nearest the screen's middle.
+  // (projectModels took them in the zoo's object order: in a big zoo every
+  // building after the first ~60 thousand faces had no shadow or shading,
+  // however close to the camera.) Under the budget nothing changes.
+  // ours: chosen again only when the view has moved a quarter of the screen,
+  // turned or zoomed, or the shapes themselves changed - not on every pan.
+  // (The choice is part of the scene's stamp: chosen each frame, every pan in
+  // a big zoo remade all the lamps' rays, the faces' projection and the sun's
+  // samples, and the game slowed with each building.)
+  {
+    size_t total=0,candidates=1469598103934665603ULL;
+    for(const auto &o:instances){total+=o.model->faces.size();candidates^=o.owner*1099511628211ULL+size_t(o.model);candidates*=1099511628211ULL;}
+    if(total>size_t(maxModelFaces)) {
+      float cx=0,cy=0;view.screenToWorldAt(w*.5f,h*.5f,0,cx,cy);
+      float lx=0,ly=0,ld=0;view.worldToScreenF(keptCentre[0],keptCentre[1],0,lx,ly,ld);
+      const bool moved=std::hypot(lx-w*.5f,ly-h*.5f)>std::max(w,h)*.25f;
+      if(moved || keptCandidates!=candidates || keptRotation!=view.getRotation() || keptZoom!=zoom || keptOwners.empty()) {
+        std::vector<size_t> order(instances.size());for(size_t k=0;k<order.size();++k)order[k]=k;
+        std::stable_sort(order.begin(),order.end(),[&](size_t a,size_t b){return instances[a].distance<instances[b].distance;});
+        int budget=maxModelFaces;keptOwners.clear();
+        for(size_t k:order){const int faces=int(instances[k].model->faces.size());if(faces>budget)continue;budget-=faces;keptOwners.insert({instances[k].owner,instances[k].model});}
+        keptCentre[0]=cx;keptCentre[1]=cy;keptCandidates=candidates;keptRotation=view.getRotation();keptZoom=zoom;
+      }
+      std::vector<Instance> kept;kept.reserve(instances.size());
+      for(const auto &o:instances)if(keptOwners.count({o.owner,o.model})){kept.push_back(o);mix(size_t(o.owner));}
+      instances.swap(kept);
+    } else {
+      keptOwners.clear();
+    }
+  }
   // addition: fence pieces with lights of their own (Fences::litPieces: the
   // electrified bars' beacons) - their glow as the piece's pose shows it, and
   // a small light on the ground under it, there while it glows

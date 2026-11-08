@@ -161,14 +161,20 @@ void DayNightLighting::buildIrradiance(const WorldMap &map) {
   auto prune=[&](auto &cache,size_t limit){if(cache.size()>limit)for(auto it=cache.begin();it!=cache.end();) {
     if(it->second.used!=irradianceTick)it=cache.erase(it);else ++it;
   }};
-  prune(groundIrradianceCache,256);prune(surfaceIrradianceCache,1024);
+  // (ours: room for every shape and light in both of a flickering light's
+  // states - a torch's flame frames switch its light on and off - so
+  // switching back finds its samples instead of casting its rays again)
+  prune(groundIrradianceCache,std::max<size_t>(256,lights.size()*4));prune(surfaceIrradianceCache,std::max<size_t>(1024,instances.size()*3));
 }
 
 // addition: cache camera-independent geometry in each of the four views.
 // Panning changes one translation; it never transforms or sorts the 3D mesh.
 void DayNightLighting::projectModels(const WorldRenderer &view) {
-  if(projectionHash==sceneHash && projectionRotation==view.getRotation() && projectionUnit==view.getHeightUnitPixels())return;
-  projectionHash=sceneHash;projectionRotation=view.getRotation();projectionUnit=view.getHeightUnitPixels();projectedFaces.clear();projectedSunStamp[0]=projectedSunStamp[1]=0;++projectionSerial;
+  // (keyed by the shapes only - geometryHash - not the lights: a light coming
+  // or going changes the lamps' light on faces, read at drawing, not where
+  // the faces are; remade only when a shape moves, the view turns or zooms)
+  if(projectionHash==geometryHash && projectionRotation==view.getRotation() && projectionUnit==view.getHeightUnitPixels())return;
+  projectionHash=geometryHash;projectionRotation=view.getRotation();projectionUnit=view.getHeightUnitPixels();projectedFaces.clear();projectedSunStamp[0]=projectedSunStamp[1]=0;++projectionSerial;
   float ox,oy,od;view.worldToScreenF(0,0,0,ox,oy,od);
   int budget=maxModelFaces;
   {size_t total=0;for(const auto &o:instances)total+=o.model->faces.size();projectedFaces.reserve(std::min(total,size_t(budget)));}
@@ -244,7 +250,11 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
     const bool needsClip=terrainClip || boundsClip || LightingDiagnostics::fullReceiverClip;
     if(!needsClip && batch!=mask.texture){flush();batch=mask.texture;}const int directFirst=int(vertices.size());
     polygon.clear();
-    const auto a=ambient[f.instance];auto local=f.local;
+    // (a scenery face's lamp light as it is now - the projection keeps
+    // shapes only, so a light coming or going doesn't remake it)
+    const auto a=ambient[f.instance];
+    auto local=f.instance<instances.size() && f.instance<surfaceLight.size() && f.localIndex<surfaceLight[f.instance].size()
+                   ? surfaceLight[f.instance][f.localIndex] : f.instance<instances.size() ? SurfaceSamples{} : f.local;
     if(f.instance<instances.size() && !transientLights.empty()) {
       Point centre{};for(auto p:f.world){centre.x+=p.x*.25f;centre.y+=p.y*.25f;centre.z+=p.z*.25f;}
       const auto pulse=irradiance(centre,f.normal,instances[f.instance].owner,true);
