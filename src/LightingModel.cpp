@@ -4,6 +4,12 @@
 #include "CompassDirection.hpp"
 #include <algorithm>
 #include <cmath>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace LightingAssets {
 bool Model::contains(int x,int y,int z)const {
@@ -243,6 +249,17 @@ Model runBuild(const BuildJob &job) {
   return model;
 }
 void finishBuild(const BuildJob &job,const Model &model){saveModelCache(job.cacheKey,model);}
+Model runBuildInBackground(const BuildJob &job) {
+#ifdef _WIN32
+  const HANDLE thread=GetCurrentThread();const int was=GetThreadPriority(thread);
+  SetThreadPriority(thread,THREAD_PRIORITY_BELOW_NORMAL);
+  Model model=runBuild(job);
+  SetThreadPriority(thread,was==THREAD_PRIORITY_ERROR_RETURN?THREAD_PRIORITY_NORMAL:was);
+  return model;
+#else
+  return runBuild(job);
+#endif
+}
 Model build(Animation &art,const Definition &asset,float halfX,float halfY,int pose,bool actor) {
   Model model;bool hit=false;
   const auto job=prepareBuild(art,asset,halfX,halfY,pose,actor,model,hit);

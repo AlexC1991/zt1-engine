@@ -75,6 +75,10 @@ Model build(Animation &,const Definition &,float halfX,float halfY,int frame=-1,
 struct BuildJob;
 std::shared_ptr<const BuildJob> prepareBuild(Animation &,const Definition &,float halfX,float halfY,int frame,bool actor,Model &cached,bool &hit);
 Model runBuild(const BuildJob &);
+// runBuild on a worker thread below the game's priority (put back after: the
+// pool's threads are reused) - on a laptop the builds' cores share the power
+// the game's thread runs on, and slowed every frame while they ran
+Model runBuildInBackground(const BuildJob &);
 void finishBuild(const BuildJob &,const Model &);
 }
 #endif

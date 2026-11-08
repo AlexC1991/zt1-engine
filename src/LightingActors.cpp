@@ -19,11 +19,11 @@ void DayNightLighting::addActor(Animation *art,int frame,Point position,float fx
   static const bool atOnce=std::getenv("ZT_LIGHTING_CHECKS") || std::getenv("ZT_SHADOW_CHECKS") || std::getenv("ZT_LIGHTING_BENCH") || std::getenv("ZT_LIGHTING_GALLERY");
   if(found==actorModels.end() && counters.actorBuilds<2 && !atOnce && !(id&(uint64_t(1)<<53))) {
     const std::pair<std::string,int> slot{key,pose};
-    if(!pendingActorModels.count(slot) && pendingActorModels.size()<4) {
+    if(!pendingActorModels.count(slot) && pendingActorModels.size()+pendingModels.size()<2) {
       LightingAssets::Definition body{0,"animated body"};LightingAssets::Model cached;bool hit=false;
       auto job=LightingAssets::prepareBuild(*art,body,halfX,halfY,pose,true,cached,hit);++counters.actorBuilds;
       if(hit)found=actorModels.emplace(slot,ActorModel{std::move(cached),actorTick}).first;
-      else if(job)pendingActorModels.emplace(slot,PendingActorModel{job,std::async(std::launch::async,[job]{return LightingAssets::runBuild(*job);})});
+      else if(job)pendingActorModels.emplace(slot,PendingActorModel{job,std::async(std::launch::async,[job]{return LightingAssets::runBuildInBackground(*job);})});
       else found=actorModels.emplace(slot,ActorModel{{},actorTick}).first; // (no art for a view: as build's empty model)
     }
   }

@@ -157,12 +157,12 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
   }
   auto buildModel=[&](const std::tuple<Animation*,int,std::string> &key,Animation &art,const LightingAssets::Definition &definition,float halfX,float halfY,int frame,bool actor) {
     if(atOnce)return models.emplace(key,LightingAssets::build(art,definition,halfX,halfY,frame,actor)).first;
-    if(pendingModels.count(key) || pendingModels.size()>=4)return models.end();
+    if(pendingModels.count(key) || pendingModels.size()+pendingActorModels.size()>=2)return models.end();
     LightingAssets::Model cached;bool hit=false;
     const auto job=LightingAssets::prepareBuild(art,definition,halfX,halfY,frame,actor,cached,hit);
     if(hit)return models.emplace(key,std::move(cached)).first;
     if(!job)return models.emplace(key,LightingAssets::Model{}).first;
-    pendingModels.emplace(key,PendingActorModel{job,std::async(std::launch::async,[job]{return LightingAssets::runBuild(*job);})});
+    pendingModels.emplace(key,PendingActorModel{job,std::async(std::launch::async,[job]{return LightingAssets::runBuildInBackground(*job);})});
     return models.end();
   };
   for(size_t i=0;i<all.size();++i) {
