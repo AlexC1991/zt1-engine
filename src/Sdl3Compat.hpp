@@ -243,4 +243,36 @@ struct ID3D11Device;
 ID3D11Device *ZT_RenderGetD3D11Device(SDL_Renderer *r); // (D3D11Util.cpp)
 #endif
 
+// ours: the window's stand-in. SDL3's GPU renderer keeps the window's frame
+// to itself, so while GpuFsr's screen passes need to read it the frame is
+// drawn into a texture instead (GpuFsrSdlGpu.cpp): choosing the window as
+// the target chooses the texture, asking for the target answers the window
+// for it, and presenting goes through GpuFsr, which copies the texture to
+// the window first. Nothing changes while no stand-in is set.
+struct ZT_StandIn {
+  SDL_Renderer *renderer = nullptr;
+  SDL_Texture *texture = nullptr;             // (while set, the frame goes here)
+  bool (*present)(SDL_Renderer *) = nullptr; // (presents renderer's frames)
+};
+inline ZT_StandIn &ZT_WindowStandIn() {
+  static ZT_StandIn s;
+  return s;
+}
+inline bool ZT_SetRenderTarget(SDL_Renderer *r, SDL_Texture *t) {
+  const ZT_StandIn &s = ZT_WindowStandIn();
+  return SDL_SetRenderTarget(r, !t && r == s.renderer ? s.texture : t);
+}
+inline SDL_Texture *ZT_GetRenderTarget(SDL_Renderer *r) {
+  SDL_Texture *t = SDL_GetRenderTarget(r);
+  const ZT_StandIn &s = ZT_WindowStandIn();
+  return t && r == s.renderer && t == s.texture ? nullptr : t;
+}
+inline bool ZT_RenderPresent(SDL_Renderer *r) {
+  const ZT_StandIn &s = ZT_WindowStandIn();
+  return s.present && r == s.renderer ? s.present(r) : SDL_RenderPresent(r);
+}
+#define SDL_SetRenderTarget ZT_SetRenderTarget
+#define SDL_GetRenderTarget ZT_GetRenderTarget
+#define SDL_RenderPresent ZT_RenderPresent
+
 #endif // SDL3_COMPAT_HPP

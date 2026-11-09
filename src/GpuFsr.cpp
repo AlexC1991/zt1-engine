@@ -407,8 +407,7 @@ bool init(SDL_Renderer *renderer, float sharpness) {
     return g_available;
   }
   if (renderer && ZT_GetRendererInfo(renderer, &info) == 0 && std::strcmp(info.name, "gpu") == 0) {
-    // (ours: SDL3's GPU renderer - the upscaling only so far; the colour
-    // pass and the effects need the window's frame, which it doesn't share)
+    // (ours: SDL3's GPU renderer)
     g_available = (info.flags & ZT_RENDERER_TARGETTEXTURE) && SdlGpu::init(renderer);
     g_backend = g_available ? Backend::SdlGpu : Backend::None;
     SDL_Log("[GpuFsr] GPU FSR 1 on SDL GPU %s (sharpness %.2f)", g_available ? "ready" : "unavailable", sharpness);
@@ -487,6 +486,7 @@ void setColour(int filter, float strength, float brightness) {
     }
   g_gamma = std::clamp(brightness, 0.25f, 4.0f);
   g_colourOn = (filter != 0 && strength > 0.0f) || std::fabs(g_gamma - 1.0f) > 0.001f;
+  SdlGpu::setColour(g_colourOn, g_matrix, g_gamma);
 }
 
 void finishFrame(SDL_Renderer *renderer) {
@@ -495,8 +495,11 @@ void finishFrame(SDL_Renderer *renderer) {
       D3D11::colourPass(renderer, g_matrix, g_gamma);
     return;
   }
-  if (g_backend == Backend::SdlGpu)
+  if (g_backend == Backend::SdlGpu) {
+    if (renderer)
+      SdlGpu::finishFrame(renderer);
     return;
+  }
   if (!g_available || !g_colour || !g_colourOn || !renderer)
     return;
   SDL_Texture *was = SDL_GetRenderTarget(renderer);
@@ -608,7 +611,7 @@ unsigned compileEffect(const std::string &glsl, const std::string &hlsl, const s
   if (g_backend == Backend::D3d)
     return D3D11::compile(hlsl, params, log);
   if (g_backend == Backend::SdlGpu)
-    return log = "effects aren't on SDL's GPU renderer yet", 0;
+    return SdlGpu::compile(hlsl, params, log);
   return compileShader(glsl, log);
 }
 
@@ -661,7 +664,7 @@ bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pa
   if (g_backend == Backend::D3d)
     return D3D11::screenPass(renderer, prog, uniforms, smooth);
   if (g_backend == Backend::SdlGpu)
-    return false;
+    return SdlGpu::screenPass(renderer, prog, uniforms, smooth);
   SDL_Texture *was = SDL_GetRenderTarget(renderer);
   SDL_SetRenderTarget(renderer, nullptr);
   int w = 0, h = 0;
