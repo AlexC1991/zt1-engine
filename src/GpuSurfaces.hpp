@@ -40,7 +40,8 @@ bool drawGround(SDL_Renderer *renderer, const std::vector<uint32_t> &quads, cons
 // SDL_UpdateTexture for the receiving surfaces' mask atlas. On SDL3's GPU
 // renderer SDL would send it with its frame - after the passes, which run
 // ahead of it - so it goes with the engine's own uploads instead
-// (GpuUploadSdlGpu), sent before the next pass; elsewhere it's SDL's
+// (GpuUploadSdlGpu), sent before the next pass; on Direct3D 11 straight
+// into the texture (D3D11Util::updateTexture); elsewhere it's SDL's
 bool updateMask(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch);
 // GpuSunD3D11::upload's
 bool uploadSun(const LightingAssets::SunDepth (&maps)[2], const std::vector<float> *opacity, uint64_t frame);

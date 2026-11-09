@@ -60,8 +60,10 @@ DayNightLighting::ReceiverMask DayNightLighting::receiverMask(const Instance &o,
       if(page>=0){for(auto it=nativeMasks.begin();it!=nativeMasks.end();)if(it->second.page==page)it=nativeMasks.erase(it);else ++it;auto &p=maskPages[page];p.x=p.y=4;p.row=0;}}
     if(page<0){result.texture=nullptr;return result;}
     auto &p=maskPages[page];std::vector<Uint32> pixels(size_t(w)*h);
-    for(int y=0;y<s->h;++y)for(int x=0;x<s->w;++x){const auto pixel=reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(s->pixels)+y*s->pitch)[x];
-      if((pixel&SDL_GetPixelFormatDetails(s->format)->Amask)>>SDL_GetPixelFormatDetails(s->format)->Ashift)pixels[size_t(y+2)*w+x+2]=0xFFFFFFFFu;}
+    // (ours: the format's alpha looked up once, not twice for every pixel)
+    const auto *format=SDL_GetPixelFormatDetails(s->format);const Uint32 amask=format->Amask;const int ashift=format->Ashift;
+    for(int y=0;y<s->h;++y){const auto *row=reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(s->pixels)+y*s->pitch);Uint32 *to=&pixels[size_t(y+2)*w+2];
+      for(int x=0;x<s->w;++x)if((row[x]&amask)>>ashift)to[x]=0xFFFFFFFFu;}
     if(source.shadowRuns)for(auto run:*source.shadowRuns)for(size_t i=size_t(run>>32);i<size_t(run>>32)+uint32_t(run);++i)
       pixels[(i/s->w+2)*w+i%s->w+2]=0;
     const int offsetX=maskAtlasSide==4096?(page%2)*2048:0,offsetY=maskAtlasSide==4096?(page/2)*2048:0;

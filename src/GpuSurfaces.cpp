@@ -2,6 +2,7 @@
 
 // ours: see GpuSurfaces.hpp
 
+#include "D3D11Util.hpp"
 #include "GpuLightingSdlGpu.hpp"
 #include "GpuSunD3D11.hpp"
 #include "GpuUploadSdlGpu.hpp"
@@ -101,6 +102,9 @@ bool drawGround(SDL_Renderer *renderer, const std::vector<uint32_t> &quads, cons
 
 bool updateMask(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch) {
   return GpuUploadSdlGpu::update(renderer, texture, rect, pixels, pitch) ||
+#ifdef _WIN32
+         (D3D11Util::ready(renderer) && D3D11Util::updateTexture(texture, rect, pixels, pitch)) ||
+#endif
          SDL_UpdateTexture(texture, rect, pixels, pitch);
 }
 

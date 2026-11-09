@@ -234,6 +234,37 @@ ID3D11RenderTargetView *boundTarget(SDL_Renderer *renderer) {
   return rtv;
 }
 
+// ours: SDL3's own update makes a staging texture, copies through it and
+// frees it, each time - and first draws whatever it has queued that uses the
+// texture: about a tenth of a millisecond for a mask of a few hundred pixels.
+// UpdateSubresource takes the pixels as they are; SDL's record of the
+// pipeline is untouched (no state is bound).
+bool updateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch) {
+  if (!texture || !g_ctx || !pixels)
+    return false;
+  auto *resource = static_cast<ID3D11Texture2D *>(
+      SDL_GetPointerProperty(SDL_GetTextureProperties(texture), SDL_PROP_TEXTURE_D3D11_TEXTURE_POINTER, nullptr));
+  if (!resource)
+    return false;
+  D3D11_TEXTURE2D_DESC desc{};
+  resource->GetDesc(&desc);
+  switch (desc.Format) { // (four bytes a pixel, as SDL copies them)
+  case DXGI_FORMAT_B8G8R8A8_TYPELESS: case DXGI_FORMAT_B8G8R8A8_UNORM:
+  case DXGI_FORMAT_R8G8B8A8_TYPELESS: case DXGI_FORMAT_R8G8B8A8_UNORM: break;
+  default: return false;
+  }
+  if (desc.Usage != D3D11_USAGE_DEFAULT || desc.MipLevels != 1 || desc.ArraySize != 1)
+    return false;
+  D3D11_BOX box{0, 0, 0, desc.Width, desc.Height, 1};
+  if (rect) {
+    if (rect->x < 0 || rect->y < 0 || rect->w <= 0 || rect->h <= 0 || UINT(rect->x + rect->w) > desc.Width || UINT(rect->y + rect->h) > desc.Height)
+      return false;
+    box = {UINT(rect->x), UINT(rect->y), 0, UINT(rect->x + rect->w), UINT(rect->y + rect->h), 1};
+  }
+  g_ctx->UpdateSubresource(resource, 0, &box, pixels, UINT(pitch), 0);
+  return true;
+}
+
 ID3D11ShaderResourceView *viewOf(SDL_Texture *texture) {
   // ours: SDL3 gives a texture's Direct3D 11 texture as a property (SDL2's
   // record was read before); a view of it is made once and kept with the

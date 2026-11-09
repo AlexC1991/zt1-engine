@@ -46,6 +46,10 @@ ID3D11RenderTargetView *boundTarget(SDL_Renderer *renderer);
 // SDL's own shader view of one of its textures (SDL 2.32's record, checked
 // against the texture first), not referenced - 0 when it can't be had
 ID3D11ShaderResourceView *viewOf(SDL_Texture *texture);
+// Part of one of SDL's textures written straight through the immediate
+// context - only for a part nothing SDL has queued draws from (the masks'
+// fresh atlas space); false when it can't be, for SDL_UpdateTexture instead
+bool updateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch);
 
 } // namespace D3D11Util
 #endif
