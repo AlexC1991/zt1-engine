@@ -235,28 +235,40 @@ ID3D11RenderTargetView *boundTarget(SDL_Renderer *renderer) {
 }
 
 ID3D11ShaderResourceView *viewOf(SDL_Texture *texture) {
-#ifdef ZT_D3D11_RECORD
-  if (!texture)
+  // ours: SDL3 gives a texture's Direct3D 11 texture as a property (SDL2's
+  // record was read before); a view of it is made once and kept with the
+  // texture - released by SDL as the texture goes
+  if (!texture || !g_dev)
     return nullptr;
-  int w = 0, h = 0;
-  Uint32 format = 0;
-  if (ZT_QueryTexture(texture, &format, nullptr, &w, &h) != 0)
-    return nullptr;
-  const auto *record = reinterpret_cast<const SdlTexture *>(texture);
-  if (record->w != w || record->h != h || record->format != format || !record->driverdata)
-    return nullptr;
-  const auto *data = static_cast<const D3D11TextureStart *>(record->driverdata);
-  if (!data->mainTexture || !data->mainTextureResourceView)
+  const SDL_PropertiesID props = SDL_GetTextureProperties(texture);
+  if (auto *kept = static_cast<ID3D11ShaderResourceView *>(SDL_GetPointerProperty(props, "zt1.d3d11.view", nullptr)))
+    return kept;
+  auto *resource = static_cast<ID3D11Texture2D *>(SDL_GetPointerProperty(props, SDL_PROP_TEXTURE_D3D11_TEXTURE_POINTER, nullptr));
+  if (!resource)
     return nullptr;
   D3D11_TEXTURE2D_DESC desc{};
-  data->mainTexture->GetDesc(&desc);
-  if (int(desc.Width) != w || int(desc.Height) != h)
+  resource->GetDesc(&desc);
+  // (SDL3 may make it typeless, to view it plain or as sRGB: plain here, as
+  // SDL's own views read the game's colours)
+  DXGI_FORMAT format = desc.Format;
+  switch (format) {
+  case DXGI_FORMAT_B8G8R8A8_TYPELESS: format = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+  case DXGI_FORMAT_B8G8R8X8_TYPELESS: format = DXGI_FORMAT_B8G8R8X8_UNORM; break;
+  case DXGI_FORMAT_R8G8B8A8_TYPELESS: format = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+  case DXGI_FORMAT_R10G10B10A2_TYPELESS: format = DXGI_FORMAT_R10G10B10A2_UNORM; break;
+  case DXGI_FORMAT_R16G16B16A16_TYPELESS: format = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
+  default: break;
+  }
+  D3D11_SHADER_RESOURCE_VIEW_DESC v{};
+  v.Format = format;
+  v.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+  v.Texture2D.MipLevels = desc.MipLevels ? desc.MipLevels : 1;
+  ID3D11ShaderResourceView *view = nullptr;
+  if (FAILED(g_dev->CreateShaderResourceView(resource, &v, &view)) || !view)
     return nullptr;
-  return data->mainTextureResourceView;
-#else
-  (void)texture;
-  return nullptr;
-#endif
+  SDL_SetPointerPropertyWithCleanup(props, "zt1.d3d11.view", view,
+                                    [](void *, void *value) { static_cast<ID3D11ShaderResourceView *>(value)->Release(); }, nullptr);
+  return view;
 }
 
 } // namespace D3D11Util

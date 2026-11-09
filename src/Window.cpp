@@ -21,6 +21,11 @@ Window::Window(const std::string &title, int width, int height, float fps_target
     // the window's size is in real pixels, and the uiscale extra makes the
     // screens bigger in whole steps instead (SDL3 is aware of each monitor's
     // DPI already: SDL2 needed SDL_HINT_WINDOWS_DPI_AWARENESS)
+    // (SDL3 checks by default that every texture and renderer handed to it is
+    // a live one - a locked table lookup a call, thousands a frame: the
+    // world's drawing took 1.7 times as long as on SDL2. Null checks only,
+    // as SDL2 made)
+    SDL_SetHint(SDL_HINT_INVALID_PARAM_CHECKS, "1");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "couldn't init SDL: %s", SDL_GetError());
         exit(1);

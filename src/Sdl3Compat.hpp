@@ -11,6 +11,7 @@
 #include <SDL3/SDL.h>
 
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 // (SDL2's renderer flags, for the code that still reads them: ZT_GetRendererInfo)
@@ -113,18 +114,19 @@ inline int ZT_RenderReadPixels(SDL_Renderer *r, const SDL_Rect *rect, Uint32 for
   SDL_DestroySurface(got);
   return ok ? 0 : -1;
 }
+// (asked for every sprite drawn: SDL3's texture holds its format and size
+// itself; only its access is a property - a locked lookup)
 inline int ZT_QueryTexture(SDL_Texture *t, Uint32 *format, int *access, int *w, int *h) {
   if (!t)
     return -1;
-  const SDL_PropertiesID p = SDL_GetTextureProperties(t);
   if (format)
-    *format = Uint32(SDL_GetNumberProperty(p, SDL_PROP_TEXTURE_FORMAT_NUMBER, 0));
+    *format = Uint32(t->format);
   if (access)
-    *access = int(SDL_GetNumberProperty(p, SDL_PROP_TEXTURE_ACCESS_NUMBER, 0));
+    *access = int(SDL_GetNumberProperty(SDL_GetTextureProperties(t), SDL_PROP_TEXTURE_ACCESS_NUMBER, 0));
   if (w)
-    *w = int(SDL_GetNumberProperty(p, SDL_PROP_TEXTURE_WIDTH_NUMBER, 0));
+    *w = t->w;
   if (h)
-    *h = int(SDL_GetNumberProperty(p, SDL_PROP_TEXTURE_HEIGHT_NUMBER, 0));
+    *h = t->h;
   return 0;
 }
 
@@ -149,12 +151,30 @@ inline SDL_Surface *ZT_ConvertSurfaceFormat(SDL_Surface *s, Uint32 format, Uint3
   return SDL_ConvertSurface(s, SDL_PixelFormat(format));
 }
 
-// A texture's own pointer, as SDL2's user data
+// A texture's own pointer, as SDL2's user data: read for every sprite drawn
+// (ArtScaler::scaleOf), so kept in a table of the engine's - a property is
+// a locked lookup - and the texture told to forget it as SDL destroys it (a
+// texture made later at the same address can't find an old one)
+inline std::unordered_map<SDL_Texture *, void *> &ZT_TextureData() {
+  static std::unordered_map<SDL_Texture *, void *> data;
+  return data;
+}
 inline int ZT_SetTextureUserData(SDL_Texture *t, void *data) {
-  return SDL_SetPointerProperty(SDL_GetTextureProperties(t), "zt1.userdata", data) ? 0 : -1;
+  if (!t)
+    return -1;
+  auto &table = ZT_TextureData();
+  const bool known = table.count(t) != 0;
+  table[t] = data;
+  if (!known)
+    SDL_SetPointerPropertyWithCleanup(SDL_GetTextureProperties(t), "zt1.userdata", t,
+                                      [](void *, void *texture) { ZT_TextureData().erase(static_cast<SDL_Texture *>(texture)); },
+                                      nullptr);
+  return 0;
 }
 inline void *ZT_GetTextureUserData(SDL_Texture *t) {
-  return SDL_GetPointerProperty(SDL_GetTextureProperties(t), "zt1.userdata", nullptr);
+  const auto &table = ZT_TextureData();
+  const auto found = table.find(t);
+  return found == table.end() ? nullptr : found->second;
 }
 
 inline int ZT_RenderSetLogicalSize(SDL_Renderer *r, int w, int h) {
