@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <cstdlib>
+#include <cstring>
 using LightingAssets::Point;
 void DayNightLighting::addActor(Animation *art,int frame,Point position,float fx,float fy,float halfX,float halfY,uint64_t id) {
   if(!art || actors.size()>=maxActors)return;
@@ -204,9 +205,23 @@ void DayNightLighting::collectActors(World &world) {
   // a stable sort of the faces moved each large face about many times)
   // (each face's depth and place side by side, sorted by both: the order a
   // stable sort by depth gives, without reaching into the faces each time)
-  faceKeys.resize(actorFaces.size());for(size_t i=0;i<faceKeys.size();++i)faceKeys[i]={actorFaces[i].depth,uint32_t(i)};
-  std::sort(faceKeys.begin(),faceKeys.end());
-  faceScratch.clear();faceScratch.reserve(actorFaces.size());for(const auto &k:faceKeys)faceScratch.push_back(std::move(actorFaces[k.second]));
+  // (ours: by a stable radix sort of the depth's bits, four passes - ties keep
+  // their place, the order the (depth, place) pairs sorted to; a comparison
+  // sort of twelve thousand faces took most of a millisecond. -0 is taken as
+  // 0, as the pairs' comparison did)
+  const size_t count=actorFaces.size();faceKeys.resize(count);faceKeysSpare.resize(count);
+  for(size_t i=0;i<count;++i) {
+    const float depth=actorFaces[i].depth==0?0.0f:actorFaces[i].depth;uint32_t bits;std::memcpy(&bits,&depth,sizeof bits);
+    bits=bits&0x80000000u?~bits:bits|0x80000000u; // (ordered as the floats are)
+    faceKeys[i]=uint64_t(bits)<<32|uint32_t(i);
+  }
+  for(int shift=32;shift<64;shift+=8) {
+    size_t at[257]{};for(const uint64_t k:faceKeys)++at[((k>>shift)&255)+1];
+    for(int b=0;b<256;++b)at[b+1]+=at[b];
+    for(const uint64_t k:faceKeys)faceKeysSpare[at[(k>>shift)&255]++]=k;
+    faceKeys.swap(faceKeysSpare);
+  }
+  faceScratch.clear();faceScratch.reserve(actorFaces.size());for(const uint64_t k:faceKeys)faceScratch.push_back(std::move(actorFaces[uint32_t(k)]));
   actorFaces.swap(faceScratch);
   finishEmitters();
   counters.actors=int(actors.size());counters.actorFaces=int(actorFaces.size());

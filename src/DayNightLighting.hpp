@@ -189,7 +189,7 @@ private:
   LightingAssets::ActorCells receiverCells[2],faceCells[2];uint64_t projectionSerial=0;
   std::vector<uint8_t> receiverNear,faceNear;std::vector<Uint8> shadowAlpha;std::vector<uint32_t> shadowShown;
   struct GroundBox{const void *data=nullptr;size_t count=0;LightingAssets::Point lo{},hi{};};std::vector<GroundBox> groundBoxes; // (composite's: each lamp's pool's box)
-  std::vector<ProjectedFace> faceScratch;std::vector<std::pair<float,uint32_t>> faceKeys;
+  std::vector<ProjectedFace> faceScratch;std::vector<uint64_t> faceKeys,faceKeysSpare;
   std::vector<float> casterOpacity; // addition: by sun-map caster (instance+1): foliage lets light through
   GpuLighting gpu;
   bool gpuSunReady=false;
