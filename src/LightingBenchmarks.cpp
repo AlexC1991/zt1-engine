@@ -153,6 +153,8 @@ int runLightingBenchmarks(World &world,ResourceManager *rm,SDL_Renderer *rendere
  meta<<"simulation="<<simulation<<"\n";
  std::ofstream samples(out+"/frames.csv");samples<<"pass,mode,frame,frame_ms,thread_cpu_ms,simulation_ms,lights,faces,actors,actor_faces,sun_builds,actor_builds,actor_fallbacks\n";
  std::ofstream phases(out+"/phases.csv");phases<<"pass,mode,phase,total_ms,frames\n";
+ // ours: each frame's own phases (those over 0.05 ms), to find what a slow frame spent its time on
+ std::ofstream framePhases(out+"/frame_phases.csv");framePhases<<"pass,mode,frame,phase,ms\n";
  for(int pass=0;pass<2;++pass)for(int mode=0;mode<4;++mode) {
   const char *label=mode==0?"off":mode==1?"day":mode==2?"sunset":"night";Features::dayNightLighting=mode!=0;
   FrameProfile::totals.clear();FrameProfile::active=true;
@@ -163,10 +165,12 @@ int runLightingBenchmarks(World &world,ResourceManager *rm,SDL_Renderer *rendere
    // addition: model/place bursts exercise invalidation while the camera pans.
    if(scenario=="placement" && f%45==0){auto &list=objects.all();list.erase(std::remove_if(list.begin(),list.end(),[](const auto &o){return o.x>38 && o.x<40 && o.y>38 && o.y<40;}),list.end());
      objects.add(buildings.empty()?"scenery/other/lamp.ai":buildings[(f/45+pass)%buildings.size()],39.0f,39.0f,(f/45%4)*2);world.reindex();}
+   const auto before=FrameProfile::totals;
    FrameProfile::begin();const double cpu=threadMilliseconds();Uint64 start=SDL_GetPerformanceCounter();
    if(simulation)world.update(SDL_GetKeyboardState(nullptr),1.0f/60);
    const double simulationMs=simulation?elapsed(start):0;
    draw();SDL_RenderPresent(renderer);const double ms=elapsed(start),cpuMs=threadMilliseconds()-cpu;
+   if(f>=24)for(const auto &[name,total]:FrameProfile::totals){const auto was=before.find(name);const double spent=total-(was==before.end()?0:was->second);if(spent>.05)framePhases<<pass<<","<<label<<","<<f-24<<","<<name<<","<<spent<<"\n";}
    if(f>=24){const auto &s=light.stats();samples<<pass<<","<<label<<","<<f-24<<","<<ms<<","<<cpuMs<<","<<simulationMs<<","<<(mode?s.lights:0)<<","<<(mode?s.modelFaces:0)<<","<<(mode?s.actors:0)<<","<<(mode?s.actorFaces:0)<<","<<(mode?s.sunBuilds:0)<<","<<(mode?s.actorBuilds:0)<<","<<(mode?s.actorFallbacks:0)<<"\n";}
   }
   FrameProfile::active=false;for(const auto &[name,ms]:FrameProfile::totals)phases<<pass<<","<<label<<","<<name<<","<<ms<<",204\n";

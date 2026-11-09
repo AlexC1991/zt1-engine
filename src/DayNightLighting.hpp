@@ -183,6 +183,9 @@ private:
   std::vector<Receiver> receivers;
   struct ReceiverPoint {LightingAssets::Point p,normal;float amount=0,sun[2]{};};
   std::vector<ReceiverPoint> receiverPoints;
+  std::vector<ReceiverPoint> receiverPrevious; // ours: the points before they were made again (prepareReceivers)
+  std::vector<int> receiverMatch,receiverLattice,receiverChain;std::vector<uint32_t> receiverMissed;
+  void sampleMissed(int k); // ours: sun map k asked at receiverMissed's points
   // ours: which ground points and face corners an actor's shadow may reach,
   // asked only in the sun maps' cells an actor reached; and what the map's
   // and each tank's ground pass share in a frame (each worked it all out)

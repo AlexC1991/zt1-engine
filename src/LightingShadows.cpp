@@ -44,6 +44,30 @@ struct DayNightLighting::SunScene {
   std::vector<std::array<Point,4>> facePoints;std::vector<Point> faceNormals;std::vector<uint32_t> faceIds;std::vector<char> faceVisible;
 };
 struct DayNightLighting::SunGround {uint64_t generation=0;std::vector<Point> points,normals;};
+
+// ours: for each of `count` points (to), which of the `fromCount` points (from)
+// is at the same place with the same normal - -1 where none is. Every
+// receiver point is on the quarter-tile lattice, so the from points are kept
+// by lattice cell (a chain through the cell's points of different heights),
+// with no hashing. A point's sun in a map depends on its place and normal
+// only, so a matched point's sun is what asking the map again would give.
+template<class From,class To> static void samePoints(size_t fromCount,From from,size_t count,To to,
+    std::vector<int> &match,std::vector<int> &lattice,std::vector<int> &chain) {
+  match.assign(count,-1);if(!fromCount || !count)return;
+  int x0=std::numeric_limits<int>::max(),y0=x0,x1=std::numeric_limits<int>::min(),y1=x1;
+  for(size_t i=0;i<fromCount;++i){const Point p=from(i).first;const int x=int(std::lround(p.x*4)),y=int(std::lround(p.y*4));
+    x0=std::min(x0,x);x1=std::max(x1,x);y0=std::min(y0,y);y1=std::max(y1,y);}
+  const int w=x1-x0+1,h=y1-y0+1;
+  lattice.assign(size_t(w)*h,-1);chain.assign(fromCount,-1);
+  for(size_t i=0;i<fromCount;++i){const Point p=from(i).first;const size_t cell=size_t(int(std::lround(p.y*4))-y0)*w+(int(std::lround(p.x*4))-x0);
+    chain[i]=lattice[cell];lattice[cell]=int(i);}
+  parallelFor(count,[&](size_t begin,size_t end){for(size_t j=begin;j<end;++j) {
+    const auto [p,n]=to(j);const int x=int(std::lround(p.x*4))-x0,y=int(std::lround(p.y*4))-y0;
+    if(x<0 || y<0 || x>=w || y>=h)continue;
+    for(int i=lattice[size_t(y)*w+x];i>=0;i=chain[i]){const auto [q,m]=from(size_t(i));
+      if(q.x==p.x && q.y==p.y && q.z==p.z && m.x==n.x && m.y==n.y && m.z==n.z){match[j]=i;break;}}
+  }});
+}
 struct DayNightLighting::SunTerrain {uint32_t generation=0;bool flat=true;float flatHeight=0;std::vector<std::array<Point,4>> quads;};
 
 struct DayNightLighting::SunJob {
@@ -122,6 +146,16 @@ bool DayNightLighting::takeSunJob(int k,double time,float left,float top,float e
   if(job->ground->generation==gpuReceiverGeneration && job->receiverSun.size()==receiverPoints.size()) {
     for(size_t i=0;i<receiverPoints.size();++i)receiverPoints[i].sun[k]=job->receiverSun[i];
     receiverSunStamp[k]=sunMaps[k].stamp;receiverCells[k]=std::move(job->receiverCells);
+  } else if(job->receiverSun.size()==job->ground->points.size()) {
+    // ours: made from the points before a pan made them again: the points
+    // that stayed take the job's sun, the rest ask the map now (all of them
+    // were asked again, the frame waiting)
+    const auto &g=*job->ground;
+    samePoints(g.points.size(),[&](size_t i){return std::make_pair(g.points[i],g.normals[i]);},
+      receiverPoints.size(),[&](size_t j){return std::make_pair(receiverPoints[j].p,receiverPoints[j].normal);},receiverMatch,receiverLattice,receiverChain);
+    receiverMissed.clear();
+    for(size_t j=0;j<receiverPoints.size();++j)if(receiverMatch[j]>=0)receiverPoints[j].sun[k]=job->receiverSun[size_t(receiverMatch[j])];else receiverMissed.push_back(uint32_t(j));
+    sampleMissed(k);receiverSunStamp[k]=sunMaps[k].stamp;
   }
   return true;
 }
@@ -236,6 +270,10 @@ float DayNightLighting::sunShadow(Point p,Point normal,uint32_t receiver)const {
   if(sky.sun<=.001f)return 0;
   return sunMaps[0].shadow(p,normal,receiver)*(1-sunBlend)+sunMaps[1].shadow(p,normal,receiver)*sunBlend;
 }
+void DayNightLighting::sampleMissed(int k) {
+  const auto &atlas=sunMaps[k];
+  parallelFor(receiverMissed.size(),[&](size_t b,size_t e){for(size_t i=b;i<e;++i){auto &p=receiverPoints[receiverMissed[i]];p.sun[k]=atlas.shadow(p.p,p.normal,0xFFFFFFFFu,true);}},1024);
+}
 void DayNightLighting::prepareReceivers(const WorldMap &map,const WorldRenderer &view) {
   float x0=1e9f,y0=1e9f,x1=-1e9f,y1=-1e9f;
   for(float z:{float(map.getMinHeight()),float(map.getMaxHeight())})for(int k=0;k<4;++k) {
@@ -245,6 +283,28 @@ void DayNightLighting::prepareReceivers(const WorldMap &map,const WorldRenderer 
   const int l=std::max(0,int(std::floor(x0/8))*8-2),t=std::max(0,int(std::floor(y0/8))*8-2);
   const int r=std::min(map.getWidth(),int(std::ceil(x1/8))*8+2),b=std::min(map.getHeight(),int(std::ceil(y1/8))*8+2);
   if(receiverGeneration==map.getGeneration() && receiverRotation==view.getRotation() && l==receiverX0 && r==receiverX1 && t==receiverY0 && b==receiverY1)return;
+  // ours: the points about to be made again kept, with the sun maps they
+  // were asked of - a point that stays (the same place and normal) keeps its
+  // sun rather than asking the map again (a pan across a block of tiles had
+  // every point ask both maps while the frame waited)
+  bool keep[2];uint64_t kept[2];
+  for(int k=0;k<2;++k){kept[k]=receiverSunStamp[k];keep[k]=kept[k]!=0 && kept[k]==sunMaps[k].stamp && !receiverPoints.empty();}
+  receiverPrevious.swap(receiverPoints);
+  struct Carry {
+    DayNightLighting &d;const bool *keep;const uint64_t *kept;
+    ~Carry() {
+      if(keep[0] || keep[1]) {
+        const auto &from=d.receiverPrevious;auto &to=d.receiverPoints;
+        samePoints(from.size(),[&](size_t i){return std::make_pair(from[i].p,from[i].normal);},
+          to.size(),[&](size_t j){return std::make_pair(to[j].p,to[j].normal);},d.receiverMatch,d.receiverLattice,d.receiverChain);
+        d.receiverMissed.clear();
+        for(size_t j=0;j<to.size();++j)if(d.receiverMatch[j]>=0){for(int k=0;k<2;++k)if(keep[k])to[j].sun[k]=from[size_t(d.receiverMatch[j])].sun[k];}
+          else d.receiverMissed.push_back(uint32_t(j));
+        for(int k=0;k<2;++k)if(keep[k]){d.sampleMissed(k);d.receiverSunStamp[k]=kept[k];}
+      }
+      d.receiverPrevious.clear();
+    }
+  } carry{*this,keep,kept};
   receiverGeneration=map.getGeneration();receiverRotation=view.getRotation();receiverX0=l;receiverX1=r;receiverY0=t;receiverY1=b;receivers.clear();receiverPoints.clear();receiverSampleFrame=size_t(-1);receiverSunStamp[0]=receiverSunStamp[1]=0;
   ++gpuReceiverGeneration;gpuGroundPoints.clear();
   // addition: a flat map is a regular quarter-tile grid. Build each vertex
