@@ -9496,6 +9496,13 @@ int main(int argc, char *argv[]) {
 
   for (int i = 1; i + 1 < argc; i++) {
     if (std::string(argv[i]) == "--panel-shots") {
+      // ZT_AUDIO_CHECKS=1: the sound as SDL2_mixer made it, measured through
+      // SDL's silent disk driver (src/AudioChecks.cpp)
+      if (std::getenv("ZT_AUDIO_CHECKS")) {
+        extern std::string runAudioChecks(ResourceManager *, const std::string &);
+        std::filesystem::create_directories(argv[i + 1]);
+        return runAudioChecks(&resource_manager, argv[i + 1]).find("FAIL ") == std::string::npos ? 0 : 1;
+      }
       Animation::setGradualZoomedIn(false); // (the checks' pictures: every frame complete)
       GraphicsQuality::forThisRun(GraphicsQuality::High); // (the same pictures on every PC)
       return runPanelShots(window.renderer, &resource_manager,

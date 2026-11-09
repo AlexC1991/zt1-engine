@@ -67,6 +67,26 @@ bool spec(int *frequency, int *channels) {
 Clip *load(const void *data, size_t size) {
   if (!g_mixer || !data || !size)
     return nullptr;
+  // A WAV is made the mixer's own format here, once, as SDL2_mixer's
+  // Mix_LoadWAV made a chunk the device's: SDL3_mixer changing the rate as a
+  // sound plays left 14 frames of silence 23 ms into every sound not already
+  // at the mixer's rate - most of the game's are 22050 Hz - its first read
+  // coming back short (AudioChecks.cpp)
+  SDL_AudioSpec from{}, to{};
+  Uint8 *pcm = nullptr;
+  Uint32 len = 0;
+  if (MIX_GetMixerFormat(g_mixer, &to) && SDL_LoadWAV_IO(SDL_IOFromConstMem(data, size), true, &from, &pcm, &len)) {
+    to.format = SDL_AUDIO_S16; // (SDL2_mixer's chunks' format)
+    Uint8 *converted = nullptr;
+    int convertedLen = 0;
+    const bool ok = SDL_ConvertAudioSamples(&from, pcm, int(len), &to, &converted, &convertedLen);
+    SDL_free(pcm);
+    if (ok)
+      if (Clip *clip = MIX_LoadRawAudioNoCopy(g_mixer, converted, size_t(convertedLen), &to, true))
+        return clip;
+    SDL_free(converted);
+  }
+  // (anything else SDL3_mixer reads - and decodes whole)
   SDL_IOStream *io = SDL_IOFromConstMem(data, size);
   return io ? MIX_LoadAudio_IO(g_mixer, io, true, true) : nullptr;
 }

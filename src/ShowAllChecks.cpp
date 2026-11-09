@@ -74,10 +74,15 @@ int runShowAllChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     for (int id : f.updateExhibits(map, 1, 0, 1)) f.finishExhibit(id, name, map);
     return f.exhibitAt(x, y);
   };
-  const int HX = 40, SX = 56, Y = 30, HW = 16, SW = 24, H = 18;
-  const int home = rectangle(HX, Y, HW, H, f.typeIndex("tankwal2"), "Show home");
+  // (the home above the show tank, sharing its top wall, in the clear middle
+  // of the zoo - its own walls are no rectangle on this map: at x 40 to 80
+  // side by side the show tank ran through the east wall and was never a
+  // tank - with the trainer's place just beside the show tank)
+  const int HX = 38, HY = 8, SX = 38, Y = 26, HW = 16, SW = 24, H = 18;
+  const int home = rectangle(HX, HY, HW, H, f.typeIndex("tankwal2"), "Show home");
   const int tank = rectangle(SX, Y, SW, H, f.typeIndex("tankwal3"), "Show tank");
   check("home and show tanks built", home >= 0 && tank >= 0 && home != tank);
+  check("both are tanks", home >= 0 && tank >= 0 && f.exhibit(home) && f.exhibit(home)->tank && f.exhibit(tank) && f.exhibit(tank)->tank);
   if (home < 0 || tank < 0) return 1;
   for (int id : {tank, home}) {
     while (f.canAdjustWall(id, 1)) f.adjustWall(id, 1);
@@ -137,7 +142,7 @@ int runShowAllChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
   };
 
   const int trainerType = st.typeOfFile("staff/trainer.ai");
-  const int trainer = st.hire(trainerType, SX + SW + 3.5f, Y + 2.5f, map, f);
+  const int trainer = st.hire(trainerType, SX + SW + 1.5f, Y + 2.5f, map, f);
   check("marine specialist hired", trainer >= 0);
   if (trainer < 0) return 1;
   run(1);
@@ -150,10 +155,10 @@ int runShowAllChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     const std::string file = type.file, name = file.substr(file.find('/') + 1);
     while (shows.remove(tank, 0)) {}
     a.clear();
-    st.moveTo(trainer, SX + SW + 3.5f, Y + 2.5f);
+    st.moveTo(trainer, SX + SW + 1.5f, Y + 2.5f);
     const int typeIndex = a.typeOfFile(file);
-    const int one = a.adopt(typeIndex, false, HX + 4.5f, Y + 6.5f, map, f);
-    const int two = a.adopt(typeIndex, true, HX + 10.5f, Y + 10.5f, map, f);
+    const int one = a.adopt(typeIndex, false, HX + 4.5f, HY + 6.5f, map, f);
+    const int two = a.adopt(typeIndex, true, HX + 10.5f, HY + 10.5f, map, f);
     run(1);
     for (auto &m : const_cast<std::vector<Animals::Member> &>(a.members())) m.happiness = 100;
     const bool selected = shows.selectSpecies(tank, file);
@@ -240,9 +245,9 @@ int runShowAllChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     const std::string file = performers.front();
     while (shows.remove(tank, 0)) {}
     a.clear();
-    st.moveTo(trainer, SX + SW + 3.5f, Y + 2.5f);
-    a.adopt(a.typeOfFile(file), false, HX + 4.5f, Y + 6.5f, map, f);
-    a.adopt(a.typeOfFile(file), true, HX + 10.5f, Y + 10.5f, map, f);
+    st.moveTo(trainer, SX + SW + 1.5f, Y + 2.5f);
+    a.adopt(a.typeOfFile(file), false, HX + 4.5f, HY + 6.5f, map, f);
+    a.adopt(a.typeOfFile(file), true, HX + 10.5f, HY + 10.5f, map, f);
     run(1);
     shows.selectSpecies(tank, file);
     for (const auto &t : shows.tricks(file))
