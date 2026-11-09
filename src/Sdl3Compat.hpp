@@ -432,11 +432,19 @@ struct ZT_Vertex {
 inline int ZT_RenderGeometry(SDL_Renderer *r, SDL_Texture *t, const ZT_Vertex *v, int n, const int *indices, int ni) {
   if (!r || !v || n <= 0)
     return n == 0 ? 0 : -1;
-  // (each colour as SDL3's 0-1 floats: the same /255 SDL2's renderers made)
+  // (each colour as SDL3's 0-1 floats: the same /255 SDL2's renderers made,
+  // looked up - the lighting's fields send tens of thousands a frame)
+  static const struct Unit {
+    float v[256];
+    Unit() {
+      for (int i = 0; i < 256; i++)
+        v[i] = i / 255.0f;
+    }
+  } unit;
   thread_local std::vector<SDL_FColor> colours;
   colours.resize(size_t(n));
   for (int i = 0; i < n; i++)
-    colours[i] = SDL_FColor{v[i].color.r / 255.0f, v[i].color.g / 255.0f, v[i].color.b / 255.0f, v[i].color.a / 255.0f};
+    colours[i] = SDL_FColor{unit.v[v[i].color.r], unit.v[v[i].color.g], unit.v[v[i].color.b], unit.v[v[i].color.a]};
   const bool ok = ZT_RenderGeometryRaw(r, t, &v[0].position.x, int(sizeof(ZT_Vertex)), colours.data(), int(sizeof(SDL_FColor)),
                                        &v[0].tex_coord.x, int(sizeof(ZT_Vertex)), n, indices, ni, indices ? 4 : 0);
   return ok ? 0 : -1;
