@@ -33,6 +33,16 @@ SHADERS = [("GpuFsrD3D11.cpp", "kEasu"), ("GpuFsrD3D11.cpp", "kRcas"), ("GpuFsrD
 EFFECTS = [("GraphicsEffects.cpp", "kFxaaHlsl"), ("GraphicsEffects.cpp", "kBloomHlsl"),
            ("GraphicsEffects.cpp", "kTiltShiftHlsl"), ("GraphicsEffects.cpp", "kGradeHlsl")]
 
+# The lighting's passes (src/shaders/*.hlsl, written for SDL_GPU's layout):
+# (file, the name in the header, profile). '#include "sun"' in them becomes
+# GpuSunD3D11.cpp's sun functions (kHlsl without its declarations)
+LIGHTING = [("lighting_clip.comp.hlsl", "kLightingClip", "cs_6_0"),
+            ("lighting_surface.vert.hlsl", "kLightingSurfaceVert", "vs_6_0"),
+            ("lighting_surface.frag.hlsl", "kLightingSurfaceFrag", "ps_6_0"),
+            ("lighting_ground.vert.hlsl", "kLightingGroundVert", "vs_6_0"),
+            ("lighting_ground.frag.hlsl", "kLightingGroundFrag", "ps_6_0"),
+            ("lighting_composite.frag.hlsl", "kLightingComposite", "ps_6_0")]
+
 HEADER = """[[vk::binding(0, 3)]] cbuffer C : register(b0, space3) { float2 uSize; float uTime; float pad; float4 p0; float4 p1; float4 p2; float4 p3; };
 [[vk::combinedImageSampler]] [[vk::binding(0, 2)]] Texture2D src : register(t0, space2);
 [[vk::combinedImageSampler]] [[vk::binding(0, 2)]] SamplerState samp : register(s0, space2);
@@ -85,7 +95,7 @@ def body(src, name):
 
 def array(out, name, code):
     out.append(f"// {name}: {len(code)} bytes")
-    out.append(f"static const unsigned char {name}[] = {{")
+    out.append(f"inline constexpr unsigned char {name}[] = {{")
     for i in range(0, len(code), 20):
         out.append("  " + ", ".join(f"0x{b:02x}" for b in code[i:i + 20]) + ",")
     out.append("};")
@@ -119,19 +129,35 @@ def main():
                 if r.returncode != 0:
                     sys.exit(f"{name} ({what}): dxc failed\n{r.stdout}{r.stderr}")
                 array(out, name + end, code_file.read_bytes())
+        sun = raw("GpuSunD3D11.cpp", "kHlsl")
+        sun = sun[sun.index("float sunTap("):]
+        # (sunOpacity a byte buffer there: SDL_GPU binds raw views)
+        assert sun.count("sunOpacity[by]") == 1
+        sun = sun.replace("sunOpacity[by]", "asfloat(sunOpacity.Load(by * 4u))")
+        for file, name, profile in LIGHTING:
+            src = (ROOT / "src" / "shaders" / file).read_text(encoding="utf-8").replace('#include "sun"', sun)
+            hlsl = Path(tmp) / file
+            hlsl.write_text(src, encoding="utf-8")
+            for what, end, extra in TARGETS:
+                code_file = Path(tmp) / f"{name}.{end}"
+                r = subprocess.run([dxc, "-nologo", "-T", profile, "-E", "main", "-O3", *extra, "-Fo",
+                                    str(code_file), str(hlsl)], capture_output=True, text=True)
+                if r.returncode != 0:
+                    sys.exit(f"{name} ({what}): dxc failed\n{r.stdout}{r.stderr}")
+                array(out, name + end, code_file.read_bytes())
     out += ["", "// A shader in both forms",
             "struct Code {", "  const unsigned char *dxil;", "  size_t dxilSize;", "  const unsigned char *spv;",
             "  size_t spvSize;", "};"]
-    for _, name in SHADERS:
-        out.append(f"static const Code {name}Code = {{{name}Dxil, sizeof({name}Dxil), {name}Spv, sizeof({name}Spv)}};")
+    for name in [n for _, n in SHADERS] + [n for _, n, _ in LIGHTING]:
+        out.append(f"inline constexpr Code {name}Code = {{{name}Dxil, sizeof({name}Dxil), {name}Spv, sizeof({name}Spv)}};")
     out += ["", "// The effects, by the FNV-1a hash of their HLSL",
             "struct Effect {", "  unsigned long long hash;", "  Code code;", "};",
-            "static const Effect kEffects[] = {"]
+            "inline constexpr Effect kEffects[] = {"]
     for name, h in hashes[len(SHADERS):]:
         out.append(f"  {{0x{h:016x}ull, {{{name}Dxil, sizeof({name}Dxil), {name}Spv, sizeof({name}Spv)}}}},")
     out += ["};", "} // namespace SdlGpu", "} // namespace GpuFsr", ""]
     OUT.write_bytes("\r\n".join(out).encode("utf-8"))
-    print("wrote", OUT, "with", ", ".join(n for _, n in SHADERS + EFFECTS), "using", dxc)
+    print("wrote", OUT, "with", ", ".join([n for _, n in SHADERS + EFFECTS] + [n for _, n, _ in LIGHTING]), "using", dxc)
 
 
 if __name__ == "__main__":

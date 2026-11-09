@@ -233,7 +233,14 @@ const char *kPixel = R"(
 Texture2D mask : register(t0);
 SamplerState samp : register(s0);
 struct GSOut { float4 pos : SV_Position; float4 colour : COLOR0; float2 uv : TEXCOORD0; };
-float4 main(GSOut i) : SV_Target { return i.colour * mask.Sample(samp, i.uv); }
+// (the mask read a 64th of a texel on, so no pixel sits exactly between two
+// texels - there each graphics card and API picked its own; this way
+// Direct3D 11, SDL3's GPU renderer and every card pick the same)
+float4 main(GSOut i) : SV_Target {
+  float w, h;
+  mask.GetDimensions(w, h);
+  return i.colour * mask.Sample(samp, i.uv + (1.0 / 64.0) / float2(w, h));
+}
 )";
 
 // The CPU's drawShadows: each point's shadow - from the sun maps as made for

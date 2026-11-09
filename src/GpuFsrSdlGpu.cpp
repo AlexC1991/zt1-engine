@@ -60,7 +60,8 @@ int g_screenAsked = 0;
 // The frame already copied to the window (by finishFrame) this frame
 bool g_finished = false;
 
-SDL_GPURenderState *makeState(SDL_Renderer *renderer, const Code &code, const char *what) {
+SDL_GPURenderState *makeState(SDL_Renderer *renderer, const Code &code, const char *what, int samplers = 1,
+                              int uniforms = 1) {
   SDL_GPUShaderCreateInfo info{};
   const bool dxil = g_format == SDL_GPU_SHADERFORMAT_DXIL;
   info.code = dxil ? code.dxil : code.spv;
@@ -68,8 +69,8 @@ SDL_GPURenderState *makeState(SDL_Renderer *renderer, const Code &code, const ch
   info.entrypoint = "main";
   info.format = g_format;
   info.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
-  info.num_samplers = 1;
-  info.num_uniform_buffers = 1;
+  info.num_samplers = Uint32(samplers);
+  info.num_uniform_buffers = Uint32(uniforms);
   SDL_GPUShader *shader = SDL_CreateGPUShader(g_dev, &info);
   if (!shader) {
     SDL_Log("[GpuFsr] SDL GPU %s shader: %s", what, SDL_GetError());
@@ -200,6 +201,13 @@ unsigned long long fnv1a64(const std::string &s) {
 }
 
 } // namespace
+
+SDL_GPUDevice *device() { return g_dev; }
+SDL_GPUShaderFormat shaderFormat() { return g_format; }
+SDL_GPURenderState *renderState(SDL_Renderer *renderer, const Code &code, int samplers, int uniforms,
+                                const char *what) {
+  return g_dev ? makeState(renderer, code, what, samplers, uniforms) : nullptr;
+}
 
 bool init(SDL_Renderer *renderer) {
   g_dev = static_cast<SDL_GPUDevice *>(

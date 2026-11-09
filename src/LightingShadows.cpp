@@ -4,8 +4,7 @@
 #include "DayNightLighting.hpp"
 #include "ParallelFor.hpp"
 #include "GraphicsQuality.hpp"
-#include "GpuSunD3D11.hpp"
-#include "GpuSurfacesD3D11.hpp"
+#include "GpuSurfaces.hpp"
 #include "WorldRenderer.hpp"
 #include "WorldMap.hpp"
 #include <algorithm>
@@ -343,13 +342,13 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
     receiverNear.assign(receiverPoints.size(),0);
     for(int k=0;k<2;++k){receiverCells[k].sort(sunMaps[k],gpuReceiverGeneration,receiverPoints.size(),at);receiverCells[k].mark(sunMaps[k],at,receiverNear);}
   };
-  // ours: on Direct3D 11, the same on the graphics card (GpuSurfacesD3D11):
+  // ours: on Direct3D 11 or SDL3's GPU renderer, the same on the graphics card (GpuSurfaces):
   // the points and quads kept there, sent again only when they change; a
   // frame sends which points ask the sun maps now, a pass which quads it draws
   // (on the screen and its own: the map's or a tank's)
   bool groundDrawn=false;
-  if(GraphicsQuality::lightingOnGraphicsCard() && GpuSurfacesD3D11::available(renderer)) {
-    namespace G=GpuSurfacesD3D11;
+  if(GraphicsQuality::lightingOnGraphicsCard() && GpuSurfaces::available(renderer)) {
+    namespace G=GpuSurfaces;
     float ox,oy,od;view.worldToScreenF(0,0,0,ox,oy,od);
     if(d3dGroundFrame!=receiverFrame) {
       d3dGroundFrame=receiverFrame;
@@ -409,7 +408,7 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
           d3dGroundSeen[j]=d3dGroundSerial;if(onScreen(receivers[j])){d3dGroundShown.push_back(j);added=true;}
         }
       if(added)std::sort(d3dGroundShown.begin(),d3dGroundShown.end()); // (the CPU's order)
-      d3dGroundReady=G::groundKey()==key && G::groundSunKey()==sunKey && G::setGroundLive(d3dGroundLive) && GpuSunD3D11::upload(sunMaps,&casterOpacity,receiverFrame);
+      d3dGroundReady=G::groundKey()==key && G::groundSunKey()==sunKey && G::setGroundLive(d3dGroundLive) && GpuSurfaces::uploadSun(sunMaps,&casterOpacity,receiverFrame);
     }
     if(d3dGroundReady) {
       d3dGroundQuads.clear();

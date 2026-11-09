@@ -1,7 +1,6 @@
 #include <string_view>
 #include "DayNightLighting.hpp"
-#include "GpuSurfacesD3D11.hpp"
-#include "GpuSunD3D11.hpp"
+#include "GpuSurfaces.hpp"
 #include "ParallelFor.hpp"
 #include "GraphicsQuality.hpp"
 #include "WorldRenderer.hpp"
@@ -261,8 +260,8 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
   timer.mark("surface near");
   const bool useGpu=gpu.available(renderer) && std::string_view(SDL_getenv("ZT_LIGHTING_GPU"))!="ground" && !gpuSurfaceFailed && (sky.sun<=.001f || gpuSunReady);
   if(useGpu){gpuSurfaceFaces.clear();gpuSurfaceBatches.clear();gpuSurfaceFaces.reserve(projectedFaces.size()+actorFaces.size());}
-  // ours: on Direct3D 11, the same arithmetic on the graphics card
-  // (GpuSurfacesD3D11): the scenery faces kept there, sent again only when
+  // ours: on Direct3D 11 or SDL3's GPU renderer, the same arithmetic on the
+  // graphics card (GpuSurfaces): the scenery faces kept there, sent again only when
   // they change; a frame sends what's drawn in what order, each shape's sky
   // colour and outline, and the corners an actor's shadow may reach. A
   // lighthouse beam or a light's pulse at night (their light worked out per
@@ -271,8 +270,8 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
     SDL_Texture *atlas=nullptr;bool oneAtlas=true;
     for(const auto &m:masks)if(m.texture){if(!atlas)atlas=m.texture;else if(m.texture!=atlas)oneAtlas=false;}
     const bool perCornerLight=sky.lamps>.001f && (!beamLights.empty() || !transientLights.empty());
-    if(!useGpu && atlas && oneAtlas && !perCornerLight && !LightingDiagnostics::fullReceiverClip && GraphicsQuality::lightingOnGraphicsCard() && GpuSurfacesD3D11::available(renderer)) {
-      namespace G=GpuSurfacesD3D11;
+    if(!useGpu && atlas && oneAtlas && !perCornerLight && !LightingDiagnostics::fullReceiverClip && GraphicsQuality::lightingOnGraphicsCard() && GpuSurfaces::available(renderer)) {
+      namespace G=GpuSurfaces;
       // (the faces' shapes kept until they're projected again; their light -
       // a new sun map several times a game hour, a lamp coming or going -
       // sent on its own, a sixth of the size)
@@ -333,7 +332,7 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
       G::Frame frame;frame.originX=ox;frame.originY=oy;frame.scale=scale;frame.lamps=sky.lamps;
       frame.sun[0]=sun.x;frame.sun[1]=sun.y;frame.sun[2]=sun.z;frame.direct=direct;frame.reference=reference;
       frame.shadow=sky.sun>.001f?sky.shadow:0.0f;frame.sunBlend=sunBlend;frame.targetW=textureW;frame.targetH=textureH;
-      const bool sunSent=!sunUp || GpuSunD3D11::upload(sunMaps,&casterOpacity,receiverFrame);
+      const bool sunSent=!sunUp || GpuSurfaces::uploadSun(sunMaps,&casterOpacity,receiverFrame);
       if(sunSent && G::draw(renderer,atlas,order,moving,shapes,frame)){timer.mark("surface project");timer.mark("surface geometry queue");return;}
     }
   }
