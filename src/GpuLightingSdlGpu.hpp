@@ -46,8 +46,6 @@ void setGroundSun(const std::vector<std::array<float, 2>> &sun, uint64_t key);
 uint64_t groundSunKey();
 bool setGroundLive(const std::vector<uint32_t> &bits);
 bool drawGround(SDL_Renderer *renderer, const std::vector<uint32_t> &quads, const GroundFrame &frame);
-// The mask atlas changed through SDL (GpuSurfaces::maskChanged)
-void maskChanged();
 // As GpuSunD3D11::upload
 bool uploadSun(const LightingAssets::SunDepth (&maps)[2], const std::vector<float> *opacity, uint64_t frame);
 

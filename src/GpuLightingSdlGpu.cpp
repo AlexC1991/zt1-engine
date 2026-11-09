@@ -10,6 +10,7 @@
 
 #include "GpuFsrSdlGpu.hpp"
 #include "GpuFsrSdlGpuShaders.hpp"
+#include "GpuUploadSdlGpu.hpp"
 
 namespace GpuSurfacesSdlGpu {
 namespace {
@@ -177,8 +178,6 @@ struct Layer {
   }
 };
 Layer g_surfaceLayer, g_groundLayer;
-// The mask atlas changed through SDL since SDL last sent its commands
-bool g_maskChanged = false;
 
 SDL_GPUShader *shader(const GpuFsr::SdlGpu::Code &code, SDL_GPUShaderStage stage, Uint32 samplers, Uint32 storageTextures,
                       Uint32 storageBuffers, Uint32 uniforms, const char *what) {
@@ -414,14 +413,9 @@ bool draw(SDL_Renderer *renderer, SDL_Texture *mask, const std::vector<Draw> &or
   if (order.empty())
     return true;
   SDL_GPUTexture *maskTexture = gpuTextureOf(mask);
-  // (SDL sends a texture's new pixels with its frame, after this pass: when
-  // the atlas just changed, a 1 x 1 read has SDL send what it has queued now)
-  if (g_maskChanged) {
-    g_maskChanged = false;
-    const SDL_Rect one{0, 0, 1, 1};
-    if (SDL_Surface *s = SDL_RenderReadPixels(renderer, &one))
-      SDL_DestroySurface(s);
-  }
+  // (the mask atlas's new pixels, sent with the engine's uploads: ahead of
+  // this pass - GpuSurfaces::updateMask)
+  GpuUploadSdlGpu::flush(renderer);
   if (!maskTexture || !g_surfaceLayer.ensure(renderer, frame.targetW, frame.targetH))
     return false;
   SDL_GPUTexture *layer = g_surfaceLayer.gpu();
@@ -604,8 +598,6 @@ bool drawGround(SDL_Renderer *renderer, const std::vector<uint32_t> &quads, cons
   }
   return true;
 }
-
-void maskChanged() { g_maskChanged = true; }
 
 bool uploadSun(const LightingAssets::SunDepth (&maps)[2], const std::vector<float> *opacity, uint64_t frame) {
   if (!g_ready)

@@ -37,10 +37,11 @@ void setGroundSun(const std::vector<std::array<float, 2>> &sun, uint64_t key);
 uint64_t groundSunKey();
 bool setGroundLive(const std::vector<uint32_t> &bits);
 bool drawGround(SDL_Renderer *renderer, const std::vector<uint32_t> &quads, const GroundFrame &frame);
-// The receiving surfaces' mask atlas was just changed (SDL_UpdateTexture):
-// SDL3's GPU renderer sends it with its frame, after the passes, so the next
-// pass first has SDL send what it has queued (Direct3D 11: nothing to do)
-void maskChanged();
+// SDL_UpdateTexture for the receiving surfaces' mask atlas. On SDL3's GPU
+// renderer SDL would send it with its frame - after the passes, which run
+// ahead of it - so it goes with the engine's own uploads instead
+// (GpuUploadSdlGpu), sent before the next pass; elsewhere it's SDL's
+bool updateMask(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch);
 // GpuSunD3D11::upload's
 bool uploadSun(const LightingAssets::SunDepth (&maps)[2], const std::vector<float> *opacity, uint64_t frame);
 

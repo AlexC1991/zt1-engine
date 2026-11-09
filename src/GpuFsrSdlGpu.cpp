@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "GpuFsrSdlGpuShaders.hpp"
+#include "GpuUploadSdlGpu.hpp"
 
 // (this file runs the window's stand-in, so it calls SDL's own functions;
 // standIn() is the window as the rest of the engine sees it)
@@ -188,6 +189,7 @@ void arm(SDL_Renderer *renderer) {
 
 bool present(SDL_Renderer *renderer) {
   finish(renderer, false);
+  GpuUploadSdlGpu::flush(renderer); // (new textures' pixels before SDL's frame)
   const bool ok = SDL_RenderPresent(renderer);
   arm(renderer);
   return ok;
@@ -233,6 +235,7 @@ bool init(SDL_Renderer *renderer) {
     s.renderer = renderer;
     s.texture = nullptr;
     s.present = present;
+    GpuUploadSdlGpu::install(renderer, g_dev);
   }
   SDL_Log("[GpuFsr] SDL GPU (%s) shaders %s", SDL_GetGPUDeviceDriver(g_dev), ok ? "ready" : "unavailable");
   return ok;

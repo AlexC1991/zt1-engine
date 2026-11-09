@@ -34,7 +34,7 @@ SDL_Texture *DayNightLighting::whiteMask() {
     ZT_RendererInfo info{};ZT_GetRendererInfo(frameRenderer,&info);maskAtlasSide=info.max_texture_width>=4096 && info.max_texture_height>=4096?4096:2048;
     auto *t=SDL_CreateTexture(frameRenderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STATIC,maskAtlasSide,maskAtlasSide);if(!t)return nullptr;
     std::vector<Uint32> empty(size_t(maskAtlasSide)*maskAtlasSide);empty[0]=0xFFFFFFFFu;
-    if(!SDL_UpdateTexture(t,nullptr,empty.data(),maskAtlasSide*4)){SDL_DestroyTexture(t);return nullptr;}GpuSurfaces::maskChanged();
+    if(!GpuSurfaces::updateMask(frameRenderer,t,nullptr,empty.data(),maskAtlasSide*4)){SDL_DestroyTexture(t);return nullptr;}
     SDL_SetTextureBlendMode(t,SDL_BLENDMODE_BLEND);SDL_SetTextureScaleMode(t,SDL_SCALEMODE_NEAREST);maskPages.push_back({t});
   }
   maskPages.front().used=actorTick;return maskPages.front().texture;
@@ -55,7 +55,7 @@ DayNightLighting::ReceiverMask DayNightLighting::receiverMask(const Instance &o,
     if(page<0 && maskPages.size()<4){
       if(maskAtlasSide==4096){page=int(maskPages.size());maskPages.push_back({maskPages.front().texture});}
       else {auto *t=SDL_CreateTexture(frameRenderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STATIC,2048,2048);
-        if(t){std::vector<Uint32> empty(2048*2048);SDL_UpdateTexture(t,nullptr,empty.data(),2048*4);GpuSurfaces::maskChanged();SDL_SetTextureBlendMode(t,SDL_BLENDMODE_BLEND);SDL_SetTextureScaleMode(t,SDL_SCALEMODE_NEAREST);page=int(maskPages.size());maskPages.push_back({t});}}}
+        if(t){std::vector<Uint32> empty(2048*2048);GpuSurfaces::updateMask(frameRenderer,t,nullptr,empty.data(),2048*4);SDL_SetTextureBlendMode(t,SDL_BLENDMODE_BLEND);SDL_SetTextureScaleMode(t,SDL_SCALEMODE_NEAREST);page=int(maskPages.size());maskPages.push_back({t});}}}
     if(page<0){size_t oldest=size_t(-1);for(size_t i=1;i<maskPages.size();++i)if(maskPages[i].used!=actorTick && maskPages[i].used<oldest){oldest=maskPages[i].used;page=int(i);}
       if(page>=0){for(auto it=nativeMasks.begin();it!=nativeMasks.end();)if(it->second.page==page)it=nativeMasks.erase(it);else ++it;auto &p=maskPages[page];p.x=p.y=4;p.row=0;}}
     if(page<0){result.texture=nullptr;return result;}
@@ -65,7 +65,7 @@ DayNightLighting::ReceiverMask DayNightLighting::receiverMask(const Instance &o,
     if(source.shadowRuns)for(auto run:*source.shadowRuns)for(size_t i=size_t(run>>32);i<size_t(run>>32)+uint32_t(run);++i)
       pixels[(i/s->w+2)*w+i%s->w+2]=0;
     const int offsetX=maskAtlasSide==4096?(page%2)*2048:0,offsetY=maskAtlasSide==4096?(page/2)*2048:0;
-    SDL_Rect rect{p.x+offsetX,p.y+offsetY,w,h};if(!SDL_UpdateTexture(p.texture,&rect,pixels.data(),w*4)){result.texture=nullptr;return result;}GpuSurfaces::maskChanged();
+    SDL_Rect rect{p.x+offsetX,p.y+offsetY,w,h};if(!GpuSurfaces::updateMask(frameRenderer,p.texture,&rect,pixels.data(),w*4)){result.texture=nullptr;return result;}
     found=nativeMasks.emplace(s,MaskEntry{page,rect.x+2,rect.y+2,s->w,s->h}).first;p.x+=w;p.row=std::max(p.row,h);
   }
   const auto &entry=found->second;maskPages[entry.page].used=actorTick;result.texture=maskPages[entry.page].texture;result.uv={float(entry.x)/maskAtlasSide,float(entry.y)/maskAtlasSide,float(entry.w)/maskAtlasSide,float(entry.h)/maskAtlasSide};return result;

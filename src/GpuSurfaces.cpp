@@ -4,6 +4,7 @@
 
 #include "GpuLightingSdlGpu.hpp"
 #include "GpuSunD3D11.hpp"
+#include "GpuUploadSdlGpu.hpp"
 
 namespace GpuSurfaces {
 namespace {
@@ -98,9 +99,9 @@ bool drawGround(SDL_Renderer *renderer, const std::vector<uint32_t> &quads, cons
   return false;
 }
 
-void maskChanged() {
-  if (g_card == Card::SdlGpu)
-    GpuSurfacesSdlGpu::maskChanged();
+bool updateMask(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch) {
+  return GpuUploadSdlGpu::update(renderer, texture, rect, pixels, pitch) ||
+         SDL_UpdateTexture(texture, rect, pixels, pitch);
 }
 
 bool uploadSun(const LightingAssets::SunDepth (&maps)[2], const std::vector<float> *opacity, uint64_t frame) {

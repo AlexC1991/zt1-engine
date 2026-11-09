@@ -105,7 +105,31 @@ inline int ZT_RenderDrawRect(SDL_Renderer *r, const SDL_Rect *rect) {
   return SDL_RenderRect(r, rect ? &f : nullptr) ? 0 : -1;
 }
 // SDL2's: the pixels into the caller's memory, in the format asked for
+// ours: SDL3's GPU renderer's hooks (GpuFsrSdlGpu.cpp, GpuUploadSdlGpu.cpp),
+// set for that renderer only; nothing changes while they're unset.
+// - The window's stand-in: the renderer keeps the window's frame to itself,
+//   so while GpuFsr's screen passes need to read it the frame is drawn into
+//   a texture instead: choosing the window as the target chooses the
+//   texture, asking for the target answers the window for it, and presenting
+//   goes through GpuFsr, which copies the texture to the window first.
+// - New textures' pixels sent on the engine's own command buffer (SDL's
+//   makes and frees an upload buffer for each one), flushed before SDL sends
+//   its own commands: at present and before reading pixels back.
+struct ZT_StandIn {
+  SDL_Renderer *renderer = nullptr;
+  SDL_Texture *texture = nullptr;                                 // (while set, the frame goes here)
+  bool (*present)(SDL_Renderer *) = nullptr;                     // (presents renderer's frames)
+  void (*flush)(SDL_Renderer *) = nullptr;                       // (sends what SDL's frame needs of ours)
+  SDL_Texture *(*create)(SDL_Renderer *, SDL_Surface *) = nullptr; // (a texture of a surface; null: SDL's)
+};
+inline ZT_StandIn &ZT_WindowStandIn() {
+  static ZT_StandIn s;
+  return s;
+}
+
 inline int ZT_RenderReadPixels(SDL_Renderer *r, const SDL_Rect *rect, Uint32 format, void *pixels, int pitch) {
+  if (ZT_WindowStandIn().flush && r == ZT_WindowStandIn().renderer)
+    ZT_WindowStandIn().flush(r);
   SDL_Surface *got = SDL_RenderReadPixels(r, rect);
   if (!got)
     return -1;
@@ -243,21 +267,6 @@ struct ID3D11Device;
 ID3D11Device *ZT_RenderGetD3D11Device(SDL_Renderer *r); // (D3D11Util.cpp)
 #endif
 
-// ours: the window's stand-in. SDL3's GPU renderer keeps the window's frame
-// to itself, so while GpuFsr's screen passes need to read it the frame is
-// drawn into a texture instead (GpuFsrSdlGpu.cpp): choosing the window as
-// the target chooses the texture, asking for the target answers the window
-// for it, and presenting goes through GpuFsr, which copies the texture to
-// the window first. Nothing changes while no stand-in is set.
-struct ZT_StandIn {
-  SDL_Renderer *renderer = nullptr;
-  SDL_Texture *texture = nullptr;             // (while set, the frame goes here)
-  bool (*present)(SDL_Renderer *) = nullptr; // (presents renderer's frames)
-};
-inline ZT_StandIn &ZT_WindowStandIn() {
-  static ZT_StandIn s;
-  return s;
-}
 inline bool ZT_SetRenderTarget(SDL_Renderer *r, SDL_Texture *t) {
   const ZT_StandIn &s = ZT_WindowStandIn();
   return SDL_SetRenderTarget(r, !t && r == s.renderer ? s.texture : t);
@@ -271,8 +280,23 @@ inline bool ZT_RenderPresent(SDL_Renderer *r) {
   const ZT_StandIn &s = ZT_WindowStandIn();
   return s.present && r == s.renderer ? s.present(r) : SDL_RenderPresent(r);
 }
+inline SDL_Surface *ZT_RenderReadPixelsSurface(SDL_Renderer *r, const SDL_Rect *rect) {
+  const ZT_StandIn &s = ZT_WindowStandIn();
+  if (s.flush && r == s.renderer)
+    s.flush(r);
+  return SDL_RenderReadPixels(r, rect);
+}
+inline SDL_Texture *ZT_CreateTextureFromSurface(SDL_Renderer *r, SDL_Surface *surface) {
+  const ZT_StandIn &s = ZT_WindowStandIn();
+  if (s.create && r == s.renderer)
+    if (SDL_Texture *t = s.create(r, surface))
+      return t;
+  return SDL_CreateTextureFromSurface(r, surface);
+}
 #define SDL_SetRenderTarget ZT_SetRenderTarget
 #define SDL_GetRenderTarget ZT_GetRenderTarget
 #define SDL_RenderPresent ZT_RenderPresent
+#define SDL_RenderReadPixels ZT_RenderReadPixelsSurface
+#define SDL_CreateTextureFromSurface ZT_CreateTextureFromSurface
 
 #endif // SDL3_COMPAT_HPP
