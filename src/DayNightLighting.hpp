@@ -184,6 +184,7 @@ private:
   // addition: persistent submission storage; panning reuses allocated capacity.
   std::vector<ZT_Vertex> surfaceVertices,shadowVertices,fieldVertices;
   std::vector<int> surfaceIndices,shadowIndices,fieldIndices;
+  float sunLeft=0,sunTop=0,sunExtent=0; // ours: where the sun maps are (updateSun)
   LightingAssets::SunDepth sunMaps[2];float sunBlend=0;size_t sunHash=0;uint64_t projectedSunStamp[2]={},receiverSunStamp[2]={};
   struct Receiver {std::array<LightingAssets::Point,4> p;SDL_FPoint screen[4];LightingAssets::Point normal;int sample[4];};
   std::vector<Receiver> receivers;

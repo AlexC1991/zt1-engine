@@ -155,13 +155,15 @@ int runLightingBenchmarks(World &world,ResourceManager *rm,SDL_Renderer *rendere
  std::ofstream phases(out+"/phases.csv");phases<<"pass,mode,phase,total_ms,frames\n";
  // ours: each frame's own phases (those over 0.05 ms), to find what a slow frame spent its time on
  std::ofstream framePhases(out+"/frame_phases.csv");framePhases<<"pass,mode,frame,phase,ms\n";
+ // ours: how far the camera goes round (ZT_LIGHTING_BENCH_PAN tiles, 5 as before): further crosses the lighting's own blocks
+ const char *panSetting=std::getenv("ZT_LIGHTING_BENCH_PAN");const float pan=panSetting && std::atof(panSetting)>0?float(std::atof(panSetting)):5.0f;
  for(int pass=0;pass<2;++pass)for(int mode=0;mode<4;++mode) {
   const char *label=mode==0?"off":mode==1?"day":mode==2?"sunset":"night";Features::dayNightLighting=mode!=0;
   FrameProfile::totals.clear();FrameProfile::active=true;
   for(int f=0;f<204;++f) {
    SDL_PumpEvents();const int frame=f+pass*204;if(!simulation)animate(frame);
    light.previewHour=(mode==1?12:mode==2?17.5:0)+f/1800.0;
-   world.getRenderer().centreOnWorld(39+std::sin(f*.035f)*5,39+std::cos(f*.035f)*5,0);
+   world.getRenderer().centreOnWorld(39+std::sin(f*.035f)*pan,39+std::cos(f*.035f)*pan,0);
    // addition: model/place bursts exercise invalidation while the camera pans.
    if(scenario=="placement" && f%45==0){auto &list=objects.all();list.erase(std::remove_if(list.begin(),list.end(),[](const auto &o){return o.x>38 && o.x<40 && o.y>38 && o.y<40;}),list.end());
      objects.add(buildings.empty()?"scenery/other/lamp.ai":buildings[(f/45+pass)%buildings.size()],39.0f,39.0f,(f/45%4)*2);world.reindex();}

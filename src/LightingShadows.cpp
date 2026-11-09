@@ -168,7 +168,17 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
   if(projectedFaces.empty() && actorFaces.empty() && map.getMinHeight()==map.getMaxHeight()){sunMaps[0].size=sunMaps[1].size=0;return;}
   float cx,cy;view.screenToWorldAt(logicalW*.5f,logicalH*.5f,0,cx,cy);
   const float extent=std::max(96.0f,std::ceil((logicalW/64+logicalH/32+64)/32)*32);
-  const float left=std::floor(cx/16)*16-extent*.5f,top=std::floor(cy/16)*16-extent*.5f;
+  // ours: the maps kept where they are while the view's middle stays within
+  // a quarter of them (less 8 tiles) of theirs - they were centred again on
+  // every 16-tile line the view crossed, both made again at once while the
+  // frame waited; centred again (on the same 16-tile lines) once it goes
+  // further, or their size changes. Even then the view is well inside them
+  float left=sunLeft,top=sunTop;
+  const float allowance=extent/4-8;
+  if(sunExtent!=extent || !(std::abs(cx-(left+extent*.5f))<=allowance && std::abs(cy-(top+extent*.5f))<=allowance)) {
+    left=std::floor(cx/16)*16-extent*.5f;top=std::floor(cy/16)*16-extent*.5f;
+  }
+  sunLeft=left;sunTop=top;sunExtent=extent;
   constexpr double interval=.02;const double h0=std::floor(hour/interval)*interval;
   sunBlend=float((hour-h0)/interval);
   const char *mode=SDL_getenv("ZT_LIGHTING_GPU");
