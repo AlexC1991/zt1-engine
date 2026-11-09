@@ -284,6 +284,12 @@ const char *startupRenderer() {
   const std::string pick = forced && *forced ? forced : Settings::get("user", "renderer", "auto");
   if (pick == "opengl" || pick == "direct3d11")
     return picked(pick == "opengl" ? "opengl" : "direct3d11");
+  // (ours: SDL3's GPU renderer - Direct3D 12 or Vulkan underneath - and its
+  // own Direct3D 12 and Vulkan renderers, for this run only while the
+  // engine's passes are made for them)
+  static std::string asked;
+  if (forced && (pick == "gpu" || pick == "direct3d12" || pick == "vulkan"))
+    return picked((asked = pick).c_str());
   // (what needs OpenGL, as saved: mods' shaders, written in GLSL. FSR,
   // Stylized, brightness, the colour filter and the graphics effects run on
   // Direct3D 11 too - GpuFsrD3D11.cpp - so they no longer switch the game
