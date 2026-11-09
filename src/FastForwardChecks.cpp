@@ -164,7 +164,7 @@ int runFastForwardChecks(ResourceManager *rm,SDL_Renderer *renderer,const std::s
         return image;
       };
       auto save=[&](const std::vector<Uint8> &image,const std::string &name) {
-        auto *surface=ZT_CreateRGBSurfaceWithFormatFrom(const_cast<Uint8*>(image.data()),1280,720,32,1280*4,SDL_PIXELFORMAT_RGBA32);
+        auto *surface=SDL_CreateSurfaceFrom(1280, 720, SDL_PIXELFORMAT_RGBA32, const_cast<Uint8*>(image.data()), 1280*4);
         if(surface){IMG_SavePNG(surface,(out+"/"+name+".png").c_str());SDL_DestroySurface(surface);}
       };
       for(bool centred:{false,true})for(double hour:{-1.,12.,17.5,0.})for(int rotation=0;rotation<4;++rotation)for(float zoom:{.5f,.75f,1.f,1.5f}) {

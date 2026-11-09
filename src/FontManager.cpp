@@ -174,8 +174,7 @@ SDL_Texture *FontManager::getStringTexture(SDL_Renderer *renderer, int fontId,
 
   // Text over its shadow, offset one layout pixel down and to the right
   int offset = std::max(1, static_cast<int>(scale + 0.5f));
-  SDL_Surface *out = ZT_CreateRGBSurfaceWithFormat(
-      0, text->w + offset, text->h + offset, 32, SDL_PIXELFORMAT_ARGB8888);
+  SDL_Surface *out = SDL_CreateSurface(text->w + offset, text->h + offset, SDL_PIXELFORMAT_ARGB8888);
   SDL_Texture *texture = nullptr;
   if (out) {
     SDL_FillSurfaceRect(out, nullptr, ZT_MapRGBA(out->format, 0, 0, 0, 0));

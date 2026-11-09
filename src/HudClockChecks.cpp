@@ -60,7 +60,7 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
   {
     auto load = [&](const char *name) {
       SDL_Surface *source=IMG_Load((out+"/"+name).c_str());
-      SDL_Surface *image=source?ZT_ConvertSurfaceFormat(source,SDL_PIXELFORMAT_RGBA32,0):nullptr;
+      SDL_Surface *image=source?SDL_ConvertSurface(source, SDL_PIXELFORMAT_RGBA32):nullptr;
       if(source)SDL_DestroySurface(source);
       return image;
     };
@@ -137,7 +137,7 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
   SDL_Rect originalStrip{};SDL_GetRectUnion(&originalPlay,&originalDate,&originalStrip);
   auto pixels = [&](const std::string &file) {
     uint64_t hash=1469598103934665603ull;SDL_Surface *source=IMG_Load(file.c_str());
-    SDL_Surface *image=source?ZT_ConvertSurfaceFormat(source,SDL_PIXELFORMAT_RGBA32,0):nullptr;
+    SDL_Surface *image=source?SDL_ConvertSurface(source, SDL_PIXELFORMAT_RGBA32):nullptr;
     if(source)SDL_DestroySurface(source);if(!image)return uint64_t(0);
     for(int y=originalStrip.y;y<originalStrip.y+originalStrip.h && y<image->h;++y)
       for(int x=originalStrip.x;x<originalStrip.x+originalStrip.w && x<image->w;++x)
@@ -158,7 +158,7 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
   for(const auto &[source,dest] : {std::pair{"clock-original-off.png","original-strip.png"},
                                  std::pair{"clock-18-30.png","clock-strip.png"}}) {
     SDL_Surface *image=IMG_Load((out+"/"+source).c_str());
-    SDL_Surface *strip=ZT_CreateRGBSurfaceWithFormat(0,320,40,32,SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *strip=SDL_CreateSurface(320, 40, SDL_PIXELFORMAT_RGBA32);
     SDL_Rect region{165,560,320,40};
     bool saved=image && strip && SDL_BlitSurface(image,&region,strip,nullptr) && IMG_SavePNG(strip,(out+"/"+dest).c_str());
     if(image)SDL_DestroySurface(image);if(strip)SDL_DestroySurface(strip);

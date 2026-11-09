@@ -81,7 +81,7 @@ static int runShadowScene(World &world, SDL_Renderer *renderer, const std::strin
     world.draw(renderer);
     SDL_FlushRenderer(renderer);
   };
-  SDL_Surface *shot = ZT_CreateRGBSurfaceWithFormat(0, 1280, 720, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *shot = SDL_CreateSurface(1280, 720, SDL_PIXELFORMAT_RGBA32);
   if (!shot)
     return 1;
   int saved = 0;
@@ -157,7 +157,7 @@ int runLightingGallery(World &world, ResourceManager *, SDL_Renderer *renderer, 
     world.draw(renderer);
     SDL_FlushRenderer(renderer);
   };
-  SDL_Surface *shot = ZT_CreateRGBSurfaceWithFormat(0, 560, 480, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *shot = SDL_CreateSurface(560, 480, SDL_PIXELFORMAT_RGBA32);
   if (!shot)
     return 1;
   // (each one visited first, so its lighting shapes are made: a few a frame)

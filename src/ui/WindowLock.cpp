@@ -33,7 +33,7 @@ SDL_Texture *make(SDL_Renderer *renderer, ResourceManager *rm, bool locked, char
   Animation *close = rm ? rm->getAnimation("ui/sharedui/close/close") : nullptr;
   SDL_Surface *src = close ? close->frameSurface(std::string(1, frame), 0) : nullptr;
   if (src) {
-    SDL_Surface *s = ZT_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
+    SDL_Surface *s = SDL_ConvertSurface(src, SDL_PIXELFORMAT_RGBA32);
     if (s) {
       Uint32 *px = static_cast<Uint32 *>(s->pixels);
       const int pitch = s->pitch / 4, w = s->w, h = s->h;

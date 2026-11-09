@@ -386,7 +386,7 @@ SDL_Surface *Animation::sourceFrame(const std::string &direction, size_t frame) 
   if (pd == this->packed.end() || frame >= pd->second.frames.size() || !pd->second.frames[frame].present)
     return nullptr;
   const PackedFrame &f = pd->second.frames[frame];
-  SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, f.w, f.h, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *s = SDL_CreateSurface(f.w, f.h, SDL_PIXELFORMAT_RGBA32);
   if (!s)
     return nullptr;
   SDL_FillSurfaceRect(s, nullptr, 0);
@@ -907,7 +907,7 @@ void Animation::makeLazyFrame(SDL_Renderer *renderer, std::vector<SDL_Texture *>
         if (start + count <= shadowMask.size())
           std::fill_n(shadowMask.begin() + start, count, Uint8(1));
       }
-    clean = ZT_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+    clean = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
     if (clean)
       removePaletteShadow(clean, surface, shadowMask);
   }
@@ -1082,7 +1082,7 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
       }
     }
     if(relight) {
-      clean=ZT_ConvertSurfaceFormat(surface,SDL_PIXELFORMAT_RGBA32,0);
+      clean=SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
       if(clean) {
         removePaletteShadow(clean,original,shadowMask);
         surface=clean;
@@ -1101,7 +1101,7 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
           hd = HdArt::recolour(hd, surface, this->recoloured, direction_string, frame);
         int k = surface->w > 0 ? hd->w / surface->w : 0;
         if (k >= 2 && hd->w == surface->w * k && hd->h == surface->h * k)
-          big = ZT_ConvertSurfaceFormat(hd, SDL_PIXELFORMAT_RGBA32, 0);
+          big = SDL_ConvertSurface(hd, SDL_PIXELFORMAT_RGBA32);
         HdArt::freeFrame(hd);
       }
       if (!big)
@@ -1427,7 +1427,7 @@ void Animation::loadSurfaces(std::string direction_string,
     };
     for (int i = 0; i < count; i++) {
       std::vector<Uint8> mask(size_t(W)*H);
-      SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, W, H, 0, SDL_PIXELFORMAT_RGBA32);
+      SDL_Surface *s = SDL_CreateSurface(W, H, SDL_PIXELFORMAT_RGBA32);
       if (s) {
         SDL_FillSurfaceRect(s, NULL, 0x00000000);
         paint(s, data->frames[count],mask);
@@ -1463,8 +1463,7 @@ void Animation::loadSurfaces(std::string direction_string,
   int loop_limit = (int)data->frame_count + (int)data->has_background;
 
   for (int i = 0; i < loop_limit; i++) {
-    SDL_Surface *new_surface = ZT_CreateRGBSurfaceWithFormat(
-        0, data->width, data->height, 0, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *new_surface = SDL_CreateSurface(data->width, data->height, SDL_PIXELFORMAT_RGBA32);
     if (!new_surface) {
       this->surfaces[direction_string].push_back(nullptr);shadowRuns[direction_string].push_back({});
       continue;

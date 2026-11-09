@@ -1977,7 +1977,7 @@ static SDL_Texture *makeSpeedTransportFace(SDL_Renderer *renderer, SDL_Surface *
   SDL_IOStream *bytes = SDL_IOFromConstMem(UiSpeedControlArt::png, sizeof(UiSpeedControlArt::png));
   SDL_Surface *atlas = bytes ? IMG_Load_IO(bytes, 1) : nullptr;
   if (!atlas) return nullptr;
-  SDL_Surface *face = ZT_ConvertSurfaceFormat(atlas, SDL_PIXELFORMAT_RGBA32, 0);
+  SDL_Surface *face = SDL_ConvertSurface(atlas, SDL_PIXELFORMAT_RGBA32);
   SDL_DestroySurface(atlas);
   if (!face) return nullptr;
 
@@ -2024,7 +2024,7 @@ static SDL_Texture *makeSpeedTransportFace(SDL_Renderer *renderer, SDL_Surface *
     }
   }
 
-  SDL_Surface *overlay = ZT_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *overlay = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGBA32);
   SDL_Texture *texture = nullptr;
   if (overlay) {
     SDL_SetSurfaceBlendMode(face, SDL_BLENDMODE_NONE);
@@ -2565,7 +2565,7 @@ void UiGameScreen::drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     SDL_GetRenderScale(renderer, &sx, &sy);
     int ow = 0, oh = 0;
     SDL_GetCurrentRenderOutputSize(renderer, &ow, &oh);
-    if (SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, ow, oh, 24, SDL_PIXELFORMAT_RGB24)) {
+    if (SDL_Surface *s = SDL_CreateSurface(ow, oh, SDL_PIXELFORMAT_RGB24)) {
       SDL_SetRenderViewport(renderer, nullptr);
       SDL_SetRenderScale(renderer, 1, 1);
       if (ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, s->pixels, s->pitch) == 0)
@@ -4568,7 +4568,7 @@ void UiGameScreen::drawRound(SDL_Renderer *renderer, const SDL_Rect &box,
     layer = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, lw, lh);
     mask = nullptr;
     // (the circle: white, opaque inside, clear outside, a pixel's soft edge)
-    if (SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, lw, lh, 32, SDL_PIXELFORMAT_ARGB8888)) {
+    if (SDL_Surface *s = SDL_CreateSurface(lw, lh, SDL_PIXELFORMAT_ARGB8888)) {
       const float rx = lw * 0.5f - 2.0f, ry = lh * 0.5f - 2.0f, mx = lw * 0.5f, my = lh * 0.5f;
       for (int y = 0; y < lh; y++)
         for (int x = 0; x < lw; x++) {

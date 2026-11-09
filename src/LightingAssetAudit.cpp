@@ -43,7 +43,7 @@ int runLightingAssetAudit(World &world,ResourceManager *rm,SDL_Renderer *rendere
  auto texture=[&](const std::string &resource,const std::string &state,SDL_Texture *tex) {
   if(!tex){++missing;return;}int w,h;if(ZT_QueryTexture(tex,nullptr,nullptr,&w,&h)!=0)return;
   auto *target=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,w,h);
-  auto *surface=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);if(!target || !surface){SDL_DestroyTexture(target);SDL_DestroySurface(surface);return;}
+  auto *surface=SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);if(!target || !surface){SDL_DestroyTexture(target);SDL_DestroySurface(surface);return;}
   auto *previous=SDL_GetRenderTarget(renderer);SDL_Rect viewport,clip;float sx,sy;SDL_GetRenderViewport(renderer,&viewport);SDL_GetRenderClipRect(renderer,&clip);const bool clipped=SDL_RenderClipEnabled(renderer);SDL_GetRenderScale(renderer,&sx,&sy);
   SDL_SetRenderTarget(renderer,target);SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderScale(renderer,1,1);SDL_SetRenderClipRect(renderer,nullptr);SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);ZT_RenderCopy(renderer,tex,nullptr,nullptr);
   if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,surface->pixels,surface->pitch)==0) {

@@ -14,9 +14,9 @@ namespace HdArt {std::string materialKey(int);SDL_Surface *loadEmission(const st
 // size (an HD patch scaled down to it).
 static SDL_Texture *glowOf(SDL_Renderer *renderer,SDL_Surface *source,int w,int h,int pad=Animation::kGlowPad) {
   if(!renderer || !source || w<=0 || h<=0 || w>1024 || h>1024)return nullptr;
-  SDL_Surface *rgba=ZT_ConvertSurfaceFormat(source,SDL_PIXELFORMAT_RGBA32,0);if(!rgba)return nullptr;
+  SDL_Surface *rgba=SDL_ConvertSurface(source, SDL_PIXELFORMAT_RGBA32);if(!rgba)return nullptr;
   if(rgba->w!=w || rgba->h!=h) {
-    SDL_Surface *small=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *small=SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);
     if(small){SDL_FillSurfaceRect(small,nullptr,0);SDL_SetSurfaceBlendMode(rgba,SDL_BLENDMODE_NONE);SDL_BlitSurfaceScaled(rgba,nullptr,small,nullptr, SDL_SCALEMODE_NEAREST);}
     SDL_DestroySurface(rgba);rgba=small;if(!rgba)return nullptr;
   }
@@ -36,7 +36,7 @@ static SDL_Texture *glowOf(SDL_Renderer *renderer,SDL_Surface *source,int w,int 
     }
   };
   pass(a,b,true);pass(b,a,false);pass(a,b,true);pass(b,a,false);
-  SDL_Surface *out=ZT_CreateRGBSurfaceWithFormat(0,W,H,32,SDL_PIXELFORMAT_RGBA32);if(!out)return nullptr;
+  SDL_Surface *out=SDL_CreateSurface(W, H, SDL_PIXELFORMAT_RGBA32);if(!out)return nullptr;
   for(int y=0;y<H;++y){Uint8 *row=static_cast<Uint8*>(out->pixels)+size_t(y)*out->pitch;
     for(int x=0;x<W;++x){const float *p=&a[(size_t(y)*W+x)*4];Uint8 *o=row+x*4;
       if(p[3]<=1e-4f){o[0]=o[1]=o[2]=o[3]=0;continue;}
@@ -88,14 +88,14 @@ const std::vector<Animation::EmissionPatch> &Animation::emissionPatches(SDL_Rend
     std::string base=hd_dir+"/light/"+key+"_";std::transform(base.begin(),base.end(),base.begin(),[](unsigned char c){return char(std::tolower(c));});
     SDL_Surface *map=HdArt::loadModLight(base+std::to_string(index));
     if(!map && index)map=HdArt::loadModLight(base+"0");
-    auto *rgba=map?ZT_ConvertSurfaceFormat(map,SDL_PIXELFORMAT_RGBA32,0):nullptr;if(map)SDL_DestroySurface(map);
+    auto *rgba=map?SDL_ConvertSurface(map, SDL_PIXELFORMAT_RGBA32):nullptr;if(map)SDL_DestroySurface(map);
     if(!rgba)return patches;
     int left=rgba->w,top=rgba->h,right=0,bottom=0,pixels=0;
     for(int y=0;y<rgba->h;++y)for(int x=0;x<rgba->w;++x)if(static_cast<Uint8*>(rgba->pixels)[y*rgba->pitch+x*4+3]){left=std::min(left,x);top=std::min(top,y);right=std::max(right,x+1);bottom=std::max(bottom,y+1);++pixels;}
     if(pixels) {
       SDL_Rect area{left,top,right-left,bottom-top};
       SDL_Rect box{left-rgba->w/2+anchor.x,top-rgba->h/2+anchor.y,area.w,area.h};
-      auto *cropped=ZT_CreateRGBSurfaceWithFormat(0,area.w,area.h,32,SDL_PIXELFORMAT_RGBA32);SDL_Texture *texture=nullptr,*glow=nullptr;
+      auto *cropped=SDL_CreateSurface(area.w, area.h, SDL_PIXELFORMAT_RGBA32);SDL_Texture *texture=nullptr,*glow=nullptr;
       if(cropped){SDL_SetSurfaceBlendMode(rgba,SDL_BLENDMODE_NONE);SDL_BlitSurface(rgba,&area,cropped,nullptr);texture=SDL_CreateTextureFromSurface(renderer,cropped);if(texture)glow=glowOf(renderer,cropped,box.w,box.h);SDL_DestroySurface(cropped);}
       if(texture){SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);SDL_SetTextureScaleMode(texture,SDL_SCALEMODE_LINEAR);
         patches.push_back({texture,box,{box.x+box.w*.5f-anchor.x,box.y+box.h*.5f-anchor.y},{255,230,180,255},pixels,"mod light map",false,glow});}
@@ -110,12 +110,12 @@ const std::vector<Animation::EmissionPatch> &Animation::emissionPatches(SDL_Rend
       if(scale>=2 && baked->w==source->w*scale && baked->h==source->h*scale) {
         // addition: retain only the lamp/window footprint on the GPU, not
         // a mostly transparent four-times building canvas for every pose.
-        auto *rgba=ZT_ConvertSurfaceFormat(baked,SDL_PIXELFORMAT_RGBA32,0);
+        auto *rgba=SDL_ConvertSurface(baked, SDL_PIXELFORMAT_RGBA32);
         int left=baked->w,top=baked->h,right=0,bottom=0,pixels=0;
         if(rgba)for(int y=0;y<rgba->h;++y)for(int x=0;x<rgba->w;++x)if(static_cast<Uint8*>(rgba->pixels)[y*rgba->pitch+x*4+3]){left=std::min(left,x);top=std::min(top,y);right=std::max(right,x+1);bottom=std::max(bottom,y+1);++pixels;}
         if(pixels) {
           SDL_Rect box{left/scale,top/scale,(right+scale-1)/scale-left/scale,(bottom+scale-1)/scale-top/scale};
-          SDL_Rect area{box.x*scale,box.y*scale,box.w*scale,box.h*scale};auto *cropped=ZT_CreateRGBSurfaceWithFormat(0,area.w,area.h,32,SDL_PIXELFORMAT_RGBA32);
+          SDL_Rect area{box.x*scale,box.y*scale,box.w*scale,box.h*scale};auto *cropped=SDL_CreateSurface(area.w, area.h, SDL_PIXELFORMAT_RGBA32);
           SDL_Texture *texture=nullptr,*glow=nullptr;
           if(cropped){SDL_SetSurfaceBlendMode(rgba,SDL_BLENDMODE_NONE);SDL_BlitSurface(rgba,&area,cropped,nullptr);texture=SDL_CreateTextureFromSurface(renderer,cropped);if(texture)glow=glowOf(renderer,cropped,box.w,box.h);SDL_DestroySurface(cropped);}
           if(texture){SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);SDL_SetTextureScaleMode(texture,SDL_SCALEMODE_LINEAR);
@@ -127,7 +127,7 @@ const std::vector<Animation::EmissionPatch> &Animation::emissionPatches(SDL_Rend
       }SDL_DestroySurface(baked);
     }
   }
-  SDL_Surface *atlas=batched?ZT_CreateRGBSurfaceWithFormat(0,source->w,source->h,32,SDL_PIXELFORMAT_RGBA32):nullptr;
+  SDL_Surface *atlas=batched?SDL_CreateSurface(source->w, source->h, SDL_PIXELFORMAT_RGBA32):nullptr;
   if(batched && !atlas)return patches;if(atlas)SDL_FillSurfaceRect(atlas,nullptr,0);
   const bool reflective=std::all_of(asset->views[view].begin(),asset->views[view].end(),[](const Region &r){return r.material==Material::Water || r.material==Material::Steam;});
   int atlasPixels=0,al=source->w,at=source->h,ar=0,ab=0;
@@ -144,7 +144,7 @@ const std::vector<Animation::EmissionPatch> &Animation::emissionPatches(SDL_Rend
     // A beacon follows its native frame while office panes in the same
     // atlas keep their reference pose. Occupants cannot flicker the windows.
     auto *regionSource=dynamic && !region.animated && it->second.front()?it->second.front():source;
-    auto *surface=atlas?atlas:ZT_CreateRGBSurfaceWithFormat(0,box.w,box.h,32,SDL_PIXELFORMAT_RGBA32);if(!surface)continue;
+    auto *surface=atlas?atlas:SDL_CreateSurface(box.w, box.h, SDL_PIXELFORMAT_RGBA32);if(!surface)continue;
     if(!atlas)SDL_FillSurfaceRect(surface,nullptr,0);int pixels=0;
     for(int y=0;y<box.h;++y)for(int x=0;x<box.w;++x) {
       const int sx=box.x+x,sy=box.y+y;
@@ -206,7 +206,7 @@ const std::vector<Animation::EmissionPatch> &Animation::emissionPatches(SDL_Rend
       }
     }
     if(atlasPixels) {
-      SDL_Rect box{al,at,ar-al,ab-at};auto *cropped=ZT_CreateRGBSurfaceWithFormat(0,box.w,box.h,32,SDL_PIXELFORMAT_RGBA32);
+      SDL_Rect box{al,at,ar-al,ab-at};auto *cropped=SDL_CreateSurface(box.w, box.h, SDL_PIXELFORMAT_RGBA32);
       if(cropped) {
         SDL_SetSurfaceBlendMode(atlas,SDL_BLENDMODE_NONE);SDL_BlitSurface(atlas,&box,cropped,nullptr);
         auto *texture=SDL_CreateTextureFromSurface(renderer,cropped);

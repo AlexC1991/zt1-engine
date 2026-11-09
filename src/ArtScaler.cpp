@@ -497,7 +497,7 @@ static void rcas(const std::vector<Px> &in, int w, int h, std::vector<Px> &out,
 
 static SDL_Surface *upscale(SDL_Surface *surface, int k, bool wrap) {
   SDL_Surface *rgba =
-      ZT_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+      SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
   if (!rgba)
     return nullptr;
   int w = rgba->w, h = rgba->h;
@@ -555,7 +555,7 @@ static SDL_Surface *upscale(SDL_Surface *surface, int k, bool wrap) {
 
   int W = w * outScale, H = h * outScale;
   SDL_Surface *out =
-      ZT_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_RGBA32);
+      SDL_CreateSurface(W, H, SDL_PIXELFORMAT_RGBA32);
   if (!out)
     return nullptr;
   for (int y = 0; y < H; y++)

@@ -104,7 +104,7 @@ void GameBenchmark::beforeSimulation(){if(enabled())simulationStart=SDL_GetPerfo
 void GameBenchmark::afterSimulation(){if(enabled())simulationMs=1000*seconds(simulationStart);}
 void GameBenchmark::shot(SDL_Renderer *renderer,const char *name) {
   int w=0,h=0;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);
-  SDL_Surface *image=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *image=SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);
   if(image){if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,image->pixels,image->pitch)==0)IMG_SavePNG(image,(out+"/"+name+".png").c_str());SDL_DestroySurface(image);}
 }
 void GameBenchmark::beforePresent(World &,SDL_Renderer *renderer) {

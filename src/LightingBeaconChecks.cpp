@@ -51,7 +51,7 @@ int runLightingBeaconAudit(World &world,ResourceManager *rm,SDL_Renderer *,const
 int runLightingBeaconChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,const std::string &out,const std::function<void()> &draw) {
   using namespace LightingAssets;int failed=0;std::ostringstream log;
   auto check=[&](const std::string &name,bool ok){log<<(ok?"PASS ":"FAIL ")<<name<<'\n';failed+=!ok;};
-  auto snapshot=[&](const std::string &name){int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);auto *s=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);if(!s){++failed;return;}
+  auto snapshot=[&](const std::string &name){int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);auto *s=SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);if(!s){++failed;return;}
     if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,s->pixels,s->pitch) || !IMG_SavePNG(s,(out+"/"+name+".png").c_str()))++failed;SDL_DestroySurface(s);};
   auto checksum=[&](){int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);std::vector<Uint32> pixels(size_t(w)*h);ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4);uint64_t hash=1469598103934665603ull;for(auto p:pixels){hash^=p;hash*=1099511628211ull;}return hash;};
   const bool was=Features::dayNightLighting;world.loadBlank(80,80);world.setPaused(true);world.getCamera().zoom=1;

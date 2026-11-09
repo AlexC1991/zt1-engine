@@ -13,7 +13,7 @@
 int runLightingDetailChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,const std::string &out,const std::function<void()> &draw) {
   using namespace LightingAssets;int failed=0;std::ostringstream report;
   auto check=[&](const std::string &name,bool ok){report<<(ok?"PASS ":"FAIL ")<<name<<'\n';failed+=!ok;};
-  auto capture=[&](const std::string &name){draw();int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);auto *s=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);
+  auto capture=[&](const std::string &name){draw();int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);auto *s=SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);
     if(!s){++failed;return;}if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,s->pixels,s->pitch) || !IMG_SavePNG(s,(out+"/"+name+".png").c_str()))++failed;SDL_DestroySurface(s);SDL_RenderPresent(renderer);};
   auto &light=world.getLighting();const bool before=Features::dayNightLighting,paths=Features::elevatedPaths;
   Features::dayNightLighting=true;Features::elevatedPaths=true;world.loadBlank(100,100);world.setPaused(true);world.getCamera().zoom=1;

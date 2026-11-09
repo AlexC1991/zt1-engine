@@ -2647,7 +2647,7 @@ static void takeSnapshot(SDL_Renderer *renderer, ResourceManager *rm) {
   std::snprintf(name, sizeof name, "Zoo%03d", (highest + 1) % 1000);
   int w = 0, h = 0;
   SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
-  SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, w, h, 24, SDL_PIXELFORMAT_RGB24);
+  SDL_Surface *s = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGB24);
   bool ok = false;
   std::string written;
   if (s && ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, s->pixels, s->pitch) == 0) {
@@ -3271,7 +3271,7 @@ static bool saveTargetToBmp(SDL_Renderer *renderer, SDL_Texture *target,
   ZT_QueryTexture(target, nullptr, nullptr, &w, &h);
   SDL_SetRenderTarget(renderer, target);
   SDL_Surface *surface =
-      ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+      SDL_CreateSurface(w, h, SDL_PIXELFORMAT_ARGB8888);
   bool ok = surface &&
             ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
                                  surface->pixels, surface->pitch) == 0 &&
@@ -3520,7 +3520,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     int w = 0, h = 0;
     SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
     SDL_Surface *s =
-        ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+        SDL_CreateSurface(w, h, SDL_PIXELFORMAT_ARGB8888);
     if (s && ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
                                   s->pixels, s->pitch) == 0)
       if (std::getenv("ZT_HUD_CLOCK_CHECKS") || std::getenv("ZT_SPEED_HUD_CHECKS")) IMG_SavePNG(s, (outDir + "/" + name + ".png").c_str());
@@ -3586,7 +3586,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       drawLayoutCentered(renderer, layout, rm);
       int w = 0, h = 0;
       SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
-      if (SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)) {
+      if (SDL_Surface *s = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_ARGB8888)) {
         if (ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, s->pixels, s->pitch) == 0)
           SDL_SaveBMP(s, (outDir + "/" + name + ".bmp").c_str());
         SDL_DestroySurface(s);
@@ -4103,7 +4103,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         world->draw(renderer);
         int pw = 0, ph = 0;
         SDL_GetCurrentRenderOutputSize(renderer, &pw, &ph);
-        if (SDL_Surface *shot = ZT_CreateRGBSurfaceWithFormat(0, pw, ph, 32, SDL_PIXELFORMAT_RGBA32)) {
+        if (SDL_Surface *shot = SDL_CreateSurface(pw, ph, SDL_PIXELFORMAT_RGBA32)) {
           if (ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGBA32, shot->pixels, shot->pitch) == 0)
             IMG_SavePNG(shot, (outDir + "/" + nm).c_str());
           SDL_DestroySurface(shot);
@@ -4436,7 +4436,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         capture(name);
         std::vector<int> redness;
         if (SDL_Surface *s = SDL_LoadBMP((outDir + "/" + name + ".bmp").c_str())) {
-          if (SDL_Surface *c = ZT_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0)) {
+          if (SDL_Surface *c = SDL_ConvertSurface(s, SDL_PIXELFORMAT_ARGB8888)) {
             redness.resize(static_cast<size_t>(c->w) * c->h);
             for (int y = 0; y < c->h; y++)
               for (int x = 0; x < c->w; x++) {
@@ -4596,7 +4596,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             col++;
           }
         }
-        SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, 2800, 760, 24, SDL_PIXELFORMAT_RGB24);
+        SDL_Surface *sf = SDL_CreateSurface(2800, 760, SDL_PIXELFORMAT_RGB24);
         ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, sf->pixels, sf->pitch);
         SDL_SaveBMP(sf, (outDir + "/tankpieces.bmp").c_str());
         SDL_DestroySurface(sf);
@@ -4623,7 +4623,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           }
           row++;
         }
-        SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, 760, 200, 24, SDL_PIXELFORMAT_RGB24);
+        SDL_Surface *sf = SDL_CreateSurface(760, 200, SDL_PIXELFORMAT_RGB24);
         ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, sf->pixels, sf->pitch);
         SDL_SaveBMP(sf, (outDir + "/waterparts.bmp").c_str());
         SDL_DestroySurface(sf);
@@ -5534,7 +5534,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       SDL_SetRenderScale(renderer, 1, 1);
       int w = 0, h = 0;
       SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
-      SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+      SDL_Surface *sf = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_ARGB8888);
       ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
       SDL_SaveBMP(sf, (outDir + "/seagull_frames.bmp").c_str());
       SDL_DestroySurface(sf);
@@ -5663,7 +5663,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         SDL_SetRenderScale(renderer, 1, 1);
         int w = 0, h = 0;
         SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
-        SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+        SDL_Surface *sf = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_ARGB8888);
         ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
         SDL_SaveBMP(sf, (outDir + "/staff_sheet.bmp").c_str());
         SDL_DestroySurface(sf);

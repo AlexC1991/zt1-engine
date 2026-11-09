@@ -1322,7 +1322,7 @@ void World::rebuildMiniMap(SDL_Renderer *renderer, int w, int h) {
   // across = (u - v + V) / (U + V), down = (u + v) / (U + V)
   int U, V;
   worldRenderer.getViewSize(U, V);
-  SDL_Surface *surf = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *surf = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);
   if (!surf)
     return;
   SDL_FillSurfaceRect(surf, nullptr, ZT_MapRGBA(surf->format, 0, 0, 0, 0));

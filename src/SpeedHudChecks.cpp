@@ -24,7 +24,7 @@ int runSpeedHudChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
   auto away=[&]{send({0,0},InputEvent::CURSOR_MOVE);};
   auto hash=[&](const char *file,SDL_Rect r){
     SDL_Surface *loaded=IMG_Load((out+"/"+file+".png").c_str());
-    SDL_Surface *s=loaded?ZT_ConvertSurfaceFormat(loaded,SDL_PIXELFORMAT_RGBA32,0):nullptr;
+    SDL_Surface *s=loaded?SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32):nullptr;
     if(loaded)SDL_DestroySurface(loaded);uint64_t h=1469598103934665603ull;
     if(!s)return uint64_t(0);
     for(int y=r.y;y<r.y+r.h;++y)for(int x=r.x;x<r.x+r.w;++x){
@@ -84,7 +84,7 @@ int runSpeedHudChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
     SDL_Surface *ref=IMG_Load(reference),*actual=IMG_Load((out+"/speed-clock-running.png").c_str());
     SDL_Texture *golden=ref?SDL_CreateTextureFromSurface(renderer,ref):nullptr;
     SDL_Texture *target=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_TARGET,800,600);
-    SDL_Surface *expected=ZT_CreateRGBSurfaceWithFormat(0,800,600,32,SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *expected=SDL_CreateSurface(800, 600, SDL_PIXELFORMAT_RGBA32);
     bool valid=golden&&target&&expected&&actual;
     int compared=0,maxDelta=0;
     if(valid) {

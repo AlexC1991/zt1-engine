@@ -13,7 +13,7 @@ int runGpuLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer
   std::ostringstream report;int failed=0;auto check=[&](const std::string &n,bool ok){report<<(ok?"PASS ":"FAIL ")<<n<<'\n';failed+=!ok;};
   auto pixels=[&]{int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);std::vector<Uint32> p(size_t(w)*h);if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,p.data(),w*4))p.clear();return p;};
   auto compare=[&](const auto &a,const auto &b){int delta=0;if(a.empty() || a.size()!=b.size())return 255;for(size_t i=0;i<a.size();++i)for(int s:{0,8,16,24})delta=std::max(delta,std::abs(int((a[i]>>s)&255)-int((b[i]>>s)&255)));return delta;};
-  auto save=[&](const std::string &name){int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);auto *s=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_ARGB8888);if(s){ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,s->pixels,s->pitch);IMG_SavePNG(s,(out+"/"+name+".png").c_str());SDL_DestroySurface(s);}};
+  auto save=[&](const std::string &name){int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);auto *s=SDL_CreateSurface(w, h, SDL_PIXELFORMAT_ARGB8888);if(s){ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,s->pixels,s->pitch);IMG_SavePNG(s,(out+"/"+name+".png").c_str());SDL_DestroySurface(s);}};
   const char *old=SDL_getenv("ZT_LIGHTING_GPU");const std::string setting=old?old:"";const bool enabled=Features::dayNightLighting;
   SDL_setenv_unsafe("ZT_LIGHTING_GPU","1",1);GpuLighting gpu;check("production SDL context supports GPU receivers",gpu.available(renderer));
   if(!gpu.available(renderer)){report<<gpu.reason()<<'\n';std::ofstream(out+"/gpu-checks.txt")<<report.str();return 1;}

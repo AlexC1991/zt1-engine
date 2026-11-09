@@ -222,7 +222,7 @@ void Window::present() {
             SDL_SetRenderScale(this->renderer, 1, 1);
             int w = 0, h = 0;
             SDL_GetCurrentRenderOutputSize(this->renderer, &w, &h);
-            if (SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, w, h, 24, SDL_PIXELFORMAT_BGR24)) {
+            if (SDL_Surface *s = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_BGR24)) {
                 if (ZT_RenderReadPixels(this->renderer, nullptr, SDL_PIXELFORMAT_BGR24, s->pixels, s->pitch) == 0)
                     SDL_SaveBMP(s, shot.c_str());
                 SDL_DestroySurface(s);

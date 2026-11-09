@@ -935,7 +935,7 @@ int UiOptions::updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const s
           }
         }
       }
-      SDL_Surface *image = ZT_CreateRGBSurfaceWithFormat(0, 800, 600, 32, SDL_PIXELFORMAT_ARGB8888);
+      SDL_Surface *image = SDL_CreateSurface(800, 600, SDL_PIXELFORMAT_ARGB8888);
       const std::string shotName = kPageNames[page];
       std::string file = out + "/options-" + (inGame ? "zoo-" : "menu-") + shotName + ".png";
       bool saved = image && ZT_RenderReadPixels(renderer, &screen, SDL_PIXELFORMAT_ARGB8888, image->pixels, image->pitch) == 0 &&
@@ -949,7 +949,7 @@ int UiOptions::updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const s
           options.scrollBy(150);
           SDL_RenderClear(renderer);
           options.draw(renderer, &screen);
-          SDL_Surface *more = ZT_CreateRGBSurfaceWithFormat(0, 800, 600, 32, SDL_PIXELFORMAT_ARGB8888);
+          SDL_Surface *more = SDL_CreateSurface(800, 600, SDL_PIXELFORMAT_ARGB8888);
           const std::string scrolled = out + "/options-" + (inGame ? "zoo-" : "menu-") + shotName + "-scrolled" +
                                        (part > 1 ? std::to_string(part) : std::string()) + ".png";
           check(more && ZT_RenderReadPixels(renderer, &screen, SDL_PIXELFORMAT_ARGB8888, more->pixels, more->pitch) == 0 &&

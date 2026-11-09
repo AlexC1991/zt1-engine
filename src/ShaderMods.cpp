@@ -223,7 +223,7 @@ SDL_Surface *normals(SDL_Surface *frame) {
       float lum = (p[0] * 0.299f + p[1] * 0.587f + p[2] * 0.114f) / 255.0f;
       hgt[i] = std::sqrt(1.0f - (1.0f - t) * (1.0f - t)) * R * 0.75f + lum * R * 0.12f;
     }
-  SDL_Surface *out = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *out = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);
   if (!out)
     return nullptr;
   auto hAt = [&](int x, int y) { return hgt[static_cast<size_t>(std::clamp(y, 0, h - 1)) * w + std::clamp(x, 0, w - 1)]; };

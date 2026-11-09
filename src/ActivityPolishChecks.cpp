@@ -292,7 +292,7 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
   ex->water=1; ex->testAnimals=2;
   // The animal pass nests inside the tank's device-pixel strips. A changed
   // clip or scale corrupts later glass, platform and filter drawing.
-  SDL_Surface *canvas=ZT_CreateRGBSurfaceWithFormat(0,512,512,32,SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *canvas=SDL_CreateSurface(512, 512, SDL_PIXELFORMAT_RGBA32);
   SDL_Renderer *probe=canvas?SDL_CreateSoftwareRenderer(canvas):nullptr;if(probe)SDL_SetDefaultTextureScaleMode(probe,SDL_SCALEMODE_NEAREST); // (SDL2's default)
   bool restored=probe!=nullptr;const bool oldTankClip=Features::tankClip;Features::tankClip=true;
   world.centreOn(38,32);

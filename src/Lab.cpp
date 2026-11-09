@@ -2762,7 +2762,7 @@ int LabApp::run(const std::string &mapStem) {
       lastShot = now;
       int w, h;
       SDL_GetCurrentRenderOutputSize(ren, &w, &h);
-      if (SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)) {
+      if (SDL_Surface *sf = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_ARGB8888)) {
         ZT_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
         SDL_SaveBMP(sf, (std::string(shots) + "/lab" + std::to_string(++shotNo) + ".bmp").c_str());
         SDL_DestroySurface(sf);
@@ -3613,7 +3613,7 @@ void LabApp::sendIcon(const std::string &path) {
       SDL_RenderClear(ren);
       SDL_Rect r{0, 0, w, h};
       a->draw(ren, &r, CompassDirection::N);
-      if (SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)) {
+      if (SDL_Surface *sf = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_ARGB8888)) {
         ZT_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
         png = base64(encodeImage(sf, true));
         SDL_DestroySurface(sf);
@@ -3671,7 +3671,7 @@ void LabApp::sendFileView(const std::string &name, const std::string &dirWanted)
           SDL_SetRenderDrawColor(ren, 0, 0, 0, 0);
           SDL_RenderClear(ren);
           a->drawAnchored(ren, -l, -t, dirs[pick].first, nullptr, f);
-          if (SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_ARGB8888)) {
+          if (SDL_Surface *sf = SDL_CreateSurface(W, H, SDL_PIXELFORMAT_ARGB8888)) {
             ZT_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
             frames += (frames.empty() ? "" : ",") + jq(base64(encodeImage(sf, true)));
             SDL_DestroySurface(sf);

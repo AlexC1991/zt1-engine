@@ -17,7 +17,7 @@ int runLightingCatalogueChecks(World &world,ResourceManager *rm,SDL_Renderer *re
   float scaleX,scaleY;SDL_GetRenderScale(renderer,&scaleX,&scaleY);const bool clipped=SDL_RenderClipEnabled(renderer);
   auto *target=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,640,640);
   if(!target)return 1;
-  auto *pixels=ZT_CreateRGBSurfaceWithFormat(0,640,640,32,SDL_PIXELFORMAT_RGBA32);int failures=0,profiles=0;
+  auto *pixels=SDL_CreateSurface(640, 640, SDL_PIXELFORMAT_RGBA32);int failures=0,profiles=0;
   if(!pixels){SDL_DestroyTexture(target);return 1;}
   auto capture=[&](const std::string &path){if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,pixels->pixels,pixels->pitch)!=0 || !IMG_SavePNG(pixels,path.c_str()))++failures;};
   for(const auto &asset:LightingAssets::all()) {

@@ -98,7 +98,7 @@ void ensure() {
 }
 
 // A frame as RGBA32 (a new surface the caller frees)
-SDL_Surface *rgba(SDL_Surface *s) { return ZT_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_RGBA32, 0); }
+SDL_Surface *rgba(SDL_Surface *s) { return SDL_ConvertSurface(s, SDL_PIXELFORMAT_RGBA32); }
 
 // The clear pixels given their opaque neighbours' colour, a few pixels out
 // (still clear): an upscaler blends across the outline, and black there
@@ -244,7 +244,7 @@ SDL_Surface *loadAt(const std::string &path, int level) {
   // own art gets it
   if (const float stops = g_sharpStops; s && stops >= 0.0f) {
     if (s->format != SDL_PIXELFORMAT_RGBA32) {
-      SDL_Surface *c = ZT_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_RGBA32, 0);
+      SDL_Surface *c = SDL_ConvertSurface(s, SDL_PIXELFORMAT_RGBA32);
       SDL_DestroySurface(s);
       s = c;
     }
@@ -284,7 +284,7 @@ SDL_Surface *halve(SDL_Surface *s) {
   if (!in)
     return nullptr;
   const int w = in->w / 2, h = in->h / 2;
-  SDL_Surface *out = w > 0 && h > 0 ? ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32) : nullptr;
+  SDL_Surface *out = w > 0 && h > 0 ? SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32) : nullptr;
   if (out) {
     SDL_LockSurface(in);
     for (int y = 0; y < h; y++) {
@@ -708,7 +708,7 @@ void exportMaterialSeeds(Animation &art,const std::string &direction,int frame,S
     for(int side=0;side<8;++side){const auto dir=CompassDirection(side);auto native=art.lightingFrame(dir,frame);if(native.surface!=source)continue;
       const auto &patches=art.emissionPatches(exportRenderer,dir,frame,id);if(patches.empty())continue;
       auto *target=SDL_CreateTexture(exportRenderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,source->w,source->h);
-      auto *image=ZT_CreateRGBSurfaceWithFormat(0,source->w,source->h,32,SDL_PIXELFORMAT_RGBA32);if(!target || !image){SDL_DestroyTexture(target);SDL_DestroySurface(image);throw std::runtime_error("material seed allocation failed");}
+      auto *image=SDL_CreateSurface(source->w, source->h, SDL_PIXELFORMAT_RGBA32);if(!target || !image){SDL_DestroyTexture(target);SDL_DestroySurface(image);throw std::runtime_error("material seed allocation failed");}
       auto *previous=SDL_GetRenderTarget(exportRenderer);SDL_SetRenderTarget(exportRenderer,target);SDL_SetRenderViewport(exportRenderer,nullptr);SDL_SetRenderClipRect(exportRenderer,nullptr);SDL_SetRenderScale(exportRenderer,1,1);SDL_SetRenderDrawColor(exportRenderer,0,0,0,0);SDL_RenderClear(exportRenderer);
       for(const auto &p:patches){SDL_BlendMode blend;SDL_GetTextureBlendMode(p.texture,&blend);SDL_SetTextureBlendMode(p.texture,SDL_BLENDMODE_NONE);ZT_RenderCopy(exportRenderer,p.texture,nullptr,&p.rect);SDL_SetTextureBlendMode(p.texture,blend);}
       const std::string seed=std::to_string(id)+"@"+std::to_string(side)+"@"+flat;

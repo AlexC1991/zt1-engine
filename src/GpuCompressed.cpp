@@ -245,7 +245,7 @@ bool encode(SDL_Surface *surface, bool best, Blocks &out, int threads) {
     return false;
   SDL_Surface *rgba = surface->format == SDL_PIXELFORMAT_RGBA32
                           ? surface
-                          : ZT_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+                          : SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
   if (!rgba)
     return false;
   const int w = surface->w, h = surface->h, w4 = (w + 3) & ~3, h4 = (h + 3) & ~3;
@@ -298,7 +298,7 @@ SDL_Texture *create(SDL_Renderer *renderer, SDL_Surface *surface, int scale, boo
 
 std::string selfCheck(SDL_Renderer *renderer) {
   const int w = 30, h = 22, w4 = 32, h4 = 24;
-  SDL_Surface *picture = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *picture = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);
   if (!picture)
     return "no surface";
   uint32_t seed = 12345;

@@ -649,8 +649,7 @@ static SDL_Surface *decodeZt1NToSurface(const uint8_t *data, int size,
           height, use_4byte ? "4" : "2");
 
   // 4. DECODE RLE PIXELS
-  SDL_Surface *surf = ZT_CreateRGBSurfaceWithFormat(0, width, height, 32,
-                                                     SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *surf = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGBA32);
   if (!surf)
     return nullptr;
   SDL_FillSurfaceRect(surf, nullptr, ZT_MapRGBA(surf->format, 0, 0, 0, 0));
@@ -742,8 +741,7 @@ SDL_Texture *ResourceManager::getZt1FrameTexture(SDL_Renderer *renderer,
     pos += 4 + 10; // frame size, then the 10-byte frame header
     if (frames > 0 && pal && width > 0 && height > 0 && width < 4096 &&
         height < 4096) {
-      SDL_Surface *surf = ZT_CreateRGBSurfaceWithFormat(
-          0, width, height, 32, SDL_PIXELFORMAT_RGBA32);
+      SDL_Surface *surf = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGBA32);
       if (surf) {
         SDL_FillSurfaceRect(surf, nullptr, ZT_MapRGBA(surf->format, 0, 0, 0, 0));
         uint32_t *pixels = (uint32_t *)surf->pixels;
@@ -1037,8 +1035,8 @@ SDL_Cursor *ResourceManager::getCursor(uint32_t id, int hotX, int hotY, int scal
     // (bigger: each pixel a scale x scale square - Game Options >
     // Accessibility > Cursor size)
     if (scale > 1) {
-      if (SDL_Surface *big = ZT_CreateRGBSurfaceWithFormat(0, s->w * scale, s->h * scale, 32, SDL_PIXELFORMAT_ARGB8888)) {
-        SDL_Surface *src = ZT_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0);
+      if (SDL_Surface *big = SDL_CreateSurface(s->w * scale, s->h * scale, SDL_PIXELFORMAT_ARGB8888)) {
+        SDL_Surface *src = SDL_ConvertSurface(s, SDL_PIXELFORMAT_ARGB8888);
         if (src) {
           SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
           SDL_BlitSurfaceScaled(src, nullptr, big, nullptr, SDL_SCALEMODE_NEAREST);

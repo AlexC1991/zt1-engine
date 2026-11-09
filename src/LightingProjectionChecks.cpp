@@ -19,7 +19,7 @@ namespace LightingDiagnostics {extern bool omitReceivers,fullReceiverClip;}
 int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,const std::string &out,const std::function<void()> &draw) {
   using namespace LightingAssets;int failed=0;std::ostringstream log;
   auto check=[&](const std::string &name,bool ok){log<<(ok?"PASS ":"FAIL ")<<name<<'\n';failed+=!ok;};
-  auto capture=[&](const std::string &name){draw();int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);auto *s=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);if(!s){++failed;return;}
+  auto capture=[&](const std::string &name){draw();int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);auto *s=SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);if(!s){++failed;return;}
     if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,s->pixels,s->pitch) || !IMG_SavePNG(s,(out+"/"+name+".png").c_str()))++failed;SDL_DestroySurface(s);};
   auto pixels=[&]{int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);std::vector<Uint32> data(size_t(w)*h);if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,data.data(),w*4))data.clear();return data;};
   auto coverage=[&]{int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);std::vector<Uint8> mask(size_t(w)*h);for(const auto &c:world.getLighting().covers){const auto f=c.art->lightingFrame(c.side,c.frame);auto *s=f.surface;if(!s)continue;
@@ -44,7 +44,7 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
     check("isolated HD review pack is active",HdArt::active());
     auto atlas=[&](const std::vector<Animation::EmissionPatch> &patches,int w,int h,int scale) {
       std::vector<Uint8> alpha(size_t(w)*h*scale*scale);auto *target=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,w*scale,h*scale);
-      auto *surface=ZT_CreateRGBSurfaceWithFormat(0,w*scale,h*scale,32,SDL_PIXELFORMAT_RGBA32);auto *previous=SDL_GetRenderTarget(renderer);
+      auto *surface=SDL_CreateSurface(w*scale, h*scale, SDL_PIXELFORMAT_RGBA32);auto *previous=SDL_GetRenderTarget(renderer);
       if(!target || !surface){SDL_DestroyTexture(target);SDL_DestroySurface(surface);++failed;return alpha;}
       SDL_SetRenderTarget(renderer,target);SDL_SetRenderScale(renderer,1,1);SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderClipRect(renderer,nullptr);SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);
       for(const auto &patch:patches){SDL_BlendMode mode;Uint8 a;SDL_GetTextureBlendMode(patch.texture,&mode);SDL_GetTextureAlphaMod(patch.texture,&a);SDL_SetTextureBlendMode(patch.texture,SDL_BLENDMODE_NONE);SDL_SetTextureAlphaMod(patch.texture,255);
@@ -74,7 +74,7 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
           const int selected=a->animated?frame:0;const char *dirs[]={"NE","SE","SW","NW"};
           std::unique_ptr<SDL_Surface,decltype(&SDL_DestroySurface)> colour{HdArt::load(art->lightingKey()+"/"+dirs[side]+"_"+std::to_string(selected)),SDL_DestroySurface};
           if(!colour || colour->w!=w*4 || colour->h!=h*4)footprint=false;
-          else {auto *rgba=ZT_ConvertSurfaceFormat(colour.get(),SDL_PIXELFORMAT_RGBA32,0);
+          else {auto *rgba=SDL_ConvertSurface(colour.get(), SDL_PIXELFORMAT_RGBA32);
             for(int y=0;y<h*4;++y)for(int x=0;x<w*4;++x){const int expected=std::min(int(nativeAlpha[size_t(y/4)*w+x/4]),int(static_cast<Uint8*>(rgba->pixels)[y*rgba->pitch+x*4+3]));mismatches+=std::abs(int(alpha[size_t(y)*w*4+x])-expected)>1;}
             SDL_DestroySurface(rgba);alphaCompared+=size_t(w)*h*16;}
           footprint &= mismatches==0;
@@ -98,7 +98,7 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
       auto baked=[&]{RenderSettings::worldZoomedIn=true;const auto &patches=art->emissionPatches(renderer,CompassDirection::NE,0,a->id);return !patches.empty() && std::string(patches[0].material)=="baked HD material";};
       std::error_code ec;fs::rename(file,backup,ec);check("review layer can be temporarily withheld",!ec);
       if(!ec){HdArt::refresh();check("missing HD map falls back to the native material",!baked());
-        auto *tiny=ZT_CreateRGBSurfaceWithFormat(0,1,1,32,SDL_PIXELFORMAT_RGBA32);SDL_FillSurfaceRect(tiny,nullptr,0xffffffff);const bool saved=IMG_SavePNG(tiny,file.string().c_str());SDL_DestroySurface(tiny);
+        auto *tiny=SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);SDL_FillSurfaceRect(tiny,nullptr,0xffffffff);const bool saved=IMG_SavePNG(tiny,file.string().c_str());SDL_DestroySurface(tiny);
         HdArt::refresh();check("incorrect HD map dimensions fall back without replacing the sprite",saved && !baked());fs::remove(file,ec);fs::rename(backup,file,ec);HdArt::refresh();check("restoring a map reloads the baked layer",!ec && baked());
       }
       world.getCamera().zoom=1.5f;Features::dayNightLighting=true;light.previewHour=0;draw();const auto on=pixels();

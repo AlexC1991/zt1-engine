@@ -274,7 +274,7 @@ int UiUpdate::checks(SDL_Renderer *r, ResourceManager *rm, const std::string &ou
       }
     }
     SDL_Rect capture{0, 0, 800, 600};
-    SDL_Surface *image = ZT_CreateRGBSurfaceWithFormat(0, capture.w, capture.h, 32, SDL_PIXELFORMAT_ARGB8888);
+    SDL_Surface *image = SDL_CreateSurface(capture.w, capture.h, SDL_PIXELFORMAT_ARGB8888);
     bool saved = image && ZT_RenderReadPixels(r, &capture, SDL_PIXELFORMAT_ARGB8888, image->pixels, image->pitch) == 0 &&
         IMG_SavePNG(image, (out + "/update-" + std::to_string(static_cast<int>(s)) + ".png").c_str());
     if (image) SDL_DestroySurface(image);
