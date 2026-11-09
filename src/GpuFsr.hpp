@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 // ============================================================================
 // GPU FSR 1 (AMD FidelityFX Super Resolution 1: EASU upscale + RCAS sharpen)

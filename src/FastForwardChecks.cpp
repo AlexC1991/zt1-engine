@@ -8,7 +8,7 @@
 #include "GpuTankLayer.hpp"
 #include "GameSpeedClock.hpp"
 #include <thread>
-#include <SDL_image.h>
+#include <SDL3_image/SDL_image.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -17,7 +17,7 @@
 #include <sstream>
 #include <vector>
 #include <map>
-#include <SDL_opengl.h>
+#include <SDL3/SDL_opengl.h>
 
 namespace FrameProfile {extern bool active;extern std::map<std::string,double> totals;}
 
@@ -28,7 +28,7 @@ extern std::string runShowManagementChecks(World &,ResourceManager *);
 
 namespace {
 constexpr float quantum=1.0f/60;
-constexpr Uint8 noKeys[SDL_NUM_SCANCODES]={};
+constexpr bool noKeys[SDL_SCANCODE_COUNT]={};
 double milliseconds(Uint64 start) {
   return 1000.0*(SDL_GetPerformanceCounter()-start)/SDL_GetPerformanceFrequency();
 }
@@ -62,8 +62,8 @@ int runFastForwardChecks(ResourceManager *rm,SDL_Renderer *renderer,const std::s
   std::ofstream log(out+"/speed-checks.txt"),csv(out+"/speed-frames.csv"),summary(out+"/speed-summary.csv");
   std::ofstream phases(out+"/speed-phases.csv"),device(out+"/device.txt");
   phases<<"speed,lighting,phase,total_ms,frames\n";
-  SDL_RendererInfo info{};SDL_GetRendererInfo(renderer,&info);
-  device<<"SDL renderer="<<(info.name?info.name:"")<<"\naccelerated="<<bool(info.flags&SDL_RENDERER_ACCELERATED)<<'\n';
+  ZT_RendererInfo info{};ZT_GetRendererInfo(renderer,&info);
+  device<<"SDL renderer="<<(info.name?info.name:"")<<"\naccelerated="<<bool(info.flags&ZT_RENDERER_ACCELERATED)<<'\n';
   using GetString=const GLubyte *(APIENTRY *)(GLenum);
   auto getString=reinterpret_cast<GetString>(SDL_GL_GetProcAddress("glGetString"));
   if(SDL_GL_GetCurrentContext() && getString)for(auto key:{GL_VENDOR,GL_RENDERER,GL_VERSION})
@@ -104,7 +104,7 @@ int runFastForwardChecks(ResourceManager *rm,SDL_Renderer *renderer,const std::s
   }
   for(int rate:{1,2,5}) {
     World controlsWorld(rm);controlsWorld.loadBlank(16,16);controlsWorld.edgeScroll=false;
-    GameSpeedClock timing;Uint8 keys[SDL_NUM_SCANCODES]={};keys[SDL_SCANCODE_RIGHT]=1;
+    GameSpeedClock timing;bool keys[SDL_SCANCODE_COUNT]={};keys[SDL_SCANCODE_RIGHT]=true;
     const int start=controlsWorld.getCamera().x;controlsWorld.setPaused(false);
     for(int frame=0;frame<60;++frame)timing.advance(1./60,rate,false,[&](float dt,float input){controlsWorld.update(input>0?keys:noKeys,dt,input);return true;});
     check(start-controlsWorld.getCamera().x==300,"real world camera distance stays normal at "+std::to_string(rate)+"x");
@@ -113,8 +113,8 @@ int runFastForwardChecks(ResourceManager *rm,SDL_Renderer *renderer,const std::s
     check(controlsWorld.getClock()==before && start-controlsWorld.getCamera().x==600,"paused world still pans normally without advancing");
   }
   std::string reference;
-  SDL_SetWindowSize(SDL_RenderGetWindow(renderer),1280,720);SDL_HideWindow(SDL_RenderGetWindow(renderer));
-  SDL_RenderSetVSync(renderer,0);
+  SDL_SetWindowSize(SDL_GetRenderWindow(renderer),1280,720);SDL_HideWindow(SDL_GetRenderWindow(renderer));
+  SDL_SetRenderVSync(renderer,0);
   if(std::getenv("ZT_SPEED_MANAGEMENT")) {
     World management(rm);management.loadBlank(128,128);management.getFences().setEditing(true);
     // The existing ff01 check admits guests and places its distant group at
@@ -156,16 +156,16 @@ int runFastForwardChecks(ResourceManager *rm,SDL_Renderer *renderer,const std::s
       w.setPaused(true);
       SDL_Rect compareView{0,0,1280,720};
       auto draw=[&](bool read=true) {
-        SDL_SetRenderTarget(renderer,nullptr);SDL_RenderSetViewport(renderer,nullptr);SDL_RenderSetScale(renderer,1,1);
+        SDL_SetRenderTarget(renderer,nullptr);SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderScale(renderer,1,1);
         SDL_SetRenderDrawColor(renderer,0,0,0,255);SDL_RenderClear(renderer);w.setView(compareView,1);w.draw(renderer);
-        if(!read){SDL_RenderFlush(renderer);return std::vector<Uint8>{};}
+        if(!read){SDL_FlushRenderer(renderer);return std::vector<Uint8>{};}
         std::vector<Uint8> image(1280*720*4);
-        check(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,image.data(),1280*4)==0,"native comparison frame read");
+        check(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,image.data(),1280*4)==0,"native comparison frame read");
         return image;
       };
       auto save=[&](const std::vector<Uint8> &image,const std::string &name) {
-        auto *surface=SDL_CreateRGBSurfaceWithFormatFrom(const_cast<Uint8*>(image.data()),1280,720,32,1280*4,SDL_PIXELFORMAT_RGBA32);
-        if(surface){IMG_SavePNG(surface,(out+"/"+name+".png").c_str());SDL_FreeSurface(surface);}
+        auto *surface=ZT_CreateRGBSurfaceWithFormatFrom(const_cast<Uint8*>(image.data()),1280,720,32,1280*4,SDL_PIXELFORMAT_RGBA32);
+        if(surface){IMG_SavePNG(surface,(out+"/"+name+".png").c_str());SDL_DestroySurface(surface);}
       };
       for(bool centred:{false,true})for(double hour:{-1.,12.,17.5,0.})for(int rotation=0;rotation<4;++rotation)for(float zoom:{.5f,.75f,1.f,1.5f}) {
         compareView=centred?SDL_Rect{240,60,800,600}:SDL_Rect{0,0,1280,720};
@@ -242,7 +242,7 @@ int runFastForwardChecks(ResourceManager *rm,SDL_Renderer *renderer,const std::s
     // This remains a test driver, not the production game loop or HUD.
     if(hz==60 && !fullShow)for(bool night:{false,true}) {
       Features::dayNightLighting=night;w.getLighting().previewHour=0;
-      auto draw=[&]{SDL_SetRenderTarget(renderer,nullptr);SDL_RenderSetScale(renderer,1,1);SDL_RenderSetViewport(renderer,nullptr);SDL_SetRenderDrawColor(renderer,0,0,0,255);SDL_RenderClear(renderer);w.setView({0,0,1280,720},1);w.draw(renderer);SDL_RenderPresent(renderer);};
+      auto draw=[&]{SDL_SetRenderTarget(renderer,nullptr);SDL_SetRenderScale(renderer,1,1);SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderDrawColor(renderer,0,0,0,255);SDL_RenderClear(renderer);w.setView({0,0,1280,720},1);w.draw(renderer);SDL_RenderPresent(renderer);};
       GameSpeedClock realtime;double previous=1.0/60;
       auto advance=[&](double elapsed) {
         const auto frame=realtime.advance(elapsed,speed,w.isPaused(),[&](float dt,float input){tick(dt,input);return !w.isPaused();});

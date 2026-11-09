@@ -1,7 +1,7 @@
 #include "WorldRenderer.hpp"
 #include "ArtScaler.hpp"
 #include "RenderSettings.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -186,7 +186,7 @@ float WorldRenderer::getHeightUnitPixels() const {
 //   screenX = (u - v) * (tileWidth / 2)
 //   screenY = (u + v) * (tileHeight / 2) - height * unitPixels
 //
-// The renderer draws under SDL_RenderSetScale(zoom), so every position here
+// The renderer draws under SDL_SetRenderScale(zoom), so every position here
 // is in logical pixels. Dividing the screen center by zoom keeps the middle
 // of the window fixed while zooming.
 // ============================================================================
@@ -462,8 +462,8 @@ void WorldRenderer::tileToScreen(int tileX, int tileY, int height,
 // ============================================================================
 
 void WorldRenderer::addTriangle(SDL_Renderer *renderer, SDL_Texture *texture,
-                                const SDL_Vertex &a, const SDL_Vertex &b,
-                                const SDL_Vertex &c) {
+                                const ZT_Vertex &a, const ZT_Vertex &b,
+                                const ZT_Vertex &c) {
   if (texture != batchTexture) {
     flushBatch(renderer);
     batchTexture = texture;
@@ -479,7 +479,7 @@ void WorldRenderer::addTriangle(SDL_Renderer *renderer, SDL_Texture *texture,
 
 void WorldRenderer::flushBatch(SDL_Renderer *renderer) {
   if (!batchIndices.empty()) {
-    if (SDL_RenderGeometry(renderer, batchTexture, batchVertices.data(),
+    if (ZT_RenderGeometry(renderer, batchTexture, batchVertices.data(),
                            static_cast<int>(batchVertices.size()),
                            batchIndices.data(),
                            static_cast<int>(batchIndices.size())) != 0) {
@@ -496,8 +496,8 @@ void WorldRenderer::flushBatch(SDL_Renderer *renderer) {
 }
 
 void WorldRenderer::addToBucket(int layer, int order, SDL_Texture *texture,
-                                const SDL_Vertex &a, const SDL_Vertex &b,
-                                const SDL_Vertex &c) {
+                                const ZT_Vertex &a, const ZT_Vertex &b,
+                                const ZT_Vertex &c) {
   Bucket *bucket = nullptr;
   for (size_t i = 0; i < bucketsUsed; i++) {
     Bucket &bk = buckets[i];
@@ -878,10 +878,10 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
           auto tv = [&](int units) {
             return std::min(1.0f, (units - topU) * vPerUnit);
           };
-          SDL_Vertex va = {{a.x, a.y + ta * unitPx}, c, {0.0f, tv(ta)}};
-          SDL_Vertex vb = {{b.x, b.y + tb * unitPx}, c, {inv, tv(tb)}};
-          SDL_Vertex vb2 = {{b.x, b.y + bb * unitPx}, c, {inv, tv(bb)}};
-          SDL_Vertex va2 = {{a.x, a.y + ba * unitPx}, c, {0.0f, tv(ba)}};
+          ZT_Vertex va = {{a.x, a.y + ta * unitPx}, c, {0.0f, tv(ta)}};
+          ZT_Vertex vb = {{b.x, b.y + tb * unitPx}, c, {inv, tv(tb)}};
+          ZT_Vertex vb2 = {{b.x, b.y + bb * unitPx}, c, {inv, tv(bb)}};
+          ZT_Vertex va2 = {{a.x, a.y + ba * unitPx}, c, {0.0f, tv(ba)}};
           if (tb != bb)
             addToBucket(0, 0, texture, va, vb, vb2);
           if (ta != ba)
@@ -921,7 +921,7 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
         float k = tex.tilesPerTexture;
         float baseU = std::fmod(float(x), k) / k;
         float baseV = std::fmod(float(y), k) / k;
-        SDL_Vertex vtx[4];
+        ZT_Vertex vtx[4];
         SDL_Texture *texture = tex.texture;
         for (int i = 0; i < 4; i++) {
           SDL_Color c = shade(base, shadingMode == 1 ? 1.0f : light[i]);
@@ -1003,10 +1003,10 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
           float x0 = cx - art.anchorX * k, y0 = cy - art.anchorY * k;
           float x1 = x0 + art.width * k, y1 = y0 + art.height * k;
           SDL_Color white = {255, 255, 255, 255};
-          SDL_Vertex q0 = {{x0, y0}, white, {0, 0}};
-          SDL_Vertex q1 = {{x1, y0}, white, {1, 0}};
-          SDL_Vertex q2 = {{x1, y1}, white, {1, 1}};
-          SDL_Vertex q3 = {{x0, y1}, white, {0, 1}};
+          ZT_Vertex q0 = {{x0, y0}, white, {0, 0}};
+          ZT_Vertex q1 = {{x1, y0}, white, {1, 0}};
+          ZT_Vertex q2 = {{x1, y1}, white, {1, 1}};
+          ZT_Vertex q3 = {{x0, y1}, white, {0, 1}};
           addToBucket(2, pathType, pathTexture, q0, q1, q2);
           addToBucket(2, pathType, pathTexture, q0, q2, q3);
         }
@@ -1020,10 +1020,10 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
         auto edge = [&](SDL_FPoint a, SDL_FPoint b, SDL_Color upper,
                         SDL_Color lower) {
           auto band = [&](float top, SDL_Color c) {
-            SDL_Vertex v0 = {{a.x, a.y + top}, c, {0, 0}};
-            SDL_Vertex v1 = {{b.x, b.y + top}, c, {0, 0}};
-            SDL_Vertex v2 = {{b.x, b.y + top + 1.0f}, c, {0, 0}};
-            SDL_Vertex v3 = {{a.x, a.y + top + 1.0f}, c, {0, 0}};
+            ZT_Vertex v0 = {{a.x, a.y + top}, c, {0, 0}};
+            ZT_Vertex v1 = {{b.x, b.y + top}, c, {0, 0}};
+            ZT_Vertex v2 = {{b.x, b.y + top + 1.0f}, c, {0, 0}};
+            ZT_Vertex v3 = {{a.x, a.y + top + 1.0f}, c, {0, 0}};
             addToBucket(3, 0, nullptr, v0, v1, v2);
             addToBucket(3, 0, nullptr, v0, v2, v3);
           };
@@ -1138,7 +1138,7 @@ void WorldRenderer::drawPathPiece(SDL_Renderer *renderer, SpriteDatabase &sprite
     SDL_SetTextureColorMod(texture, tint->r, tint->g, tint->b);
     SDL_SetTextureAlphaMod(texture, tint->a);
   }
-  SDL_RenderCopyF(renderer, texture, nullptr, &dst);
+  ZT_RenderCopyF(renderer, texture, nullptr, &dst);
   if (tint) {
     SDL_SetTextureColorMod(texture, 255, 255, 255);
     SDL_SetTextureAlphaMod(texture, 255);
@@ -1205,10 +1205,10 @@ void WorldRenderer::drawSolid(SDL_Renderer *renderer, SpriteDatabase &spriteDB, 
         worldToScreenF(x0, y0, lo0, q[3].x, q[3].y, d);
         auto v = [&](float z) { return std::clamp((bh - z) * vPerUnit, 0.0f, 1.0f); };
         float u0 = s0 / tpt, u1 = s1 / tpt;
-        SDL_Vertex vx[4] = {{q[0], col, {u0, v(hi0)}}, {q[1], col, {u1, v(hi1)}},
+        ZT_Vertex vx[4] = {{q[0], col, {u0, v(hi0)}}, {q[1], col, {u1, v(hi1)}},
                             {q[2], col, {u1, v(lo1)}}, {q[3], col, {u0, v(lo0)}}};
         int idx[6] = {0, 1, 2, 0, 2, 3};
-        SDL_RenderGeometry(renderer, tex, vx, 4, idx, 6);
+        ZT_RenderGeometry(renderer, tex, vx, 4, idx, 6);
       }
     }
   };
@@ -1262,20 +1262,20 @@ void WorldRenderer::drawBox(SDL_Renderer *renderer, SpriteDatabase &spriteDB, fl
       worldToScreenF(wx[a], wy[a], z1 - t1, pa1.x, pa1.y, d);
       worldToScreenF(wx[c], wy[c], z1 - t, pc0.x, pc0.y, d);
       worldToScreenF(wx[c], wy[c], z1 - t1, pc1.x, pc1.y, d);
-      SDL_Vertex v[4] = {{pa0, col, {0, 0}}, {pc0, col, {u, 0}}, {pc1, col, {u, std::min(1.0f, ya)}},
+      ZT_Vertex v[4] = {{pa0, col, {0, 0}}, {pc0, col, {u, 0}}, {pc1, col, {u, std::min(1.0f, ya)}},
                          {pa1, col, {0, std::min(1.0f, ya)}}};
       int idx[6] = {0, 1, 2, 0, 2, 3};
-      SDL_RenderGeometry(renderer, tex, v, 4, idx, 6);
+      ZT_RenderGeometry(renderer, tex, v, 4, idx, 6);
     }
   };
   face(left, b, kLeftCliffLight);
   face(b, right, kRightCliffLight);
   if (top) {
     SDL_Color col{255, 255, 255, alpha};
-    SDL_Vertex v[4];
+    ZT_Vertex v[4];
     for (int i = 0; i < 4; i++)
       v[i] = {hi[i], col, {i == 1 || i == 2 ? 1.0f / tpt : 0.0f, i >= 2 ? 1.0f / tpt : 0.0f}};
     int idx[6] = {0, 1, 2, 0, 2, 3};
-    SDL_RenderGeometry(renderer, tex, v, 4, idx, 6);
+    ZT_RenderGeometry(renderer, tex, v, 4, idx, 6);
   }
 }

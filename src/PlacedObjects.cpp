@@ -683,7 +683,7 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
   // Use the art's full canvas, including tall/airborne frames and mirrored anchors.
   if (cullWorldSprites) {
     SDL_Rect viewport;
-    SDL_RenderGetViewport(renderer, &viewport);
+    SDL_GetRenderViewport(renderer, &viewport);
     const float width = static_cast<float>(viewport.w);
     const float height = static_cast<float>(viewport.h);
     constexpr float margin = 2.0f; // outward rounding at fractional zoom/odd view sizes
@@ -710,18 +710,18 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
   // ground showing through as a line), and rounding out by hand drew a
   // column twice (see-through water darker there)
   float sxScale = 1, syScale = 1;
-  SDL_RenderGetScale(renderer, &sxScale, &syScale);
-  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+  SDL_GetRenderScale(renderer, &sxScale, &syScale);
+  SDL_SetRenderScale(renderer, 1.0f, 1.0f);
   SDL_Rect oldClip;
-  SDL_RenderGetClipRect(renderer, &oldClip);
-  SDL_RenderSetScale(renderer, sxScale, syScale);
-  bool hadClip = SDL_RenderIsClipEnabled(renderer);
+  SDL_GetRenderClipRect(renderer, &oldClip);
+  SDL_SetRenderScale(renderer, sxScale, syScale);
+  bool hadClip = SDL_RenderClipEnabled(renderer);
   if (profiling) FrameProfile::record("sprite preparation", elapsed(setupStart));
   auto setDeviceClip = [&](const SDL_Rect *r) {
     const Uint64 start = profiling ? SDL_GetPerformanceCounter() : 0;
-    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
-    SDL_RenderSetClipRect(renderer, r);
-    SDL_RenderSetScale(renderer, sxScale, syScale);
+    SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+    SDL_SetRenderClipRect(renderer, r);
+    SDL_SetRenderScale(renderer, sxScale, syScale);
     if (profiling) clipMs += elapsed(start);
   };
   for (size_t i = 0; i < drawn.size(); i++) {
@@ -751,7 +751,7 @@ void PlacedObjects::draw(SDL_Renderer *renderer, const WorldRenderer &view,
         continue;
       if (hadClip) {
         SDL_Rect both;
-        if (!SDL_IntersectRect(&r, &oldClip, &both))
+        if (!SDL_GetRectIntersection(&r, &oldClip, &both))
           continue;
         r = both;
       }

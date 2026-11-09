@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <SDL_image.h>
+#include <SDL3_image/SDL_image.h>
 
 #include "../Animation.hpp"
 #include "../CompassDirection.hpp"
@@ -71,7 +71,7 @@ void windowPixels(SDL_Renderer *renderer, int &w, int &h) {
   // renderer's output is that layer, already scaled down)
   w = 800;
   h = 600;
-  if (SDL_Window *win = SDL_RenderGetWindow(renderer))
+  if (SDL_Window *win = SDL_GetRenderWindow(renderer))
     SDL_GetWindowSizeInPixels(win, &w, &h);
 }
 } // namespace
@@ -935,12 +935,12 @@ int UiOptions::updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const s
           }
         }
       }
-      SDL_Surface *image = SDL_CreateRGBSurfaceWithFormat(0, 800, 600, 32, SDL_PIXELFORMAT_ARGB8888);
+      SDL_Surface *image = ZT_CreateRGBSurfaceWithFormat(0, 800, 600, 32, SDL_PIXELFORMAT_ARGB8888);
       const std::string shotName = kPageNames[page];
       std::string file = out + "/options-" + (inGame ? "zoo-" : "menu-") + shotName + ".png";
-      bool saved = image && SDL_RenderReadPixels(renderer, &screen, SDL_PIXELFORMAT_ARGB8888, image->pixels, image->pitch) == 0 &&
-                   IMG_SavePNG(image, file.c_str()) == 0;
-      if (image) SDL_FreeSurface(image);
+      bool saved = image && ZT_RenderReadPixels(renderer, &screen, SDL_PIXELFORMAT_ARGB8888, image->pixels, image->pitch) == 0 &&
+                   IMG_SavePNG(image, file.c_str());
+      if (image) SDL_DestroySurface(image);
       check(saved, "capture " + file);
       // (a long page scrolled, too: Graphics' lighting and effects, under the
       // fold - a picture every 150 down)
@@ -949,13 +949,13 @@ int UiOptions::updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const s
           options.scrollBy(150);
           SDL_RenderClear(renderer);
           options.draw(renderer, &screen);
-          SDL_Surface *more = SDL_CreateRGBSurfaceWithFormat(0, 800, 600, 32, SDL_PIXELFORMAT_ARGB8888);
+          SDL_Surface *more = ZT_CreateRGBSurfaceWithFormat(0, 800, 600, 32, SDL_PIXELFORMAT_ARGB8888);
           const std::string scrolled = out + "/options-" + (inGame ? "zoo-" : "menu-") + shotName + "-scrolled" +
                                        (part > 1 ? std::to_string(part) : std::string()) + ".png";
-          check(more && SDL_RenderReadPixels(renderer, &screen, SDL_PIXELFORMAT_ARGB8888, more->pixels, more->pitch) == 0 &&
-                    IMG_SavePNG(more, scrolled.c_str()) == 0,
+          check(more && ZT_RenderReadPixels(renderer, &screen, SDL_PIXELFORMAT_ARGB8888, more->pixels, more->pitch) == 0 &&
+                    IMG_SavePNG(more, scrolled.c_str()),
                 "capture " + scrolled);
-          if (more) SDL_FreeSurface(more);
+          if (more) SDL_DestroySurface(more);
         }
         options.scrollBy(-600);
       }
@@ -1377,7 +1377,7 @@ void UiOptions::tick(SDL_Renderer *renderer) {
   // What the art looks like now
   if (this->page == kGraphics) {
     int w = 800, h = 600;
-    if (SDL_Window *win = SDL_RenderGetWindow(renderer))
+    if (SDL_Window *win = SDL_GetRenderWindow(renderer))
       SDL_GetWindowSizeInPixels(win, &w, &h);
     float ui = RenderSettings::uiScaleHeld > 0.0f ? RenderSettings::uiScaleHeld : RenderSettings::uiScaleFor(w, h);
     bool mapBigger = this->inGame && g_ZoomLevel > 1.001f;
@@ -2069,7 +2069,7 @@ UiAction UiOptions::handleInputs(std::vector<Input> &inputs) {
   if (!held)
     for (UiElement *e : this->pageElements()) {
       SDL_Rect r = e->getLastRect();
-      if (!overPage || !SDL_HasIntersection(&r, &view)) {
+      if (!overPage || !SDL_HasRectIntersection(&r, &view)) {
         e->setHidden(true);
         away.push_back(e);
       }
@@ -2174,25 +2174,25 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
         SDL_SetRenderDrawColor(renderer, 30, 46, 33, 255);
       else
         SDL_SetRenderDrawColor(renderer, 41, 61, 44, 255);
-      SDL_RenderFillRect(renderer, &clip);
+      ZT_RenderFillRect(renderer, &clip);
       if (zoo && zw > 15 && zh > 45) {
         // (zoobck's own picture starts 15 in and 45 down: it covers the
         // whole window, its middle kept, its shape kept)
-        SDL_RenderSetClipRect(renderer, &clip);
+        SDL_SetRenderClipRect(renderer, &clip);
         float pw = zw - 15.0f, ph = zh - 45.0f, k = std::max(kW / pw, kH / ph);
         float cw = kW / k, ch = kH / ph * ph / k;
         piece(zoo, zw, zh, {15 + (pw - cw) / 2, 45 + (ph - ch) / 2, cw, ch},
               {static_cast<float>(r.x), static_cast<float>(r.y), static_cast<float>(kW), static_cast<float>(kH)});
-        SDL_RenderSetClipRect(renderer, nullptr);
+        SDL_SetRenderClipRect(renderer, nullptr);
       }
       // (the footer box: darker over the zoo, a fine light edge along its top)
       if (p.y == kFooterTop) {
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 110);
-        SDL_RenderFillRect(renderer, &clip);
+        ZT_RenderFillRect(renderer, &clip);
         SDL_SetRenderDrawColor(renderer, 237, 228, 173, 70);
         SDL_Rect edge = {clip.x, clip.y, clip.w, 1};
-        SDL_RenderFillRect(renderer, &edge);
+        ZT_RenderFillRect(renderer, &edge);
       }
     }
     SDL_SetRenderDrawBlendMode(renderer, was);
@@ -2222,9 +2222,9 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
     shifted.y -= this->scroll;
     std::stable_sort(rows.begin(), rows.end(), [](UiElement *a, UiElement *b) { return a->getLayer() < b->getLayer(); });
     SDL_Rect wasClip;
-    SDL_RenderGetClipRect(renderer, &wasClip);
-    const bool wasClipped = SDL_RenderIsClipEnabled(renderer);
-    SDL_RenderSetClipRect(renderer, &clip);
+    SDL_GetRenderClipRect(renderer, &wasClip);
+    const bool wasClipped = SDL_RenderClipEnabled(renderer);
+    SDL_SetRenderClipRect(renderer, &clip);
     // ours: each row on a faint band, alternately lighter and darker, so a
     // setting reads as one line; a heading with a fine gold rule under it
     if (RenderSettings::drawsUiArt() && this->page != kGame)
@@ -2245,13 +2245,13 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
           if (head) {
             SDL_SetRenderDrawColor(renderer, 255, 218, 90, 120);
             SDL_Rect rule = {r.x + kLabelX, y + kHeadH - 1, kViewRight - kLabelX - 24, 1};
-            SDL_RenderFillRect(renderer, &rule);
+            ZT_RenderFillRect(renderer, &rule);
             n = 0;
             continue;
           }
           SDL_SetRenderDrawColor(renderer, n % 2 ? 255 : 0, n % 2 ? 255 : 0, n % 2 ? 255 : 0, n % 2 ? 14 : 46);
           SDL_Rect band = {r.x + kLabelX - 6, y + 1, kViewRight - kLabelX - 18, std::max(1, row.h - 2)};
-          SDL_RenderFillRect(renderer, &band);
+          ZT_RenderFillRect(renderer, &band);
           n++;
         }
         SDL_SetRenderDrawBlendMode(renderer, wasBlend);
@@ -2262,13 +2262,13 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
       // lets go of the clip, and a long one was drawn over the title)
       if (dynamic_cast<UiText *>(e) && shifted.y + std::atoi(this->ini->get(e->getName(), "y").c_str()) < clip.y - 2)
         continue;
-      SDL_RenderSetClipRect(renderer, &clip); // (again for each: drawing can reset it)
+      SDL_SetRenderClipRect(renderer, &clip); // (again for each: drawing can reset it)
       e->draw(renderer, &shifted);
       SDL_Rect er = e->getLastRect();
       if (er.h > 0)
         bottom = std::max(bottom, er.y + er.h - shifted.y);
     }
-    SDL_RenderSetClipRect(renderer, wasClipped ? &wasClip : nullptr);
+    SDL_SetRenderClipRect(renderer, wasClipped ? &wasClip : nullptr);
     this->contentBottom = bottom;
   }
   // Its lock, beside the close button

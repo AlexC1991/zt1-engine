@@ -1,6 +1,6 @@
 #ifndef INPUT_HPP
 #define INPUT_HPP
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 enum class InputType {
   NONE,

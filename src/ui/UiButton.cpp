@@ -337,7 +337,7 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     if (this->fill_color.a && RenderSettings::drawsUiArt()) {
       SDL_Rect in = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4, dest_rect.h - 4};
       SDL_SetRenderDrawColor(renderer, this->fill_color.r, this->fill_color.g, this->fill_color.b, 255);
-      SDL_RenderFillRect(renderer, &in);
+      ZT_RenderFillRect(renderer, &in);
     }
     if (this->icon && RenderSettings::drawsUiArt()) {
       int iw = 0, ih = 0;
@@ -368,7 +368,7 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     }
     RenderSettings::applyArtScaleMode(target);
     if (RenderSettings::drawsUiArt())
-      SDL_RenderCopy(renderer, target, nullptr, &render_rect);
+      ZT_RenderCopy(renderer, target, nullptr, &render_rect);
   }
 
   if (this->text != nullptr) {
@@ -440,7 +440,7 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     if (t) {
       RenderSettings::applyArtScaleMode(t);
       if (RenderSettings::drawsUiArt())
-        SDL_RenderCopy(renderer, t, NULL, &dest_rect);
+        ZT_RenderCopy(renderer, t, NULL, &dest_rect);
     }
   }
 
@@ -454,34 +454,34 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
 
     if ((!this->transparent || force_bg) && RenderSettings::drawsUiArt()) {
       SDL_SetRenderDrawColor(renderer, 40, 50, 40, 255);
-      SDL_RenderFillRect(renderer, &dest_rect);
+      ZT_RenderFillRect(renderer, &dest_rect);
 
       SDL_Rect inner = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4,
                         dest_rect.h - 4};
       SDL_SetRenderDrawColor(renderer, 70, 85, 60, 255);
-      SDL_RenderFillRect(renderer, &inner);
+      ZT_RenderFillRect(renderer, &inner);
 
       SDL_Rect highlight = {dest_rect.x + 2, dest_rect.y + 2, dest_rect.w - 4,
                             2};
       SDL_SetRenderDrawColor(renderer, 100, 115, 85, 255);
-      SDL_RenderFillRect(renderer, &highlight);
+      ZT_RenderFillRect(renderer, &highlight);
 
       SDL_Rect shadow_line = {dest_rect.x + 2, dest_rect.y + dest_rect.h - 4,
                               dest_rect.w - 4, 2};
       SDL_SetRenderDrawColor(renderer, 50, 60, 45, 255);
-      SDL_RenderFillRect(renderer, &shadow_line);
+      ZT_RenderFillRect(renderer, &shadow_line);
     }
   }
 
   if (this->shadow != nullptr && text_rect.w > 0 && text_rect.h > 0 &&
       RenderSettings::drawsUiText()) {
     shadow_rect = {text_rect.x - 1, text_rect.y + 1, text_rect.w, text_rect.h};
-    SDL_RenderCopy(renderer, this->shadow, nullptr, &shadow_rect);
+    ZT_RenderCopy(renderer, this->shadow, nullptr, &shadow_rect);
   }
 
   if (this->text != nullptr && text_rect.w > 0 && text_rect.h > 0 &&
       RenderSettings::drawsUiText()) {
-    SDL_RenderCopy(renderer, this->text, nullptr, &text_rect);
+    ZT_RenderCopy(renderer, this->text, nullptr, &text_rect);
   }
 
   this->last_rect = this->dest_rect; // where it is, for getLastRect

@@ -2,7 +2,7 @@
 #define UI_SCROLLBAR_HPP
 
 #include "UiElement.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <functional>
 #include <string>

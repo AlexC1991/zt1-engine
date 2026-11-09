@@ -8,7 +8,6 @@
 #include <string>
 #include <thread>
 
-#include <SDL2/SDL_syswm.h>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -18,7 +17,7 @@
 
 namespace {
 std::atomic<bool> g_active{false}, g_quit{false}, g_hidden{true}, g_snap{false};
-std::atomic<bool> g_heldKeys[SDL_NUM_SCANCODES]{};
+std::atomic<bool> g_heldKeys[SDL_SCANCODE_COUNT]{};
 std::atomic<bool> g_pressed{false}; // (press / release: a drag's button held)
 // (shot <file>: set by the listening thread, taken by the game's)
 std::mutex g_shotLock;
@@ -31,18 +30,18 @@ SDL_Window *g_window = nullptr;
 void clickAt(int x, int y, int button) {
   Uint32 id = g_window ? SDL_GetWindowID(g_window) : 0;
   SDL_Event e{};
-  e.type = SDL_MOUSEMOTION;
+  e.type = SDL_EVENT_MOUSE_MOTION;
   e.motion.windowID = id;
   e.motion.x = x;
   e.motion.y = y;
   SDL_PushEvent(&e);
   SDL_Delay(60);
-  for (Uint32 type : {static_cast<Uint32>(SDL_MOUSEBUTTONDOWN), static_cast<Uint32>(SDL_MOUSEBUTTONUP)}) {
+  for (Uint32 type : {static_cast<Uint32>(SDL_EVENT_MOUSE_BUTTON_DOWN), static_cast<Uint32>(SDL_EVENT_MOUSE_BUTTON_UP)}) {
     SDL_Event b{};
     b.type = type;
     b.button.windowID = id;
     b.button.button = static_cast<Uint8>(button);
-    b.button.state = type == SDL_MOUSEBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED;
+    b.button.down = type == SDL_EVENT_MOUSE_BUTTON_DOWN;
     b.button.clicks = 1;
     b.button.x = x;
     b.button.y = y;
@@ -173,16 +172,16 @@ void holdKey(const char *name, int ms) {
   if (sc == SDL_SCANCODE_UNKNOWN)
     return;
   Uint32 id = g_window ? SDL_GetWindowID(g_window) : 0;
-  for (Uint32 type : {static_cast<Uint32>(SDL_KEYDOWN), static_cast<Uint32>(SDL_KEYUP)}) {
+  for (Uint32 type : {static_cast<Uint32>(SDL_EVENT_KEY_DOWN), static_cast<Uint32>(SDL_EVENT_KEY_UP)}) {
     SDL_Event e{};
     e.type = type;
     e.key.windowID = id;
-    e.key.state = type == SDL_KEYDOWN ? SDL_PRESSED : SDL_RELEASED;
-    e.key.keysym.scancode = sc;
-    e.key.keysym.sym = SDL_GetKeyFromScancode(sc);
-    g_heldKeys[sc].store(type == SDL_KEYDOWN, std::memory_order_relaxed);
+    e.key.down = type == SDL_EVENT_KEY_DOWN;
+    e.key.scancode = sc;
+    e.key.key = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false);
+    g_heldKeys[sc].store(type == SDL_EVENT_KEY_DOWN, std::memory_order_relaxed);
     SDL_PushEvent(&e);
-    if (type == SDL_KEYDOWN)
+    if (type == SDL_EVENT_KEY_DOWN)
       SDL_Delay(static_cast<Uint32>(ms > 0 ? ms : 1));
   }
 }
@@ -216,7 +215,7 @@ bool command(const char *line) {
     // (the mouse there and left: hovering - a tooltip, a lit piece; with
     // the button pressed, a drag)
     SDL_Event e{};
-    e.type = SDL_MOUSEMOTION;
+    e.type = SDL_EVENT_MOUSE_MOTION;
     e.motion.windowID = g_window ? SDL_GetWindowID(g_window) : 0;
     e.motion.x = x;
     e.motion.y = y;
@@ -228,10 +227,10 @@ bool command(const char *line) {
     bool down = line[0] == 'p';
     g_pressed = down;
     SDL_Event b{};
-    b.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+    b.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
     b.button.windowID = g_window ? SDL_GetWindowID(g_window) : 0;
     b.button.button = SDL_BUTTON_LEFT;
-    b.button.state = down ? SDL_PRESSED : SDL_RELEASED;
+    b.button.down = down;
     b.button.clicks = 1;
     b.button.x = x;
     b.button.y = y;
@@ -296,18 +295,17 @@ void listen() {
   // (asked to, or the Lab app gone: the game goes too)
   g_quit = true;
   SDL_Event e{};
-  e.type = SDL_QUIT;
+  e.type = SDL_EVENT_QUIT;
   SDL_PushEvent(&e);
 }
 } // namespace
 
 namespace Embed {
 bool into(SDL_Window *window, const char *ownerHandle) {
-  SDL_SysWMinfo info;
-  SDL_VERSION(&info.version);
-  if (!SDL_GetWindowWMInfo(window, &info))
+  // (SDL3: the window's HWND is one of its properties)
+  g_child = static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+  if (!g_child)
     return false;
-  g_child = info.info.win.window;
   g_window = window;
   g_owner = reinterpret_cast<HWND>(static_cast<uintptr_t>(std::strtoull(ownerHandle, nullptr, 0)));
   if (!g_child || !g_owner || !IsWindow(g_owner))
@@ -328,10 +326,10 @@ bool into(SDL_Window *window, const char *ownerHandle) {
   // (clicked: the keyboard to it, as a window of its own got it by being
   // activated)
   SDL_AddEventWatch(
-      [](void *, SDL_Event *e) -> int {
-        if (e->type == SDL_MOUSEBUTTONDOWN && GetWindowThreadProcessId(g_child, nullptr) == GetCurrentThreadId() && GetFocus() != g_child)
+      [](void *, SDL_Event *e) -> bool {
+        if (e->type == SDL_EVENT_MOUSE_BUTTON_DOWN && GetWindowThreadProcessId(g_child, nullptr) == GetCurrentThreadId() && GetFocus() != g_child)
           SetFocus(g_child);
-        return 0;
+        return true;
       },
       nullptr);
   g_active = true;
@@ -345,11 +343,11 @@ bool into(SDL_Window *window, const char *ownerHandle) {
 bool active() { return g_active; }
 bool quitAsked() { return g_quit; }
 bool hidden() { return g_active && g_hidden; }
-const Uint8 *keyboardState() {
-  const Uint8 *physical = SDL_GetKeyboardState(nullptr);
+const bool *keyboardState() {
+  const bool *physical = SDL_GetKeyboardState(nullptr);
   if (!g_active) return physical;
-  static Uint8 combined[SDL_NUM_SCANCODES]{};
-  for (int key = 0; key < SDL_NUM_SCANCODES; ++key)
+  static bool combined[SDL_SCANCODE_COUNT]{};
+  for (int key = 0; key < SDL_SCANCODE_COUNT; ++key)
     combined[key] = physical[key] || g_heldKeys[key].load(std::memory_order_relaxed);
   return combined;
 }

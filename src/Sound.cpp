@@ -19,34 +19,33 @@ Sound &Sound::get() {
 }
 
 void Sound::reload() {
-  Mix_HaltChannel(-1);
-  for (const auto &[file, sound] : chunks) if (sound) Mix_FreeChunk(sound);
+  Audio::halt(-1);
+  for (const auto &[file, sound] : chunks) if (sound) Audio::free(sound);
   chunks.clear();
   paused = false;
 }
 
 void Sound::init(ResourceManager *rm) {
   this->rm = rm;
-  // Room for the many that can play at once (animals, guests, the UI)
-  Mix_AllocateChannels(32);
+  // (room for the many that can play at once - animals, guests, the UI:
+  // Audio's 32 channels)
 }
 
-Mix_Chunk *Sound::chunk(const std::string &raw) {
+Audio::Clip *Sound::chunk(const std::string &raw) {
   std::string path = Utils::string_to_lower(raw);
   if (path.size() < 4 || path.compare(path.size() - 4, 4, ".wav") != 0)
     path += ".wav";
   auto it = this->chunks.find(path);
   if (it != this->chunks.end())
     return it->second;
-  Mix_Chunk *c = nullptr;
+  Audio::Clip *c = nullptr;
   if (this->rm) {
     int size = 0;
     void *data = this->rm->getFileBytes(path, &size);
     if (data && size > 0) {
-      if (SDL_RWops *rw = SDL_RWFromConstMem(data, size))
-        c = Mix_LoadWAV_RW(rw, 1);
+      c = Audio::load(data, static_cast<size_t>(size));
       if (!c)
-        SDL_Log("[Sound] can't read %s: %s", path.c_str(), Mix_GetError());
+        SDL_Log("[Sound] can't read %s: %s", path.c_str(), SDL_GetError());
     }
     free(data);
   }
@@ -56,21 +55,21 @@ Mix_Chunk *Sound::chunk(const std::string &raw) {
   return c;
 }
 
-int Sound::start(Mix_Chunk *c, int atten, float pan, int loops) {
+int Sound::start(Audio::Clip *c, int atten, float pan, int loops) {
   if (!c || !this->enabled)
     return -1;
   int total = std::max(1, this->master + atten);
   if (total > kInaudible)
     return -1;
-  int channel = Mix_PlayChannel(-1, c, loops);
+  int channel = Audio::play(c, loops);
   if (channel < 0)
     return -1;
   // Hundredths of a decibel to a volume
   float gain = std::pow(10.0f, -total / 2000.0f);
-  Mix_Volume(channel, std::clamp(static_cast<int>(std::lround(gain * MIX_MAX_VOLUME)), 0, MIX_MAX_VOLUME));
+  Audio::volume(channel, std::clamp(static_cast<int>(std::lround(gain * Audio::kMaxVolume)), 0, Audio::kMaxVolume));
   float p = std::clamp(pan, -1.0f, 1.0f);
-  Mix_SetPanning(channel, static_cast<Uint8>(std::lround(p > 0 ? 255 * (1 - p) : 255)),
-                 static_cast<Uint8>(std::lround(p < 0 ? 255 * (1 + p) : 255)));
+  Audio::pan(channel, static_cast<Uint8>(std::lround(p > 0 ? 255 * (1 - p) : 255)),
+             static_cast<Uint8>(std::lround(p < 0 ? 255 * (1 + p) : 255)));
   return channel;
 }
 
@@ -99,14 +98,14 @@ bool Sound::place(int channel, float dx, float dy, int atten) {
   int away = std::min(kMaxDistance, static_cast<int>(std::hypot(dx, dy) * kPerPixel));
   int total = std::max(1, this->master + atten + away);
   if (total > 9000) { // (zoo.exe: over 9000 a positional sound stops)
-    Mix_HaltChannel(channel);
+    Audio::halt(channel);
     return false;
   }
   float gain = std::pow(10.0f, -total / 2000.0f);
-  Mix_Volume(channel, std::clamp(static_cast<int>(std::lround(gain * MIX_MAX_VOLUME)), 0, MIX_MAX_VOLUME));
+  Audio::volume(channel, std::clamp(static_cast<int>(std::lround(gain * Audio::kMaxVolume)), 0, Audio::kMaxVolume));
   float p = std::clamp(dx * kPanPerPixel, -10000.0f, 10000.0f) / 10000.0f;
-  Mix_SetPanning(channel, static_cast<Uint8>(std::lround(p > 0 ? 255 * (1 - p) : 255)),
-                 static_cast<Uint8>(std::lround(p < 0 ? 255 * (1 + p) : 255)));
+  Audio::pan(channel, static_cast<Uint8>(std::lround(p > 0 ? 255 * (1 - p) : 255)),
+             static_cast<Uint8>(std::lround(p < 0 ? 255 * (1 + p) : 255)));
   return true;
 }
 
@@ -120,7 +119,7 @@ int Sound::loopAt(const std::string &path, float dx, float dy, int atten) {
 
 void Sound::stop(int channel) {
   if (channel >= 0)
-    Mix_HaltChannel(channel);
+    Audio::halt(channel);
 }
 
 void Sound::setPaused(bool paused) {
@@ -128,7 +127,7 @@ void Sound::setPaused(bool paused) {
     return;
   this->paused = paused;
   if (paused)
-    Mix_Pause(-1);
+    Audio::pause(-1);
   else
-    Mix_Resume(-1);
+    Audio::resume(-1);
 }

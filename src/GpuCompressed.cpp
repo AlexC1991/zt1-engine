@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <SDL2/SDL_opengl.h>
+#include <SDL3/SDL_opengl.h>
 
 #include "ArtScaler.hpp"
 #include "Bc7.hpp"
@@ -17,7 +17,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <SDL2/SDL_system.h>
+#include <SDL3/SDL_system.h>
 #include <d3d11.h>
 // (SDL's own records as SDL 2.32 lays them out - src/render/SDL_sysrender.h
 // and src/render/direct3d11/SDL_render_d3d11.c in vendor/SDL - checked
@@ -86,8 +86,8 @@ struct D3D11TextureStart { // (D3D11_TextureData's first two)
 #endif
 
 std::string backendOf(SDL_Renderer *renderer) {
-  SDL_RendererInfo info{};
-  return SDL_GetRendererInfo(renderer, &info) == 0 && info.name ? info.name : "";
+  ZT_RendererInfo info{};
+  return ZT_GetRendererInfo(renderer, &info) == 0 && info.name ? info.name : "";
 }
 
 void refuse(SDL_Renderer *renderer, const char *why) {
@@ -102,12 +102,12 @@ void refuse(SDL_Renderer *renderer, const char *why) {
 // The storage of t (made by SDL, ARGB8888, w x h) swapped for the blocks
 bool swapGl(SDL_Renderer *renderer, SDL_Texture *t, int w, int h, const std::vector<uint8_t> &blocks) {
   float tw = 0, th = 0;
-  if (SDL_GL_BindTexture(t, &tw, &th) != 0)
+  if (ZT_GL_BindTexture(t, &tw, &th) != 0)
     return false;
   // (a GL_TEXTURE_2D of its own size: SDL gives 1, 1; a rectangle texture or
   // one rounded up to a power of 2 can't be)
   if (tw != 1.0f || th != 1.0f) {
-    SDL_GL_UnbindTexture(t);
+    ZT_GL_UnbindTexture(t);
     refuse(renderer, "textures here aren't plain 2D ones");
     return false;
   }
@@ -115,7 +115,7 @@ bool swapGl(SDL_Renderer *renderer, SDL_Texture *t, int w, int h, const std::vec
   }
   g_gl.CompressedTexImage2D(GL_TEXTURE_2D, 0, kBptcRgba, w, h, 0, static_cast<GLsizei>(blocks.size()), blocks.data());
   const GLenum err = g_gl.GetError();
-  SDL_GL_UnbindTexture(t);
+  ZT_GL_UnbindTexture(t);
   if (err != GL_NO_ERROR) {
     refuse(renderer, "the driver didn't take the compressed texture");
     return false;
@@ -128,14 +128,14 @@ bool swapD3d11(SDL_Renderer *renderer, SDL_Texture *t, int w, int h, const std::
   // (SDL's record of it, as laid out above: checked by what's known of it)
   const auto *rec = reinterpret_cast<const SdlTexture *>(t);
   void *const mark = reinterpret_cast<void *>(intptr_t(0x5A17));
-  SDL_SetTextureUserData(t, mark);
+  ZT_SetTextureUserData(t, mark);
   if (rec->w != w || rec->h != h || rec->format != SDL_PIXELFORMAT_ARGB8888 || rec->renderer != renderer ||
       rec->native || rec->userdata != mark || !rec->driverdata) {
-    SDL_SetTextureUserData(t, nullptr);
+    ZT_SetTextureUserData(t, nullptr);
     refuse(renderer, "SDL's texture record isn't laid out as expected");
     return false;
   }
-  SDL_SetTextureUserData(t, nullptr);
+  ZT_SetTextureUserData(t, nullptr);
   auto *data = static_cast<D3D11TextureStart *>(rec->driverdata);
   if (!data->mainTexture || !data->mainTextureResourceView) {
     refuse(renderer, "SDL's Direct3D texture isn't laid out as expected");
@@ -153,7 +153,7 @@ bool swapD3d11(SDL_Renderer *renderer, SDL_Texture *t, int w, int h, const std::
     refuse(renderer, "SDL's Direct3D texture isn't laid out as expected");
     return false;
   }
-  ID3D11Device *device = SDL_RenderGetD3D11Device(renderer);
+  ID3D11Device *device = ZT_RenderGetD3D11Device(renderer);
   if (!device)
     return false;
   D3D11_TEXTURE2D_DESC bc{};
@@ -206,7 +206,7 @@ bool supported(SDL_Renderer *renderer) {
   }
 #ifdef ZT_D3D11_SWAP
   else if (backend == "direct3d11") {
-    if (ID3D11Device *device = SDL_RenderGetD3D11Device(renderer)) {
+    if (ID3D11Device *device = ZT_RenderGetD3D11Device(renderer)) {
       UINT support = 0;
       ok = SUCCEEDED(device->CheckFormatSupport(DXGI_FORMAT_BC7_UNORM, &support)) &&
            (support & D3D11_FORMAT_SUPPORT_TEXTURE2D) && (support & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE);
@@ -243,9 +243,9 @@ static SDL_Texture *fromBlocks(SDL_Renderer *renderer, int w, int h, const std::
 bool encode(SDL_Surface *surface, bool best, Blocks &out, int threads) {
   if (!surface || surface->w <= 0 || surface->h <= 0)
     return false;
-  SDL_Surface *rgba = surface->format->format == SDL_PIXELFORMAT_RGBA32
+  SDL_Surface *rgba = surface->format == SDL_PIXELFORMAT_RGBA32
                           ? surface
-                          : SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+                          : ZT_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
   if (!rgba)
     return false;
   const int w = surface->w, h = surface->h, w4 = (w + 3) & ~3, h4 = (h + 3) & ~3;
@@ -264,7 +264,7 @@ bool encode(SDL_Surface *surface, bool best, Blocks &out, int threads) {
   if (SDL_MUSTLOCK(rgba))
     SDL_UnlockSurface(rgba);
   if (rgba != surface)
-    SDL_FreeSurface(rgba);
+    SDL_DestroySurface(rgba);
   out.w = w;
   out.h = h;
   out.w4 = w4;
@@ -283,7 +283,7 @@ SDL_Texture *upload(SDL_Renderer *renderer, const Blocks &b, int scale) {
     return nullptr;
   ArtScaler::markPadded(t, scale, b.w4 - b.w, b.h4 - b.h, true);
   SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
-  SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+  SDL_SetTextureScaleMode(t, SDL_SCALEMODE_LINEAR);
   g_made++;
   g_bytes += b.data.size();
   return t;
@@ -298,7 +298,7 @@ SDL_Texture *create(SDL_Renderer *renderer, SDL_Surface *surface, int scale, boo
 
 std::string selfCheck(SDL_Renderer *renderer) {
   const int w = 30, h = 22, w4 = 32, h4 = 24;
-  SDL_Surface *picture = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *picture = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32);
   if (!picture)
     return "no surface";
   uint32_t seed = 12345;
@@ -323,7 +323,7 @@ std::string selfCheck(SDL_Renderer *renderer) {
     for (int bx = 0; bx < w4 / 4; bx++) {
       uint8_t px[64];
       if (!Bc7::decodeBlock(&blocks[(size_t(by) * (w4 / 4) + bx) * 16], px)) {
-        SDL_FreeSurface(picture);
+        SDL_DestroySurface(picture);
         return "a block isn't mode 6";
       }
       for (int y = 0; y < 4; y++)
@@ -354,20 +354,20 @@ std::string selfCheck(SDL_Renderer *renderer) {
       ArtScaler::querySize(t, &qw, &qh);
       SDL_Texture *was = SDL_GetRenderTarget(renderer);
       SDL_Rect viewport;
-      SDL_RenderGetViewport(renderer, &viewport);
+      SDL_GetRenderViewport(renderer, &viewport);
       float sx = 1, sy = 1;
-      SDL_RenderGetScale(renderer, &sx, &sy);
+      SDL_GetRenderScale(renderer, &sx, &sy);
       std::vector<uint8_t> read(size_t(w) * h * 4);
       SDL_SetRenderTarget(renderer, target);
-      SDL_RenderSetScale(renderer, 1, 1);
+      SDL_SetRenderScale(renderer, 1, 1);
       SDL_SetTextureBlendMode(t, SDL_BLENDMODE_NONE);
-      SDL_SetTextureScaleMode(t, SDL_ScaleModeNearest);
+      SDL_SetTextureScaleMode(t, SDL_SCALEMODE_NEAREST);
       SDL_Rect to{0, 0, w, h};
-      SDL_RenderCopy(renderer, t, &content, &to);
-      const int got = SDL_RenderReadPixels(renderer, &to, SDL_PIXELFORMAT_ABGR8888, read.data(), w * 4);
+      ZT_RenderCopy(renderer, t, &content, &to);
+      const int got = ZT_RenderReadPixels(renderer, &to, SDL_PIXELFORMAT_ABGR8888, read.data(), w * 4);
       SDL_SetRenderTarget(renderer, was);
-      SDL_RenderSetViewport(renderer, &viewport);
-      SDL_RenderSetScale(renderer, sx, sy);
+      SDL_SetRenderViewport(renderer, &viewport);
+      SDL_SetRenderScale(renderer, sx, sy);
       int worst = 0;
       for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++)
@@ -426,19 +426,19 @@ std::string selfCheck(SDL_Renderer *renderer) {
     else if (fail.empty()) {
       SDL_Texture *was = SDL_GetRenderTarget(renderer);
       SDL_Rect viewport;
-      SDL_RenderGetViewport(renderer, &viewport);
+      SDL_GetRenderViewport(renderer, &viewport);
       float sx = 1, sy = 1;
-      SDL_RenderGetScale(renderer, &sx, &sy);
+      SDL_GetRenderScale(renderer, &sx, &sy);
       SDL_SetRenderTarget(renderer, target);
-      SDL_RenderSetScale(renderer, 1, 1);
+      SDL_SetRenderScale(renderer, 1, 1);
       SDL_SetTextureBlendMode(t, SDL_BLENDMODE_NONE);
-      SDL_SetTextureScaleMode(t, SDL_ScaleModeNearest);
+      SDL_SetTextureScaleMode(t, SDL_SCALEMODE_NEAREST);
       SDL_Rect all{0, 0, tw, th};
-      SDL_RenderCopy(renderer, t, &all, &all);
-      const int got = SDL_RenderReadPixels(renderer, &all, SDL_PIXELFORMAT_ABGR8888, read.data(), tw * 4);
+      ZT_RenderCopy(renderer, t, &all, &all);
+      const int got = ZT_RenderReadPixels(renderer, &all, SDL_PIXELFORMAT_ABGR8888, read.data(), tw * 4);
       SDL_SetRenderTarget(renderer, was);
-      SDL_RenderSetViewport(renderer, &viewport);
-      SDL_RenderSetScale(renderer, sx, sy);
+      SDL_SetRenderViewport(renderer, &viewport);
+      SDL_SetRenderScale(renderer, sx, sy);
       if (got != 0)
         fail = std::string("couldn't read the random blocks back: ") + SDL_GetError();
       for (int row = 0; row < bh && fail.empty(); row++)
@@ -458,7 +458,7 @@ std::string selfCheck(SDL_Renderer *renderer) {
     if (target)
       SDL_DestroyTexture(target);
   }
-  SDL_FreeSurface(picture);
+  SDL_DestroySurface(picture);
   return fail;
 }
 

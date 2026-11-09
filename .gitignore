@@ -20,6 +20,8 @@ lab-app/.lab-pack/
 
 # Releases (engine-build-resources/make_release.py): the x64 build and its zips
 build-x64/
+# (the port to SDL3, built on its own while it is made: -DZT1_SDL3=ON)
+build-sdl3/
 dist/
 
 # Private reverse-engineering data (recordings, caches, private notes): never shared

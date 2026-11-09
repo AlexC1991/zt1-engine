@@ -1,6 +1,7 @@
 #define SDL_MAIN_HANDLED
+#include <SDL3/SDL_main.h>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -40,6 +41,7 @@
 #include "GameSpeedClock.hpp"
 #include "GameBenchmark.hpp"
 #include "GraphicsQuality.hpp"
+#include "Audio.hpp"
 #include "SampleProfiler.hpp"
 #include "ModMenu.hpp"
 #include "DisplaySettings.hpp"
@@ -63,7 +65,7 @@
 #include "Sound.hpp"
 #include "SaveGame.hpp"
 #include "Goals.hpp"
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 
 #include "ui/UiImage.hpp"
 #include "ui/UiLayout.hpp"
@@ -338,7 +340,7 @@ struct UiTransform {
 
 static UiTransform getUiTransform(SDL_Renderer *renderer) {
   int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
-  SDL_GetRendererOutputSize(renderer, &w, &h);
+  SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
   UiTransform t;
   t.scale = RenderSettings::uiScaleFor(w, h);
   // The viewport is set in layout units, so snap the offset to them; mouse
@@ -363,7 +365,7 @@ static UiTransform hudTransform(SDL_Renderer *renderer) {
 // growing and shrinking around it (RenderSettings::uiScaleHeld)
 static UiTransform optionsTransform(SDL_Renderer *renderer) {
   int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
-  SDL_GetRendererOutputSize(renderer, &w, &h);
+  SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
   UiTransform t;
   t.scale = RenderSettings::uiScaleHeld > 0.0f ? RenderSettings::uiScaleHeld : RenderSettings::uiScaleFor(w, h);
   return t;
@@ -389,14 +391,14 @@ static void drawUiScaled(SDL_Renderer *renderer, ResourceManager *rm,
                          const UiTransform &t, DrawFn draw) {
   rm->setTextScale(t.scale);
   int outW = UI_LAYOUT_W, outH = UI_LAYOUT_H;
-  SDL_GetRendererOutputSize(renderer, &outW, &outH);
+  SDL_GetCurrentRenderOutputSize(renderer, &outW, &outH);
 
   if (GpuFsr::upscales(t.scale)) {
     GpuFsr::beginLayer(renderer, GpuFsr::Layer::Ui,
                        static_cast<int>(std::ceil(outW / t.scale)),
                        static_cast<int>(std::ceil(outH / t.scale)),
                        SDL_Color{0, 0, 0, 0});
-    RenderSettings::artScaleMode = SDL_ScaleModeNearest;
+    RenderSettings::artScaleMode = SDL_SCALEMODE_NEAREST;
     RenderSettings::uiPass = RenderSettings::UiPass::Art;
     draw(renderer);
     GpuFsr::endLayer(renderer, GpuFsr::Layer::Ui, outW / t.scale,
@@ -417,7 +419,7 @@ static void drawUiScaled(SDL_Renderer *renderer, ResourceManager *rm,
       lw = w;
       lh = h;
       if (layer) {
-        RenderSettings::setScaleMode(layer, SDL_ScaleModeLinear);
+        RenderSettings::setScaleMode(layer, SDL_SCALEMODE_LINEAR);
         // (drawn over clear black, its colours already carry their alpha)
         SDL_SetTextureBlendMode(layer, SDL_ComposeCustomBlendMode(
                                            SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD,
@@ -433,22 +435,22 @@ static void drawUiScaled(SDL_Renderer *renderer, ResourceManager *rm,
       SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
       SDL_RenderClear(renderer);
       SDL_SetRenderDrawBlendMode(renderer, mode);
-      RenderSettings::artScaleMode = SDL_ScaleModeNearest;
+      RenderSettings::artScaleMode = SDL_SCALEMODE_NEAREST;
       RenderSettings::uiPass = RenderSettings::UiPass::Art;
       draw(renderer);
       SDL_SetRenderTarget(renderer, was);
       SDL_FRect dst = {0.0f, 0.0f, w * t.scale, h * t.scale};
-      SDL_RenderCopyF(renderer, layer, nullptr, &dst);
+      ZT_RenderCopyF(renderer, layer, nullptr, &dst);
       RenderSettings::uiPass = RenderSettings::UiPass::Text;
     }
   } else {
     RenderSettings::artScaleMode = RenderSettings::lookFor(t.scale);
   }
-  SDL_RenderSetScale(renderer, t.scale, t.scale);
+  SDL_SetRenderScale(renderer, t.scale, t.scale);
   draw(renderer);
-  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+  SDL_SetRenderScale(renderer, 1.0f, 1.0f);
   RenderSettings::uiPass = RenderSettings::UiPass::All;
-  RenderSettings::artScaleMode = SDL_ScaleModeNearest;
+  RenderSettings::artScaleMode = SDL_SCALEMODE_NEAREST;
 }
 
 // The Options window (over the main menu or a zoo), centred in the window
@@ -458,7 +460,7 @@ static void drawOptions(SDL_Renderer *renderer, ResourceManager *rm, UiOptions *
     return;
   UiTransform t = optionsTransform(renderer);
   int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
-  SDL_GetRendererOutputSize(renderer, &w, &h);
+  SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
   SDL_Rect screen = {0, 0, static_cast<int>(w / t.scale), static_cast<int>(h / t.scale)};
   drawUiScaled(renderer, rm, t, [&](SDL_Renderer *r) { options->draw(r, &screen); });
 }
@@ -471,10 +473,10 @@ static void drawLayoutCentered(SDL_Renderer *renderer, UiLayout *layout,
     SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
                          static_cast<int>(std::lround(t.offsetY / t.scale)),
                          UI_LAYOUT_W, UI_LAYOUT_H};
-    SDL_RenderSetViewport(r, &viewport);
+    SDL_SetRenderViewport(r, &viewport);
     SDL_Rect layoutRect = {0, 0, UI_LAYOUT_W, UI_LAYOUT_H};
     layout->draw(r, &layoutRect);
-    SDL_RenderSetViewport(r, nullptr);
+    SDL_SetRenderViewport(r, nullptr);
   });
 }
 
@@ -595,7 +597,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
   // Undo starts visible but greyed out (nothing to undo yet); the Scenario
   // button is greyed out in freeform games
   if (UiButton *snap = dynamic_cast<UiButton *>(g_hud->getElementById(1099)))
-    snap->onClick = [] { g_snapshot = (SDL_GetModState() & KMOD_SHIFT) ? 2 : 1; };
+    snap->onClick = [] { g_snapshot = (SDL_GetModState() & SDL_KMOD_SHIFT) ? 2 : 1; };
   if (UiButton *undo = dynamic_cast<UiButton *>(g_hud->getElementById(1075))) {
     undo->setHidden(false);
     undo->setDisabled(true);
@@ -756,7 +758,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
 // The HUD's layout covers the window in layout units (window / UI scale)
 static SDL_Rect hudLayoutRect(SDL_Renderer *renderer, const UiTransform &t) {
   int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
-  SDL_GetRendererOutputSize(renderer, &w, &h);
+  SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
   // Rounded, not truncated: the right-hand and centred pieces then sit
   // within half a layout pixel of the window's real right edge and centre
   return {0, 0, static_cast<int>(std::lround(w / t.scale)),
@@ -768,7 +770,7 @@ static SDL_Rect hudLayoutRect(SDL_Renderer *renderer, const UiTransform &t) {
 // widescreen option, the whole window
 static SDL_Rect gameViewRect(SDL_Renderer *renderer) {
   int w = UI_LAYOUT_W, h = UI_LAYOUT_H;
-  SDL_GetRendererOutputSize(renderer, &w, &h);
+  SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
   if (g_widescreen)
     return {0, 0, w, h};
   UiTransform t = getUiTransform(renderer);
@@ -801,10 +803,10 @@ static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
     SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
                          static_cast<int>(std::lround(t.offsetY / t.scale)),
                          UI_LAYOUT_W, UI_LAYOUT_H};
-    SDL_RenderSetViewport(r, &viewport);
+    SDL_SetRenderViewport(r, &viewport);
     SDL_Rect layoutRect = {0, 0, UI_LAYOUT_W, UI_LAYOUT_H};
     g_hud->draw(r, &layoutRect);
-    SDL_RenderSetViewport(r, nullptr);
+    SDL_SetRenderViewport(r, nullptr);
   });
   // A drop-down list goes over everything, text included
   if (g_hud->hasPopup())
@@ -812,10 +814,10 @@ static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
       SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
                            static_cast<int>(std::lround(t.offsetY / t.scale)),
                            UI_LAYOUT_W, UI_LAYOUT_H};
-      SDL_RenderSetViewport(r, &viewport);
+      SDL_SetRenderViewport(r, &viewport);
       SDL_Rect layoutRect = {0, 0, UI_LAYOUT_W, UI_LAYOUT_H};
       g_hud->drawPopup(r, &layoutRect);
-      SDL_RenderSetViewport(r, nullptr);
+      SDL_SetRenderViewport(r, nullptr);
     });
   // A dialog (new exhibit name, are you sure) over everything
   if (g_hud->hasDialog())
@@ -823,10 +825,10 @@ static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
       SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
                            static_cast<int>(std::lround(t.offsetY / t.scale)),
                            UI_LAYOUT_W, UI_LAYOUT_H};
-      SDL_RenderSetViewport(r, &viewport);
+      SDL_SetRenderViewport(r, &viewport);
       SDL_Rect layoutRect = {0, 0, UI_LAYOUT_W, UI_LAYOUT_H};
       g_hud->drawDialog(r, &layoutRect);
-      SDL_RenderSetViewport(r, nullptr);
+      SDL_SetRenderViewport(r, nullptr);
     });
 }
 
@@ -2072,7 +2074,7 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
   }
   if (c == "day" || c == "month") {
     int days = static_cast<int>(num(1, 1)) * (c == "month" ? 30 : 1);
-    const Uint8 none[SDL_NUM_SCANCODES] = {};
+    const bool none[SDL_SCANCODE_COUNT] = {};
     for (int s = 0; s < days * 120; s++) {
       g_world->update(none, 0.1f);
       g_sim.update(0.1f);
@@ -2233,9 +2235,9 @@ static void drawToolCost(SDL_Renderer *renderer, ResourceManager *rm) {
     SDL_GetRenderDrawBlendMode(renderer, &was);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, 34, 29, 15, 240);
-    SDL_RenderFillRect(renderer, &box);
+    ZT_RenderFillRect(renderer, &box);
     SDL_SetRenderDrawColor(renderer, 255, 217, 90, 255);
-    SDL_RenderDrawRect(renderer, &box);
+    ZT_RenderDrawRect(renderer, &box);
     SDL_SetRenderDrawBlendMode(renderer, was);
     int y = box.y + pad;
     for (SDL_Texture *m : tex) {
@@ -2244,7 +2246,7 @@ static void drawToolCost(SDL_Renderer *renderer, ResourceManager *rm) {
       int w = 0, h = 0;
       rm->getTextSize(m, &w, &h);
       SDL_Rect r = {box.x + pad, y, w, h};
-      SDL_RenderCopy(renderer, m, nullptr, &r);
+      ZT_RenderCopy(renderer, m, nullptr, &r);
       y += h;
     }
   }
@@ -2266,7 +2268,7 @@ static void drawToolCost(SDL_Renderer *renderer, ResourceManager *rm) {
   SDL_Rect r = {g_mouseX + static_cast<int>(14 * t.scale), g_mouseY - h / 2, w, h};
   if (g_world->isBulldozing())
     r = {g_mouseX + static_cast<int>(6 * t.scale), g_mouseY + static_cast<int>(8 * t.scale), w, h};
-  SDL_RenderCopy(renderer, text, nullptr, &r);
+  ZT_RenderCopy(renderer, text, nullptr, &r);
 }
 
 extern float g_ZoomLevel; // World.cpp
@@ -2307,7 +2309,7 @@ static UiAction hudInputs(SDL_Renderer *renderer, std::vector<Input> inputs) {
     // A path that can be raised picked: the wheel sets the walkway height
     // (Ctrl + wheel still zooms)
     if (g_world && Features::elevatedPaths && !g_world->getPathTool().empty() &&
-        World::raisable(g_world->getPathTool()) && !(SDL_GetModState() & KMOD_CTRL)) {
+        World::raisable(g_world->getPathTool()) && !(SDL_GetModState() & SDL_KMOD_CTRL)) {
       g_world->adjustBuildHeight(in.event == InputEvent::SCROLL_UP ? 1 : -1);
       continue;
     }
@@ -2644,20 +2646,20 @@ static void takeSnapshot(SDL_Renderer *renderer, ResourceManager *rm) {
   char name[32];
   std::snprintf(name, sizeof name, "Zoo%03d", (highest + 1) % 1000);
   int w = 0, h = 0;
-  SDL_GetRendererOutputSize(renderer, &w, &h);
-  SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 24, SDL_PIXELFORMAT_RGB24);
+  SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
+  SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, w, h, 24, SDL_PIXELFORMAT_RGB24);
   bool ok = false;
   std::string written;
-  if (s && SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, s->pixels, s->pitch) == 0) {
+  if (s && ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, s->pixels, s->pitch) == 0) {
     written = (dir / (std::string(name) + ".jpg")).string();
-    ok = IMG_SaveJPG(s, written.c_str(), 75) == 0;
+    ok = IMG_SaveJPG(s, written.c_str(), 75);
     if (!ok) {
       written = (dir / (std::string(name) + ".bmp")).string();
-      ok = SDL_SaveBMP(s, written.c_str()) == 0;
+      ok = SDL_SaveBMP(s, written.c_str());
     }
   }
   if (s)
-    SDL_FreeSurface(s);
+    SDL_DestroySurface(s);
   if (!g_hud)
     return;
   if (ok) {
@@ -3266,16 +3268,16 @@ static int g_renderCheckExtraRotation = 0;
 static bool saveTargetToBmp(SDL_Renderer *renderer, SDL_Texture *target,
                             const std::string &path) {
   int w = 0, h = 0;
-  SDL_QueryTexture(target, nullptr, nullptr, &w, &h);
+  ZT_QueryTexture(target, nullptr, nullptr, &w, &h);
   SDL_SetRenderTarget(renderer, target);
   SDL_Surface *surface =
-      SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+      ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
   bool ok = surface &&
-            SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
+            ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
                                  surface->pixels, surface->pitch) == 0 &&
-            SDL_SaveBMP(surface, path.c_str()) == 0;
+            SDL_SaveBMP(surface, path.c_str());
   if (surface)
-    SDL_FreeSurface(surface);
+    SDL_DestroySurface(surface);
   SDL_SetRenderTarget(renderer, nullptr);
   if (!ok)
     SDL_Log("[RenderCheck] Failed to save %s: %s", path.c_str(), SDL_GetError());
@@ -3352,11 +3354,11 @@ static int runMapRenderCheck(SDL_Renderer *renderer, ResourceManager *rm,
       SDL_Texture *preview = rm->getZt1Texture(renderer, raw, pal);
       if (preview) {
         int w = 0, h = 0;
-        SDL_QueryTexture(preview, nullptr, nullptr, &w, &h);
+        ZT_QueryTexture(preview, nullptr, nullptr, &w, &h);
         SDL_Texture *target = SDL_CreateTexture(
             renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
         SDL_SetRenderTarget(renderer, target);
-        SDL_RenderCopy(renderer, preview, nullptr, nullptr);
+        ZT_RenderCopy(renderer, preview, nullptr, nullptr);
         saveTargetToBmp(renderer, target, prefix + "_preview.bmp");
         SDL_DestroyTexture(target);
       }
@@ -3516,20 +3518,20 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         SDL_RenderPresent(renderer);
     }
     int w = 0, h = 0;
-    SDL_GetRendererOutputSize(renderer, &w, &h);
+    SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
     SDL_Surface *s =
-        SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
-    if (s && SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
+        ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (s && ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
                                   s->pixels, s->pitch) == 0)
       if (std::getenv("ZT_HUD_CLOCK_CHECKS") || std::getenv("ZT_SPEED_HUD_CHECKS")) IMG_SavePNG(s, (outDir + "/" + name + ".png").c_str());
       else SDL_SaveBMP(s, (outDir + "/" + name + ".bmp").c_str());
     if (s)
-      SDL_FreeSurface(s);
+      SDL_DestroySurface(s);
     SDL_RenderPresent(renderer);
     note(name);
   };
   if (std::getenv("ZT_SPEED_HUD_CHECKS")) {
-    SDL_HideWindow(SDL_RenderGetWindow(renderer));
+    SDL_HideWindow(SDL_GetRenderWindow(renderer));
     extern int runSpeedHudChecks(World &,UiGameScreen &,ResourceManager *,SDL_Renderer *,const std::string &,bool &,
         const std::function<void(const char*)> &,const std::function<void(bool)> &,const std::function<float()> &);
     const int result=runSpeedHudChecks(*world,*g_hud,rm,renderer,outDir,g_widescreen,capture,
@@ -3544,7 +3546,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     return result;
   }
   if (std::getenv("ZT_HUD_CLOCK_CHECKS")) {
-    SDL_HideWindow(SDL_RenderGetWindow(renderer));
+    SDL_HideWindow(SDL_GetRenderWindow(renderer));
     extern int runHudClockChecks(World &,UiGameScreen &,ResourceManager *,SDL_Renderer *,const std::string &,
                                 bool &,const std::function<void(const char*)> &,const std::function<void(bool)> &);
     const int result = runHudClockChecks(*world,*g_hud,rm,renderer,outDir,g_widescreen,capture,
@@ -3583,11 +3585,11 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       SDL_RenderClear(renderer);
       drawLayoutCentered(renderer, layout, rm);
       int w = 0, h = 0;
-      SDL_GetRendererOutputSize(renderer, &w, &h);
-      if (SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)) {
-        if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, s->pixels, s->pitch) == 0)
+      SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
+      if (SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)) {
+        if (ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, s->pixels, s->pitch) == 0)
           SDL_SaveBMP(s, (outDir + "/" + name + ".bmp").c_str());
-        SDL_FreeSurface(s);
+        SDL_DestroySurface(s);
       }
       SDL_RenderPresent(renderer);
     };
@@ -3880,7 +3882,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     // ZT_START_ONLY=1: just the start view (for calibrating it)
     if (std::getenv("ZT_START_ONLY")) {
       int w = 0, h = 0;
-      SDL_GetRendererOutputSize(renderer, &w, &h);
+      SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
       float sc = h / 600.0f, ox = (w - 800 * sc) / 2;
       for (const PlacedObjects::Object &o : world->getObjects().objects()) {
         const std::string &t = o.typeName;
@@ -4065,7 +4067,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       world->setPaused(false);
       world->setView(gameViewRect(renderer), getUiTransform(renderer).scale);
       Animation::setGradualZoomedIn(true); // (as in play)
-      const Uint8 *keys = SDL_GetKeyboardState(nullptr);
+      const bool *keys = SDL_GetKeyboardState(nullptr);
       const std::vector<Animals::Member> members = world->getAnimals().members(); // (they move)
       std::set<int> seen;
       int n = 0, frames = 0;
@@ -4100,11 +4102,11 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         SDL_RenderClear(renderer);
         world->draw(renderer);
         int pw = 0, ph = 0;
-        SDL_GetRendererOutputSize(renderer, &pw, &ph);
-        if (SDL_Surface *shot = SDL_CreateRGBSurfaceWithFormat(0, pw, ph, 32, SDL_PIXELFORMAT_RGBA32)) {
-          if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGBA32, shot->pixels, shot->pitch) == 0)
+        SDL_GetCurrentRenderOutputSize(renderer, &pw, &ph);
+        if (SDL_Surface *shot = ZT_CreateRGBSurfaceWithFormat(0, pw, ph, 32, SDL_PIXELFORMAT_RGBA32)) {
+          if (ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGBA32, shot->pixels, shot->pitch) == 0)
             IMG_SavePNG(shot, (outDir + "/" + nm).c_str());
-          SDL_FreeSurface(shot);
+          SDL_DestroySurface(shot);
         }
         SDL_RenderPresent(renderer);
       }
@@ -4434,7 +4436,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         capture(name);
         std::vector<int> redness;
         if (SDL_Surface *s = SDL_LoadBMP((outDir + "/" + name + ".bmp").c_str())) {
-          if (SDL_Surface *c = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0)) {
+          if (SDL_Surface *c = ZT_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0)) {
             redness.resize(static_cast<size_t>(c->w) * c->h);
             for (int y = 0; y < c->h; y++)
               for (int x = 0; x < c->w; x++) {
@@ -4442,14 +4444,14 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                 redness[static_cast<size_t>(y) * c->w + x] =
                     static_cast<int>((p >> 16) & 0xff) - static_cast<int>((p >> 8) & 0xff);
               }
-            SDL_FreeSurface(c);
+            SDL_DestroySurface(c);
           }
-          SDL_FreeSurface(s);
+          SDL_DestroySurface(s);
         }
         return redness;
       };
       int outW = 0, outH = 0;
-      SDL_GetRendererOutputSize(renderer, &outW, &outH);
+      SDL_GetCurrentRenderOutputSize(renderer, &outW, &outH);
       // (each tile at its middle and toward its far side, away from the
       // tank: the wall's own face covers the near half of one behind the
       // tank, as its art does, and there it's the wall that's picked - one
@@ -4559,7 +4561,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                 if (Animation *a = ft.tankArt[c][l]) {
                   float x = 30.0f + col * 48.0f, y = 60.0f + row * 90.0f;
                   SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
-                  SDL_RenderDrawPointF(renderer, x, y);
+                  SDL_RenderPoint(renderer, x, y);
                   a->drawAnchored(renderer, x, y, dir, nullptr, 0);
                 }
             for (Animation *a : {ft.ladder, ft.ladderOut, ft.platform}) {
@@ -4567,7 +4569,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                 float x = 30.0f + col * 48.0f, y = 60.0f + row * 90.0f;
                 a->drawAnchored(renderer, x, y, dir, nullptr, 0);
                 SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
-                SDL_RenderDrawPointF(renderer, x, y);
+                SDL_RenderPoint(renderer, x, y);
               }
               col++;
             }
@@ -4585,7 +4587,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
               float x = 60.0f + col * 110.0f, y = 700.0f;
               a->drawAnchored(renderer, x, y, CompassDirection::N, nullptr, 0);
               SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
-              SDL_RenderDrawPointF(renderer, x, y);
+              SDL_RenderPoint(renderer, x, y);
               int w = 0, h = 0, ox = 0, oy = 0;
               a->queryTexture(CompassDirection::N, &w, &h);
               a->anchorOffset(CompassDirection::N, &ox, &oy);
@@ -4594,10 +4596,10 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             col++;
           }
         }
-        SDL_Surface *sf = SDL_CreateRGBSurfaceWithFormat(0, 2800, 760, 24, SDL_PIXELFORMAT_RGB24);
-        SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, sf->pixels, sf->pitch);
+        SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, 2800, 760, 24, SDL_PIXELFORMAT_RGB24);
+        ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, sf->pixels, sf->pitch);
         SDL_SaveBMP(sf, (outDir + "/tankpieces.bmp").c_str());
-        SDL_FreeSurface(sf);
+        SDL_DestroySurface(sf);
         SDL_SetRenderTarget(renderer, nullptr);
         SDL_DestroyTexture(t);
       }
@@ -4621,10 +4623,10 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           }
           row++;
         }
-        SDL_Surface *sf = SDL_CreateRGBSurfaceWithFormat(0, 760, 200, 24, SDL_PIXELFORMAT_RGB24);
-        SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, sf->pixels, sf->pitch);
+        SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, 760, 200, 24, SDL_PIXELFORMAT_RGB24);
+        ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, sf->pixels, sf->pitch);
         SDL_SaveBMP(sf, (outDir + "/waterparts.bmp").c_str());
-        SDL_FreeSurface(sf);
+        SDL_DestroySurface(sf);
         SDL_SetRenderTarget(renderer, nullptr);
         SDL_DestroyTexture(t);
       }
@@ -5524,18 +5526,18 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       Animation *a = rm->getAnimation("animals/seagull/m/idle/idle");
       SDL_SetRenderDrawColor(renderer, 90, 70, 50, 255);
       SDL_RenderClear(renderer);
-      SDL_RenderSetScale(renderer, 6, 6);
+      SDL_SetRenderScale(renderer, 6, 6);
       for (int f = 0; f < 6; f++)
         a->drawAnchored(renderer, 20.0f + f * 36, 40.0f, CompassDirection::SE, nullptr, f);
       for (int f = 0; f < 6; f++)
         a->drawAnchored(renderer, 20.0f + f * 36, 90.0f, CompassDirection::SW, nullptr, f);
-      SDL_RenderSetScale(renderer, 1, 1);
+      SDL_SetRenderScale(renderer, 1, 1);
       int w = 0, h = 0;
-      SDL_GetRendererOutputSize(renderer, &w, &h);
-      SDL_Surface *sf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
-      SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
+      SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
+      SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+      ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
       SDL_SaveBMP(sf, (outDir + "/seagull_frames.bmp").c_str());
-      SDL_FreeSurface(sf);
+      SDL_DestroySurface(sf);
     }
     capture("ambient_birds");
   }
@@ -5636,7 +5638,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         // Every type, man and woman, a few colourings, standing and walking
         SDL_SetRenderDrawColor(renderer, 110, 90, 60, 255);
         SDL_RenderClear(renderer);
-        SDL_RenderSetScale(renderer, 2, 2);
+        SDL_SetRenderScale(renderer, 2, 2);
         const CompassDirection dirs[8] = {CompassDirection::N, CompassDirection::NE, CompassDirection::E,
                                           CompassDirection::SE, CompassDirection::S, CompassDirection::SW,
                                           CompassDirection::W, CompassDirection::NW};
@@ -5658,13 +5660,13 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             }
             row++;
           }
-        SDL_RenderSetScale(renderer, 1, 1);
+        SDL_SetRenderScale(renderer, 1, 1);
         int w = 0, h = 0;
-        SDL_GetRendererOutputSize(renderer, &w, &h);
-        SDL_Surface *sf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
-        SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
+        SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
+        SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+        ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
         SDL_SaveBMP(sf, (outDir + "/staff_sheet.bmp").c_str());
-        SDL_FreeSurface(sf);
+        SDL_DestroySurface(sf);
       }
       int wagesBefore = st.monthlyWages();
       check("monthly wages $1100", wagesBefore == 1100);
@@ -6565,9 +6567,9 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     WorldMap &map = world->getMap();
     Fences &fn = world->getFences();
     // The game's sounds play (uiclick.wav)
-    Mix_HaltChannel(-1);
+    Audio::halt(-1);
     Sound::get().play("sounds/uiclick");
-    check("sounds play (uiclick.wav)", Mix_Playing(-1) > 0);
+    check("sounds play (uiclick.wav)", Audio::playing(-1));
     int zebra = an.typeOfFile("animals/zebra.ai");
     check(("animal types loaded (" + std::to_string(an.types().size()) + ")").c_str(),
           zebra >= 0 && an.types().size() > 40 && an.isZooAnimal(zebra));
@@ -6857,7 +6859,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             if (m.exhibit == pen->id)
               z = &m;
           bool faced = z && !z->faces.empty();
-          bool sounding = Mix_Playing(-1) > 0;
+          bool sounding = Audio::playing(-1);
           world->centreOn(placedX + 0.5f, placedY + 0.5f);
           if (z)
             for (int i = 0; i < 4; i++)
@@ -9245,7 +9247,7 @@ int main(int argc, char *argv[]) {
   for (int i = 1; i < argc; i++)
     if (std::string(argv[i]) == "--lab-host") {
       labHost = true;
-      SDL_SetHint(SDL_HINT_AUDIODRIVER, "dummy");
+      SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
       SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
     }
 #ifdef _WIN32
@@ -9255,7 +9257,7 @@ int main(int argc, char *argv[]) {
   // set in the environment still wins. (Not for the Lab's engine: the
   // variable would outrank its silent device)
   if (!labHost && SDL_getenv("SDL_AUDIODRIVER") == NULL)
-    SDL_setenv("SDL_AUDIODRIVER", "directsound", 0);
+    SDL_setenv_unsafe("SDL_AUDIODRIVER", "directsound", 0);
 #endif
 
   // Initialize memory tracking and crash dump system
@@ -9327,8 +9329,8 @@ int main(int argc, char *argv[]) {
   // ours: and its draws batched. Named by the hint, SDL turns batching off,
   // and every sprite, tile and shadow went to the driver as a draw of its
   // own (half of each frame spent there). Our own OpenGL passes (FSR, the
-  // lighting) send SDL's batch first (SDL_RenderFlush) as batching needs.
-  SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");
+  // lighting) send SDL's batch first (SDL_FlushRenderer) as batching needs.
+  // (SDL3's renderers always batch: SDL2's SDL_HINT_RENDER_BATCHING is gone)
   windowLifetime=std::make_unique<Window>("ZT1-Engine",config.getScreenWidth(),config.getScreenHeight(),60.0f);
   Window &window=*windowLifetime;
   // The Display, Graphics and Accessibility settings at work (frame rate,
@@ -9381,7 +9383,7 @@ int main(int argc, char *argv[]) {
     window.set_cursor(g_arrowCursor);
     for (SDL_Cursor *c : old)
       if (c)
-        SDL_FreeCursor(c);
+        SDL_DestroyCursor(c);
   };
   loadCursors(Display::cursorSize());
   Display::onCursorSize = loadCursors;
@@ -9560,7 +9562,7 @@ int main(int argc, char *argv[]) {
       if (g_currentState == LayoutState::GAME_LOOP)
         resource_manager.fadeMenuMusic();
       else if (lastState == LayoutState::GAME_LOOP) {
-        Mix_HaltChannel(-1);
+        Audio::halt(-1);
         resource_manager.playMenuMusic();
       }
       lastState = g_currentState;
@@ -9570,8 +9572,8 @@ int main(int argc, char *argv[]) {
     static bool heldHidden = false;
     if (Embed::hidden()) {
       if (!heldHidden) {
-        Mix_Pause(-1);
-        Mix_PauseMusic();
+        Audio::pause(-1);
+        Audio::pauseMusic();
         heldHidden = true;
       }
       if (Embed::quitAsked())
@@ -9583,8 +9585,8 @@ int main(int argc, char *argv[]) {
       continue;
     }
     if (heldHidden) {
-      Mix_Resume(-1);
-      Mix_ResumeMusic();
+      Audio::resume(-1);
+      Audio::resumeMusic();
       heldHidden = false;
       lastFrameTime = SDL_GetTicks();
       g_speedClock.clearPending();
@@ -9610,10 +9612,10 @@ int main(int argc, char *argv[]) {
       }
     if(g_currentState==LayoutState::GAME_LOOP)
       for(const Input &in:inputs)if(in.event==InputEvent::KEY_DOWN && in.key==SDLK_F9) {
-        FrameProfile::start();int width=0,height=0;SDL_GetRendererOutputSize(window.renderer,&width,&height);
-        SDL_RendererInfo device{};SDL_GetRendererInfo(window.renderer,&device);
+        FrameProfile::start();int width=0,height=0;SDL_GetCurrentRenderOutputSize(window.renderer,&width,&height);
+        ZT_RendererInfo device{};ZT_GetRendererInfo(window.renderer,&device);
         SDL_Log("[FrameProfile] renderer=%s accelerated=%d targetTextures=%d vsync=%d",device.name,
-          (device.flags&SDL_RENDERER_ACCELERATED)!=0,(device.flags&SDL_RENDERER_TARGETTEXTURE)!=0,(device.flags&SDL_RENDERER_PRESENTVSYNC)!=0);
+          (device.flags&ZT_RENDERER_ACCELERATED)!=0,(device.flags&ZT_RENDERER_TARGETTEXTURE)!=0,(device.flags&ZT_RENDERER_PRESENTVSYNC)!=0);
         SDL_Log("[FrameProfile] context guests=%zu animals=%zu size=%dx%d zoom=%.2f paused=%d spriteCulling=%d",
           g_world->getGuests().guests().size(),g_world->getAnimals().members().size(),width,height,
           g_world->getCamera().zoom,g_world->isPaused(),spriteCulling);
@@ -9651,7 +9653,7 @@ int main(int argc, char *argv[]) {
           !g_hud->closeTopmost())
         g_hud->toggleGameMenu();
       // Ctrl+Z: Undo, as its button ("hotkeys")
-      if (input.event == InputEvent::KEY_DOWN && input.key == SDLK_z && (SDL_GetModState() & KMOD_CTRL) &&
+      if (input.event == InputEvent::KEY_DOWN && input.key == SDLK_Z && (SDL_GetModState() & SDL_KMOD_CTRL) &&
           Features::hotkeys && !UiText::isEditing() && !g_console.isOpen() &&
           g_currentState == LayoutState::GAME_LOOP && g_hud && g_world && g_world->canUndo())
         if (UiButton *undo = dynamic_cast<UiButton *>(g_hud->getElementById(1075)))
@@ -9665,24 +9667,24 @@ int main(int argc, char *argv[]) {
         g_world->adjustBuildHeight(input.key == SDLK_PAGEUP ? 1 : -1);
       // Q / E turn the view left / right, as the rotate buttons - or, with
       // an object to put down, turn the object ("hotkeys")
-      if (input.event == InputEvent::KEY_DOWN && (input.key == SDLK_q || input.key == SDLK_e) &&
+      if (input.event == InputEvent::KEY_DOWN && (input.key == SDLK_Q || input.key == SDLK_E) &&
           !UiText::isEditing() && !g_console.isOpen() && g_currentState == LayoutState::GAME_LOOP &&
           g_world) {
         if (Features::hotkeys && g_hud && !g_world->getObjectTool().empty())
-          g_hud->rotateHeld(input.key == SDLK_e ? 1 : -1);
+          g_hud->rotateHeld(input.key == SDLK_E ? 1 : -1);
         else
-          g_world->rotateView(input.key == SDLK_e ? 1 : -1);
+          g_world->rotateView(input.key == SDLK_E ? 1 : -1);
       }
       // Tab (Shift+Tab back): how a path or walkway drag lays out
       if (input.event == InputEvent::KEY_DOWN && input.key == SDLK_TAB && !UiText::isEditing() &&
           g_currentState == LayoutState::GAME_LOOP && g_world && !g_world->getPathTool().empty() &&
           Features::pathModes)
-        g_world->cyclePathMode((SDL_GetModState() & KMOD_SHIFT) ? -1 : 1);
+        g_world->cyclePathMode((SDL_GetModState() & SDL_KMOD_SHIFT) ? -1 : 1);
       // Tab (Shift+Tab back) changes how a fence drag lays out
       if (input.event == InputEvent::KEY_DOWN && input.key == SDLK_TAB &&
           !UiText::isEditing() && g_currentState == LayoutState::GAME_LOOP && g_world &&
           g_world->getFenceTool() >= 0 && Features::fenceModes)
-        g_world->cycleFenceMode((SDL_GetModState() & KMOD_SHIFT) ? -1 : 1);
+        g_world->cycleFenceMode((SDL_GetModState() & SDL_KMOD_SHIFT) ? -1 : 1);
     }
 
     std::vector<Input> updateInputs = inputs;
@@ -9959,8 +9961,8 @@ int main(int argc, char *argv[]) {
     // UPDATE LOGGING
     if (g_currentState == LayoutState::GAME_LOOP) {
       // SDL_Log("MainLoop: Pre-Update");
-      const Uint8 *state = Embed::keyboardState();
-      static const Uint8 noKeys[SDL_NUM_SCANCODES] = {};
+      const bool *state = Embed::keyboardState();
+      static const bool noKeys[SDL_SCANCODE_COUNT] = {};
       // Game Options (window or original panel), questions and naming boxes
       // stop the whole simulation. Only resume a game that the modal paused;
       // a zoo the player had already paused must stay paused on dismissal.
@@ -9980,7 +9982,7 @@ int main(int argc, char *argv[]) {
         g_resetSimulationFrame=false;g_speedClock.clearPending();deltaTime=0;lastFrameTime=SDL_GetTicks();
       }
       bool controlsSent=false;
-      const Uint8 *frameKeys=g_console.isOpen() || UiText::isEditing() || dialogUp?noKeys:state;
+      const bool *frameKeys=g_console.isOpen() || UiText::isEditing() || dialogUp?noKeys:state;
       auto advanceGame=[&](float simulationSeconds,float inputSeconds) {
       g_world->update(controlsSent?noKeys:frameKeys,simulationSeconds,inputSeconds);
       controlsSent=true;
@@ -10157,7 +10159,7 @@ int main(int argc, char *argv[]) {
       }
       {
         int ow = 0, oh = 0;
-        SDL_GetRendererOutputSize(window.renderer, &ow, &oh);
+        SDL_GetCurrentRenderOutputSize(window.renderer, &ow, &oh);
         g_console.draw(window.renderer, &resource_manager, ow, oh);
       }
       // SDL_Log("MainLoop: Post-Draw");
@@ -10176,9 +10178,9 @@ int main(int argc, char *argv[]) {
         drawUiScaled(window.renderer, &resource_manager, t, [&](SDL_Renderer *r) {
           SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
                                static_cast<int>(std::lround(t.offsetY / t.scale)), UI_LAYOUT_W, UI_LAYOUT_H};
-          SDL_RenderSetViewport(r, &viewport);
+          SDL_SetRenderViewport(r, &viewport);
           updateUi.draw(r, layout);
-          SDL_RenderSetViewport(r, nullptr);
+          SDL_SetRenderViewport(r, nullptr);
         });
       }
     }

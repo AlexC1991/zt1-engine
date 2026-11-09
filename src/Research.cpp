@@ -5,7 +5,7 @@
 #include <mutex>
 #include <random>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include "IniReader.hpp"
 #include "ItemCatalog.hpp"

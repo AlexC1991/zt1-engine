@@ -4,7 +4,7 @@
 #include "CompassDirection.hpp"
 #include "SpriteDatabase.hpp"
 #include "WorldMap.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <functional>
 #include <string>
 #include <set>
@@ -183,7 +183,7 @@ private:
 
   // Batched triangle geometry (one SDL_RenderGeometry call per flush).
   // A batch holds one texture (or none); switching texture flushes.
-  std::vector<SDL_Vertex> batchVertices;
+  std::vector<ZT_Vertex> batchVertices;
   std::vector<int> batchIndices;
   SDL_Texture *batchTexture = nullptr;
 
@@ -208,15 +208,15 @@ private:
     int layer;
     int order;
     SDL_Texture *texture;
-    std::vector<SDL_Vertex> vertices;
+    std::vector<ZT_Vertex> vertices;
   };
   std::vector<Bucket> buckets;
   // ours: how many of them are in use; the rest kept with their space, not
   // made and freed again for every diagonal of every frame
   size_t bucketsUsed = 0;
   void addToBucket(int layer, int order, SDL_Texture *texture,
-                   const SDL_Vertex &a, const SDL_Vertex &b,
-                   const SDL_Vertex &c);
+                   const ZT_Vertex &a, const ZT_Vertex &b,
+                   const ZT_Vertex &c);
   void flushBuckets(SDL_Renderer *renderer);
 
   // Screen center in logical coordinates, so zoom scales around the
@@ -228,8 +228,8 @@ private:
   void projectTile(int tileX, int tileY, float &screenX, float &screenY) const;
 
   void addTriangle(SDL_Renderer *renderer, SDL_Texture *texture,
-                   const SDL_Vertex &a, const SDL_Vertex &b,
-                   const SDL_Vertex &c);
+                   const ZT_Vertex &a, const ZT_Vertex &b,
+                   const ZT_Vertex &c);
   void flushBatch(SDL_Renderer *renderer);
   const std::vector<std::pair<int, int>> *onlyTiles = nullptr; // (renderTerrainTiles; sorted)
 };

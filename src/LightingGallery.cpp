@@ -8,7 +8,7 @@
 #include "ItemCatalog.hpp"
 #include "HdArt.hpp"
 #include "Features.hpp"
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -66,22 +66,22 @@ static int runShadowScene(World &world, SDL_Renderer *renderer, const std::strin
   world.getStaff().hire(world.getStaff().typeOfFile("staff/keeper.ai"), 31.5f, 27.5f, world.getMap(), world.getFences());
   world.reindex();
   world.getCamera().zoom = 1.5f;
-  SDL_SetWindowSize(SDL_RenderGetWindow(renderer), 1280, 720);
-  SDL_RenderSetVSync(renderer, 0);
+  SDL_SetWindowSize(SDL_GetRenderWindow(renderer), 1280, 720);
+  SDL_SetRenderVSync(renderer, 0);
   const bool lightingWas = Features::dayNightLighting;
   Features::dayNightLighting = true;
   auto &light = world.getLighting();
   auto draw = [&] {
     SDL_SetRenderTarget(renderer, nullptr);
-    SDL_RenderSetViewport(renderer, nullptr);
-    SDL_RenderSetScale(renderer, 1, 1);
+    SDL_SetRenderViewport(renderer, nullptr);
+    SDL_SetRenderScale(renderer, 1, 1);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     world.setView({0, 0, 1280, 720}, 1);
     world.draw(renderer);
-    SDL_RenderFlush(renderer);
+    SDL_FlushRenderer(renderer);
   };
-  SDL_Surface *shot = SDL_CreateRGBSurfaceWithFormat(0, 1280, 720, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *shot = ZT_CreateRGBSurfaceWithFormat(0, 1280, 720, 32, SDL_PIXELFORMAT_RGBA32);
   if (!shot)
     return 1;
   int saved = 0;
@@ -92,17 +92,17 @@ static int runShadowScene(World &world, SDL_Renderer *renderer, const std::strin
       light.previewHour = hour;
       for (int k = 0; k < (saved ? 6 : 120); k++)
         draw();
-      if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGBA32, shot->pixels, shot->pitch) == 0) {
+      if (ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGBA32, shot->pixels, shot->pitch) == 0) {
         char name[64];
         std::snprintf(name, sizeof name, "/scene/r%d-%04.1f.png", side, hour);
-        if (IMG_SavePNG(shot, (out + name).c_str()) == 0)
+        if (IMG_SavePNG(shot, (out + name).c_str()))
           saved++;
       }
       SDL_PumpEvents();
     }
     world.rotateView(1);
   }
-  SDL_FreeSurface(shot);
+  SDL_DestroySurface(shot);
   light.previewHour = -1;
   Features::dayNightLighting = lightingWas;
   return saved ? 0 : 1;
@@ -142,22 +142,22 @@ int runLightingGallery(World &world, ResourceManager *, SDL_Renderer *renderer, 
   }
   world.reindex();
   world.getCamera().zoom = 1.5f; // (close enough to see signs)
-  SDL_SetWindowSize(SDL_RenderGetWindow(renderer), 1280, 720);
-  SDL_RenderSetVSync(renderer, 0);
+  SDL_SetWindowSize(SDL_GetRenderWindow(renderer), 1280, 720);
+  SDL_SetRenderVSync(renderer, 0);
   const bool lightingWas = Features::dayNightLighting;
   Features::dayNightLighting = true;
   auto &light = world.getLighting();
   auto draw = [&] {
     SDL_SetRenderTarget(renderer, nullptr);
-    SDL_RenderSetViewport(renderer, nullptr);
-    SDL_RenderSetScale(renderer, 1, 1);
+    SDL_SetRenderViewport(renderer, nullptr);
+    SDL_SetRenderScale(renderer, 1, 1);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     world.setView({0, 0, 1280, 720}, 1);
     world.draw(renderer);
-    SDL_RenderFlush(renderer);
+    SDL_FlushRenderer(renderer);
   };
-  SDL_Surface *shot = SDL_CreateRGBSurfaceWithFormat(0, 560, 480, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *shot = ZT_CreateRGBSurfaceWithFormat(0, 560, 480, 32, SDL_PIXELFORMAT_RGBA32);
   if (!shot)
     return 1;
   // (each one visited first, so its lighting shapes are made: a few a frame)
@@ -178,10 +178,10 @@ int runLightingGallery(World &world, ResourceManager *, SDL_Renderer *renderer, 
           draw();
         // (the building's foot at the middle: most of it is above)
         const SDL_Rect crop{640 - 280, 360 - 360, 560, 480};
-        if (SDL_RenderReadPixels(renderer, &crop, SDL_PIXELFORMAT_RGBA32, shot->pixels, shot->pitch) == 0) {
+        if (ZT_RenderReadPixels(renderer, &crop, SDL_PIXELFORMAT_RGBA32, shot->pixels, shot->pitch) == 0) {
           const std::string name = fs::path(s.file).stem().string() + "-r" + std::to_string(side) + "-" +
                                    (hour == 0 ? "night" : hour < 12 ? "morning" : "afternoon") + ".png";
-          if (IMG_SavePNG(shot, (out + "/gallery/" + name).c_str()) == 0)
+          if (IMG_SavePNG(shot, (out + "/gallery/" + name).c_str()))
             saved++;
         }
         SDL_PumpEvents();
@@ -189,7 +189,7 @@ int runLightingGallery(World &world, ResourceManager *, SDL_Renderer *renderer, 
     }
     world.rotateView(1);
   }
-  SDL_FreeSurface(shot);
+  SDL_DestroySurface(shot);
   light.previewHour = -1;
   Features::dayNightLighting = lightingWas;
   std::ofstream(out + "/gallery-checks.txt") << "buildings " << files.size() << " placed " << placed.size()

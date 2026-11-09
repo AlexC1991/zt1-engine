@@ -1,7 +1,7 @@
 #include "PngLoader.hpp"
 #include "Utils.hpp"
-#include <SDL2/SDL.h>
-#include <SDL_image.h>
+#include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
 
 
 Animation *PngLoader::loadPngAsAnimation(const std::string &path) {
@@ -14,7 +14,7 @@ Animation *PngLoader::loadPngAsAnimation(const std::string &path) {
   SDL_Surface *surface = IMG_Load(path.c_str());
   if (!surface) {
     SDL_Log("[PngLoader] Failed to load image '%s': %s", path.c_str(),
-            IMG_GetError());
+            SDL_GetError());
     return nullptr;
   }
 
@@ -25,7 +25,7 @@ Animation *PngLoader::loadPngAsAnimation(const std::string &path) {
   Animation *anim = new Animation(surface);
 
   // Animation makes a copy, so we free our loaded surface
-  SDL_FreeSurface(surface);
+  SDL_DestroySurface(surface);
 
   return anim;
 }

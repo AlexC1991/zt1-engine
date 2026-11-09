@@ -87,7 +87,7 @@ void UiGraph::text(SDL_Renderer *renderer, const std::string &s, SDL_Color c,
   this->resource_manager->getTextSize(t, &w, &h);
   int left = align < 0 ? x : align == 0 ? x - w / 2 : x - w;
   SDL_Rect r = {left, y, w, h};
-  SDL_RenderCopy(renderer, t, nullptr, &r);
+  ZT_RenderCopy(renderer, t, nullptr, &r);
 }
 
 UiAction UiGraph::handleInputs(std::vector<Input> &inputs) {
@@ -155,8 +155,8 @@ void UiGraph::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   if (art) {
     SDL_SetRenderDrawColor(renderer, this->axis_color.r, this->axis_color.g,
                            this->axis_color.b, 255);
-    SDL_RenderDrawLine(renderer, axisX, axisTop, axisX, axisY);
-    SDL_RenderDrawLine(renderer, axisX, axisY, right, axisY);
+    SDL_RenderLine(renderer, axisX, axisTop, axisX, axisY);
+    SDL_RenderLine(renderer, axisX, axisY, right, axisY);
   }
 
   // The points (or bars), spread across the width
@@ -178,7 +178,7 @@ void UiGraph::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     SDL_SetRenderDrawColor(renderer, this->line_color.r, this->line_color.g,
                            this->line_color.b, 255);
     for (int i = 1; i < count; i++)
-      SDL_RenderDrawLine(renderer, pointX(i - 1), valueY(this->points[i - 1].value),
+      SDL_RenderLine(renderer, pointX(i - 1), valueY(this->points[i - 1].value),
                          pointX(i), valueY(this->points[i].value));
   }
 
@@ -191,10 +191,10 @@ void UiGraph::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       if (art) {
         SDL_SetRenderDrawColor(renderer, this->box_color.r, this->box_color.g,
                                this->box_color.b, 255);
-        SDL_RenderFillRect(renderer, &box);
+        ZT_RenderFillRect(renderer, &box);
         SDL_SetRenderDrawColor(renderer, this->axis_color.r, this->axis_color.g,
                                this->axis_color.b, 255);
-        SDL_RenderDrawRect(renderer, &box);
+        ZT_RenderDrawRect(renderer, &box);
       }
     } else if (art) {
       // A dot ringed in the line colour (7 px across, 5 inside)
@@ -205,7 +205,7 @@ void UiGraph::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
             continue;
           SDL_Color c = d > 4 ? this->line_color : this->point_color;
           SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, 255);
-          SDL_RenderDrawPoint(renderer, x + dx, y + dy);
+          SDL_RenderPoint(renderer, x + dx, y + dy);
         }
     }
     this->text(renderer, this->format(p.value), labelColor(p.value), x, y - 21, 0);

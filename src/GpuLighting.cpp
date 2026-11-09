@@ -1,6 +1,6 @@
 #include "GpuLighting.hpp"
 #include "GpuLightingShaders.hpp"
-#include <SDL2/SDL_opengl.h>
+#include <SDL3/SDL_opengl.h>
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -84,19 +84,19 @@ struct State {
 };
 // Read physical bounds without the rounding caused by SDL's scaled getters.
 void setView(Gl &g,SDL_Renderer *renderer,GLuint program) {
-  float sx,sy;SDL_RenderGetScale(renderer,&sx,&sy);
+  float sx,sy;SDL_GetRenderScale(renderer,&sx,&sy);
   SDL_Rect viewport{},clip{};
-  SDL_RenderSetScale(renderer,1,1);
-  SDL_RenderGetViewport(renderer,&viewport);
-  SDL_RenderGetClipRect(renderer,&clip);
-  SDL_RenderSetScale(renderer,sx,sy);
-  int width=0,height=0;SDL_GetRendererOutputSize(renderer,&width,&height);
+  SDL_SetRenderScale(renderer,1,1);
+  SDL_GetRenderViewport(renderer,&viewport);
+  SDL_GetRenderClipRect(renderer,&clip);
+  SDL_SetRenderScale(renderer,sx,sy);
+  int width=0,height=0;SDL_GetCurrentRenderOutputSize(renderer,&width,&height);
   const bool target=SDL_GetRenderTarget(renderer)!=nullptr;
   g.Uniform2f(g.GetUniformLocation(program,"viewSize"),float(viewport.w),float(viewport.h));
   g.Uniform2f(g.GetUniformLocation(program,"renderScale"),sx,sy);
   g.Uniform1f(g.GetUniformLocation(program,"targetSign"),target?1.0f:-1.0f);
   g.Viewport(viewport.x,target?viewport.y:height-viewport.y-viewport.h,viewport.w,viewport.h);
-  if(SDL_RenderIsClipEnabled(renderer)){
+  if(SDL_RenderClipEnabled(renderer)){
     g.Enable(GL_SCISSOR_TEST);
     g.Scissor(viewport.x+clip.x,target?viewport.y+clip.y:height-viewport.y-clip.y-clip.h,clip.w,clip.h);
   }else g.Disable(GL_SCISSOR_TEST);
@@ -148,7 +148,7 @@ bool GpuLighting::available(SDL_Renderer *renderer){
   auto &p=*impl;
   if(p.attempted)return p.ready && p.renderer==renderer && p.context==SDL_GL_GetCurrentContext();
   p.attempted=true;p.renderer=renderer;p.context=SDL_GL_GetCurrentContext();
-  SDL_RendererInfo info{};SDL_GetRendererInfo(renderer,&info);
+  ZT_RendererInfo info{};ZT_GetRendererInfo(renderer,&info);
   if(!p.context || !info.name || std::strcmp(info.name,"opengl")){p.reason="requires SDL OpenGL renderer";return false;}
   auto &g=p.gl;if(!g.load()){p.reason="missing GL entry points";return false;}
   GLint major=0,minor=0;g.GetIntegerv(GL_MAJOR_VERSION,&major);g.GetIntegerv(GL_MINOR_VERSION,&minor);
@@ -158,7 +158,7 @@ bool GpuLighting::available(SDL_Renderer *renderer){
   g.GetIntegerv(GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS,&geometryBlocks);
   g.GetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS,&storageBindings);
   if(vertexBlocks<4 || geometryBlocks<5 || storageBindings<6){p.reason="insufficient shader storage bindings";return false;}
-  if(SDL_RenderFlush(renderer)!=0){p.reason="SDL could not flush the active renderer";return false;}
+  if(!SDL_FlushRenderer(renderer)){p.reason="SDL could not flush the active renderer";return false;}
   State state(g);
   const auto vs=p.shader(GL_VERTEX_SHADER,std::string("#version 430 compatibility\n")+GpuLightingShaders::shadow+GpuLightingShaders::ground);
   const auto fs=p.shader(GL_FRAGMENT_SHADER,GpuLightingShaders::fragment);
@@ -183,7 +183,7 @@ bool GpuLighting::available(SDL_Renderer *renderer){
 // addition: temporary stage-2 bridge. The GPU performs every receiver shadow
 // lookup; stage 3 will replace these uploads with GPU-generated shadow maps.
 bool GpuLighting::uploadSun(SDL_Renderer *r,const LightingAssets::SunDepth (&maps)[2],float blend,float strength){
-  if(!available(r))return false;auto &p=*impl;auto &g=p.gl;SDL_RenderFlush(r);State state(g);
+  if(!available(r))return false;auto &p=*impl;auto &g=p.gl;SDL_FlushRenderer(r);State state(g);
   p.blend=blend;p.strength=strength;p.mapBytes=0;
   for(int k=0;k<2;++k){const auto &m=maps[k];auto &d=p.metadata[k];d.size=m.size;d.x0=m.x0;d.y0=m.y0;d.span=m.span;d.dx=m.dx;d.dy=m.dy;
     if(m.depth.size()!=size_t(m.size)*m.size || m.owner.size()!=m.depth.size())return false;
@@ -201,7 +201,7 @@ bool GpuLighting::buildSun(SDL_Renderer *r,const LightingAssets::SunDepth (&maps
     const std::vector<CasterTriangle> &fixed,const std::vector<CasterTriangle> &actors,uint64_t generation,float terrainBase){
   if(!available(r) || fixed.size()>1048576 || actors.size()>32768)return false;
   static_assert(sizeof(CasterTriangle)==64);
-  auto &p=*impl;auto &g=p.gl;SDL_RenderFlush(r);State state(g);
+  auto &p=*impl;auto &g=p.gl;SDL_FlushRenderer(r);State state(g);
   if(!p.atlasProgram){
     if(p.atlasAttempted)return false;
     p.atlasAttempted=true;
@@ -266,7 +266,7 @@ bool GpuLighting::buildSun(SDL_Renderer *r,const LightingAssets::SunDepth (&maps
 // addition: native ground mesh and tank-region indices, shaded on the GPU.
 bool GpuLighting::ground(SDL_Renderer *r,const std::vector<GroundPoint> &v,const std::vector<uint32_t> &indices,uint64_t generation,float ox,float oy){
   if(!available(r))return false;if(indices.empty())return true;
-  auto &p=*impl;auto &g=p.gl;SDL_RenderFlush(r);State state(g);
+  auto &p=*impl;auto &g=p.gl;SDL_FlushRenderer(r);State state(g);
   for(auto &t:p.timing)if(t.pending){GLint ready=0;g.GetQueryObjectiv(t.q[1],GL_QUERY_RESULT_AVAILABLE,&ready);if(ready){GLuint64 a=0,b=0;g.GetQueryObjectui64v(t.q[0],GL_QUERY_RESULT,&a);g.GetQueryObjectui64v(t.q[1],GL_QUERY_RESULT,&b);p.stats.groundGpuMs=(b-a)/1000000.0;t.pending=false;}}
   auto &t=p.timing[p.queryAt++%p.timing.size()];const bool timed=!t.pending;if(timed)g.QueryCounter(t.q[0],GL_TIMESTAMP);
   g.BindVertexArray(p.vao);g.BindBuffer(GL_ARRAY_BUFFER,p.vertices);
@@ -308,7 +308,7 @@ bool GpuLighting::ground(SDL_Renderer *r,const std::vector<GroundPoint> &v,const
 // execute in the geometry shader. Ordered native-mask batches stay intact.
 bool GpuLighting::surfaces(SDL_Renderer *r,const std::vector<SurfaceFace> &faces,const std::vector<SurfaceBatch> &batches,float scale,float ox,float oy,LightingAssets::Point sun,float direct,float reference,float lamps,float strength){
   if(!available(r))return false;if(faces.empty())return true;
-  static_assert(sizeof(SurfaceFace)==272);auto &p=*impl;auto &g=p.gl;SDL_RenderFlush(r);State state(g);
+  static_assert(sizeof(SurfaceFace)==272);auto &p=*impl;auto &g=p.gl;SDL_FlushRenderer(r);State state(g);
   const auto program=p.surfaceProgram;g.UseProgram(program);g.BindVertexArray(p.vao);
   g.BindBuffer(GL_SHADER_STORAGE_BUFFER,p.surfaceBuffer);g.BufferData(GL_SHADER_STORAGE_BUFFER,faces.size()*sizeof(SurfaceFace),faces.data(),GL_STREAM_DRAW);g.BindBufferBase(GL_SHADER_STORAGE_BUFFER,4,p.surfaceBuffer);
   p.stats.uploadBytes+=faces.size()*sizeof(SurfaceFace);
@@ -326,13 +326,13 @@ bool GpuLighting::surfaces(SDL_Renderer *r,const std::vector<SurfaceFace> &faces
   // without painting the first few receivers twice.
   std::array<std::pair<SDL_Texture *,GLuint>,4> masks{};
   SDL_Texture *lastBound=nullptr;
-  auto unbind=[&]{if(lastBound){SDL_GL_UnbindTexture(lastBound);state.resetSdlTexture=true;}};
+  auto unbind=[&]{if(lastBound){ZT_GL_UnbindTexture(lastBound);state.resetSdlTexture=true;}};
   size_t maskCount=0;
   for(const auto &batch:batches){
     const auto end=masks.begin()+maskCount;
     const auto found=std::find_if(masks.begin(),end,[&](const auto &entry){return entry.first==batch.mask;});
     if(found!=end)continue;
-    if(maskCount==masks.size() || SDL_GL_BindTexture(batch.mask,nullptr,nullptr)!=0){unbind();return false;}
+    if(maskCount==masks.size() || ZT_GL_BindTexture(batch.mask,nullptr,nullptr)!=0){unbind();return false;}
     lastBound=batch.mask;
     GLint name=0;g.GetIntegerv(GL_TEXTURE_BINDING_2D,&name);masks[maskCount++]={batch.mask,GLuint(name)};
   }

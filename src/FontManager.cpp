@@ -1,5 +1,5 @@
 #include "FontManager.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include "Utils.hpp"
 #include "Paths.hpp"
 #include <algorithm>
@@ -93,15 +93,22 @@ TTF_Font *FontManager::getFont(int fontId, int fontSizeId, float scale) {
     points = 10;
 
   TTF_Font *font = nullptr;
+  // (SDL3_ttf: opened, then sized at the DPI - SDL2_ttf's TTF_OpenFontDPI)
+  auto open = [points, dpi](const std::string &path) {
+    TTF_Font *f = TTF_OpenFont(path.c_str(), static_cast<float>(points));
+    if (f)
+      TTF_SetFontSizeDPI(f, static_cast<float>(points), dpi, dpi);
+    return f;
+  };
   std::string file = systemFontFile(face);
   if (!file.empty()) {
-    font = TTF_OpenFontDPI(file.c_str(), points, dpi, dpi);
+    font = open(file);
   }
   if (!font) {
     // Bundled fallback when the Windows font isn't available
     std::string fallback = isBold(face) ? "Aileron-Bold.otf" : "Aileron-Regular.otf";
     // (the engine's own fonts folder, beside the exe)
-    font = TTF_OpenFontDPI((Paths::appDir() + "fonts/" + fallback).c_str(), points, dpi, dpi);
+    font = open(Paths::appDir() + "fonts/" + fallback);
     SDL_Log("[FontManager] '%s' not found, using %s", face.c_str(),
             fallback.c_str());
   }
@@ -117,13 +124,13 @@ TTF_Font *FontManager::getFont(int fontId, int fontSizeId, float scale) {
 int FontManager::getLineHeight(int fontId, int fontSizeId) {
   // Layout metric: always measured at 1x
   TTF_Font *font = getFont(fontId, fontSizeId, 1.0f);
-  return font ? TTF_FontHeight(font) : 14;
+  return font ? TTF_GetFontHeight(font) : 14;
 }
 
 void FontManager::querySize(SDL_Texture *texture, int *w, int *h) {
   int tw = 0, th = 0;
   if (texture)
-    SDL_QueryTexture(texture, nullptr, nullptr, &tw, &th);
+    ZT_QueryTexture(texture, nullptr, nullptr, &tw, &th);
   auto it = texture_scale.find(texture);
   float s = it != texture_scale.end() ? it->second : 1.0f;
   if (w)
@@ -152,26 +159,26 @@ SDL_Texture *FontManager::getStringTexture(SDL_Renderer *renderer, int fontId,
     return cached->second;
 
   auto render = [&](SDL_Color c) {
-    return smooth ? TTF_RenderUTF8_Blended(font, string.c_str(), c)
-                  : TTF_RenderUTF8_Solid(font, string.c_str(), c);
+    return smooth ? TTF_RenderText_Blended(font, string.c_str(), 0, c)
+                  : TTF_RenderText_Solid(font, string.c_str(), 0, c);
   };
   SDL_Surface *text = render(color);
   SDL_Surface *shadow = render(SDL_Color{0, 0, 0, 255});
   if (!text || !shadow) {
     if (text)
-      SDL_FreeSurface(text);
+      SDL_DestroySurface(text);
     if (shadow)
-      SDL_FreeSurface(shadow);
+      SDL_DestroySurface(shadow);
     return nullptr;
   }
 
   // Text over its shadow, offset one layout pixel down and to the right
   int offset = std::max(1, static_cast<int>(scale + 0.5f));
-  SDL_Surface *out = SDL_CreateRGBSurfaceWithFormat(
+  SDL_Surface *out = ZT_CreateRGBSurfaceWithFormat(
       0, text->w + offset, text->h + offset, 32, SDL_PIXELFORMAT_ARGB8888);
   SDL_Texture *texture = nullptr;
   if (out) {
-    SDL_FillRect(out, nullptr, SDL_MapRGBA(out->format, 0, 0, 0, 0));
+    SDL_FillSurfaceRect(out, nullptr, ZT_MapRGBA(out->format, 0, 0, 0, 0));
     if (smooth) {
       // Blend the smoothed glyph edges rather than overwriting
       SDL_SetSurfaceBlendMode(shadow, SDL_BLENDMODE_BLEND);
@@ -182,14 +189,14 @@ SDL_Texture *FontManager::getStringTexture(SDL_Renderer *renderer, int fontId,
     SDL_Rect textPos = {0, 0, 0, 0};
     SDL_BlitSurface(text, nullptr, out, &textPos);
     texture = SDL_CreateTextureFromSurface(renderer, out);
-    SDL_FreeSurface(out);
+    SDL_DestroySurface(out);
   }
-  SDL_FreeSurface(text);
-  SDL_FreeSurface(shadow);
+  SDL_DestroySurface(text);
+  SDL_DestroySurface(shadow);
 
   if (texture) {
     // Drawn at the size it was rendered for, pixel for pixel
-    SDL_SetTextureScaleMode(texture, SDL_ScaleModeNearest);
+    SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
     texture_cache[key] = texture;
     texture_scale[texture] = scale;
   }

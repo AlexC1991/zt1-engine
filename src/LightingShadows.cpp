@@ -454,7 +454,7 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
     indices.insert(indices.end(),{first,first+1,first+2,first,first+2,first+3});
   }
   SDL_BlendMode was;SDL_GetRenderDrawBlendMode(renderer,&was);SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
-  if(!vertices.empty())SDL_RenderGeometry(renderer,nullptr,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));
+  if(!vertices.empty())ZT_RenderGeometry(renderer,nullptr,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));
   SDL_SetRenderDrawBlendMode(renderer,was);
   }
   // addition: the shadows cast from sprites (spriteShadow), over the ground's.

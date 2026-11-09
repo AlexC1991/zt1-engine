@@ -14,7 +14,7 @@
 #include "ShaderMods.hpp"
 #include "MemoryManager.hpp"
 #include "MemoryTracker.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -453,7 +453,7 @@ bool World::loadFreeform(const std::string &path) {
   return true;
 }
 
-void World::update(const Uint8 *state, float deltaTime, float inputSeconds) {
+void World::update(const bool *state, float deltaTime, float inputSeconds) {
   FrameProfile::Scope profile("world update");
   // Sync mouse wheel zoom (modified by InputManager) with camera
   Camera &cam = worldRenderer.getCamera();
@@ -587,7 +587,7 @@ void World::update(const Uint8 *state, float deltaTime, float inputSeconds) {
   }
 }
 
-void World::handleCameraInput(const Uint8 *state, float deltaTime) {
+void World::handleCameraInput(const bool *state, float deltaTime) {
   Camera &cam = worldRenderer.getCamera();
 
   // Camera movement (scaled by zoom)
@@ -611,8 +611,10 @@ void World::handleCameraInput(const Uint8 *state, float deltaTime) {
   if (this->edgeScroll && kEdgeScrollOn && !this->terrain.isHeld())
     if (SDL_Window *w = SDL_GetMouseFocus())
       if (SDL_GetKeyboardFocus() == w) {
-        int mx = 0, my = 0, ww = 0, wh = 0;
-        SDL_GetMouseState(&mx, &my);
+        int ww = 0, wh = 0;
+        float fx = 0, fy = 0;
+        SDL_GetMouseState(&fx, &fy);
+        const int mx = static_cast<int>(std::floor(fx)), my = static_cast<int>(std::floor(fy));
         SDL_GetWindowSize(w, &ww, &wh);
         bool full = (SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN) != 0;
         const int near = full ? 3 : 8, far = full ? 2 : 7;
@@ -643,7 +645,7 @@ void World::handleCameraInput(const Uint8 *state, float deltaTime) {
   }
 }
 
-void World::handleDebugInput(const Uint8 *state) {
+void World::handleDebugInput(const bool *state) {
   // Throttle key input
   keyTimer++;
   if (keyTimer < 10)
@@ -695,7 +697,7 @@ void World::handleDebugInput(const Uint8 *state) {
   }
 
   // Grid: Ctrl+G, as in the original
-  if (state[SDL_SCANCODE_G] && (SDL_GetModState() & KMOD_CTRL)) {
+  if (state[SDL_SCANCODE_G] && (SDL_GetModState() & SDL_KMOD_CTRL)) {
     worldRenderer.toggleGrid();
     SDL_Log("[World] Grid: %s", worldRenderer.isGridVisible() ? "ON" : "OFF");
     keyTimer = 0;
@@ -723,7 +725,7 @@ bool World::shrinkTarget(SDL_Renderer *renderer, int level, int w, int h) {
   l.h = h;
   if (!l.tex)
     return false;
-  RenderSettings::setScaleMode(l.tex, SDL_ScaleModeLinear);
+  RenderSettings::setScaleMode(l.tex, SDL_SCALEMODE_LINEAR);
   return true;
 }
 
@@ -757,14 +759,14 @@ void World::draw(SDL_Renderer *renderer) {
   }
   beginTankAnimalFrame(true);
   // Clear screen (the bars beside a centred view stay black)
-  SDL_RenderSetViewport(renderer, nullptr);
+  SDL_SetRenderViewport(renderer, nullptr);
   SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
   SDL_RenderClear(renderer);
 
   // The map's area: the view set by the game, else the whole window
   Camera &cam = worldRenderer.getCamera();
   int outW = 0, outH = 0;
-  SDL_GetRendererOutputSize(renderer, &outW, &outH);
+  SDL_GetCurrentRenderOutputSize(renderer, &outW, &outH);
   SDL_Rect view = this->viewRect.w > 0 && this->viewRect.h > 0
                       ? this->viewRect
                       : SDL_Rect{0, 0, outW, outH};
@@ -805,8 +807,8 @@ void World::draw(SDL_Renderer *renderer) {
                       shrinkTarget(renderer, 0, fullW, fullH);
   if (shrink) {
     SDL_SetRenderTarget(renderer, this->shrinkLayers[0].tex);
-    SDL_RenderSetViewport(renderer, nullptr);
-    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+    SDL_SetRenderViewport(renderer, nullptr);
+    SDL_SetRenderScale(renderer, 1.0f, 1.0f);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
   } else if (gpuFsr) {
@@ -815,8 +817,8 @@ void World::draw(SDL_Renderer *renderer) {
                        static_cast<int>(std::ceil(view.h / zoom)),
                        SDL_Color{0, 0, 0, 255});
   } else {
-    SDL_RenderSetViewport(renderer, &view); // in pixels (scale is 1 here)
-    SDL_RenderSetScale(renderer, zoom, zoom);
+    SDL_SetRenderViewport(renderer, &view); // in pixels (scale is 1 here)
+    SDL_SetRenderScale(renderer, zoom, zoom);
   }
   RenderSettings::worldZoomedIn =
       !gpuFsr && !shrink && zoom > 1.001f && (ArtScaler::worldFactor() > 1 || hdArt);
@@ -977,7 +979,7 @@ void World::draw(SDL_Renderer *renderer) {
         float ax, ay, bx, by, d;
         worldRenderer.worldToScreenF(px[k], py[k], gz, ax, ay, d);
         worldRenderer.worldToScreenF(px[k + 1], py[k + 1], gz, bx, by, d);
-        SDL_RenderDrawLineF(renderer, ax, ay, bx, by);
+        SDL_RenderLine(renderer, ax, ay, bx, by);
       }
     }
   // Staff up on the decks, sorted in with them
@@ -993,7 +995,7 @@ void World::draw(SDL_Renderer *renderer) {
   if (this->deckOverlay.size() == 4) {
     int idx[6] = {0, 1, 2, 0, 2, 3};
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_RenderGeometry(renderer, nullptr, this->deckOverlay.data(), 4, idx, 6);
+    ZT_RenderGeometry(renderer, nullptr, this->deckOverlay.data(), 4, idx, 6);
   }
   this->deckOverlay.clear();
   this->drawBrush(renderer);
@@ -1021,22 +1023,22 @@ void World::draw(SDL_Renderer *renderer) {
     while (w / 2 >= view.w && h / 2 >= view.h && level + 1 < kShrinkLevels &&
            shrinkTarget(renderer, level + 1, w / 2, h / 2)) {
       SDL_SetRenderTarget(renderer, this->shrinkLayers[level + 1].tex);
-      SDL_RenderSetViewport(renderer, nullptr);
-      SDL_RenderCopy(renderer, this->shrinkLayers[level].tex, nullptr, nullptr);
+      SDL_SetRenderViewport(renderer, nullptr);
+      ZT_RenderCopy(renderer, this->shrinkLayers[level].tex, nullptr, nullptr);
       level++;
       w /= 2;
       h /= 2;
     }
     SDL_SetRenderTarget(renderer, savedTarget);
-    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
-    SDL_RenderSetViewport(renderer, nullptr);
+    SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+    SDL_SetRenderViewport(renderer, nullptr);
     SDL_Rect src = {0, 0, w, h};
-    SDL_RenderCopy(renderer, this->shrinkLayers[level].tex, &src, &view);
+    ZT_RenderCopy(renderer, this->shrinkLayers[level].tex, &src, &view);
   }
 
   // Reset
-  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
-  SDL_RenderSetViewport(renderer, nullptr);
+  SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+  SDL_SetRenderViewport(renderer, nullptr);
   // addition: after the world's FSR/shrink resolve, before the HUD. Lighting
   // uses the world viewport rather than tinting the whole window or its UI.
   if (Features::dayNightLighting) {
@@ -1079,7 +1081,7 @@ void World::drawPathPreview(SDL_Renderer *renderer, const std::set<std::pair<int
         continue;
       const float cx[4] = {0, 1, 1, 0}, cy[4] = {0, 0, 1, 1};
       const int ci[4] = {CORNER_X0Y0, CORNER_X1Y0, CORNER_X1Y1, CORNER_X0Y1};
-      SDL_Vertex v[4];
+      ZT_Vertex v[4];
       // (measured: the tile filled green or orange, nearly solid)
       SDL_Color c = p.second == Fences::Fit::Ok         ? SDL_Color{49, 150, 24, 225}
                     : p.second == Fences::Fit::InTheWay ? SDL_Color{165, 97, 24, 225}
@@ -1091,7 +1093,7 @@ void World::drawPathPreview(SDL_Renderer *renderer, const std::set<std::pair<int
         v[i] = {{sx, sy}, c, {0, 0}};
       }
       int idx[6] = {0, 1, 2, 0, 2, 3};
-      SDL_RenderGeometry(renderer, nullptr, v, 4, idx, 6);
+      ZT_RenderGeometry(renderer, nullptr, v, 4, idx, 6);
     }
 }
 
@@ -1104,7 +1106,7 @@ void World::drawBulldozePath(SDL_Renderer *renderer) {
     if (const MapTile *t = this->worldMap.getTile(x, y)) {
       const float cx[4] = {0, 1, 1, 0}, cy[4] = {0, 0, 1, 1};
       const int ci[4] = {CORNER_X0Y0, CORNER_X1Y0, CORNER_X1Y1, CORNER_X0Y1};
-      SDL_Vertex v[4];
+      ZT_Vertex v[4];
       for (int i = 0; i < 4; i++) {
         float sx, sy, d;
         this->worldRenderer.worldToScreenF(x + cx[i], y + cy[i],
@@ -1113,7 +1115,7 @@ void World::drawBulldozePath(SDL_Renderer *renderer) {
       }
       int idx[6] = {0, 1, 2, 0, 2, 3};
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-      SDL_RenderGeometry(renderer, nullptr, v, 4, idx, 6);
+      ZT_RenderGeometry(renderer, nullptr, v, 4, idx, 6);
     }
   }
 }
@@ -1140,7 +1142,7 @@ void World::drawToolOverlay(SDL_Renderer *renderer) {
             this->worldRenderer.worldToScreenF(tx + cx[i], ty + cy[i], static_cast<float>(t->cornerHeight[ci[i]]), sx, sy, d);
             pts[i] = {sx, sy};
           }
-          SDL_RenderDrawLinesF(renderer, pts, 5);
+          SDL_RenderLines(renderer, pts, 5);
         }
     return;
   }
@@ -1158,7 +1160,7 @@ void World::drawToolOverlay(SDL_Renderer *renderer) {
       if (const Walkways::Deck *dk = this->walkways.at(this->hoverDeck.first, this->hoverDeck.second)) {
         const float cx[4] = {0, 1, 1, 0}, cy[4] = {0, 0, 1, 1};
         const int ci[4] = {CORNER_X0Y0, CORNER_X1Y0, CORNER_X1Y1, CORNER_X0Y1};
-        SDL_Vertex v[4];
+        ZT_Vertex v[4];
         for (int i = 0; i < 4; i++) {
           float sx, sy, d;
           this->worldRenderer.worldToScreenF(this->hoverDeck.first + cx[i], this->hoverDeck.second + cy[i],
@@ -1190,8 +1192,8 @@ void World::drawToolOverlay(SDL_Renderer *renderer) {
     return SDL_FPoint{sx, sy};
   };
   auto line = [&](SDL_FPoint a, SDL_FPoint b) {
-    SDL_RenderDrawLineF(renderer, a.x, a.y, b.x, b.y);
-    SDL_RenderDrawLineF(renderer, a.x, a.y + 1, b.x, b.y + 1);
+    SDL_RenderLine(renderer, a.x, a.y, b.x, b.y);
+    SDL_RenderLine(renderer, a.x, a.y + 1, b.x, b.y + 1);
   };
   // Green: it can go; red: not there at all; orange: something's in the way
   auto colour = [&](Fences::Fit f) {
@@ -1320,10 +1322,10 @@ void World::rebuildMiniMap(SDL_Renderer *renderer, int w, int h) {
   // across = (u - v + V) / (U + V), down = (u + v) / (U + V)
   int U, V;
   worldRenderer.getViewSize(U, V);
-  SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *surf = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32);
   if (!surf)
     return;
-  SDL_FillRect(surf, nullptr, SDL_MapRGBA(surf->format, 0, 0, 0, 0));
+  SDL_FillSurfaceRect(surf, nullptr, ZT_MapRGBA(surf->format, 0, 0, 0, 0));
   uint32_t *px = static_cast<uint32_t *>(surf->pixels);
   int pitch = surf->pitch / 4;
   float span = static_cast<float>(U + V);
@@ -1339,11 +1341,11 @@ void World::rebuildMiniMap(SDL_Renderer *renderer, int w, int h) {
       SDL_Color c = worldMap.getPathType(x, y) >= 0
                         ? pathColour
                         : terrain[worldMap.getTile(x, y)->terrainType & 31];
-      px[py * pitch + pxi] = SDL_MapRGBA(surf->format, c.r, c.g, c.b, 255);
+      px[py * pitch + pxi] = ZT_MapRGBA(surf->format, c.r, c.g, c.b, 255);
     }
   }
   miniMapTexture = SDL_CreateTextureFromSurface(renderer, surf);
-  SDL_FreeSurface(surf);
+  SDL_DestroySurface(surf);
 }
 
 void World::drawMiniMap(SDL_Renderer *renderer, const SDL_Rect &box) {
@@ -1354,7 +1356,7 @@ void World::drawMiniMap(SDL_Renderer *renderer, const SDL_Rect &box) {
       miniMapH != box.h)
     rebuildMiniMap(renderer, box.w, box.h);
   if (miniMapTexture)
-    SDL_RenderCopy(renderer, miniMapTexture, nullptr, &box);
+    ZT_RenderCopy(renderer, miniMapTexture, nullptr, &box);
 
   // What is on screen, as a rectangle (the original's [ScreenView] colour)
   int U, V;
@@ -1380,10 +1382,10 @@ void World::drawMiniMap(SDL_Renderer *renderer, const SDL_Rect &box) {
   // Near the map's edge the box stops at the minimap's edges (all four
   // sides showing) rather than running off it
   SDL_Rect shown;
-  if (!SDL_IntersectRect(&view, &box, &shown))
+  if (!SDL_GetRectIntersection(&view, &box, &shown))
     return;
   SDL_SetRenderDrawColor(renderer, 255, 223, 115, 255);
-  SDL_RenderDrawRect(renderer, &shown);
+  ZT_RenderDrawRect(renderer, &shown);
 }
 
 void World::miniMapClick(float fx, float fy) {
@@ -1545,17 +1547,17 @@ void World::drawPathDebug(SDL_Renderer *renderer) {
   auto tileQuad = [&](int x, int y, SDL_Color c) {
     SDL_FPoint p[4] = {corner(x + 0.02f, y + 0.02f), corner(x + 0.98f, y + 0.02f),
                        corner(x + 0.98f, y + 0.98f), corner(x + 0.02f, y + 0.98f)};
-    SDL_Vertex v[4];
+    ZT_Vertex v[4];
     for (int i = 0; i < 4; i++)
       v[i] = {p[i], c, {0, 0}};
     int idx[6] = {0, 1, 2, 0, 2, 3};
-    SDL_RenderGeometry(renderer, nullptr, v, 4, idx, 6);
+    ZT_RenderGeometry(renderer, nullptr, v, 4, idx, 6);
   };
   auto tileOutline = [&](int x, int y, SDL_Color c) {
     SDL_FPoint p[5] = {corner(x, y), corner(x + 1, y), corner(x + 1, y + 1), corner(x, y + 1),
                        corner(x, y)};
     SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, c.a);
-    SDL_RenderDrawLinesF(renderer, p, 5);
+    SDL_RenderLines(renderer, p, 5);
   };
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
   // What stands in the way
@@ -1577,10 +1579,10 @@ void World::drawPathDebug(SDL_Renderer *renderer) {
     for (size_t i = m.pathAt; i < m.path.size(); i++)
       line.push_back(corner(m.path[i].first, m.path[i].second));
     SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, 255);
-    SDL_RenderDrawLinesF(renderer, line.data(), static_cast<int>(line.size()));
+    SDL_RenderLines(renderer, line.data(), static_cast<int>(line.size()));
     for (SDL_FPoint &p : line)
       p.y += 1;
-    SDL_RenderDrawLinesF(renderer, line.data(), static_cast<int>(line.size()));
+    SDL_RenderLines(renderer, line.data(), static_cast<int>(line.size()));
   }
 }
 
@@ -2150,8 +2152,8 @@ void World::collectWalkways(std::vector<Fences::Drawable> &out) {
       // post's lower part: the supports are drawn after all the ground, so a
       // raised block in front would otherwise show them through it)
       SDL_Rect oldClip;
-      SDL_RenderGetClipRect(r, &oldClip);
-      bool hadClip = SDL_RenderIsClipEnabled(r);
+      SDL_GetRenderClipRect(r, &oldClip);
+      bool hadClip = SDL_RenderClipEnabled(r);
       {
         float px0, py0, d0, ax, ay, bx, by, dd;
         this->worldRenderer.worldToScreenF(x + 0.5f, y + 0.5f, groundMid, px0, py0, d0);
@@ -2188,11 +2190,11 @@ void World::collectWalkways(std::vector<Fences::Drawable> &out) {
           SDL_Rect c = {-100000, -100000, 200000, static_cast<int>(std::ceil(clipBottom)) + 100000};
           if (hadClip) {
             SDL_Rect both;
-            if (!SDL_IntersectRect(&c, &oldClip, &both))
+            if (!SDL_GetRectIntersection(&c, &oldClip, &both))
               both = {0, 0, 0, 0};
             c = both;
           }
-          SDL_RenderSetClipRect(r, &c);
+          SDL_SetRenderClipRect(r, &c);
         }
       }
       bool solid = t && *std::max_element(hh, hh + 4) - *std::min_element(t->cornerHeight, t->cornerHeight + 4) <= 2;
@@ -2223,7 +2225,7 @@ void World::collectWalkways(std::vector<Fences::Drawable> &out) {
                                           14, true, alpha);
           }
       }
-      SDL_RenderSetClipRect(r, hadClip ? &oldClip : nullptr);
+      SDL_SetRenderClipRect(r, hadClip ? &oldClip : nullptr);
       // The slab's edge under a level deck
       int lowest = *std::min_element(hh, hh + 4), highest = *std::max_element(hh, hh + 4);
       if (!solid && lowest == highest && t && lowest > *std::max_element(t->cornerHeight, t->cornerHeight + 4))
@@ -2260,11 +2262,11 @@ void World::collectWalkways(std::vector<Fences::Drawable> &out) {
         this->worldRenderer.worldToScreenF(x + cxs[c0], y + cys[c0], static_cast<float>(hh[c0]), gx0, gy0, dd);
         this->worldRenderer.worldToScreenF(x + cxs[c1], y + cys[c1], static_cast<float>(hh[c1]), gx1, gy1, dd);
         SDL_SetRenderDrawColor(r, 200, 180, 140, tinted ? tc.a : 255);
-        SDL_RenderDrawLineF(r, ax, ay, bx, by);
-        SDL_RenderDrawLineF(r, ax, ay + 1, bx, by + 1);
+        SDL_RenderLine(r, ax, ay, bx, by);
+        SDL_RenderLine(r, ax, ay + 1, bx, by + 1);
         for (int k = 0; k <= 4; k++) {
           float f = k / 4.0f;
-          SDL_RenderDrawLineF(r, ax + (bx - ax) * f, ay + (by - ay) * f, gx0 + (gx1 - gx0) * f,
+          SDL_RenderLine(r, ax + (bx - ax) * f, ay + (by - ay) * f, gx0 + (gx1 - gx0) * f,
                               gy0 + (gy1 - gy0) * f);
         }
       }
@@ -2576,7 +2578,7 @@ void World::drawBrush(SDL_Renderer *renderer) {
   for (int x = x1 - 1; x >= x0; x--) ring.push_back(vertex(x, y1));
   for (int y = y1 - 1; y >= y0; y--) ring.push_back(vertex(x0, y));
   SDL_SetRenderDrawColor(renderer, 60, 255, 60, 255);
-  SDL_RenderDrawLinesF(renderer, ring.data(), static_cast<int>(ring.size()));
+  SDL_RenderLines(renderer, ring.data(), static_cast<int>(ring.size()));
 }
 
 void World::setObjectTool(const std::string &file, int cost, int facing) {

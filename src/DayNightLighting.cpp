@@ -45,13 +45,13 @@ struct RenderState {
   SDL_Renderer *r; SDL_Texture *target; SDL_Rect viewport, clip;
   float sx,sy; SDL_BlendMode blend; Uint8 red,green,blue,alpha; bool clipped;
   explicit RenderState(SDL_Renderer *renderer):r(renderer),target(SDL_GetRenderTarget(r)) {
-    SDL_RenderGetViewport(r,&viewport); SDL_RenderGetScale(r,&sx,&sy);
-    clipped=SDL_RenderIsClipEnabled(r); SDL_RenderGetClipRect(r,&clip);
+    SDL_GetRenderViewport(r,&viewport); SDL_GetRenderScale(r,&sx,&sy);
+    clipped=SDL_RenderClipEnabled(r); SDL_GetRenderClipRect(r,&clip);
     SDL_GetRenderDrawBlendMode(r,&blend); SDL_GetRenderDrawColor(r,&red,&green,&blue,&alpha);
   }
   ~RenderState() {
-    SDL_SetRenderTarget(r,target); SDL_RenderSetScale(r,sx,sy);
-    SDL_RenderSetViewport(r,&viewport); SDL_RenderSetClipRect(r,clipped?&clip:nullptr);
+    SDL_SetRenderTarget(r,target); SDL_SetRenderScale(r,sx,sy);
+    SDL_SetRenderViewport(r,&viewport); SDL_SetRenderClipRect(r,clipped?&clip:nullptr);
     SDL_SetRenderDrawBlendMode(r,blend); SDL_SetRenderDrawColor(r,red,green,blue,alpha);
   }
 };
@@ -236,7 +236,7 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
     auto emission=[&](Animation *materialArt,int profile) {
       if(!materialArt)return;const int frame=PlacedObjects::animationFrame(o,materialArt);
       for(const auto &patch:materialArt->emissionPatches(renderer,side,frame,profile)) {
-        SDL_RendererFlip flip;const auto box=materialArt->emissionRect(patch,sx,sy,side,&flip);
+        SDL_FlipMode flip;const auto box=materialArt->emissionRect(patch,sx,sy,side,&flip);
         Light e{o.x,o.y,z,0,0,i,distance};e.sx=sx+(flip==SDL_FLIP_HORIZONTAL?-patch.offset.x:patch.offset.x);e.sy=sy+patch.offset.y;
         e.patch=box;e.texture=patch.texture;e.flip=flip;e.depth=depth;e.kind=profile;e.reflective=patch.reflective;e.glow=patch.glow;e.glowPad=patch.glowPad;emitters.push_back(e);
       }
@@ -303,7 +303,7 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
       const bool near=fsx>-200 && fsx<w+200 && fsy>-300 && fsy<h+300;
       if(near && sky.lamps>.001f)for(const auto &patch:f.art->emissionPatches(renderer,f.side,f.frame,asset->id)) {
         if(!patch.pixels)continue;glowing=true;
-        SDL_RendererFlip flip;const auto box=f.art->emissionRect(patch,fsx,fsy,f.side,&flip);
+        SDL_FlipMode flip;const auto box=f.art->emissionRect(patch,fsx,fsy,f.side,&flip);
         Light e{f.x,f.y,f.z,0,0,owner,distance};e.sx=fsx+(flip==SDL_FLIP_HORIZONTAL?-patch.offset.x:patch.offset.x);e.sy=fsy+patch.offset.y;
         e.patch=box;e.texture=patch.texture;e.flip=flip;e.depth=fdepth;e.kind=asset->id;e.reflective=patch.reflective;e.glow=patch.glow;e.glowPad=patch.glowPad;emitters.push_back(e);
       }
@@ -339,14 +339,14 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
 }
 
 bool DayNightLighting::targets(SDL_Renderer *renderer,int w,int h) {
-  if(!SDL_RenderTargetSupported(renderer))return false;
+  if(!true)return false;
   if(lightmap && (w!=textureW || h!=textureH)) { SDL_DestroyTexture(lightmap);lightmap=nullptr; }
   if(!lightmap) {
     lightmap=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_TARGET,w,h);
     if(!lightmap)return false;
     textureW=w;textureH=h;
     SDL_SetTextureBlendMode(lightmap,SDL_BLENDMODE_MOD);
-    SDL_SetTextureScaleMode(lightmap,SDL_ScaleModeLinear);
+    SDL_SetTextureScaleMode(lightmap,SDL_SCALEMODE_LINEAR);
   }
   return true;
 }
@@ -360,8 +360,8 @@ void DayNightLighting::composite(SDL_Renderer *renderer,WorldRenderer &view,cons
     if(!warned) { SDL_LogWarn(SDL_LOG_CATEGORY_RENDER,"[Lighting] render targets unavailable; using normal daylight: %s",SDL_GetError());warned=true; }
     return;
   }
-  if(SDL_SetRenderTarget(renderer,lightmap)!=0)return;
-  SDL_RenderSetViewport(renderer,nullptr);SDL_RenderSetScale(renderer,1,1);SDL_RenderSetClipRect(renderer,nullptr);
+  if(!SDL_SetRenderTarget(renderer,lightmap))return;
+  SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderScale(renderer,1,1);SDL_SetRenderClipRect(renderer,nullptr);
   SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_NONE);
   SDL_SetRenderDrawColor(renderer,sky.ambient.r,sky.ambient.g,sky.ambient.b,255);SDL_RenderClear(renderer);
   const float zoom=view.getCamera().zoom,scale=float(w)/rect.w*zoom;
@@ -379,7 +379,7 @@ void DayNightLighting::composite(SDL_Renderer *renderer,WorldRenderer &view,cons
     int a=y*(cols+1)+x,b=a+1,c=a+cols+1,d=c+1;
     indices.insert(indices.end(),{a,b,d,a,d,c});
   }
-  SDL_RenderGeometry(renderer,nullptr,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));
+  ZT_RenderGeometry(renderer,nullptr,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));
   timer.mark("ambient field");
   // Cached 3D irradiance projected onto the floor. No planar footprint ray
   // or prepainted radial pool substitutes for object occlusion.
@@ -420,21 +420,21 @@ void DayNightLighting::composite(SDL_Renderer *renderer,WorldRenderer &view,cons
       int a=first+y*(pulseCells+1)+x,b=a+1,c=a+pulseCells+1,d=c+1;indices.insert(indices.end(),{a,b,d,a,d,c});
     }
   }
-  if(!vertices.empty())SDL_RenderGeometry(renderer,nullptr,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));
+  if(!vertices.empty())ZT_RenderGeometry(renderer,nullptr,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));
   timer.mark("ground field");
   drawBeamHaze(renderer,view,scale);
   drawSurfaceLighting(renderer,view,scale,map.getWidth()*.5f);
   timer.mark("surface field");
-  SDL_SetRenderTarget(renderer,saved.target);SDL_RenderSetScale(renderer,1,1);
-  SDL_RenderSetViewport(renderer,nullptr);SDL_RenderSetClipRect(renderer,nullptr);
-  SDL_RenderCopy(renderer,lightmap,nullptr,&rect);
+  SDL_SetRenderTarget(renderer,saved.target);SDL_SetRenderScale(renderer,1,1);
+  SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderClipRect(renderer,nullptr);
+  ZT_RenderCopy(renderer,lightmap,nullptr,&rect);
   timer.mark("lighting target resolve");
   counters.width=w;counters.height=h;
 }
 
 void DayNightLighting::drawEmission(SDL_Renderer *renderer,WorldRenderer &view,const SDL_Rect &rect) {
-  RenderState saved(renderer);SDL_RenderSetScale(renderer,1,1);SDL_RenderSetViewport(renderer,nullptr);
-  SDL_RenderSetClipRect(renderer,&rect);const float zoom=view.getCamera().zoom;
+  RenderState saved(renderer);SDL_SetRenderScale(renderer,1,1);SDL_SetRenderViewport(renderer,nullptr);
+  SDL_SetRenderClipRect(renderer,&rect);const float zoom=view.getCamera().zoom;
   if(emissionClips.size()>320)for(auto it=emissionClips.begin();it!=emissionClips.end();) {
     if(it->second.used+2<actorTick)it=emissionClips.erase(it);else ++it;
   }
@@ -466,7 +466,7 @@ void DayNightLighting::drawEmission(SDL_Renderer *renderer,WorldRenderer &view,c
           if(!merged)clip.rectangles.push_back({x,y,end-x,1});x=end;
         }
       }
-      std::vector<SDL_Vertex> v;std::vector<int> indices;v.reserve(clip.rectangles.size()*4);indices.reserve(clip.rectangles.size()*6);
+      std::vector<ZT_Vertex> v;std::vector<int> indices;v.reserve(clip.rectangles.size()*4);indices.reserve(clip.rectangles.size()*6);
       const SDL_Color tint{255,255,255,Uint8(alpha*sky.lamps*e.energy)};
       for(const auto &r:clip.rectangles) {
         const float l=dest.x+r.x*zoom,t=dest.y+r.y*zoom,right=l+r.w*zoom,bottom=t+r.h*zoom;
@@ -475,7 +475,7 @@ void DayNightLighting::drawEmission(SDL_Renderer *renderer,WorldRenderer &view,c
         v.insert(v.end(),{{{l,t},tint,{u0,v0}},{{right,t},tint,{u1,v0}},{{right,bottom},tint,{u1,v1}},{{l,bottom},tint,{u0,v1}}});
         indices.insert(indices.end(),{first,first+1,first+2,first,first+2,first+3});
       }
-      if(!v.empty()){SDL_SetTextureBlendMode(e.texture,SDL_BLENDMODE_BLEND);SDL_RenderGeometry(renderer,e.texture,v.data(),int(v.size()),indices.data(),int(indices.size()));++counters.emissives;}
+      if(!v.empty()){SDL_SetTextureBlendMode(e.texture,SDL_BLENDMODE_BLEND);ZT_RenderGeometry(renderer,e.texture,v.data(),int(v.size()),indices.data(),int(indices.size()));++counters.emissives;}
       continue;
     }
     // addition: its soft light round it (Animation::EmissionPatch::glow),
@@ -485,25 +485,25 @@ void DayNightLighting::drawEmission(SDL_Renderer *renderer,WorldRenderer &view,c
       const SDL_FRect around{dest.x-pad,dest.y-pad,dest.w+2*pad,dest.h+2*pad};
       const float strength=glowStrength*(e.glowPad>Animation::kGlowPad?1.6f:1.0f);
       SDL_SetTextureAlphaMod(e.glow,Uint8(std::clamp(strength*sky.lamps*e.energy,0.0f,255.0f)));
-      SDL_RenderCopyExF(renderer,e.glow,nullptr,&around,0,nullptr,e.flip);
+      ZT_RenderCopyExF(renderer,e.glow,nullptr,&around,0,nullptr,e.flip);
     }
     if(!e.reflective) {
       SDL_SetTextureBlendMode(e.texture,SDL_BLENDMODE_ADD);SDL_SetTextureAlphaMod(e.texture,Uint8(35*sky.lamps*e.energy));
       for(const auto offset:{SDL_FPoint{-1,0},SDL_FPoint{1,0},SDL_FPoint{0,-1},SDL_FPoint{0,1}}) {
         auto halo=dest;halo.x+=offset.x*zoom;halo.y+=offset.y*zoom;
-        SDL_RenderCopyExF(renderer,e.texture,nullptr,&halo,0,nullptr,e.flip);
+        ZT_RenderCopyExF(renderer,e.texture,nullptr,&halo,0,nullptr,e.flip);
       }
       SDL_SetTextureBlendMode(e.texture,SDL_BLENDMODE_BLEND);
     }
     SDL_SetTextureAlphaMod(e.texture,Uint8(alpha*sky.lamps*e.energy));
-    SDL_RenderCopyExF(renderer,e.texture,nullptr,&dest,0,nullptr,e.flip);
+    ZT_RenderCopyExF(renderer,e.texture,nullptr,&dest,0,nullptr,e.flip);
     SDL_SetTextureAlphaMod(e.texture,255);++counters.emissives;
   }
   // addition: where a light falls on a tank's water, small glints come and
   // go on its surface - the lighthouse's sweeping beam shimmers across a
   // tank, a lamp beside one sparkles faintly - instead of the water lit flat
   if(frameFences && sky.lamps>.001f && !frameFences->exhibits().empty()) {
-    std::vector<SDL_Vertex> v;std::vector<int> idx;const float t=float(fixtureClock);
+    std::vector<ZT_Vertex> v;std::vector<int> idx;const float t=float(fixtureClock);
     for(size_t li=0;li<groundLight.size() && li<lights.size();++li) {
       const auto &l=lights[li];if(l.groundOnly)continue;
       const bool beam=l.cone>0 && l.sweep!=0;
@@ -524,7 +524,7 @@ void DayNightLighting::drawEmission(SDL_Renderer *renderer,WorldRenderer &view,c
         idx.insert(idx.end(),{first,first+1,first+2,first,first+2,first+3});
       }
     }
-    if(!v.empty()){SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_ADD);SDL_RenderGeometry(renderer,nullptr,v.data(),int(v.size()),idx.data(),int(idx.size()));}
+    if(!v.empty()){SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_ADD);ZT_RenderGeometry(renderer,nullptr,v.data(),int(v.size()),idx.data(),int(idx.size()));}
   }
 }
 

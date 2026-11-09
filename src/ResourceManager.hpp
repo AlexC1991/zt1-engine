@@ -8,7 +8,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "SDL_ttf.h"
+#include <SDL3_ttf/SDL_ttf.h>
+#include "Audio.hpp"
 
 #include "AniFile.hpp"
 #include "Animation.hpp"
@@ -67,7 +68,7 @@ public:
 
   // scale: each pixel that many times bigger (the Cursor size setting)
   SDL_Cursor *getCursor(uint32_t cursor_id, int hotX = 0, int hotY = 0, int scale = 1);
-  Mix_Music *getMusic(const std::string &file_name);
+  Audio::Clip *getMusic(const std::string &file_name);
   IniReader *getIniReader(const std::string &file_name);
   // ours: a file the engine supplies in place of the game's, or beside it
   // (e.g. the Game Options' Extras tab: ui/gameopts.lyt with that tab on,
@@ -100,10 +101,10 @@ public:
   // The menus' music (sounds/mainmenu.wav, looped): started again, or
   // faded out as a game starts (the original takes about 6 s)
   void playMenuMusic() {
-    if (this->intro_music && !Mix_PlayingMusic())
-      Mix_PlayMusic(this->intro_music, -1);
+    if (this->intro_music && !Audio::musicPlaying())
+      Audio::playMusic(this->intro_music, -1);
   }
-  void fadeMenuMusic() { Mix_FadeOutMusic(6000); }
+  void fadeMenuMusic() { Audio::fadeOutMusic(6000); }
 
   // Every resource name (lower case, '/' separated) that starts with
   // prefix and ends with suffix
@@ -158,7 +159,7 @@ private:
   void load_animation_map(std::atomic<float> *progress, float progress_goal);
   void load_pallet_map(std::atomic<float> *progress, float progress_goal);
 
-  Mix_Music *intro_music = nullptr;
+  Audio::Clip *intro_music = nullptr;
 
   Config *config;
   FontManager font_manager;

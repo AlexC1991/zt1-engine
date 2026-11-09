@@ -1,7 +1,7 @@
 #ifndef WINDOW_LOCK_HPP
 #define WINDOW_LOCK_HPP
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 class ResourceManager;
 

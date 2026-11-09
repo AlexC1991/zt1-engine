@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <cstdio>
 
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 
 #include "Utils.hpp"
 
@@ -238,8 +238,8 @@ SDL_Surface * ZtdFile::getImageSurfaceBmp(const std::string &ztd_file, const std
 
   void * file_content = ZtdFile::getFileContent(ztd_file, file_name, &file_size);
   if (file_content) {
-    SDL_RWops * rw = SDL_RWFromMem(file_content, file_size);
-    surface = IMG_LoadTyped_RW(rw, 1, "BMP");
+    SDL_IOStream * rw = SDL_IOFromMem(file_content, file_size);
+    surface = IMG_LoadTyped_IO(rw, 1, "BMP");
     free(file_content);
   } else {
     ZT_TRACE("Could not load content of file %s in %s", file_name.c_str(), ztd_file.c_str());
@@ -255,8 +255,8 @@ SDL_Surface * ZtdFile::getImageSurfaceTga(const std::string &ztd_file, const std
 
   void * file_content = ZtdFile::getFileContent(ztd_file, file_name, &file_size);
   if (file_content) {
-    SDL_RWops * rw = SDL_RWFromMem(file_content, file_size);
-    surface = IMG_LoadTyped_RW(rw, 1, "TGA");
+    SDL_IOStream * rw = SDL_IOFromMem(file_content, file_size);
+    surface = IMG_LoadTyped_IO(rw, 1, "TGA");
     free(file_content);
   } else {
     ZT_TRACE("Could not load content of file %s in %s", file_name.c_str(), ztd_file.c_str());
@@ -272,8 +272,8 @@ SDL_Surface * ZtdFile::getImageSurfaceZt1(const std::string &ztd_file, const std
 
   void * file_content = ZtdFile::getFileContent(ztd_file, file_name, &file_size);
   if (file_content) {
-    SDL_RWops * rw = SDL_RWFromMem(file_content, file_size);
-    surface = IMG_Load_RW(rw, 1);
+    SDL_IOStream * rw = SDL_IOFromMem(file_content, file_size);
+    surface = IMG_Load_IO(rw, 1);
     free(file_content);
   } else {
     ZT_TRACE("Could not load content of file %s in %s", file_name.c_str(), ztd_file.empty() ? "unknown ztd file" : ztd_file.c_str());
@@ -301,15 +301,15 @@ SDL_Surface * ZtdFile::getImageSurface(const std::string &ztd_file, const std::s
   return surface;
 }
 
-Mix_Music * ZtdFile::getMusic(const std::string &ztd_file, const std::string &file_name) {
-  Mix_Music * music = NULL;
+Audio::Clip * ZtdFile::getMusic(const std::string &ztd_file, const std::string &file_name) {
+  Audio::Clip * music = NULL;
   int file_size = 0;
-  Mix_MusicType music_type = MUS_WAV;
 
   void * file_content = ZtdFile::getFileContent(ztd_file, file_name, &file_size);
   if (file_content) {
-    SDL_RWops * rw = SDL_RWFromMem(file_content, file_size);
-    music = Mix_LoadMUSType_RW(rw, MUS_WAV, 1);
+    // (decoded whole as it loads, so the file's bytes can go)
+    music = Audio::load(file_content, static_cast<size_t>(file_size));
+    free(file_content);
   } else {
     ZT_TRACE("Could not load content of file %s in %s", file_name.c_str(), ztd_file.c_str());
     return nullptr; // [PATCH] Don't crash on missing files

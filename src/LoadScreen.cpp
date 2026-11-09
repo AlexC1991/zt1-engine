@@ -1,6 +1,6 @@
 #include "LoadScreen.hpp"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include "ArtScaler.hpp"
 
@@ -25,7 +25,7 @@ void LoadScreen::run(Window * window, Config * config, ResourceManager * resourc
     window->clear();
     if (SDL_PollEvent(&event)) {
       switch (event.type) {
-        case SDL_QUIT:
+        case SDL_EVENT_QUIT:
           std::exit(0);
           break;
       }
@@ -34,15 +34,15 @@ void LoadScreen::run(Window * window, Config * config, ResourceManager * resourc
     background_rect.x = window_rect.w /2 - background_rect.w / 2;
     background_rect.y = window_rect.h /2 - background_rect.h / 2;
     if (ArtScaler::scaleOf(background) > 1)
-      SDL_SetTextureScaleMode(background, SDL_ScaleModeLinear);
-    SDL_RenderCopy(window->renderer, background, NULL, &background_rect);
+      SDL_SetTextureScaleMode(background, SDL_SCALEMODE_LINEAR);
+    ZT_RenderCopy(window->renderer, background, NULL, &background_rect);
 
     SDL_Rect loading_bar_draw_rect = loading_bar_rect;
     loading_bar_draw_rect.x += background_rect.x;
     loading_bar_draw_rect.y += background_rect.y;
     loading_bar_draw_rect.w = (int) ((float) loading_bar_draw_rect.w / 100.0f * (float) progress);
     SDL_SetRenderDrawColor(window->renderer, loading_bar_color.r, loading_bar_color.g, loading_bar_color.b, 255);
-    SDL_RenderFillRect(window->renderer, &loading_bar_draw_rect);
+    ZT_RenderFillRect(window->renderer, &loading_bar_draw_rect);
 
     window->present();
   }

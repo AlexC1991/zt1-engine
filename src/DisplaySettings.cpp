@@ -47,22 +47,25 @@ std::string fmt(float v) {
   std::snprintf(b, sizeof b, "%.2f", v);
   return b;
 }
-int displayOf(SDL_Window *w) {
-  int d = w ? SDL_GetWindowDisplayIndex(w) : 0;
-  return d < 0 ? 0 : d;
+// (SDL3's displays are ids, not numbers from 0: the window's, or the main one)
+SDL_DisplayID displayOf(SDL_Window *w) {
+  const SDL_DisplayID d = w ? SDL_GetDisplayForWindow(w) : 0;
+  return d ? d : SDL_GetPrimaryDisplay();
 }
 // Full screen's display mode: the size picked, at the monitor's best refresh
+// (SDL3: a mode set on the window makes its full screen exclusive)
 void setFullscreenMode(Size s) {
-  SDL_DisplayMode want{}, got{};
-  want.w = s.w;
-  want.h = s.h;
-  if (SDL_GetClosestDisplayMode(displayOf(g_window), &want, &got))
-    SDL_SetWindowDisplayMode(g_window, &got);
+  SDL_DisplayMode got{};
+  if (SDL_GetClosestFullscreenDisplayMode(displayOf(g_window), s.w, s.h, 0.0f, false, &got))
+    SDL_SetWindowFullscreenMode(g_window, &got);
+}
+Size desktopSize() {
+  const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(displayOf(g_window));
+  return dm ? Size{dm->w, dm->h} : Size{};
 }
 Size savedFullscreenSize() {
-  SDL_DisplayMode dm{};
-  SDL_GetDesktopDisplayMode(displayOf(g_window), &dm);
-  return {Settings::getInt("user", "fullscreenwidth", dm.w), Settings::getInt("user", "fullscreenheight", dm.h)};
+  const Size desk = desktopSize();
+  return {Settings::getInt("user", "fullscreenwidth", desk.w), Settings::getInt("user", "fullscreenheight", desk.h)};
 }
 } // namespace
 
@@ -71,7 +74,7 @@ void init(SDL_Window *window, SDL_Renderer *renderer) {
   g_renderer = renderer;
   g_fps = std::clamp(Settings::getInt("user", "fpslimit", 60), 0, 1000);
   g_vsync = Settings::getInt("user", "vsync", 1) != 0;
-  SDL_RenderSetVSync(renderer, g_vsync ? 1 : 0);
+  SDL_SetRenderVSync(renderer, g_vsync ? 1 : 0);
   g_brightness = std::clamp(static_cast<float>(std::atof(Settings::get("user", "brightness", "1").c_str())), 0.5f, 2.0f);
   g_art = g_artAtStart = parseArt(Settings::get("user", "artupscale", "fsr"));
   std::string f = Settings::get("user", "colorfilter", "off");
@@ -88,10 +91,10 @@ void init(SDL_Window *window, SDL_Renderer *renderer) {
 // ------------------------------------------------------------------ the window
 Mode mode() {
   Uint32 f = g_window ? SDL_GetWindowFlags(g_window) : 0;
-  if ((f & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN_DESKTOP)
-    return Mode::Borderless;
+  // (SDL3: full screen with a display mode of its own is exclusive; with
+  // none, it's the desktop's - borderless)
   if (f & SDL_WINDOW_FULLSCREEN)
-    return Mode::Fullscreen;
+    return SDL_GetWindowFullscreenMode(g_window) ? Mode::Fullscreen : Mode::Borderless;
   return Mode::Windowed;
 }
 
@@ -104,9 +107,12 @@ void setMode(Mode m) {
     return;
   if (m == Mode::Fullscreen) {
     setFullscreenMode(savedFullscreenSize());
-    SDL_SetWindowFullscreen(g_window, SDL_WINDOW_FULLSCREEN);
+    SDL_SetWindowFullscreen(g_window, true);
+  } else if (m == Mode::Borderless) {
+    SDL_SetWindowFullscreenMode(g_window, nullptr);
+    SDL_SetWindowFullscreen(g_window, true);
   } else {
-    SDL_SetWindowFullscreen(g_window, m == Mode::Borderless ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    SDL_SetWindowFullscreen(g_window, false);
   }
   Settings::set("user", "windowmode", modeName(m));
   Settings::setInt("user", "fullscreen", m == Mode::Windowed ? 0 : 1);
@@ -114,12 +120,13 @@ void setMode(Mode m) {
 
 std::vector<Size> resolutions() {
   std::vector<Size> out;
-  int d = displayOf(g_window);
   SDL_Rect usable = Window::usableArea(g_window);
   bool windowed = mode() == Mode::Windowed;
-  for (int i = 0, n = SDL_GetNumDisplayModes(d); i < n; i++) {
-    SDL_DisplayMode dm;
-    if (SDL_GetDisplayMode(d, i, &dm) != 0 || dm.w < 800 || dm.h < 600)
+  int n = 0;
+  SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(displayOf(g_window), &n);
+  for (int i = 0; modes && i < n; i++) {
+    const SDL_DisplayMode &dm = *modes[i];
+    if (dm.w < 800 || dm.h < 600)
       continue;
     // (a window's frame needs a little room round it)
     if (windowed && (dm.w > usable.w || dm.h > usable.h - 32))
@@ -128,6 +135,7 @@ std::vector<Size> resolutions() {
     if (std::find(out.begin(), out.end(), s) == out.end())
       out.push_back(s);
   }
+  SDL_free(modes);
   if (windowed && out.empty())
     out.push_back({800, 600});
   // (the window's own size, dragged to one of its own, among them)
@@ -142,16 +150,11 @@ Size resolution() {
   if (!g_window)
     return {};
   Mode m = mode();
-  if (m == Mode::Fullscreen) {
-    SDL_DisplayMode dm{};
-    if (SDL_GetWindowDisplayMode(g_window, &dm) == 0)
-      return {dm.w, dm.h};
-  }
-  if (m == Mode::Borderless) {
-    SDL_DisplayMode dm{};
-    SDL_GetDesktopDisplayMode(displayOf(g_window), &dm);
-    return {dm.w, dm.h};
-  }
+  if (m == Mode::Fullscreen)
+    if (const SDL_DisplayMode *dm = SDL_GetWindowFullscreenMode(g_window))
+      return {dm->w, dm->h};
+  if (m == Mode::Borderless)
+    return desktopSize();
   Size s;
   SDL_GetWindowSize(g_window, &s.w, &s.h);
   return s;
@@ -164,9 +167,7 @@ void setResolution(Size s) {
     return;
   if (mode() == Mode::Fullscreen) {
     setFullscreenMode(s);
-    // (the new mode takes hold as full screen is entered again)
-    SDL_SetWindowFullscreen(g_window, 0);
-    SDL_SetWindowFullscreen(g_window, SDL_WINDOW_FULLSCREEN);
+    // (SDL3 changes an exclusive full screen's mode as it's set)
     Settings::setInt("user", "fullscreenwidth", s.w);
     Settings::setInt("user", "fullscreenheight", s.h);
     return;
@@ -174,7 +175,7 @@ void setResolution(Size s) {
   if (SDL_GetWindowFlags(g_window) & SDL_WINDOW_MAXIMIZED)
     SDL_RestoreWindow(g_window);
   SDL_SetWindowSize(g_window, s.w, s.h);
-  int d = displayOf(g_window);
+  const SDL_DisplayID d = displayOf(g_window);
   SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED_DISPLAY(d), SDL_WINDOWPOS_CENTERED_DISPLAY(d));
   // (kept as the window's own size and place: Window::windowChanged)
   Window::windowChanged(g_window);
@@ -192,7 +193,7 @@ bool vsync() { return g_vsync; }
 void setVsync(bool on) {
   g_vsync = on;
   if (g_renderer)
-    SDL_RenderSetVSync(g_renderer, on ? 1 : 0);
+    SDL_SetRenderVSync(g_renderer, on ? 1 : 0);
   Settings::setInt("user", "vsync", on ? 1 : 0);
 }
 

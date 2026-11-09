@@ -2,7 +2,7 @@
 #include "Features.hpp"
 #include "RenderSettings.hpp"
 #include "ItemCatalog.hpp"
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -13,8 +13,8 @@
 int runLightingDetailChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,const std::string &out,const std::function<void()> &draw) {
   using namespace LightingAssets;int failed=0;std::ostringstream report;
   auto check=[&](const std::string &name,bool ok){report<<(ok?"PASS ":"FAIL ")<<name<<'\n';failed+=!ok;};
-  auto capture=[&](const std::string &name){draw();int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);auto *s=SDL_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);
-    if(!s){++failed;return;}if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,s->pixels,s->pitch) || IMG_SavePNG(s,(out+"/"+name+".png").c_str()))++failed;SDL_FreeSurface(s);SDL_RenderPresent(renderer);};
+  auto capture=[&](const std::string &name){draw();int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);auto *s=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);
+    if(!s){++failed;return;}if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,s->pixels,s->pitch) || !IMG_SavePNG(s,(out+"/"+name+".png").c_str()))++failed;SDL_DestroySurface(s);SDL_RenderPresent(renderer);};
   auto &light=world.getLighting();const bool before=Features::dayNightLighting,paths=Features::elevatedPaths;
   Features::dayNightLighting=true;Features::elevatedPaths=true;world.loadBlank(100,100);world.setPaused(true);world.getCamera().zoom=1;
   auto &map=world.getMap();auto &fences=world.getFences();fences.setEditing(true);auto &view=world.getRenderer();
@@ -80,7 +80,7 @@ int runLightingDetailChecks(World &world,ResourceManager *rm,SDL_Renderer *rende
   check("local placement preserves distant irradiance byte for byte",same);
   check("local placement rebuilds only the affected lamp grid",rebuilt>0 && rebuilt<=441);
   check("placement still agrees with exhaustive obstruction rays",light.verifyLocalLightIndex());
-  {DayNightLighting fresh;fresh.previewHour=0;int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);
+  {DayNightLighting fresh;fresh.previewHour=0;int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);
     for(int i=0;i<10;++i)fresh.prepare(world,rm,world.objectsMutable(),map,view,0,w,h,renderer);
     bool equal=fresh.groundLight.size()==light.groundLight.size() && fresh.surfaceLight.size()==light.surfaceLight.size();
     if(equal)for(size_t g=0;g<fresh.groundLight.size();++g){const auto &a=fresh.groundLight[g],&b=light.groundLight[g];if(a.size()!=b.size()){equal=false;break;}

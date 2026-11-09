@@ -1,7 +1,7 @@
 #ifndef RENDER_SETTINGS_HPP
 #define RENDER_SETTINGS_HPP
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <functional>
 #include "CompassDirection.hpp"
 class Animation;
@@ -19,7 +19,7 @@ inline bool relightWorld = false;
 // addition: the tissue pass shares native sprite ordering and tank clips.
 inline std::function<void(SDL_Renderer*,Animation*,float,float,CompassDirection,int)> fluorescence;
 
-inline SDL_ScaleMode artScaleMode = SDL_ScaleModeNearest;
+inline SDL_ScaleMode artScaleMode = SDL_SCALEMODE_NEAREST;
 
 // How art drawn bigger looks without FSR (Game Options > Graphics > Art
 // upscaling): Auto - sharp at whole sizes, smooth between - Sharp (every
@@ -29,10 +29,10 @@ inline ArtLook artLook = ArtLook::Auto;
 // The scale mode for art drawn this many times bigger
 inline SDL_ScaleMode lookFor(float scale) {
   if (artLook == ArtLook::Sharp)
-    return SDL_ScaleModeNearest;
+    return SDL_SCALEMODE_NEAREST;
   if (artLook == ArtLook::Smooth)
-    return SDL_ScaleModeLinear;
-  return SDL_fabsf(scale - SDL_roundf(scale)) < 0.01f ? SDL_ScaleModeNearest : SDL_ScaleModeLinear;
+    return SDL_SCALEMODE_LINEAR;
+  return SDL_fabsf(scale - SDL_roundf(scale)) < 0.01f ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR;
 }
 
 // The interface's size (Game Options > Graphics > Interface Size, zoo.ini
@@ -87,19 +87,15 @@ inline UiPass uiPass = UiPass::All;
 inline bool drawsUiArt() { return uiPass != UiPass::Text; }
 inline bool drawsUiText() { return uiPass != UiPass::Art; }
 
-// ours: a texture's scale mode, changed safely while drawing. SDL's OpenGL
-// renderer applies it at once - to draws of the texture still waiting in its
-// batch too - binding the texture behind its own record of what is bound (a
-// later draw could then use the wrong texture). Only when it changes; the
-// waiting draws of it sent first, and the record cleared after.
+// ours: a texture's scale mode, set only when it changes. (SDL3 keeps the
+// mode with each draw as it's queued, so changing it no longer reaches draws
+// of the texture still waiting in the batch - SDL2's OpenGL renderer needed
+// the texture bound around the change)
 inline void setScaleMode(SDL_Texture *texture, SDL_ScaleMode want) {
   SDL_ScaleMode have;
-  if (!texture || (SDL_GetTextureScaleMode(texture, &have) == 0 && have == want))
+  if (!texture || (SDL_GetTextureScaleMode(texture, &have) && have == want))
     return;
-  const bool gl = SDL_GL_BindTexture(texture, nullptr, nullptr) == 0;
   SDL_SetTextureScaleMode(texture, want);
-  if (gl)
-    SDL_GL_UnbindTexture(texture);
 }
 
 inline void applyArtScaleMode(SDL_Texture *texture) {
@@ -109,7 +105,7 @@ inline void applyArtScaleMode(SDL_Texture *texture) {
   // scaling to the window smoothly
   // (only when it changes: asked for every sprite, every frame, SDL bound
   // the texture and set its filter again each time)
-  setScaleMode(texture, ArtScaler::scaleOf(texture) > 1 ? SDL_ScaleModeLinear : artScaleMode);
+  setScaleMode(texture, ArtScaler::scaleOf(texture) > 1 ? SDL_SCALEMODE_LINEAR : artScaleMode);
 }
 
 } // namespace RenderSettings

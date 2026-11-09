@@ -91,7 +91,7 @@ std::shared_ptr<const BuildJob> prepareBuild(Animation &art,const Definition &as
       for(int y=0;y<v.h;++y)for(int x=0;x<v.w;++x) {
         const int sx=nf.mirrored?f->w-1-x:x;
         if(sx<0 || sx>=f->w || y>=f->h){v.mask[y*v.w+x]=0;continue;}
-        Uint8 red,green,blue,alpha;SDL_GetRGBA(reinterpret_cast<Uint32*>(static_cast<Uint8*>(f->pixels)+y*f->pitch)[sx],f->format,&red,&green,&blue,&alpha);
+        Uint8 red,green,blue,alpha;ZT_GetRGBA(reinterpret_cast<Uint32*>(static_cast<Uint8*>(f->pixels)+y*f->pitch)[sx],f->format,&red,&green,&blue,&alpha);
         if(alpha<64)v.mask[y*v.w+x]=0;
       }
       if(nf.shadowRuns)for(uint64_t run:*nf.shadowRuns) {
@@ -105,7 +105,7 @@ std::shared_ptr<const BuildJob> prepareBuild(Animation &art,const Definition &as
     for(int y=0;y<v.h;++y)for(int x=0;x<v.w;++x)if(v.mask[y*v.w+x]) {
       for(const auto &material:asset.views[k])if(material.shadowCut && inside(material,x+.5f-v.ax,y+.5f-v.ay)) {
         const int sx=native.mirrored?s->w-1-x:x;Uint8 r,g,b,a;
-        SDL_GetRGBA(reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(s->pixels)+y*s->pitch)[sx],s->format,&r,&g,&b,&a);
+        ZT_GetRGBA(reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(s->pixels)+y*s->pitch)[sx],s->format,&r,&g,&b,&a);
         if(pixelAllowed(material.pixels,r,g,b)){v.mask[y*v.w+x]=0;break;}
       }
       if(v.mask[y*v.w+x])top=std::max(top,v.ay-y);

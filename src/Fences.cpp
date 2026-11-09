@@ -33,7 +33,7 @@ void fenceGpuComposition(bool on) { composeTanksOnGpu = on; }
 // line at every piece - in every art look. Drawn 1:1 (or smaller) as it is
 static void layered(SDL_Renderer *r, const std::function<void()> &draw) {
   float sx = 1.0f, sy = 1.0f;
-  SDL_RenderGetScale(r, &sx, &sy);
+  SDL_GetRenderScale(r, &sx, &sy);
   if (sx <= 1.001f && sy <= 1.001f) {
     RenderSettings::layeredDirect++;
     draw();
@@ -46,14 +46,14 @@ static void layered(SDL_Renderer *r, const std::function<void()> &draw) {
   // between two strips was left undrawn - the grass showing through)
   SDL_Texture *was = SDL_GetRenderTarget(r);
   SDL_Rect view, devView, devClip;
-  SDL_RenderGetViewport(r, &view);
-  const bool clipped = SDL_RenderIsClipEnabled(r);
-  SDL_RenderSetScale(r, 1.0f, 1.0f);
-  SDL_RenderGetClipRect(r, &devClip);
+  SDL_GetRenderViewport(r, &view);
+  const bool clipped = SDL_RenderClipEnabled(r);
+  SDL_SetRenderScale(r, 1.0f, 1.0f);
+  SDL_GetRenderClipRect(r, &devClip);
   // (and the viewport: asked in the view's units it comes back rounded, and
   // set back it moved the rest of the frame by up to a pixel)
-  SDL_RenderGetViewport(r, &devView);
-  SDL_RenderSetScale(r, sx, sy);
+  SDL_GetRenderViewport(r, &devView);
+  SDL_SetRenderScale(r, sx, sy);
   // The part to draw, in the view's units: the clip's, a unit wider each
   // way (the clip, put back, cuts it exactly), kept to the view - a tank's
   // end strips reach a billion pixels out each way
@@ -63,7 +63,7 @@ static void layered(SDL_Renderer *r, const std::function<void()> &draw) {
     int x1 = static_cast<int>(std::ceil((devClip.x + devClip.w) / sx)) + 1;
     int y1 = static_cast<int>(std::ceil((devClip.y + devClip.h) / sy)) + 1;
     SDL_Rect want = {x0, y0, x1 - x0, y1 - y0};
-    if (!SDL_IntersectRect(&want, &whole, &clip))
+    if (!SDL_GetRectIntersection(&want, &whole, &clip))
       return;
   }
   if (clip.w <= 0 || clip.h <= 0)
@@ -87,14 +87,14 @@ static void layered(SDL_Renderer *r, const std::function<void()> &draw) {
     return;
   }
   SDL_SetRenderTarget(r, layer);
-  SDL_RenderSetScale(r, 1.0f, 1.0f);
-  SDL_RenderSetViewport(r, nullptr);
-  SDL_RenderSetClipRect(r, &clip);
+  SDL_SetRenderScale(r, 1.0f, 1.0f);
+  SDL_SetRenderViewport(r, nullptr);
+  SDL_SetRenderClipRect(r, &clip);
   SDL_BlendMode mode;
   SDL_GetRenderDrawBlendMode(r, &mode);
   SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
   SDL_SetRenderDrawColor(r, 0, 0, 0, 0);
-  SDL_RenderFillRect(r, &clip);
+  ZT_RenderFillRect(r, &clip);
   SDL_SetRenderDrawBlendMode(r, mode);
   const bool zoomedIn = RenderSettings::worldZoomedIn;
   RenderSettings::worldZoomedIn = false; // (the art's own frames, 1:1)
@@ -108,13 +108,13 @@ static void layered(SDL_Renderer *r, const std::function<void()> &draw) {
   RenderSettings::setScaleMode(layer, RenderSettings::lookFor(sx));
   SDL_SetRenderTarget(r, was);
   // (the viewport and clip in the screen's pixels as they were)
-  SDL_RenderSetScale(r, 1.0f, 1.0f);
-  SDL_RenderSetViewport(r, &devView);
-  SDL_RenderSetClipRect(r, clipped ? &devClip : nullptr);
-  SDL_RenderSetScale(r, sx, sy);
+  SDL_SetRenderScale(r, 1.0f, 1.0f);
+  SDL_SetRenderViewport(r, &devView);
+  SDL_SetRenderClipRect(r, clipped ? &devClip : nullptr);
+  SDL_SetRenderScale(r, sx, sy);
   SDL_FRect dst = {static_cast<float>(clip.x), static_cast<float>(clip.y), static_cast<float>(clip.w),
                    static_cast<float>(clip.h)};
-  SDL_RenderCopyF(r, layer, &clip, &dst);
+  ZT_RenderCopyF(r, layer, &clip, &dst);
 }
 
 void drawLayered(SDL_Renderer *renderer, const std::function<void()> &draw) { layered(renderer, draw); }
@@ -2823,7 +2823,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
         float x0, y0, x1, y1, d;
         vp->worldToScreenF(m.ax, m.ay, static_cast<float>(m.outside), x0, y0, d);
         vp->worldToScreenF(m.bx, m.by, static_cast<float>(m.outside), x1, y1, d);
-        SDL_RenderDrawLineF(r, x0, y0, x1, y1);
+        SDL_RenderLine(r, x0, y0, x1, y1);
       }
       };
       out.push_back(std::move(part));
@@ -2952,7 +2952,7 @@ void Fences::drawWater(SDL_Renderer *renderer, const WorldRenderer &view,
       continue; // (with the art: the tank's inside, in collect)
     {
       // No art (Marine Mania missing): plain water
-      std::vector<SDL_Vertex> v;
+      std::vector<ZT_Vertex> v;
       std::vector<int> idx;
       SDL_Color c = {40, 110, 190, 150};
       for (auto [x, y] : ex.tiles) {
@@ -2967,7 +2967,7 @@ void Fences::drawWater(SDL_Renderer *renderer, const WorldRenderer &view,
           idx.push_back(base + i);
       }
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-      SDL_RenderGeometry(renderer, nullptr, v.data(), static_cast<int>(v.size()), idx.data(),
+      ZT_RenderGeometry(renderer, nullptr, v.data(), static_cast<int>(v.size()), idx.data(),
                          static_cast<int>(idx.size()));
       continue;
     }

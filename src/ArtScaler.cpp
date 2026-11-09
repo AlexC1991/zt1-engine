@@ -8,7 +8,7 @@
 #include <thread>
 #include <vector>
 
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 
 #include "GpuCompressed.hpp"
 #include "HdArt.hpp"
@@ -25,10 +25,9 @@ void configure(Mode mode, int factor, float sharpness) {
   if (factor <= 0) {
     // Enough detail for the biggest the UI gets on this desktop (the UI is
     // 800x600 scaled to fit)
-    SDL_DisplayMode dm;
     int h = 1080;
-    if (SDL_GetDesktopDisplayMode(0, &dm) == 0 && dm.h > 0)
-      h = dm.h;
+    if (const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay()); dm && dm->h > 0)
+      h = dm->h;
     factor = static_cast<int>(std::ceil(h / 600.0));
   }
   g_factor = mode == Mode::Off ? 1 : std::clamp(factor, 2, 4);
@@ -75,7 +74,7 @@ int worldFactor() {
 // each) and whether it's compressed (GpuCompressed)
 namespace {
 intptr_t marksOf(SDL_Texture *texture) {
-  return texture ? reinterpret_cast<intptr_t>(SDL_GetTextureUserData(texture)) : 0;
+  return texture ? reinterpret_cast<intptr_t>(ZT_GetTextureUserData(texture)) : 0;
 }
 } // namespace
 
@@ -86,7 +85,7 @@ int scaleOf(SDL_Texture *texture) {
 
 void markPadded(SDL_Texture *texture, int scale, int padX, int padY, bool compressed) {
   if (texture)
-    SDL_SetTextureUserData(texture, reinterpret_cast<void *>(intptr_t(std::clamp(scale, 1, 255)) |
+    ZT_SetTextureUserData(texture, reinterpret_cast<void *>(intptr_t(std::clamp(scale, 1, 255)) |
                                                              (intptr_t(padX & 3) << 8) | (intptr_t(padY & 3) << 10) |
                                                              (compressed ? intptr_t(1) << 12 : 0)));
 }
@@ -97,7 +96,7 @@ bool contentRect(SDL_Texture *texture, SDL_Rect *rect) {
   if (!padX && !padY)
     return false;
   int tw = 0, th = 0;
-  SDL_QueryTexture(texture, nullptr, nullptr, &tw, &th);
+  ZT_QueryTexture(texture, nullptr, nullptr, &tw, &th);
   *rect = {0, 0, tw - padX, th - padY};
   return true;
 }
@@ -107,7 +106,7 @@ bool contentUV(SDL_Texture *texture, float *u, float *v) {
   if (!contentRect(texture, &r))
     return false;
   int tw = 0, th = 0;
-  SDL_QueryTexture(texture, nullptr, nullptr, &tw, &th);
+  ZT_QueryTexture(texture, nullptr, nullptr, &tw, &th);
   *u = tw > 0 ? float(r.w) / float(tw) : 1.0f;
   *v = th > 0 ? float(r.h) / float(th) : 1.0f;
   return true;
@@ -116,7 +115,7 @@ bool contentUV(SDL_Texture *texture, float *u, float *v) {
 size_t textureBytes(SDL_Texture *texture) {
   int tw = 0, th = 0;
   if (texture)
-    SDL_QueryTexture(texture, nullptr, nullptr, &tw, &th);
+    ZT_QueryTexture(texture, nullptr, nullptr, &tw, &th);
   const size_t pixels = size_t(std::max(0, tw)) * size_t(std::max(0, th));
   return (marksOf(texture) >> 12) & 1 ? pixels : pixels * 4;
 }
@@ -124,7 +123,7 @@ size_t textureBytes(SDL_Texture *texture) {
 void querySize(SDL_Texture *texture, int *w, int *h) {
   int tw = 0, th = 0;
   if (texture)
-    SDL_QueryTexture(texture, nullptr, nullptr, &tw, &th);
+    ZT_QueryTexture(texture, nullptr, nullptr, &tw, &th);
   SDL_Rect content;
   if (contentRect(texture, &content)) {
     tw = content.w;
@@ -146,11 +145,11 @@ static SDL_Texture *makeTexture(SDL_Renderer *renderer, SDL_Surface *surface,
                                 int scale) {
   SDL_Texture *t = SDL_CreateTextureFromSurface(renderer, surface);
   if (t && scale > 1) {
-    SDL_SetTextureUserData(t, reinterpret_cast<void *>(intptr_t(scale)));
+    ZT_SetTextureUserData(t, reinterpret_cast<void *>(intptr_t(scale)));
     SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
     // The upscaled art holds the detail; linear finishes the last bit of
     // scaling smoothly
-    SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+    SDL_SetTextureScaleMode(t, SDL_SCALEMODE_LINEAR);
   }
   return t;
 }
@@ -498,7 +497,7 @@ static void rcas(const std::vector<Px> &in, int w, int h, std::vector<Px> &out,
 
 static SDL_Surface *upscale(SDL_Surface *surface, int k, bool wrap) {
   SDL_Surface *rgba =
-      SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+      ZT_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
   if (!rgba)
     return nullptr;
   int w = rgba->w, h = rgba->h;
@@ -512,7 +511,7 @@ static SDL_Surface *upscale(SDL_Surface *surface, int k, bool wrap) {
       px[static_cast<size_t>(y) * w + x] = (c >> 24) == 0 ? 0 : c;
     }
   }
-  SDL_FreeSurface(rgba);
+  SDL_DestroySurface(rgba);
 
   int outScale = 1;
   std::vector<uint32_t> result;
@@ -556,7 +555,7 @@ static SDL_Surface *upscale(SDL_Surface *surface, int k, bool wrap) {
 
   int W = w * outScale, H = h * outScale;
   SDL_Surface *out =
-      SDL_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_RGBA32);
+      ZT_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_RGBA32);
   if (!out)
     return nullptr;
   for (int y = 0; y < H; y++)
@@ -566,7 +565,7 @@ static SDL_Surface *upscale(SDL_Surface *surface, int k, bool wrap) {
 }
 
 void sharpen(SDL_Surface *s, float stops) {
-  if (!s || s->format->format != SDL_PIXELFORMAT_RGBA32 || s->w < 3 || s->h < 3)
+  if (!s || s->format != SDL_PIXELFORMAT_RGBA32 || s->w < 3 || s->h < 3)
     return;
   const int w = s->w, h = s->h;
   std::vector<Px> in(static_cast<size_t>(w) * h), out(in.size());
@@ -603,8 +602,8 @@ void sharpen(SDL_Surface *s, float stops) {
 
 void markScale(SDL_Texture *t, int scale) {
   if (t && scale > 1) {
-    SDL_SetTextureUserData(t, reinterpret_cast<void *>(intptr_t(scale)));
-    SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+    ZT_SetTextureUserData(t, reinterpret_cast<void *>(intptr_t(scale)));
+    SDL_SetTextureScaleMode(t, SDL_SCALEMODE_LINEAR);
   }
 }
 
@@ -622,7 +621,7 @@ SDL_Texture *createTexture(SDL_Renderer *renderer, SDL_Surface *surface,
     return SDL_CreateTextureFromSurface(renderer, surface);
   int scale = big->w / std::max(1, surface->w);
   SDL_Texture *t = makeTexture(renderer, big, scale);
-  SDL_FreeSurface(big);
+  SDL_DestroySurface(big);
   return t;
 }
 

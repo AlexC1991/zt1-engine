@@ -302,7 +302,7 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
     const bool art = RenderSettings::drawsUiArt();
     if (!transparent && art) {
         SDL_SetRenderDrawColor(renderer, backcolor.r, backcolor.g, backcolor.b, backcolor.a);
-        SDL_RenderFillRect(renderer, &cached_rect);
+        ZT_RenderFillRect(renderer, &cached_rect);
     }
     // No outline: border= is only the inset (the original's map, filter and
     // research lists have none)
@@ -335,7 +335,7 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
                     int tw = 0, th = 0;
                     resource_manager->getTextSize(t, &tw, &th);
                     SDL_Rect dst = {cached_rect.x + minicon_width, ty, tw, th};
-                    SDL_RenderCopy(renderer, t, nullptr, &dst);
+                    ZT_RenderCopy(renderer, t, nullptr, &dst);
                 }
                 ty += line_height;
             }
@@ -367,13 +367,13 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
             bg = &selectbackcolor;
             fg = &selectcolor;
             SDL_SetRenderDrawColor(renderer, bg->r, bg->g, bg->b, 255);
-            if (art) SDL_RenderFillRect(renderer, &item_rect);
+            if (art) ZT_RenderFillRect(renderer, &item_rect);
             SDL_SetRenderDrawColor(renderer, 255, 217, 90, 255);
-            if (art) SDL_RenderDrawRect(renderer, &item_rect);
+            if (art) ZT_RenderDrawRect(renderer, &item_rect);
         }
         else if (item_index == hover_index) {
             SDL_SetRenderDrawColor(renderer, highlightcolor.r, highlightcolor.g, highlightcolor.b, 100);
-            if (art) SDL_RenderFillRect(renderer, &item_rect);
+            if (art) ZT_RenderFillRect(renderer, &item_rect);
         }
 
         // --- FIXED LAZY LOAD ---
@@ -413,7 +413,7 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
             SDL_SetTextureBlendMode(item.iconTex, SDL_BLENDMODE_BLEND);
             RenderSettings::applyArtScaleMode(item.iconTex);
             if (art)
-                SDL_RenderCopy(renderer, item.iconTex, nullptr, &iconRect);
+                ZT_RenderCopy(renderer, item.iconTex, nullptr, &iconRect);
             if (minicon_width <= 0)
                 text_x_offset = 24;
         }
@@ -432,7 +432,7 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
                 int left = cached_rect.x + static_cast<int>(columns[k + 1] * scale);
                 int right = cached_rect.x + (k + 2 < columns.size() ? static_cast<int>(columns[k + 2] * scale) : cached_rect.w);
                 SDL_Rect dst = {k == 0 ? left + 1 : right - 1 - tw, item_rect.y + (item_height - th) / 2, tw, th};
-                SDL_RenderCopy(renderer, t, nullptr, &dst);
+                ZT_RenderCopy(renderer, t, nullptr, &dst);
             }
         } else if (!item.text.empty()) {
             std::string label = item.text;
@@ -448,7 +448,7 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
                     resource_manager->getTextSize(rt, &right_w, &rh);
                     SDL_Rect rr = {item_rect.x + item_rect.w - 3 - right_w, item_rect.y + (item_height - rh) / 2, right_w, rh};
                     if (RenderSettings::drawsUiText())
-                        SDL_RenderCopy(renderer, rt, nullptr, &rr);
+                        ZT_RenderCopy(renderer, rt, nullptr, &rr);
                     right_w += 10;
                 }
             }
@@ -475,7 +475,7 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
                     tex_w, tex_h
                 };
                 if (text_texture && tex_w <= available && RenderSettings::drawsUiText())
-                    SDL_RenderCopy(renderer, text_texture, nullptr, &text_rect);
+                    ZT_RenderCopy(renderer, text_texture, nullptr, &text_rect);
             }
         }
         item_y += item_height;

@@ -12,7 +12,7 @@
 #include "ShaderMods.hpp"
 #include "RenderSettings.hpp"
 #include "Features.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <assert.h>
 #include <cstdio>
 #include <cstdlib> // for abs
@@ -36,7 +36,7 @@ void liveRemove(const Animation *a);
 } // namespace
 
 static void removePaletteShadow(SDL_Surface *target,const SDL_Surface *original,const std::vector<Uint8> &mask) {
-  if(!target || !original || mask.empty() || target->format->BytesPerPixel!=4)return;
+  if(!target || !original || mask.empty() || SDL_BYTESPERPIXEL(target->format)!=4)return;
   for(int y=0;y<target->h;++y)for(int x=0;x<target->w;++x) {
     const int ox=x*original->w/target->w,oy=y*original->h/target->h;
     if(mask[size_t(oy)*original->w+ox])reinterpret_cast<Uint32*>(static_cast<Uint8*>(target->pixels)+y*target->pitch)[x]=0;
@@ -305,7 +305,7 @@ void Animation::packAll() {
     for (SDL_Surface *s : frames) {
       if (!s)
         continue;
-      if (s->format->format != SDL_PIXELFORMAT_RGBA32 || s->w > 65535 || SDL_MUSTLOCK(s)) {
+      if (s->format != SDL_PIXELFORMAT_RGBA32 || s->w > 65535 || SDL_MUSTLOCK(s)) {
         packable = false;
         break;
       }
@@ -368,7 +368,7 @@ void Animation::packAll() {
     }
     for (SDL_Surface *&s : frames)
       if (s) {
-        SDL_FreeSurface(s);
+        SDL_DestroySurface(s);
         s = nullptr;
       }
     this->packed[direction] = std::move(pd);
@@ -386,10 +386,10 @@ SDL_Surface *Animation::sourceFrame(const std::string &direction, size_t frame) 
   if (pd == this->packed.end() || frame >= pd->second.frames.size() || !pd->second.frames[frame].present)
     return nullptr;
   const PackedFrame &f = pd->second.frames[frame];
-  SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, f.w, f.h, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, f.w, f.h, 32, SDL_PIXELFORMAT_RGBA32);
   if (!s)
     return nullptr;
-  SDL_FillRect(s, nullptr, 0);
+  SDL_FillSurfaceRect(s, nullptr, 0);
   const uint8_t *p = f.data.data();
   for (int y = 0; y < f.h; y++) {
     uint32_t *row = reinterpret_cast<uint32_t *>(static_cast<uint8_t *>(s->pixels) + size_t(y) * s->pitch);
@@ -444,7 +444,7 @@ void Animation::releaseSources() const {
       if (frames[i] && i < pd->second.frames.size() && pd->second.frames[i].present) {
         if (g_frameFreed)
           g_frameFreed(frames[i]);
-        SDL_FreeSurface(frames[i]);
+        SDL_DestroySurface(frames[i]);
         frames[i] = nullptr;
       }
   }
@@ -468,7 +468,7 @@ void Animation::dropSources(const std::string &direction) {
       }
       if (g_frameFreed)
         g_frameFreed(s);
-      SDL_FreeSurface(s);
+      SDL_DestroySurface(s);
     }
   slots->second.clear();
   this->packed.erase(direction);
@@ -510,7 +510,7 @@ Animation &Animation::operator=(Animation &&other) noexcept {
     for (auto surface_list : this->surfaces) {
       for (SDL_Surface *surface : surface_list.second) {
         if (surface)
-          SDL_FreeSurface(surface);
+          SDL_DestroySurface(surface);
       }
       surface_list.second.clear();
     }
@@ -583,7 +583,7 @@ Animation::~Animation() {
   for (auto surface_list : this->surfaces) {
     for (SDL_Surface *surface : surface_list.second) {
       if (surface)
-        SDL_FreeSurface(surface);
+        SDL_DestroySurface(surface);
     }
     surface_list.second.clear();
   }
@@ -674,7 +674,7 @@ void Animation::draw(SDL_Renderer *renderer, SDL_Rect *dest_rect,
     // (a texture made up to whole blocks: only the art's part of it)
     SDL_Rect content;
     const bool padded = ArtScaler::contentRect(texture, &content);
-    SDL_RenderCopyEx(renderer, texture, padded ? &content : NULL, dest_rect, 0, NULL,
+    ZT_RenderCopyEx(renderer, texture, padded ? &content : NULL, dest_rect, 0, NULL,
                      this->renderer_flip);
   }
 }
@@ -710,7 +710,7 @@ bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
   const AnchorMemo *anchor = this->anchorFor(direction);
   if (!anchor)
     return false;
-  SDL_RendererFlip flip = this->renderer_flip;
+  SDL_FlipMode flip = this->renderer_flip;
   bool hi = this->usesHi();
   std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, hi, frame >= 0 ? frame : this->current_frame);
   if (!frames || frames->empty())
@@ -730,7 +730,7 @@ bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
   if (RenderSettings::snapEdges) {
     // (each edge on the screen pixel its own position rounds to)
     float sx = 1.0f, sy = 1.0f;
-    SDL_RenderGetScale(renderer, &sx, &sy);
+    SDL_GetRenderScale(renderer, &sx, &sy);
     float l = SDL_roundf(dest.x * sx) / sx, t = SDL_roundf(dest.y * sy) / sy;
     float r = SDL_roundf((dest.x + dest.w) * sx) / sx, b = SDL_roundf((dest.y + dest.h) * sy) / sy;
     dest = {l, t, r - l, b - t};
@@ -742,7 +742,7 @@ bool Animation::drawAnchored(SDL_Renderer *renderer, float x, float y,
   }
   SDL_Rect content;
   const bool padded = ArtScaler::contentRect(texture, &content);
-  SDL_RenderCopyExF(renderer, texture, padded ? &content : nullptr, &dest, 0, nullptr, flip);
+  ZT_RenderCopyExF(renderer, texture, padded ? &content : nullptr, &dest, 0, nullptr, flip);
   if (tint) {
     SDL_SetTextureColorMod(texture, 255, 255, 255);
     SDL_SetTextureAlphaMod(texture, 255);
@@ -785,7 +785,7 @@ bool Animation::drawMapped(SDL_Renderer *renderer, CompassDirection direction, i
   if (!texture)
     return false;
   RenderSettings::applyArtScaleMode(texture);
-  SDL_Vertex v[4];
+  ZT_Vertex v[4];
   for (int i = 0; i < 4; i++)
     v[i] = {dst[i], tint, uv[i]};
   // addition: silhouette shadows follow the same missing-direction mirror as
@@ -799,7 +799,7 @@ bool Animation::drawMapped(SDL_Renderer *renderer, CompassDirection direction, i
       vertex.tex_coord.y *= vm;
     }
   const int idx[6] = {0, 1, 2, 0, 2, 3};
-  SDL_RenderGeometry(renderer, texture, v, 4, idx, 6);
+  ZT_RenderGeometry(renderer, texture, v, 4, idx, 6);
   return true;
 }
 
@@ -811,7 +811,7 @@ bool Animation::drawCastShadow(SDL_Renderer *renderer, CompassDirection directio
   const AnchorMemo *anchor = this->anchorFor(direction);
   if (!anchor)
     return false;
-  const SDL_RendererFlip flip = this->renderer_flip;
+  const SDL_FlipMode flip = this->renderer_flip;
   std::vector<SDL_Texture *> *frames = this->frameTextures(renderer, direction, this->usesHi(), frame >= 0 ? frame : 0);
   if (!frames || frames->empty())
     return false;
@@ -827,11 +827,11 @@ bool Animation::drawCastShadow(SDL_Renderer *renderer, CompassDirection directio
   float um = 1.0f, vm = 1.0f; // (a texture made up to whole blocks: its art's part)
   ArtScaler::contentUV(texture, &um, &vm);
   const float u0 = flip == SDL_FLIP_HORIZONTAL ? um : 0.0f, u1 = um - u0;
-  SDL_Vertex v[4] = {{cast(left, top), tip, {u0, 0}}, {cast(right, top), tip, {u1, 0}},
+  ZT_Vertex v[4] = {{cast(left, top), tip, {u0, 0}}, {cast(right, top), tip, {u1, 0}},
                      {cast(right, bottom), black, {u1, vm}}, {cast(left, bottom), black, {u0, vm}}};
   const int idx[6] = {0, 1, 2, 0, 2, 3};
   RenderSettings::applyArtScaleMode(texture);
-  return SDL_RenderGeometry(renderer, texture, v, 4, idx, 6) == 0;
+  return ZT_RenderGeometry(renderer, texture, v, 4, idx, 6) == 0;
 }
 
 bool Animation::hitTestAnchored(float px,float py,float x,float y,CompassDirection direction,int frame) {
@@ -845,8 +845,8 @@ bool Animation::hitTestAnchored(float px,float py,float x,float y,CompassDirecti
   const int sy=static_cast<int>(std::floor(py-y+anchor->second.y));
   if(sx<0 || sy<0 || sx>=source->w || sy>=source->h)return false;
   if(mirrored)sx=source->w-1-sx;
-  Uint32 pixel=0;std::memcpy(&pixel,static_cast<Uint8*>(source->pixels)+sy*source->pitch+sx*source->format->BytesPerPixel,source->format->BytesPerPixel);
-  Uint8 r,g,b,a;SDL_GetRGBA(pixel,source->format,&r,&g,&b,&a);
+  Uint32 pixel=0;std::memcpy(&pixel,static_cast<Uint8*>(source->pixels)+sy*source->pitch+sx*SDL_BYTESPERPIXEL(source->format),SDL_BYTESPERPIXEL(source->format));
+  Uint8 r,g,b,a;ZT_GetRGBA(pixel,source->format,&r,&g,&b,&a);
   if(Features::dayNightLighting && world_art && !blackIsBody && paletteShadows) {
     auto masks=shadowRuns.find(key);if(masks!=shadowRuns.end() && size_t(index)<masks->second.size()) {
       const uint32_t at=uint32_t(sy*source->w+sx);
@@ -861,7 +861,7 @@ bool Animation::anchoredBounds(float x, float y, CompassDirection direction, flo
   const AnchorMemo *anchor = this->anchorFor(direction);
   if (!anchor)
     return false;
-  SDL_RendererFlip flip = this->renderer_flip;
+  SDL_FlipMode flip = this->renderer_flip;
   SDL_Point a = anchor->anchor;
   int w = 0, h = 0;
   this->queryTexture(direction, &w, &h);
@@ -907,7 +907,7 @@ void Animation::makeLazyFrame(SDL_Renderer *renderer, std::vector<SDL_Texture *>
         if (start + count <= shadowMask.size())
           std::fill_n(shadowMask.begin() + start, count, Uint8(1));
       }
-    clean = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+    clean = ZT_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
     if (clean)
       removePaletteShadow(clean, surface, shadowMask);
   }
@@ -916,7 +916,7 @@ void Animation::makeLazyFrame(SDL_Renderer *renderer, std::vector<SDL_Texture *>
     SDL_Log("Warning: Failed to create texture: %s", SDL_GetError());
   frames[index] = t;
   if (clean)
-    SDL_FreeSurface(clean);
+    SDL_DestroySurface(clean);
 }
 
 std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
@@ -1051,7 +1051,7 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
     SDL_Surface *again = ArtScaler::loadHdSurface(path);
     if (again && builtLevel == 2) {
       SDL_Surface *half = HdArt::halve(again);
-      SDL_FreeSurface(again);
+      SDL_DestroySurface(again);
       again = half;
     }
     return again;
@@ -1082,7 +1082,7 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
       }
     }
     if(relight) {
-      clean=SDL_ConvertSurfaceFormat(surface,SDL_PIXELFORMAT_RGBA32,0);
+      clean=ZT_ConvertSurfaceFormat(surface,SDL_PIXELFORMAT_RGBA32,0);
       if(clean) {
         removePaletteShadow(clean,original,shadowMask);
         surface=clean;
@@ -1101,7 +1101,7 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
           hd = HdArt::recolour(hd, surface, this->recoloured, direction_string, frame);
         int k = surface->w > 0 ? hd->w / surface->w : 0;
         if (k >= 2 && hd->w == surface->w * k && hd->h == surface->h * k)
-          big = SDL_ConvertSurfaceFormat(hd, SDL_PIXELFORMAT_RGBA32, 0);
+          big = ZT_ConvertSurfaceFormat(hd, SDL_PIXELFORMAT_RGBA32, 0);
         HdArt::freeFrame(hd);
       }
       if (!big)
@@ -1114,7 +1114,7 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
                          : this->hd_dir.rfind("objects/", 0) == 0 ? 2
                                                                   : 0;
         t = Shaders::applyArt(renderer, big, kind, surface->w, surface->h);
-        SDL_FreeSurface(big);
+        SDL_DestroySurface(big);
       }
     }
     if (!t && magnified && !this->hd_dir.empty()) {
@@ -1147,7 +1147,7 @@ std::vector<SDL_Texture *> *Animation::frameTextures(SDL_Renderer *renderer,
       g_hiHolders.insert(this);
     }
     frames.push_back(t);
-    if(clean)SDL_FreeSurface(clean);
+    if(clean)SDL_DestroySurface(clean);
   }
   if (hi) {
     g_hiSpentMs += (SDL_GetPerformanceCounter() - madeFrom) * 1000.0 / SDL_GetPerformanceFrequency();
@@ -1427,9 +1427,9 @@ void Animation::loadSurfaces(std::string direction_string,
     };
     for (int i = 0; i < count; i++) {
       std::vector<Uint8> mask(size_t(W)*H);
-      SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, W, H, 0, SDL_PIXELFORMAT_RGBA32);
+      SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, W, H, 0, SDL_PIXELFORMAT_RGBA32);
       if (s) {
-        SDL_FillRect(s, NULL, 0x00000000);
+        SDL_FillSurfaceRect(s, NULL, 0x00000000);
         paint(s, data->frames[count],mask);
         paint(s, data->frames[i],mask);
       }
@@ -1463,14 +1463,14 @@ void Animation::loadSurfaces(std::string direction_string,
   int loop_limit = (int)data->frame_count + (int)data->has_background;
 
   for (int i = 0; i < loop_limit; i++) {
-    SDL_Surface *new_surface = SDL_CreateRGBSurfaceWithFormat(
+    SDL_Surface *new_surface = ZT_CreateRGBSurfaceWithFormat(
         0, data->width, data->height, 0, SDL_PIXELFORMAT_RGBA32);
     if (!new_surface) {
       this->surfaces[direction_string].push_back(nullptr);shadowRuns[direction_string].push_back({});
       continue;
     }
     std::vector<Uint8> mask(size_t(data->width)*data->height);
-    SDL_FillRect(new_surface, NULL, 0x00000000);
+    SDL_FillSurfaceRect(new_surface, NULL, 0x00000000);
     this->surfaces[direction_string].push_back(new_surface);
 
     // Each frame placed by its own anchor (the header's offset_x is its y

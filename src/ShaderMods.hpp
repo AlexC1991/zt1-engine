@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 // Shader mods (an addition): mods can bring their own shaders, as a game
 // engine's materials and post effects. In a mod's folder:

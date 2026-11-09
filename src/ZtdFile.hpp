@@ -6,8 +6,8 @@
 #include <set>
 #include <string>
 
-#include <SDL.h>
-#include "SDL_mixer.h"
+#include <SDL3/SDL.h>
+#include "Audio.hpp"
 
 #include "IniReader.hpp"
 
@@ -27,7 +27,7 @@ public:
   // is simply nothing, never the game stopping as getFileContent does
   static bool hasFile(const std::string &ztd_file, const std::string &file_name);
   static void *tryFileContent(const std::string &ztd_file, const std::string &file_name, int *size);
-    static Mix_Music * getMusic(const std::string &ztd_file, const std::string &file_name);
+    static Audio::Clip * getMusic(const std::string &ztd_file, const std::string &file_name);
     static IniReader * getIniReader(const std::string &ztd_file, const std::string &file_name);
 private:
     static SDL_Surface * getImageSurfaceBmp(const std::string &ztd_file, const std::string &file_name);

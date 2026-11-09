@@ -54,7 +54,7 @@ Model fencePlane(Animation &art,int frame,float height,bool glass,bool mullion,f
     const int ix=int(std::floor(source.mirrored?source.anchor.x-sx:source.anchor.x+sx));
     const int iy=int(std::floor(source.anchor.y+sy));auto *s=source.surface;
     if(ix<0 || iy<0 || ix>=s->w || iy>=s->h)continue;
-    Uint8 r,g,b,a;SDL_GetRGBA(reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(s->pixels)+iy*s->pitch)[ix],s->format,&r,&g,&b,&a);
+    Uint8 r,g,b,a;ZT_GetRGBA(reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(s->pixels)+iy*s->pitch)[ix],s->format,&r,&g,&b,&a);
     bool shadow=false;if(source.shadowRuns) {
       const size_t pixel=size_t(iy)*s->w+ix;
       for(auto run:*source.shadowRuns)if(pixel>=size_t(run>>32) && pixel<size_t(run>>32)+uint32_t(run)){shadow=true;break;}

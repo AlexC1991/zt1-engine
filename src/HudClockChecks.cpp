@@ -5,7 +5,7 @@
 #include "RenderSettings.hpp"
 #include "ui/UiGameScreen.hpp"
 #include "ui/UiText.hpp"
-#include <SDL_image.h>
+#include <SDL3_image/SDL_image.h>
 #include <fstream>
 #include <functional>
 #include <tuple>
@@ -26,7 +26,7 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
   const bool wasLighting=Features::dayNightLighting,wasTime=Features::showGameTime,wasWide=widescreen,wasPaused=world.isPaused();
   const float wasScale=RenderSettings::uiScaleSetting;
   auto &lighting=world.getLighting();const double wasPreview=lighting.previewHour;
-  SDL_Window *window=SDL_RenderGetWindow(renderer);int wasWidth,wasHeight;SDL_GetWindowSize(window,&wasWidth,&wasHeight);
+  SDL_Window *window=SDL_GetRenderWindow(renderer);int wasWidth,wasHeight;SDL_GetWindowSize(window,&wasWidth,&wasHeight);
   SDL_SetWindowSize(window,800,600);widescreen=false;RenderSettings::uiScaleSetting=1;
   Features::dayNightLighting=false;Features::showGameTime=false;pause(true);capture("clock-original-off");
   const std::string calendar=label();const SDL_Rect originalDate=box(1030),originalPlay=box(1072),originalMoney=box(1016);
@@ -60,8 +60,8 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
   {
     auto load = [&](const char *name) {
       SDL_Surface *source=IMG_Load((out+"/"+name).c_str());
-      SDL_Surface *image=source?SDL_ConvertSurfaceFormat(source,SDL_PIXELFORMAT_RGBA32,0):nullptr;
-      if(source)SDL_FreeSurface(source);
+      SDL_Surface *image=source?ZT_ConvertSurfaceFormat(source,SDL_PIXELFORMAT_RGBA32,0):nullptr;
+      if(source)SDL_DestroySurface(source);
       return image;
     };
     SDL_Surface *original=load("clock-original-off.png"),*extended=load("clock-00-00.png");
@@ -88,7 +88,7 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
     }
     check(straight,"extended upper lip remains straight with no stretched corner");
     check(corner,"extended right upper corner retains the native border pixels");
-    if(original)SDL_FreeSurface(original);if(extended)SDL_FreeSurface(extended);
+    if(original)SDL_DestroySurface(original);if(extended)SDL_DestroySurface(extended);
   }
   auto *cash=dynamic_cast<UiText*>(hud.getElementById(1016));
   if(cash) {
@@ -134,15 +134,15 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
   check(label()==calendar && restoredDate.x==originalDate.x && restoredDate.y==originalDate.y &&
         restoredDate.w==originalDate.w && restoredDate.h==originalDate.h,"switching off restores original calendar and geometry");
   check(money.x==originalMoney.x && money.w==originalMoney.w,"money remains in its original position");
-  SDL_Rect originalStrip{};SDL_UnionRect(&originalPlay,&originalDate,&originalStrip);
+  SDL_Rect originalStrip{};SDL_GetRectUnion(&originalPlay,&originalDate,&originalStrip);
   auto pixels = [&](const std::string &file) {
     uint64_t hash=1469598103934665603ull;SDL_Surface *source=IMG_Load(file.c_str());
-    SDL_Surface *image=source?SDL_ConvertSurfaceFormat(source,SDL_PIXELFORMAT_RGBA32,0):nullptr;
-    if(source)SDL_FreeSurface(source);if(!image)return uint64_t(0);
+    SDL_Surface *image=source?ZT_ConvertSurfaceFormat(source,SDL_PIXELFORMAT_RGBA32,0):nullptr;
+    if(source)SDL_DestroySurface(source);if(!image)return uint64_t(0);
     for(int y=originalStrip.y;y<originalStrip.y+originalStrip.h && y<image->h;++y)
       for(int x=originalStrip.x;x<originalStrip.x+originalStrip.w && x<image->w;++x)
         for(int c=0;c<4;++c){hash^=static_cast<unsigned char*>(image->pixels)[y*image->pitch+x*4+c];hash*=1099511628211ull;}
-    SDL_FreeSurface(image);return hash;
+    SDL_DestroySurface(image);return hash;
   };
   check(pixels(out+"/clock-original-off.png")!=0 && pixels(out+"/clock-original-off.png")==pixels(out+"/clock-restored-off.png"),
         "feature off restores exact original pause/date pixels");
@@ -158,10 +158,10 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
   for(const auto &[source,dest] : {std::pair{"clock-original-off.png","original-strip.png"},
                                  std::pair{"clock-18-30.png","clock-strip.png"}}) {
     SDL_Surface *image=IMG_Load((out+"/"+source).c_str());
-    SDL_Surface *strip=SDL_CreateRGBSurfaceWithFormat(0,320,40,32,SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *strip=ZT_CreateRGBSurfaceWithFormat(0,320,40,32,SDL_PIXELFORMAT_RGBA32);
     SDL_Rect region{165,560,320,40};
-    bool saved=image && strip && SDL_BlitSurface(image,&region,strip,nullptr)==0 && IMG_SavePNG(strip,(out+"/"+dest).c_str())==0;
-    if(image)SDL_FreeSurface(image);if(strip)SDL_FreeSurface(strip);
+    bool saved=image && strip && SDL_BlitSurface(image,&region,strip,nullptr) && IMG_SavePNG(strip,(out+"/"+dest).c_str());
+    if(image)SDL_DestroySurface(image);if(strip)SDL_DestroySurface(strip);
     check(saved,std::string("native status strip capture ")+dest);
   }
   SDL_SetWindowSize(window,wasWidth,wasHeight);RenderSettings::uiScaleSetting=wasScale;widescreen=wasWide;

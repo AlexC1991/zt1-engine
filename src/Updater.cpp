@@ -16,7 +16,7 @@
 #include <thread>
 #include <vector>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include "Features.hpp"
 #include "Paths.hpp"

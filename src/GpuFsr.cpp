@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstring>
 
-#include <SDL2/SDL_opengl.h>
+#include <SDL3/SDL_opengl.h>
 
 #include "GpuFsrD3D11.hpp"
 
@@ -398,20 +398,20 @@ bool init(SDL_Renderer *renderer, float sharpness) {
   g_available = false;
   g_backend = Backend::None;
   g_con = std::exp2(-std::max(0.0f, sharpness));
-  SDL_RendererInfo info;
-  if (renderer && SDL_GetRendererInfo(renderer, &info) == 0 && std::strcmp(info.name, "direct3d11") == 0) {
-    g_available = (info.flags & SDL_RENDERER_TARGETTEXTURE) && D3D11::init(renderer);
+  ZT_RendererInfo info;
+  if (renderer && ZT_GetRendererInfo(renderer, &info) == 0 && std::strcmp(info.name, "direct3d11") == 0) {
+    g_available = (info.flags & ZT_RENDERER_TARGETTEXTURE) && D3D11::init(renderer);
     g_backend = g_available ? Backend::D3d : Backend::None;
     SDL_Log("[GpuFsr] GPU FSR 1 on Direct3D 11 %s (sharpness %.2f)", g_available ? "ready" : "unavailable", sharpness);
     return g_available;
   }
-  if (!renderer || SDL_GetRendererInfo(renderer, &info) != 0 ||
+  if (!renderer || ZT_GetRendererInfo(renderer, &info) != 0 ||
       std::strcmp(info.name, "opengl") != 0) {
     SDL_Log("[GpuFsr] needs the OpenGL renderer (have %s)",
             renderer ? info.name : "none");
     return false;
   }
-  if (!(info.flags & SDL_RENDERER_TARGETTEXTURE) || !loadGl())
+  if (!(info.flags & ZT_RENDERER_TARGETTEXTURE) || !loadGl())
     return false;
 
   // Make the renderer's context current (binding any texture does that)
@@ -420,7 +420,7 @@ bool init(SDL_Renderer *renderer, float sharpness) {
   if (!probe)
     return false;
   float tw = 0, th = 0;
-  SDL_GL_BindTexture(probe, &tw, &th);
+  ZT_GL_BindTexture(probe, &tw, &th);
   bool normalized = std::fabs(tw - 1.0f) < 0.001f; // GL_TEXTURE_2D
   SDL_DestroyTexture(probe);
   if (!normalized) {
@@ -491,12 +491,12 @@ void finishFrame(SDL_Renderer *renderer) {
   SDL_Texture *was = SDL_GetRenderTarget(renderer);
   SDL_SetRenderTarget(renderer, nullptr);
   int w = 0, h = 0;
-  SDL_GetRendererOutputSize(renderer, &w, &h);
+  SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
   if (w <= 0 || h <= 0 || !target(renderer, g_frame, g_frameW, g_frameH, w, h)) {
     SDL_SetRenderTarget(renderer, was);
     return;
   }
-  SDL_RenderFlush(renderer);
+  SDL_FlushRenderer(renderer);
   GLint program = 0;
   gl.GetIntegerv(GL_CURRENT_PROGRAM, &program);
   GLboolean blendOn = gl.IsEnabled(GL_BLEND);
@@ -504,7 +504,7 @@ void finishFrame(SDL_Renderer *renderer) {
   gl.Disable(GL_SCISSOR_TEST);
   gl.Disable(GL_BLEND);
   // The window's frame, as drawn, into the copy
-  SDL_GL_BindTexture(g_frame, nullptr, nullptr);
+  ZT_GL_BindTexture(g_frame, nullptr, nullptr);
   gl.CopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
   // and back over the whole window through the colour pass
   gl.Viewport(0, 0, w, h);
@@ -569,19 +569,19 @@ struct Kept {
   bool clipped;
   void keep(SDL_Renderer *r) {
     target = SDL_GetRenderTarget(r);
-    SDL_RenderGetScale(r, &sx, &sy);
-    SDL_RenderSetScale(r, 1.0f, 1.0f);
-    SDL_RenderGetViewport(r, &view);
-    clipped = SDL_RenderIsClipEnabled(r);
-    SDL_RenderGetClipRect(r, &clip);
-    SDL_RenderSetScale(r, sx, sy);
+    SDL_GetRenderScale(r, &sx, &sy);
+    SDL_SetRenderScale(r, 1.0f, 1.0f);
+    SDL_GetRenderViewport(r, &view);
+    clipped = SDL_RenderClipEnabled(r);
+    SDL_GetRenderClipRect(r, &clip);
+    SDL_SetRenderScale(r, sx, sy);
   }
   void restore(SDL_Renderer *r) {
     SDL_SetRenderTarget(r, target);
-    SDL_RenderSetScale(r, 1.0f, 1.0f);
-    SDL_RenderSetViewport(r, &view);
-    SDL_RenderSetClipRect(r, clipped ? &clip : nullptr);
-    SDL_RenderSetScale(r, sx, sy);
+    SDL_SetRenderScale(r, 1.0f, 1.0f);
+    SDL_SetRenderViewport(r, &view);
+    SDL_SetRenderClipRect(r, clipped ? &clip : nullptr);
+    SDL_SetRenderScale(r, sx, sy);
   }
 };
 void setUniforms(GLuint prog, float w, float h, const std::vector<std::pair<std::string, float>> &u) {
@@ -606,7 +606,7 @@ bool artPass(SDL_Renderer *renderer, unsigned prog, SDL_Texture *color, SDL_Text
   Kept k;
   k.keep(renderer);
   SDL_SetRenderTarget(renderer, out);
-  SDL_RenderFlush(renderer);
+  SDL_FlushRenderer(renderer);
   GLint program = 0;
   gl.GetIntegerv(GL_CURRENT_PROGRAM, &program);
   GLboolean blendOn = gl.IsEnabled(GL_BLEND), scissorOn = gl.IsEnabled(GL_SCISSOR_TEST);
@@ -615,12 +615,12 @@ bool artPass(SDL_Renderer *renderer, unsigned prog, SDL_Texture *color, SDL_Text
   gl.Viewport(0, 0, w, h);
   // (the frame's colour on unit 0, its normals and height on unit 1; both
   // read texel for texel)
-  SDL_SetTextureScaleMode(color, SDL_ScaleModeNearest);
-  SDL_SetTextureScaleMode(aux, SDL_ScaleModeNearest);
+  SDL_SetTextureScaleMode(color, SDL_SCALEMODE_NEAREST);
+  SDL_SetTextureScaleMode(aux, SDL_SCALEMODE_NEAREST);
   gl.ActiveTexture(GL_TEXTURE1);
-  SDL_GL_BindTexture(aux, nullptr, nullptr);
+  ZT_GL_BindTexture(aux, nullptr, nullptr);
   gl.ActiveTexture(GL_TEXTURE0);
-  SDL_GL_BindTexture(color, nullptr, nullptr);
+  ZT_GL_BindTexture(color, nullptr, nullptr);
   gl.UseProgram(prog);
   gl.Uniform1i(gl.GetUniformLocation(prog, "uColor"), 0);
   gl.Uniform1i(gl.GetUniformLocation(prog, "uNormal"), 1);
@@ -628,7 +628,7 @@ bool artPass(SDL_Renderer *renderer, unsigned prog, SDL_Texture *color, SDL_Text
   fullQuad();
   gl.UseProgram(static_cast<GLuint>(program));
   gl.ActiveTexture(GL_TEXTURE1);
-  SDL_GL_UnbindTexture(aux);
+  ZT_GL_UnbindTexture(aux);
   gl.ActiveTexture(GL_TEXTURE0);
   if (blendOn)
     gl.Enable(GL_BLEND);
@@ -650,12 +650,12 @@ bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pa
   SDL_Texture *was = SDL_GetRenderTarget(renderer);
   SDL_SetRenderTarget(renderer, nullptr);
   int w = 0, h = 0;
-  SDL_GetRendererOutputSize(renderer, &w, &h);
+  SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
   if (w <= 0 || h <= 0 || !target(renderer, g_screen, g_screenW, g_screenH, w, h)) {
     SDL_SetRenderTarget(renderer, was);
     return false;
   }
-  SDL_RenderFlush(renderer);
+  SDL_FlushRenderer(renderer);
   GLint program = 0;
   gl.GetIntegerv(GL_CURRENT_PROGRAM, &program);
   GLboolean blendOn = gl.IsEnabled(GL_BLEND), scissorOn = gl.IsEnabled(GL_SCISSOR_TEST);
@@ -663,7 +663,7 @@ bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pa
   gl.Disable(GL_BLEND);
   // (the window's frame copied - its rows bottom-up, as the copy's: a
   // pixel reads its own place at gl_FragCoord / uSize)
-  SDL_GL_BindTexture(g_screen, nullptr, nullptr);
+  ZT_GL_BindTexture(g_screen, nullptr, nullptr);
   gl.CopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
   const bool blend = smooth && gl.TexParameteri;
   if (blend) {
@@ -701,7 +701,7 @@ static SDL_Texture *target(SDL_Renderer *renderer, SDL_Texture *&tex, int &tw,
   th = h;
   if (tex) {
     // FSR reads exact pixels
-    SDL_SetTextureScaleMode(tex, SDL_ScaleModeNearest);
+    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
     SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_NONE);
   }
   return tex;
@@ -749,7 +749,7 @@ void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
   SDL_Texture *low = lt.low;
   SDL_SetRenderTarget(renderer, nullptr);
   int outW = 0, outH = 0;
-  SDL_GetRendererOutputSize(renderer, &outW, &outH);
+  SDL_GetCurrentRenderOutputSize(renderer, &outW, &outH);
   if (outW <= 0 || outH <= 0 ||
       !target(renderer, lt.mid, lt.midW, lt.midH, outW, outH))
     return;
@@ -758,7 +758,7 @@ void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
 
   // Pass 1: EASU, the layer -> a window-sized buffer
   SDL_SetRenderTarget(renderer, lt.mid);
-  SDL_RenderFlush(renderer);
+  SDL_FlushRenderer(renderer);
 
   GLint program = 0, srcRgb = 0, dstRgb = 0, srcA = 0, dstA = 0;
   gl.GetIntegerv(GL_CURRENT_PROGRAM, &program);
@@ -773,7 +773,7 @@ void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
 
   // SDL's render targets are top-down; only dst is drawn
   gl.Viewport(dst.x, dst.y, dst.w, dst.h);
-  SDL_GL_BindTexture(low, nullptr, nullptr);
+  ZT_GL_BindTexture(low, nullptr, nullptr);
   gl.UseProgram(g_easu);
   gl.Uniform1i(gl.GetUniformLocation(g_easu, "src"), 0);
   gl.Uniform2f(gl.GetUniformLocation(g_easu, "texSize"), float(lt.lowW),
@@ -796,7 +796,7 @@ void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
     gl.BlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE,
                          GL_ONE_MINUS_SRC_ALPHA);
   }
-  SDL_GL_BindTexture(lt.mid, nullptr, nullptr);
+  ZT_GL_BindTexture(lt.mid, nullptr, nullptr);
   // (Stylized: its pass in RCAS's place, its strength from the same slider)
   const GLuint pass = g_styled && g_style ? g_style : g_rcas;
   gl.UseProgram(pass);

@@ -171,7 +171,7 @@ void setModValue(const std::string &mod, const std::string &setting, float value
 }
 
 SDL_Surface *normals(SDL_Surface *frame) {
-  if (!frame || frame->format->format != SDL_PIXELFORMAT_RGBA32)
+  if (!frame || frame->format != SDL_PIXELFORMAT_RGBA32)
     return nullptr;
   const int w = frame->w, h = frame->h;
   auto px = [&](int x, int y) {
@@ -223,7 +223,7 @@ SDL_Surface *normals(SDL_Surface *frame) {
       float lum = (p[0] * 0.299f + p[1] * 0.587f + p[2] * 0.114f) / 255.0f;
       hgt[i] = std::sqrt(1.0f - (1.0f - t) * (1.0f - t)) * R * 0.75f + lum * R * 0.12f;
     }
-  SDL_Surface *out = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *out = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32);
   if (!out)
     return nullptr;
   auto hAt = [&](int x, int y) { return hgt[static_cast<size_t>(std::clamp(y, 0, h - 1)) * w + std::clamp(x, 0, w - 1)]; };
@@ -253,7 +253,7 @@ SDL_Texture *applyArt(SDL_Renderer *renderer, SDL_Surface *frame, int kind, int 
     return nullptr;
   SDL_Texture *color = SDL_CreateTextureFromSurface(renderer, frame);
   SDL_Texture *aux = SDL_CreateTextureFromSurface(renderer, n);
-  SDL_FreeSurface(n);
+  SDL_DestroySurface(n);
   SDL_Texture *result = nullptr;
   for (Shader &s : g_shaders) {
     if (!s.on || s.stage != "art" || !ready(s) || !color || !aux)

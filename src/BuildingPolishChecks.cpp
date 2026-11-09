@@ -68,7 +68,7 @@ std::string runBuildingPolishChecks(World &world, ResourceManager *rm, bool demo
       Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
       for(const char *extension:{".zt1save",".zoo"}) {
         const auto file=std::filesystem::temp_directory_path()/
-          ("zt1-drt-save-"+std::to_string(SDL_GetTicks64())+extension);
+          ("zt1-drt-save-"+std::to_string(SDL_GetTicks())+extension);
         const bool saved=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn");
         const bool loaded=saved&&SaveGame::load(file.string(),world,books,hud);
         check(stage+" full-file "+extension+" restores actors and safely parks DRT",loaded&&

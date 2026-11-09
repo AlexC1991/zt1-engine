@@ -53,9 +53,9 @@ int runLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,co
     const bool was=Features::dayNightLighting;bool good=target!=nullptr;
     std::vector<Uint32> original,relit,restored;
     if(target) {
-      SDL_SetRenderTarget(renderer,target);SDL_RenderSetViewport(renderer,nullptr);SDL_RenderSetScale(renderer,1,1);
+      SDL_SetRenderTarget(renderer,target);SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderScale(renderer,1,1);
       auto sample=[&](bool enabled,bool inWorld=true){Features::dayNightLighting=enabled;RenderSettings::relightWorld=enabled&&inWorld;SDL_SetRenderDrawColor(renderer,255,255,255,255);SDL_RenderClear(renderer);
-        art.drawAnchored(renderer,0,0,CompassDirection::N,nullptr,0);std::vector<Uint32> p(64);SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,p.data(),32);return p;};
+        art.drawAnchored(renderer,0,0,CompassDirection::N,nullptr,0);std::vector<Uint32> p(64);ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,p.data(),32);return p;};
       original=sample(false);relit=sample(true);restored=sample(false);
       good=original[0]==0xFF000000 && relit[0]==0xFFFFFFFF && relit[1]==0xFF010101 && relit[3]==0xFF000000 && restored==original;
       check("interface art keeps its original shadow pixels",sample(true,false)==original);
@@ -63,10 +63,10 @@ int runLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,co
     }
     if(target) {
       art.setWorldArt("animals/lighting-pigment-check");art.setBlackIsBody(true);
-      SDL_SetRenderTarget(renderer,target);SDL_RenderSetViewport(renderer,nullptr);SDL_RenderSetScale(renderer,1,1);
+      SDL_SetRenderTarget(renderer,target);SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderScale(renderer,1,1);
       Features::dayNightLighting=true;RenderSettings::relightWorld=true;
       SDL_SetRenderDrawColor(renderer,255,255,255,255);SDL_RenderClear(renderer);art.drawAnchored(renderer,0,0,CompassDirection::N,nullptr,0);
-      std::vector<Uint32> pigment(64);SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pigment.data(),32);
+      std::vector<Uint32> pigment(64);ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pigment.data(),32);
       check("real black animal pigment remains opaque with lighting enabled",pigment[0]==0xFF000000 && art.hitTestAnchored(.5f,.5f,0,0,CompassDirection::N,0));
     }
     SDL_SetRenderTarget(renderer,old);SDL_DestroyTexture(target);Features::dayNightLighting=was;
@@ -171,13 +171,13 @@ int runLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,co
         auto native=probeArt->lightingFrame(CompassDirection::NE,0);Uint32 *pixel=nullptr;
         if(native.surface)for(int y=0;y<native.surface->h && !pixel;++y)for(int x=0;x<native.surface->w;++x) {
           auto *at=reinterpret_cast<Uint32*>(static_cast<Uint8*>(native.surface->pixels)+y*native.surface->pitch)+x;Uint8 red,green,blue,alpha;
-          SDL_GetRGBA(*at,native.surface->format,&red,&green,&blue,&alpha);if(alpha<64)continue;
+          ZT_GetRGBA(*at,native.surface->format,&red,&green,&blue,&alpha);if(alpha<64)continue;
           bool shadow=false;const uint32_t index=y*native.surface->w+x;
           if(native.shadowRuns)for(uint64_t run:*native.shadowRuns){const uint32_t first=uint32_t(run>>32);if(index>=first && index-first<uint32_t(run)){shadow=true;break;}}
           if(!shadow){pixel=at;break;}
         }
         if(pixel) {
-          const Uint32 original=*pixel;*pixel=SDL_MapRGBA(native.surface->format,0,0,0,0);
+          const Uint32 original=*pixel;*pixel=ZT_MapRGBA(native.surface->format,0,0,0,0);
           LightingAssets::build(*probeArt,*asset,.25f,.25f,0,false);const auto changed=LightingAssets::modelCacheStats();*pixel=original;
           check("changed source pixels select a different geometry-cache entry",changed.lastKey!=after.lastKey);
         } else check("native cache probe has a non-shadow body pixel",false);
@@ -203,12 +203,12 @@ int runLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,co
   auto &lighting=world.getLighting();
   const bool enabledWas=Features::dayNightLighting;
   Features::dayNightLighting=false;capture("lighting_off");
-  int rw,rh;SDL_GetRendererOutputSize(renderer,&rw,&rh);
+  int rw,rh;SDL_GetCurrentRenderOutputSize(renderer,&rw,&rh);
   auto pixels=[&]() {
     // capture() presents, so draw once again and read the current backbuffer.
     world.draw(renderer);
     std::vector<Uint32> p(rw*rh);
-    SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,p.data(),rw*4);
+    ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,p.data(),rw*4);
     return p;
   };
   const auto off=pixels();
@@ -250,7 +250,7 @@ int runLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,co
   check("switching off restores the original world pixels",off==after);
   // Flush and present each sample: includes real draw calls, driver submission
   // and camera pans. No FPS cap or screenshot readback in the measured section.
-  SDL_RendererInfo info{};SDL_GetRendererInfo(renderer,&info);SDL_RenderSetVSync(renderer,0);
+  ZT_RendererInfo info{};ZT_GetRendererInfo(renderer,&info);SDL_SetRenderVSync(renderer,0);
   report<<"Renderer: "<<(info.name?info.name:"unknown")<<", "<<rw<<"x"<<rh<<". Timings include moving sky, camera pans, world draw and present; HUD/simulation excluded.\n";
   for(int pass=0;pass<2;++pass)for(int mode=0;mode<3;++mode) {
     Features::dayNightLighting=mode!=0;lighting.previewHour=mode==1?12:0;
@@ -270,7 +270,7 @@ int runLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,co
     std::sort(costs.begin(),costs.end());
     report<<"Pan pass "<<pass<<" "<<(mode==0?"off":mode==1?"noon":"night")<<": mean "<<std::accumulate(costs.begin(),costs.end(),0.0)/costs.size()<<" ms, median "<<costs[costs.size()/2]<<" ms, p95 "<<costs[costs.size()*95/100]<<" ms.\n";
   }
-  SDL_RenderSetVSync(renderer,(info.flags&SDL_RENDERER_PRESENTVSYNC)?1:0);
+  SDL_SetRenderVSync(renderer,(info.flags&ZT_RENDERER_PRESENTVSYNC)?1:0);
   Features::dayNightLighting=true;lighting.previewHour=-1;world.setPaused(false);
   const double beforeTime=world.getClock();world.update(SDL_GetKeyboardState(nullptr),.5f);
   check("running zoo advances the lighting clock",std::abs(world.getClock()-beforeTime-.5)<.0001 && L::hourAt(world.getClock())>L::hourAt(beforeTime));
@@ -377,8 +377,8 @@ int runLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,co
 #include <filesystem>
 // addition: full native lighting review, recorded from the real game renderer.
 static int runCatalogueLightingVideo(World &world,ResourceManager *rm,SDL_Renderer *renderer,const std::function<void()> &draw) {
-  constexpr int fps=24,duration=210;int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);
-  if(auto *window=SDL_RenderGetWindow(renderer))SDL_HideWindow(window);
+  constexpr int fps=24,duration=210;int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);
+  if(auto *window=SDL_GetRenderWindow(renderer))SDL_HideWindow(window);
 #ifdef _WIN32
   _setmode(_fileno(stdout),_O_BINARY);
 #endif
@@ -416,8 +416,8 @@ static int runCatalogueLightingVideo(World &world,ResourceManager *rm,SDL_Render
     auto &people=const_cast<std::vector<Guests::Guest>&>(world.getGuests().guests());for(auto &g:people)g.animTime+=1.0f/fps;
     draw();std::string text=scene==0?"Day and night - full cycle at 7.5x preview speed":scene<11?"Native windows, signs, lamps, fire and water - group "+std::to_string(scene)+" of 10":"Native electric shocks and camera flashes - cosmetic lighting";
     if(text!=captionKey){rm->setTextScale(1);caption=rm->getStringTexture(renderer,25001,text,{255,232,172,255},25002);captionKey=text;}
-    if(caption){int tw,th;SDL_QueryTexture(caption,nullptr,nullptr,&tw,&th);SDL_Rect bg{195,h-90,tw+24,th+18},t{207,h-81,tw,th};SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(renderer,20,35,28,235);SDL_RenderFillRect(renderer,&bg);SDL_RenderCopy(renderer,caption,nullptr,&t);}
-    if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4) || std::fwrite(pixels.data(),4,pixels.size(),stdout)!=pixels.size())return 1;
+    if(caption){int tw,th;ZT_QueryTexture(caption,nullptr,nullptr,&tw,&th);SDL_Rect bg{195,h-90,tw+24,th+18},t{207,h-81,tw,th};SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(renderer,20,35,28,235);ZT_RenderFillRect(renderer,&bg);ZT_RenderCopy(renderer,caption,nullptr,&t);}
+    if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4) || std::fwrite(pixels.data(),4,pixels.size(),stdout)!=pixels.size())return 1;
     if(f%fps==0)std::fflush(stdout);
   }
   std::fflush(stdout);Features::dayNightLighting=false;light.previewHour=-1;return 0;
@@ -428,9 +428,9 @@ int runLightingVideo(World &world,ResourceManager *rm,SDL_Renderer *renderer,
   if(std::string(std::getenv("ZT_LIGHTING_VIDEO"))=="catalogue"){options(false);return runCatalogueLightingVideo(world,rm,renderer,draw);}
   const bool overview=std::string(std::getenv("ZT_LIGHTING_VIDEO"))=="overview";
   constexpr int fps=24;const int duration=overview?150:720;
-  int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);
+  int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);
   if(w%2 || h%2)return 1;
-  if(auto *window=SDL_RenderGetWindow(renderer))SDL_HideWindow(window);
+  if(auto *window=SDL_GetRenderWindow(renderer))SDL_HideWindow(window);
 #ifdef _WIN32
   _setmode(_fileno(stdout),_O_BINARY);
 #endif
@@ -470,13 +470,13 @@ int runLightingVideo(World &world,ResourceManager *rm,SDL_Renderer *renderer,
       lastCaption=description;
     }
     if(caption) {
-      int tw,th;SDL_QueryTexture(caption,nullptr,nullptr,&tw,&th);
+      int tw,th;ZT_QueryTexture(caption,nullptr,nullptr,&tw,&th);
       SDL_Rect bg={195,h-90,tw+24,th+18},text={207,h-81,tw,th};
       SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
-      SDL_SetRenderDrawColor(renderer,20,35,28,235);SDL_RenderFillRect(renderer,&bg);
-      SDL_RenderCopy(renderer,caption,nullptr,&text);
+      SDL_SetRenderDrawColor(renderer,20,35,28,235);ZT_RenderFillRect(renderer,&bg);
+      ZT_RenderCopy(renderer,caption,nullptr,&text);
     }
-    if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4)!=0 ||
+    if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4)!=0 ||
        std::fwrite(pixels.data(),4,pixels.size(),stdout)!=pixels.size())return 1;
     if(frame%fps==0)std::fflush(stdout);
   }

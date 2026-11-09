@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 // ours: GpuFsr's passes on SDL's Direct3D 11 renderer - the same shaders as
 // the OpenGL ones in GpuFsr.cpp, in HLSL, so FSR, Stylized, the colour pass

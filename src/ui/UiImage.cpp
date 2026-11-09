@@ -6,7 +6,7 @@
 #include "../CompassDirection.hpp"
 #include "../Utils.hpp"
 
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 
 // =================================================================================
 //  USER CONFIGURATION: PREVIEW IMAGE ADJUSTMENTS
@@ -171,8 +171,8 @@ void UiImage::ensureLoaded(SDL_Renderer *renderer) {
     this->is_dynamic = false;
 
     if (!this->png_bytes.empty()) {
-      SDL_RWops *source = SDL_RWFromConstMem(this->png_bytes.data(), static_cast<int>(this->png_bytes.size()));
-      this->image = source ? IMG_LoadTexture_RW(renderer, source, 1) : nullptr;
+      SDL_IOStream *source = SDL_IOFromConstMem(this->png_bytes.data(), static_cast<int>(this->png_bytes.size()));
+      this->image = source ? IMG_LoadTexture_IO(renderer, source, 1) : nullptr;
     } else if (this->is_zt1_preview) {
       this->image = this->resource_manager->getZt1Texture(
           renderer, this->zt1_raw_path, this->zt1_pal_path);
@@ -180,7 +180,7 @@ void UiImage::ensureLoaded(SDL_Renderer *renderer) {
     } else if (this->is_file) {
       this->image = IMG_LoadTexture(renderer, this->image_path.c_str());
       if (!this->image)
-        SDL_Log("UiImage: couldn't read %s: %s", this->image_path.c_str(), IMG_GetError());
+        SDL_Log("UiImage: couldn't read %s: %s", this->image_path.c_str(), SDL_GetError());
     } else if (!this->image_path.empty()) {
       std::string ext =
           Utils::string_to_lower(Utils::getFileExtension(this->image_path));
@@ -248,15 +248,15 @@ void UiImage::drawTiled(SDL_Renderer *renderer, const SDL_Rect &area) {
       if (this->image) {
         SDL_Rect src = ArtScaler::toTexture(this->image, {0, 0, cw, ch});
         RenderSettings::applyArtScaleMode(this->image);
-        SDL_RenderCopy(renderer, this->image, &src, &r);
+        ZT_RenderCopy(renderer, this->image, &src, &r);
       } else if (cw == w && ch == h) {
         this->animation->draw(renderer, &r, CompassDirection::N);
       } else {
         SDL_Rect clip = r; // a partial animation tile (rare)
-        SDL_RenderSetClipRect(renderer, &clip);
+        SDL_SetRenderClipRect(renderer, &clip);
         SDL_Rect full = {x, y, w, h};
         this->animation->draw(renderer, &full, CompassDirection::N);
-        SDL_RenderSetClipRect(renderer, nullptr);
+        SDL_SetRenderClipRect(renderer, nullptr);
       }
     }
   }
@@ -360,8 +360,8 @@ void UiImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     }
 
     RenderSettings::applyArtScaleMode(this->image);
-    if (SDL_RenderCopy(renderer, this->image, nullptr, &dest_rect) != 0) {
-      SDL_Log("SDL_RenderCopy failed for UiImage(id=%d name=%s): %s", this->id,
+    if (ZT_RenderCopy(renderer, this->image, nullptr, &dest_rect) != 0) {
+      SDL_Log("SDL_RenderTexture failed for UiImage(id=%d name=%s): %s", this->id,
               this->name.c_str(), SDL_GetError());
     }
   } else if (this->animation != nullptr) {

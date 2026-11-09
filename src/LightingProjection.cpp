@@ -126,7 +126,7 @@ void DayNightLighting::prepareBeamShapes() {
   for(auto it=beamShapes.begin();it!=beamShapes.end();)if(it->second.stamp!=sceneHash)it=beamShapes.erase(it);else ++it;
 }
 void DayNightLighting::drawBeamHaze(SDL_Renderer *r,WorldRenderer &view,float scale) {
-  if(sky.lamps<=.001f)return;std::vector<SDL_Vertex> vertices;std::vector<int> indices;
+  if(sky.lamps<=.001f)return;std::vector<ZT_Vertex> vertices;std::vector<int> indices;
   for(size_t li:beamLights) {
     const auto &l=lights[li];auto found=beamShapes.find({l.owner,li});if(found==beamShapes.end())continue;
     const float centre=std::atan2(l.normal.y,l.normal.x)+float(fixtureClock*l.sweep),width=std::acos(std::clamp(l.cone,-1.0f,1.0f));
@@ -144,5 +144,5 @@ void DayNightLighting::drawBeamHaze(SDL_Renderer *r,WorldRenderer &view,float sc
       }
     }
   }
-  SDL_SetRenderDrawBlendMode(r,SDL_BLENDMODE_ADD);if(!vertices.empty())SDL_RenderGeometry(r,nullptr,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));
+  SDL_SetRenderDrawBlendMode(r,SDL_BLENDMODE_ADD);if(!vertices.empty())ZT_RenderGeometry(r,nullptr,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));
 }

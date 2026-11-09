@@ -13,7 +13,7 @@
 #endif
 #include <windows.h>
 
-#include <SDL2/SDL_system.h>
+#include <SDL3/SDL_system.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
 
@@ -314,10 +314,10 @@ ID3D11RenderTargetView *boundTarget(SDL_Renderer *renderer) {
   SDL_GetRenderDrawBlendMode(renderer, &mode);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
   SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-  SDL_RenderDrawPoint(renderer, 0, 0);
+  SDL_RenderPoint(renderer, 0, 0);
   SDL_SetRenderDrawColor(renderer, r, g, b, a);
   SDL_SetRenderDrawBlendMode(renderer, mode);
-  SDL_RenderFlush(renderer);
+  SDL_FlushRenderer(renderer);
   ID3D11RenderTargetView *rtv = nullptr;
   g_ctx->OMGetRenderTargets(1, &rtv, nullptr);
   return rtv;
@@ -482,7 +482,7 @@ ID3D11RenderTargetView *copyWindow(SDL_Renderer *renderer, UINT &w, UINT &h) {
 } // namespace
 
 bool init(SDL_Renderer *renderer) {
-  g_dev = SDL_RenderGetD3D11Device(renderer);
+  g_dev = ZT_RenderGetD3D11Device(renderer);
   if (!g_dev)
     return false;
   if (g_dev->GetFeatureLevel() < D3D_FEATURE_LEVEL_10_0) {

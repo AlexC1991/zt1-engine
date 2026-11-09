@@ -37,7 +37,7 @@ void DayNightLighting::addActor(Animation *art,int frame,Point position,float fx
     if(model.faces.empty() && (id&(uint64_t(1)<<53))) {
       auto source=art->lightingFrame(CompassDirection::SE,pose);const bool north=!source.surface;if(north)source=art->lightingFrame(CompassDirection::NE,pose);auto *surface=source.surface;
       if(surface)for(int y=0;y<surface->h;++y)for(int x=0;x<surface->w;++x) {
-        Uint8 r,g,b,a;SDL_GetRGBA(reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(surface->pixels)+y*surface->pitch)[x],surface->format,&r,&g,&b,&a);
+        Uint8 r,g,b,a;ZT_GetRGBA(reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(surface->pixels)+y*surface->pitch)[x],surface->format,&r,&g,&b,&a);
         if(a<128)continue;bool shadow=false;const size_t pixel=size_t(y)*surface->w+x;
         if(source.shadowRuns)for(auto run:*source.shadowRuns)if(pixel>=size_t(run>>32) && pixel<size_t(run>>32)+uint32_t(run)){shadow=true;break;}
         if(shadow)continue;
@@ -208,7 +208,7 @@ size_t DayNightLighting::bufferBytes()const {
   for(const auto &[k,m]:models)bytes+=m.solid.capacity()+m.faces.capacity()*sizeof(LightingAssets::Face);
   for(const auto &[k,m]:structureModels)bytes+=m.solid.capacity()+m.faces.capacity()*sizeof(LightingAssets::Face);
   for(const auto &[k,m]:actorModels)bytes+=m.model.solid.capacity()+m.model.faces.capacity()*sizeof(LightingAssets::Face);
-  bytes+=(surfaceVertices.capacity()+shadowVertices.capacity()+fieldVertices.capacity())*sizeof(SDL_Vertex);
+  bytes+=(surfaceVertices.capacity()+shadowVertices.capacity()+fieldVertices.capacity())*sizeof(ZT_Vertex);
   bytes+=(surfaceIndices.capacity()+shadowIndices.capacity()+fieldIndices.capacity())*sizeof(int);
   for(const auto &m:sunMaps)bytes+=m.bytes();
   for(const auto &[k,c]:groundIrradianceCache)bytes+=c.samples.capacity()*sizeof(Irradiance);

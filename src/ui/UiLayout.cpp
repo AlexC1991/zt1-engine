@@ -71,7 +71,7 @@ void UiLayout::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   SDL_Rect window_rect = {0, 0, 0, 0};
   if (layout_rect == nullptr) {
     if (!window) {
-      this->window = SDL_RenderGetWindow(renderer);
+      this->window = SDL_GetRenderWindow(renderer);
     }
     SDL_GetWindowSize(this->window, &window_rect.w, &window_rect.h);
     layout_rect = &window_rect;

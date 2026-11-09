@@ -1,6 +1,6 @@
 #include "MemoryManager.hpp"
 #include <cstdlib>
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
 AssetBuffer::~AssetBuffer() {
     free();

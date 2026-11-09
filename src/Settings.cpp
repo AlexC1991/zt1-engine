@@ -12,6 +12,7 @@
 #include "IniReader.hpp"
 #include "Paths.hpp"
 #include "Sound.hpp"
+#include "Audio.hpp"
 #include "World.hpp"
 
 namespace {
@@ -133,8 +134,8 @@ void apply() {
   // as hundredths of a decibel down, as the main volume - the top (-1000,
   // and below) full volume, the bottom 40 dB down
   int music = std::clamp(getInt("UI", "menuMusicAttenuation", -1000), 0, 10000);
-  Mix_VolumeMusic(std::clamp(static_cast<int>(std::lround(std::pow(10.0, -music / 2000.0) * MIX_MAX_VOLUME)), 0,
-                             MIX_MAX_VOLUME));
+  Audio::musicVolume(std::clamp(static_cast<int>(std::lround(std::pow(10.0, -music / 2000.0) * Audio::kMaxVolume)), 0,
+                             Audio::kMaxVolume));
   // Scrolling at the window's edge: [UI] mouseScrollX, 32 by default
   // (0x51a33c)
   World::kEdgeScrollPixels = static_cast<float>(std::clamp(getInt("UI", "mouseScrollX", 32), 8, 128));

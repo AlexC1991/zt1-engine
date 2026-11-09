@@ -18,10 +18,10 @@
 #include <thread>
 #include <vector>
 
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 #include "imgui.h"
-#include "backends/imgui_impl_sdl2.h"
-#include "backends/imgui_impl_sdlrenderer2.h"
+#include "backends/imgui_impl_sdl3.h"
+#include "backends/imgui_impl_sdlrenderer3.h"
 
 #include "Animals.hpp"
 #include "Animation.hpp"
@@ -54,7 +54,6 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <winsock2.h>
-#include <SDL2/SDL_syswm.h>
 #undef near
 
 extern float g_ZoomLevel;
@@ -66,9 +65,8 @@ namespace {
 // ---------------------------------------------------------------- the repo
 fs::path findRepo() {
   std::vector<fs::path> starts = {fs::current_path()};
-  if (char *base = SDL_GetBasePath()) {
+  if (const char *base = SDL_GetBasePath()) { // (SDL3's: SDL's own, not freed)
     starts.push_back(fs::path(base));
-    SDL_free(base);
   }
   for (fs::path p : starts)
     for (int i = 0; i < 8 && !p.empty(); i++, p = p.parent_path())
@@ -781,7 +779,7 @@ public:
   }
   int lastMessage() override { return lastMsg; }
   void runEngine(float seconds) override {
-    static Uint8 none[SDL_NUM_SCANCODES] = {};
+    static bool none[SDL_SCANCODE_COUNT] = {};
     world->setPaused(false);
     for (float t = 0; t < seconds - 1e-4f; t += 0.25f)
       world->update(none, std::min(0.25f, seconds - t));
@@ -1933,7 +1931,7 @@ void LabApp::drawHeightmap() {
     return;
   if (!heightTex) {
     heightTex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
-    SDL_SetTextureScaleMode(heightTex, SDL_ScaleModeNearest);
+    SDL_SetTextureScaleMode(heightTex, SDL_SCALEMODE_NEAREST);
   }
   int lo = 1 << 30, hi = -(1 << 30);
   for (int y = 0; y < h; y++)
@@ -1951,7 +1949,7 @@ void LabApp::drawHeightmap() {
       {150, 190, 230}, {80, 85, 50},    {190, 190, 185}, {70, 70, 75},    {150, 130, 80},  {150, 170, 180}};
   void *pixels;
   int pitch;
-  if (SDL_LockTexture(heightTex, nullptr, &pixels, &pitch) == 0) {
+  if (SDL_LockTexture(heightTex, nullptr, &pixels, &pitch)) {
     for (int y = 0; y < h; y++) {
       Uint32 *row = reinterpret_cast<Uint32 *>(static_cast<Uint8 *>(pixels) + y * pitch);
       for (int x = 0; x < w; x++) {
@@ -1975,7 +1973,7 @@ void LabApp::drawHeightmap() {
   float s = std::min(viewRect.w / static_cast<float>(w), viewRect.h / static_cast<float>(h));
   SDL_Rect dst{viewRect.x + static_cast<int>((viewRect.w - w * s) / 2), viewRect.y + static_cast<int>((viewRect.h - h * s) / 2),
                static_cast<int>(w * s), static_cast<int>(h * s)};
-  SDL_RenderCopy(ren, heightTex, nullptr, &dst);
+  ZT_RenderCopy(ren, heightTex, nullptr, &dst);
   // (its fences as lines along the tiles' sides: the zoo wall red, the
   // rest dark - the map's outline, for drawing one by hand)
   const Fences &fn = world->getFences();
@@ -1986,7 +1984,7 @@ void LabApp::drawHeightmap() {
     const int th = std::max(1, static_cast<int>(s / 3));
     SDL_Rect r = e.alongX ? SDL_Rect{static_cast<int>(x0), static_cast<int>(y0) - th / 2, std::max(1, static_cast<int>(s + 0.5f)), th}
                           : SDL_Rect{static_cast<int>(x0) - th / 2, static_cast<int>(y0), th, std::max(1, static_cast<int>(s + 0.5f))};
-    SDL_RenderFillRect(ren, &r);
+    ZT_RenderFillRect(ren, &r);
   }
   // (the map's objects as dots: plants green, buildings and the rest brown)
   for (const PlacedObjects::Object &o : world->getObjects().objects()) {
@@ -1996,14 +1994,14 @@ void LabApp::drawHeightmap() {
     SDL_SetRenderDrawColor(ren, plant ? 30 : 110, plant ? 70 : 70, plant ? 25 : 45, 255);
     const int d = std::max(2, static_cast<int>(s * (o.className == "building" ? 2.0f : 0.6f)));
     SDL_Rect r{dst.x + static_cast<int>(o.x * s) - d / 2, dst.y + static_cast<int>(o.y * s) - d / 2, d, d};
-    SDL_RenderFillRect(ren, &r);
+    ZT_RenderFillRect(ren, &r);
   }
   // (the lab animals as dots)
   SDL_SetRenderDrawColor(ren, 255, 80, 40, 255);
   for (int id : labAnimals)
     if (const Animals::Member *m = world->getAnimals().member(id)) {
       SDL_Rect d{dst.x + static_cast<int>(m->x * s) - 2, dst.y + static_cast<int>(m->y * s) - 2, 5, 5};
-      SDL_RenderFillRect(ren, &d);
+      ZT_RenderFillRect(ren, &d);
     }
 }
 
@@ -2014,7 +2012,7 @@ void LabApp::drawArt() {
   if (!artLayer) {
     artLayer = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, L, L);
     SDL_SetTextureBlendMode(artLayer, SDL_BLENDMODE_BLEND);
-    SDL_SetTextureScaleMode(artLayer, SDL_ScaleModeNearest);
+    SDL_SetTextureScaleMode(artLayer, SDL_SCALEMODE_NEAREST);
   }
   SDL_Texture *old = SDL_GetRenderTarget(ren);
   SDL_SetRenderTarget(ren, artLayer);
@@ -2031,14 +2029,14 @@ void LabApp::drawArt() {
   }
   // (the anchor: where the animal stands, the point every layer shares)
   SDL_SetRenderDrawColor(ren, 255, 80, 40, 200);
-  SDL_RenderDrawLine(ren, L / 2 - 4, L / 2, L / 2 + 4, L / 2);
-  SDL_RenderDrawLine(ren, L / 2, L / 2 - 4, L / 2, L / 2 + 4);
+  SDL_RenderLine(ren, L / 2 - 4, L / 2, L / 2 + 4, L / 2);
+  SDL_RenderLine(ren, L / 2, L / 2 - 4, L / 2, L / 2 + 4);
   SDL_SetRenderTarget(ren, old);
   int sz = static_cast<int>(L * artZoom);
   SDL_Rect dst{viewRect.x + (viewRect.w - sz) / 2, viewRect.y + (viewRect.h - sz) / 2, sz, sz};
   SDL_SetRenderDrawColor(ren, 60, 90, 60, 255);
-  SDL_RenderFillRect(ren, &viewRect);
-  SDL_RenderCopy(ren, artLayer, nullptr, &dst);
+  ZT_RenderFillRect(ren, &viewRect);
+  ZT_RenderCopy(ren, artLayer, nullptr, &dst);
 }
 
 void LabApp::drawView() {
@@ -2051,9 +2049,9 @@ void LabApp::drawView() {
     world->getGuests().selected = sel.kind == "guest" ? sel.id : -1;
     world->getStaff().selected = sel.kind == "staff" ? sel.id : -1;
     world->draw(ren);
-    SDL_RenderSetViewport(ren, nullptr);
-    SDL_RenderSetClipRect(ren, nullptr);
-    SDL_RenderSetScale(ren, 1.0f, 1.0f);
+    SDL_SetRenderViewport(ren, nullptr);
+    SDL_SetRenderClipRect(ren, nullptr);
+    SDL_SetRenderScale(ren, 1.0f, 1.0f);
     return;
   }
   SDL_SetRenderDrawColor(ren, 24, 24, 28, 255);
@@ -2656,15 +2654,15 @@ int LabApp::run(const std::string &mapStem) {
   SDL_SetWindowTitle(win, "ZT1 Lab");
   SDL_SetWindowSize(win, 1600, 950);
   SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-  SDL_RenderSetLogicalSize(ren, 0, 0);
-  SDL_RenderSetScale(ren, 1.0f, 1.0f);
+  ZT_RenderSetLogicalSize(ren, 0, 0);
+  SDL_SetRenderScale(ren, 1.0f, 1.0f);
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGui::GetIO().IniFilename = nullptr;
   ImGui::StyleColorsDark();
-  ImGui_ImplSDL2_InitForSDLRenderer(win, ren);
-  ImGui_ImplSDLRenderer2_Init(ren);
+  ImGui_ImplSDL3_InitForSDLRenderer(win, ren);
+  ImGui_ImplSDLRenderer3_Init(ren);
 
   // (last session's script builds: the numbered DLLs, not in use now)
   std::error_code ec;
@@ -2711,22 +2709,22 @@ int LabApp::run(const std::string &mapStem) {
   while (running) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-      ImGui_ImplSDL2_ProcessEvent(&e);
-      if (e.type == SDL_QUIT)
+      ImGui_ImplSDL3_ProcessEvent(&e);
+      if (e.type == SDL_EVENT_QUIT)
         running = false;
       bool overUi = ImGui::GetIO().WantCaptureMouse;
       if (viewMode == "scene" && !overUi) {
-        if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+        if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) {
           dragging = true;
           dragX = e.button.x;
           dragY = e.button.y;
-        } else if (e.type == SDL_MOUSEWHEEL) {
+        } else if (e.type == SDL_EVENT_MOUSE_WHEEL) {
           g_ZoomLevel = std::clamp(g_ZoomLevel * (e.wheel.y > 0 ? 1.25f : 0.8f), 0.25f, 4.0f);
         }
       }
-      if (e.type == SDL_MOUSEBUTTONUP)
+      if (e.type == SDL_EVENT_MOUSE_BUTTON_UP)
         dragging = false;
-      if (e.type == SDL_MOUSEMOTION && dragging) {
+      if (e.type == SDL_EVENT_MOUSE_MOTION && dragging) {
         world->getRenderer().getCamera().x -= static_cast<int>((e.motion.x - dragX) / std::max(0.1f, g_ZoomLevel));
         world->getRenderer().getCamera().y -= static_cast<int>((e.motion.y - dragY) / std::max(0.1f, g_ZoomLevel));
         dragX = e.motion.x;
@@ -2741,7 +2739,7 @@ int LabApp::run(const std::string &mapStem) {
       doStep();
     }
     if (playing) {
-      static Uint8 none[SDL_NUM_SCANCODES] = {};
+      static bool none[SDL_SCANCODE_COUNT] = {};
       static Uint32 last = now;
       world->update(none, std::min(0.1f, (now - last) / 1000.0f));
       last = now;
@@ -2753,21 +2751,21 @@ int LabApp::run(const std::string &mapStem) {
       pollGhidra();
     }
 
-    ImGui_ImplSDLRenderer2_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
+    ImGui_ImplSDLRenderer3_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
     ui();
     ImGui::Render();
     drawView();
-    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), ren);
+    ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), ren);
     if (shots && now - lastShot >= 4000) {
       lastShot = now;
       int w, h;
-      SDL_GetRendererOutputSize(ren, &w, &h);
-      if (SDL_Surface *sf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)) {
-        SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
+      SDL_GetCurrentRenderOutputSize(ren, &w, &h);
+      if (SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)) {
+        ZT_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
         SDL_SaveBMP(sf, (std::string(shots) + "/lab" + std::to_string(++shotNo) + ".bmp").c_str());
-        SDL_FreeSurface(sf);
+        SDL_DestroySurface(sf);
       }
     }
     SDL_RenderPresent(ren);
@@ -2778,8 +2776,8 @@ int LabApp::run(const std::string &mapStem) {
   if (buildThread.joinable())
     buildThread.join();
   ghidra.reset();
-  ImGui_ImplSDLRenderer2_Shutdown();
-  ImGui_ImplSDL2_Shutdown();
+  ImGui_ImplSDLRenderer3_Shutdown();
+  ImGui_ImplSDL3_Shutdown();
   ImGui::DestroyContext();
   return 0;
 }
@@ -2925,7 +2923,7 @@ void LabApp::sendFrame() {
   if (ow != hostW || oh != hostH)
     SDL_SetWindowSize(win, hostW, hostH);
   int w = 0, h = 0;
-  SDL_GetRendererOutputSize(ren, &w, &h);
+  SDL_GetCurrentRenderOutputSize(ren, &w, &h);
   if (w <= 0 || h <= 0)
     return;
   viewRect = SDL_Rect{0, 0, w, h};
@@ -2943,7 +2941,7 @@ void LabApp::sendFrame() {
     std::vector<unsigned char> bytes;
   } mem;
   mem.bytes.resize(static_cast<size_t>(w) * h * 4);
-  if (SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ABGR8888, mem.bytes.data(), w * 4) != 0)
+  if (ZT_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ABGR8888, mem.bytes.data(), w * 4) != 0)
     return;
   SDL_RenderPresent(ren);
   Uint64 t2 = SDL_GetPerformanceCounter();
@@ -2977,29 +2975,20 @@ void LabApp::sendFrame() {
 // --------------------------------------------- the Scene view's editor
 // An image as PNG or JPEG bytes
 std::vector<unsigned char> encodeImage(SDL_Surface *sf, bool png) {
-  struct Mem {
-    std::vector<unsigned char> bytes;
-  } mem;
-  SDL_RWops *rw = SDL_AllocRW();
-  rw->hidden.unknown.data1 = &mem;
-  rw->size = [](SDL_RWops *) -> Sint64 { return -1; };
-  rw->seek = [](SDL_RWops *, Sint64, int) -> Sint64 { return -1; };
-  rw->read = [](SDL_RWops *, void *, size_t, size_t) -> size_t { return 0; };
-  rw->write = [](SDL_RWops *ctx, const void *p, size_t size, size_t n) -> size_t {
-    auto *m = static_cast<Mem *>(ctx->hidden.unknown.data1);
-    const unsigned char *b = static_cast<const unsigned char *>(p);
-    m->bytes.insert(m->bytes.end(), b, b + size * n);
-    return n;
-  };
-  rw->close = [](SDL_RWops *ctx) -> int {
-    SDL_FreeRW(ctx);
-    return 0;
-  };
-  if (png)
-    IMG_SavePNG_RW(sf, rw, 1);
-  else
-    IMG_SaveJPG_RW(sf, rw, 1, 82);
-  return mem.bytes;
+  // (SDL3: written to a stream that grows in memory, then copied out)
+  std::vector<unsigned char> bytes;
+  SDL_IOStream *io = SDL_IOFromDynamicMem();
+  if (!io)
+    return bytes;
+  if (png ? IMG_SavePNG_IO(sf, io, false) : IMG_SaveJPG_IO(sf, io, false, 82)) {
+    const Sint64 size = SDL_TellIO(io);
+    const auto *data = static_cast<const unsigned char *>(
+        SDL_GetPointerProperty(SDL_GetIOProperties(io), SDL_PROP_IOSTREAM_DYNAMIC_MEMORY_POINTER, nullptr));
+    if (data && size > 0)
+      bytes.assign(data, data + size);
+  }
+  SDL_CloseIO(io);
+  return bytes;
 }
 
 std::string base64(const std::vector<unsigned char> &b) {
@@ -3624,10 +3613,10 @@ void LabApp::sendIcon(const std::string &path) {
       SDL_RenderClear(ren);
       SDL_Rect r{0, 0, w, h};
       a->draw(ren, &r, CompassDirection::N);
-      if (SDL_Surface *sf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)) {
-        SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
+      if (SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)) {
+        ZT_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
         png = base64(encodeImage(sf, true));
-        SDL_FreeSurface(sf);
+        SDL_DestroySurface(sf);
       }
       SDL_SetRenderTarget(ren, old);
       SDL_DestroyTexture(tex);
@@ -3682,10 +3671,10 @@ void LabApp::sendFileView(const std::string &name, const std::string &dirWanted)
           SDL_SetRenderDrawColor(ren, 0, 0, 0, 0);
           SDL_RenderClear(ren);
           a->drawAnchored(ren, -l, -t, dirs[pick].first, nullptr, f);
-          if (SDL_Surface *sf = SDL_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_ARGB8888)) {
-            SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
+          if (SDL_Surface *sf = ZT_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_ARGB8888)) {
+            ZT_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch);
             frames += (frames.empty() ? "" : ",") + jq(base64(encodeImage(sf, true)));
-            SDL_FreeSurface(sf);
+            SDL_DestroySurface(sf);
           }
         }
         SDL_SetRenderTarget(ren, old);
@@ -3707,13 +3696,13 @@ void LabApp::sendFileView(const std::string &name, const std::string &dirWanted)
     // (told its type by its extension: a TGA has no signature to guess from)
     std::string type = ext;
     std::transform(type.begin(), type.end(), type.begin(), ::toupper);
-    SDL_Surface *s = data ? IMG_LoadTyped_RW(SDL_RWFromConstMem(data, size), 1, type.c_str()) : nullptr;
+    SDL_Surface *s = data ? IMG_LoadTyped_IO(SDL_IOFromConstMem(data, size), 1, type.c_str()) : nullptr;
     free(data);
     if (s) {
       o.str("kind", "image").num("w", s->w).num("h", s->h).num("size", size).str("png", base64(encodeImage(s, true)));
-      SDL_FreeSurface(s);
+      SDL_DestroySurface(s);
     } else {
-      o.str("kind", "binary").num("size", size).str("error", IMG_GetError());
+      o.str("kind", "binary").num("size", size).str("error", SDL_GetError());
     }
   } else if (ext == "pal") {
     std::string palName = name; // (getPallet takes a string it may change)
@@ -4039,7 +4028,7 @@ void LabApp::setupGoals() {
 
 // The engine's own simulation, for so many seconds of game time
 void LabApp::stepWorld(float seconds) {
-  static Uint8 none[SDL_NUM_SCANCODES] = {};
+  static bool none[SDL_SCANCODE_COUNT] = {};
   world->setPaused(false);
   skipping = true;
   while (seconds > 1e-4f) {
@@ -4126,7 +4115,7 @@ void LabApp::drawOverlays() {
     if (!vtx(x0, y0, a) || !vtx(x1, y1, b))
       return;
     for (int d = 0; d < thick; d++)
-      SDL_RenderDrawLine(ren, a.x, a.y - d, b.x, b.y - d);
+      SDL_RenderLine(ren, a.x, a.y - d, b.x, b.y - d);
   };
   auto tile = [&](int x, int y, int thick) {
     edge(x, y, x + 1, y, thick);
@@ -4377,7 +4366,7 @@ void LabApp::routeClick(int tx, int ty) {
 void LabApp::drawSearch(const Pathfinder::Search &s) {
   if (s.width <= 0)
     return;
-  std::vector<SDL_Vertex> v;
+  std::vector<ZT_Vertex> v;
   std::vector<int> idx;
   auto corner = [&](int x, int y, SDL_FPoint &p) {
     int wx, wy;
@@ -4409,13 +4398,13 @@ void LabApp::drawSearch(const Pathfinder::Search &s) {
     quad(x, y, {90, 220, 120, 175});
   SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
   if (!idx.empty())
-    SDL_RenderGeometry(ren, nullptr, v.data(), static_cast<int>(v.size()), idx.data(), static_cast<int>(idx.size()));
+    ZT_RenderGeometry(ren, nullptr, v.data(), static_cast<int>(v.size()), idx.data(), static_cast<int>(idx.size()));
   auto line = [&](int x0, int y0, int x1, int y1, int thick) {
     SDL_FPoint a, b;
     if (!corner(x0, y0, a) || !corner(x1, y1, b))
       return;
     for (int d = 0; d < thick; d++)
-      SDL_RenderDrawLineF(ren, a.x, a.y - d, b.x, b.y - d);
+      SDL_RenderLine(ren, a.x, a.y - d, b.x, b.y - d);
   };
   auto outline = [&](int x, int y, int thick) {
     line(x, y, x + 1, y, thick);
@@ -4454,7 +4443,7 @@ void LabApp::drawFootprints() {
     world->pointToWindow(x, y, h, wx, wy);
     p = {static_cast<float>(wx), static_cast<float>(wy)};
   };
-  std::vector<SDL_Vertex> v;
+  std::vector<ZT_Vertex> v;
   std::vector<int> idx;
   std::vector<std::array<SDL_FPoint, 5>> boxes;
   std::vector<SDL_FPoint> missing;
@@ -4499,10 +4488,10 @@ void LabApp::drawFootprints() {
   }
   SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
   if (!idx.empty())
-    SDL_RenderGeometry(ren, nullptr, v.data(), static_cast<int>(v.size()), idx.data(), static_cast<int>(idx.size()));
+    ZT_RenderGeometry(ren, nullptr, v.data(), static_cast<int>(v.size()), idx.data(), static_cast<int>(idx.size()));
   SDL_SetRenderDrawColor(ren, 240, 110, 240, 230);
   for (auto &box : boxes)
-    SDL_RenderDrawLinesF(ren, box.data(), 5);
+    SDL_RenderLines(ren, box.data(), 5);
   // Each door (entrpos): green on a path a guest can stand on, yellow off one
   for (const PlacedObjects::Object &o : world->getObjects().objects()) {
     if (o.fence)
@@ -4520,15 +4509,15 @@ void LabApp::drawFootprints() {
         SDL_FPoint s[5];
         for (int j = 0; j < 5; j++)
           s[j] = {d[j].x, d[j].y + k};
-        SDL_RenderDrawLinesF(ren, s, 5);
+        SDL_RenderLines(ren, s, 5);
       }
     }
   }
   SDL_SetRenderDrawColor(ren, 255, 60, 50, 255);
   for (const SDL_FPoint &c : missing)
     for (int d = -1; d <= 1; d++) {
-      SDL_RenderDrawLineF(ren, c.x - 7, c.y - 7 + d, c.x + 7, c.y + 7 + d);
-      SDL_RenderDrawLineF(ren, c.x - 7, c.y + 7 + d, c.x + 7, c.y - 7 + d);
+      SDL_RenderLine(ren, c.x - 7, c.y - 7 + d, c.x + 7, c.y + 7 + d);
+      SDL_RenderLine(ren, c.x - 7, c.y + 7 + d, c.x + 7, c.y - 7 + d);
     }
 }
 
@@ -4552,14 +4541,14 @@ void LabApp::drawRoutes() {
       at(path[i].first, path[i].second, pts.back());
     }
     SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, 230);
-    SDL_RenderDrawLinesF(ren, pts.data(), static_cast<int>(pts.size()));
+    SDL_RenderLines(ren, pts.data(), static_cast<int>(pts.size()));
     for (SDL_FPoint &p : pts)
       p.y += 1;
-    SDL_RenderDrawLinesF(ren, pts.data(), static_cast<int>(pts.size()));
+    SDL_RenderLines(ren, pts.data(), static_cast<int>(pts.size()));
     // (its goal: a small diamond)
     SDL_FPoint g = pts.back();
     SDL_FPoint d[5] = {{g.x, g.y - 5}, {g.x + 8, g.y}, {g.x, g.y + 5}, {g.x - 8, g.y}, {g.x, g.y - 5}};
-    SDL_RenderDrawLinesF(ren, d, 5);
+    SDL_RenderLines(ren, d, 5);
   };
   SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
   for (const Animals::Member &m : world->getAnimals().members())
@@ -4746,7 +4735,7 @@ void LabApp::breakLoop(int depth) {
   while (!how && !hostQuit && host->connected()) {
     SDL_Event e;
     while (SDL_PollEvent(&e))
-      if (e.type == SDL_QUIT)
+      if (e.type == SDL_EVENT_QUIT)
         hostQuit = true;
     for (const Json &c : host->take()) {
       std::string cmd = c["cmd"].str();
@@ -5565,8 +5554,8 @@ int LabApp::runHost(const std::string &mapStem, int port) {
     SDL_Log("[Lab] port %d is taken: is another Lab engine running?", port);
     return 1;
   }
-  SDL_RenderSetLogicalSize(ren, 0, 0);
-  SDL_RenderSetScale(ren, 1.0f, 1.0f);
+  ZT_RenderSetLogicalSize(ren, 0, 0);
+  SDL_SetRenderScale(ren, 1.0f, 1.0f);
   // (the app gone - its end of stdin closed - and this goes too)
   std::atomic<bool> parentGone{false};
   std::thread([&parentGone] {
@@ -5607,7 +5596,7 @@ int LabApp::runHost(const std::string &mapStem, int port) {
   while (!hostQuit && !parentGone) {
     SDL_Event e;
     while (SDL_PollEvent(&e))
-      if (e.type == SDL_QUIT)
+      if (e.type == SDL_EVENT_QUIT)
         hostQuit = true;
     if (host->takeConnected()) {
       addLog("Lab app connected");
@@ -5635,7 +5624,7 @@ int LabApp::runHost(const std::string &mapStem, int port) {
     float real = lastUpdate ? std::min(0.1f, (now - lastUpdate) / 1000.0f) : 0.0f;
     lastUpdate = now;
     if (playing) {
-      static Uint8 none[SDL_NUM_SCANCODES] = {};
+      static bool none[SDL_SCANCODE_COUNT] = {};
       for (float left = real * speed; left > 1e-4f && playing; left -= 0.1f) {
         world->update(none, std::min(0.1f, left));
         simClock += std::min(0.1f, left);
@@ -5683,10 +5672,7 @@ int LabApp::runHost(const std::string &mapStem, int port) {
 void labHostHide(SDL_Window *window) {
   // Off the screen, off the taskbar: the app shows what it draws
   SDL_SetWindowPosition(window, -20000, -20000);
-  SDL_SysWMinfo info;
-  SDL_VERSION(&info.version);
-  if (SDL_GetWindowWMInfo(window, &info)) {
-    HWND h = info.info.win.window;
+  if (HWND h = static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))) {
     SetWindowLong(h, GWL_EXSTYLE, (GetWindowLong(h, GWL_EXSTYLE) | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
   }
 }

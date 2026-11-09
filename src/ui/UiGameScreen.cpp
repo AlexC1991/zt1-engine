@@ -32,7 +32,7 @@
 #include "UiText.hpp"
 #include "WindowLock.hpp"
 #include "UiSpeedControlArt.hpp"
-#include <SDL_image.h>
+#include <SDL3_image/SDL_image.h>
 
 // addition: the Game Options' Extras tab. The original's gameopts.lyt has an
 // About tab button with its action left out (";action=3 ;target=903"): it's
@@ -1918,11 +1918,11 @@ void UiGameScreen::placePanels(SDL_Renderer *renderer, SDL_Rect *screen) {
         if (c.x < screen->x || c.y < screen->y || c.x + c.w > screen->x + screen->w || c.y + c.h > screen->y + screen->h)
           return false;
         for (const SDL_Rect &q : placed)
-          if (SDL_HasIntersection(&c, &q))
+          if (SDL_HasRectIntersection(&c, &q))
             return false;
         if (ofBars)
           for (const SDL_Rect &q : bars)
-            if (SDL_HasIntersection(&c, &q))
+            if (SDL_HasRectIntersection(&c, &q))
               return false;
         return true;
       };
@@ -1974,11 +1974,11 @@ static SDL_FRect speedArtworkRect(const SDL_Rect &pause) {
 // The bronze-to-olive boundary supplies the coverage. At the shared waist
 // the color feathers into the speed control's bronze face.
 static SDL_Texture *makeSpeedTransportFace(SDL_Renderer *renderer, SDL_Surface *nativeFace) {
-  SDL_RWops *bytes = SDL_RWFromConstMem(UiSpeedControlArt::png, sizeof(UiSpeedControlArt::png));
-  SDL_Surface *atlas = bytes ? IMG_Load_RW(bytes, 1) : nullptr;
+  SDL_IOStream *bytes = SDL_IOFromConstMem(UiSpeedControlArt::png, sizeof(UiSpeedControlArt::png));
+  SDL_Surface *atlas = bytes ? IMG_Load_IO(bytes, 1) : nullptr;
   if (!atlas) return nullptr;
-  SDL_Surface *face = SDL_ConvertSurfaceFormat(atlas, SDL_PIXELFORMAT_RGBA32, 0);
-  SDL_FreeSurface(atlas);
+  SDL_Surface *face = ZT_ConvertSurfaceFormat(atlas, SDL_PIXELFORMAT_RGBA32, 0);
+  SDL_DestroySurface(atlas);
   if (!face) return nullptr;
 
   constexpr int width = UiSpeedControlArt::frameWidth;
@@ -1994,7 +1994,7 @@ static SDL_Texture *makeSpeedTransportFace(SDL_Renderer *renderer, SDL_Surface *
     for (int x = 0; x < width; ++x) {
       Uint32 &pixel = row[frame.x + x];
       Uint8 r, g, b, a;
-      SDL_GetRGBA(pixel, face->format, &r, &g, &b, &a);
+      ZT_GetRGBA(pixel, face->format, &r, &g, &b, &a);
       // The lit lower edge is still bronze where red and green nearly match.
       // Its stronger red-to-blue contrast distinguishes it from the olive rim.
       const float warmth = std::max((int(r) - int(g)) / 14.0f, (int(r) - int(b) - 28) / 36.0f);
@@ -2016,23 +2016,23 @@ static SDL_Texture *makeSpeedTransportFace(SDL_Renderer *renderer, SDL_Surface *
       }
       const int sx = std::clamp(int((16.5f + dx) * nativeFace->w / 32), 0, nativeFace->w - 1);
       const int sy = std::clamp(int((15.5f + dy) * nativeFace->h / 32), 0, nativeFace->h - 1);
-      const auto *sample = static_cast<const Uint8 *>(nativeFace->pixels) + sy * nativeFace->pitch + sx * nativeFace->format->BytesPerPixel;
+      const auto *sample = static_cast<const Uint8 *>(nativeFace->pixels) + sy * nativeFace->pitch + sx * SDL_BYTESPERPIXEL(nativeFace->format);
       Uint32 color = 0;
-      std::memcpy(&color, sample, nativeFace->format->BytesPerPixel);
-      SDL_GetRGB(color, nativeFace->format, &r, &g, &b);
-      pixel = SDL_MapRGBA(face->format, r, g, b, alpha);
+      std::memcpy(&color, sample, SDL_BYTESPERPIXEL(nativeFace->format));
+      ZT_GetRGB(color, nativeFace->format, &r, &g, &b);
+      pixel = ZT_MapRGBA(face->format, r, g, b, alpha);
     }
   }
 
-  SDL_Surface *overlay = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *overlay = ZT_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_RGBA32);
   SDL_Texture *texture = nullptr;
   if (overlay) {
     SDL_SetSurfaceBlendMode(face, SDL_BLENDMODE_NONE);
-    if (SDL_BlitSurface(face, &frame, overlay, nullptr) == 0)
+    if (SDL_BlitSurface(face, &frame, overlay, nullptr))
       texture = SDL_CreateTextureFromSurface(renderer, overlay);
-    SDL_FreeSurface(overlay);
+    SDL_DestroySurface(overlay);
   }
-  SDL_FreeSurface(face);
+  SDL_DestroySurface(face);
   return texture;
 }
 
@@ -2043,8 +2043,8 @@ void UiGameScreen::drawSpeedControl(SDL_Renderer *renderer, const SDL_Rect &paus
   this->speedRect = {pause.x + pause.w - 2, pause.y + 4, 22, pause.h - 8};
   if (!RenderSettings::drawsUiArt()) return;
   if (!this->speedArtwork) {
-    SDL_RWops *bytes = SDL_RWFromConstMem(UiSpeedControlArt::png, sizeof(UiSpeedControlArt::png));
-    if (bytes) this->speedArtwork = IMG_LoadTexture_RW(renderer, bytes, 1);
+    SDL_IOStream *bytes = SDL_IOFromConstMem(UiSpeedControlArt::png, sizeof(UiSpeedControlArt::png));
+    if (bytes) this->speedArtwork = IMG_LoadTexture_IO(renderer, bytes, 1);
   }
   SDL_Point pointer{this->mouseX,this->mouseY};
   const bool hover = SDL_PointInRect(&pointer,&this->speedRect);
@@ -2053,34 +2053,34 @@ void UiGameScreen::drawSpeedControl(SDL_Renderer *renderer, const SDL_Rect &paus
                         UiSpeedControlArt::frameWidth,UiSpeedControlArt::frameHeight};
   if (this->speedArtwork) {
     SDL_SetTextureBlendMode(this->speedArtwork,SDL_BLENDMODE_BLEND);
-    SDL_SetTextureScaleMode(this->speedArtwork,SDL_ScaleModeLinear);
+    SDL_SetTextureScaleMode(this->speedArtwork,SDL_SCALEMODE_LINEAR);
     SDL_SetTextureColorMod(this->speedArtwork,255,255,255);
-    SDL_RenderCopyF(renderer,this->speedArtwork,&source,&joined);
+    ZT_RenderCopyF(renderer,this->speedArtwork,&source,&joined);
     // (as a lit button: brighter under the pointer, and pressed in - darker,
     // a pixel lower - while held and for a moment after a quick click)
     const bool pressed = this->speedDown || SDL_GetTicks() < this->speedPressUntil;
     if (hover || pressed) {
       SDL_Rect previous{};
-      const bool clipped = SDL_RenderIsClipEnabled(renderer) == SDL_TRUE;
-      SDL_RenderGetClipRect(renderer,&previous);
+      const bool clipped = SDL_RenderClipEnabled(renderer) == true;
+      SDL_GetRenderClipRect(renderer,&previous);
       SDL_Rect clip = this->speedRect;
-      if (clipped) SDL_IntersectRect(&previous,&this->speedRect,&clip);
-      SDL_RenderSetClipRect(renderer,&clip);
+      if (clipped) SDL_GetRectIntersection(&previous,&this->speedRect,&clip);
+      SDL_SetRenderClipRect(renderer,&clip);
       if (pressed) {
         // (the lobe drawn again over itself, darkened and nudged down)
         SDL_FRect step = joined;
         step.y += 1.0f;
         SDL_SetTextureColorMod(this->speedArtwork,150,140,120);
-        SDL_RenderCopyF(renderer,this->speedArtwork,&source,&step);
+        ZT_RenderCopyF(renderer,this->speedArtwork,&source,&step);
       } else {
         SDL_SetTextureBlendMode(this->speedArtwork,SDL_BLENDMODE_ADD);
         SDL_SetTextureColorMod(this->speedArtwork,255,235,160);
         SDL_SetTextureAlphaMod(this->speedArtwork,90);
-        SDL_RenderCopyF(renderer,this->speedArtwork,&source,&joined);
+        ZT_RenderCopyF(renderer,this->speedArtwork,&source,&joined);
         SDL_SetTextureAlphaMod(this->speedArtwork,255);
         SDL_SetTextureBlendMode(this->speedArtwork,SDL_BLENDMODE_BLEND);
       }
-      SDL_RenderSetClipRect(renderer,clipped ? &previous : nullptr);
+      SDL_SetRenderClipRect(renderer,clipped ? &previous : nullptr);
       SDL_SetTextureColorMod(this->speedArtwork,255,255,255);
     }
   }
@@ -2257,9 +2257,9 @@ void UiGameScreen::drawDateTime(SDL_Renderer *renderer) {
       }
       if (SDL_Texture *texture = this->speedNativeFaces[key]; texture && (shown == play || hover)) {
         SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);
-        SDL_SetTextureScaleMode(texture,SDL_ScaleModeLinear);
+        SDL_SetTextureScaleMode(texture,SDL_SCALEMODE_LINEAR);
         const SDL_FRect joined = speedArtworkRect(face);
-        SDL_RenderCopyF(renderer,texture,nullptr,&joined);
+        ZT_RenderCopyF(renderer,texture,nullptr,&joined);
       }
     }
   } else {
@@ -2527,13 +2527,13 @@ void UiGameScreen::drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   if (box.y + box.h > layout_rect->y + layout_rect->h)
     box.y = this->mouseY - 8 - box.h;
   SDL_SetRenderDrawColor(renderer, 255, 227, 85, 255);
-  SDL_RenderFillRect(renderer, &box);
+  ZT_RenderFillRect(renderer, &box);
   SDL_Rect inner = {box.x + 1, box.y + 1, box.w - 2, box.h - 2};
   SDL_SetRenderDrawColor(renderer, 82, 75, 43, 255);
-  SDL_RenderFillRect(renderer, &inner);
+  ZT_RenderFillRect(renderer, &inner);
   SDL_Rect fill = {box.x + 2, box.y + 2, box.w - 4, box.h - 4};
   SDL_SetRenderDrawColor(renderer, 115, 101, 49, 255);
-  SDL_RenderFillRect(renderer, &fill);
+  ZT_RenderFillRect(renderer, &fill);
   int y = box.y + 3;
   for (const std::string &l : lines) {
     SDL_Texture *black = rm->getStringTexture(renderer, font, l, SDL_Color{0, 0, 0, 255}, size);
@@ -2546,12 +2546,12 @@ void UiGameScreen::drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
       const int off[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
       for (auto &o : off) {
         SDL_Rect d = {x + o[0], y + o[1], tw, th};
-        SDL_RenderCopy(renderer, black, nullptr, &d);
+        ZT_RenderCopy(renderer, black, nullptr, &d);
       }
     }
     if (white) {
       SDL_Rect d = {x, y, tw, th};
-      SDL_RenderCopy(renderer, white, nullptr, &d);
+      ZT_RenderCopy(renderer, white, nullptr, &d);
     }
     y += lineH;
   }
@@ -2560,19 +2560,19 @@ void UiGameScreen::drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   if (RenderSettings::uiPass != RenderSettings::UiPass::Art && Embed::active() && this->tooltipShot) {
     this->tooltipShot = false;
     SDL_Rect vp;
-    SDL_RenderGetViewport(renderer, &vp);
+    SDL_GetRenderViewport(renderer, &vp);
     float sx = 1, sy = 1;
-    SDL_RenderGetScale(renderer, &sx, &sy);
+    SDL_GetRenderScale(renderer, &sx, &sy);
     int ow = 0, oh = 0;
-    SDL_GetRendererOutputSize(renderer, &ow, &oh);
-    if (SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, ow, oh, 24, SDL_PIXELFORMAT_RGB24)) {
-      SDL_RenderSetViewport(renderer, nullptr);
-      SDL_RenderSetScale(renderer, 1, 1);
-      if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, s->pixels, s->pitch) == 0)
+    SDL_GetCurrentRenderOutputSize(renderer, &ow, &oh);
+    if (SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, ow, oh, 24, SDL_PIXELFORMAT_RGB24)) {
+      SDL_SetRenderViewport(renderer, nullptr);
+      SDL_SetRenderScale(renderer, 1, 1);
+      if (ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_RGB24, s->pixels, s->pitch) == 0)
         SDL_SaveBMP(s, "tooltip.bmp");
-      SDL_RenderSetScale(renderer, sx, sy);
-      SDL_RenderSetViewport(renderer, &vp);
-      SDL_FreeSurface(s);
+      SDL_SetRenderScale(renderer, sx, sy);
+      SDL_SetRenderViewport(renderer, &vp);
+      SDL_DestroySurface(s);
     }
   }
 }
@@ -2654,7 +2654,7 @@ void UiGameScreen::drawMessage(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     int w = 0, h = 0;
     this->resource_manager->getTextSize(t, &w, &h);
     SDL_Rect dst = {bar.x + (bar.w - w) / 2, y, w, h};
-    SDL_RenderCopy(renderer, t, nullptr, &dst);
+    ZT_RenderCopy(renderer, t, nullptr, &dst);
     y += lineH;
   }
 }
@@ -4568,7 +4568,7 @@ void UiGameScreen::drawRound(SDL_Renderer *renderer, const SDL_Rect &box,
     layer = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, lw, lh);
     mask = nullptr;
     // (the circle: white, opaque inside, clear outside, a pixel's soft edge)
-    if (SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, lw, lh, 32, SDL_PIXELFORMAT_ARGB8888)) {
+    if (SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, lw, lh, 32, SDL_PIXELFORMAT_ARGB8888)) {
       const float rx = lw * 0.5f - 2.0f, ry = lh * 0.5f - 2.0f, mx = lw * 0.5f, my = lh * 0.5f;
       for (int y = 0; y < lh; y++)
         for (int x = 0; x < lw; x++) {
@@ -4578,7 +4578,7 @@ void UiGameScreen::drawRound(SDL_Renderer *renderer, const SDL_Rect &box,
           static_cast<Uint32 *>(s->pixels)[y * (s->pitch / 4) + x] = (static_cast<Uint32>(av) << 24) | 0xFFFFFF;
         }
       mask = SDL_CreateTextureFromSurface(renderer, s);
-      SDL_FreeSurface(s);
+      SDL_DestroySurface(s);
     }
     if (layer)
       // (drawn over clear black, its colours already carry their alpha)
@@ -4598,28 +4598,28 @@ void UiGameScreen::drawRound(SDL_Renderer *renderer, const SDL_Rect &box,
   // (what's set now, to put back after)
   SDL_Texture *was = SDL_GetRenderTarget(renderer);
   float sx = 1.0f, sy = 1.0f;
-  SDL_RenderGetScale(renderer, &sx, &sy);
+  SDL_GetRenderScale(renderer, &sx, &sy);
   SDL_Rect view, clip;
-  SDL_RenderGetViewport(renderer, &view);
-  const bool clipped = SDL_RenderIsClipEnabled(renderer);
-  SDL_RenderGetClipRect(renderer, &clip);
+  SDL_GetRenderViewport(renderer, &view);
+  const bool clipped = SDL_RenderClipEnabled(renderer);
+  SDL_GetRenderClipRect(renderer, &clip);
   SDL_BlendMode mode;
   SDL_GetRenderDrawBlendMode(renderer, &mode);
   SDL_SetRenderTarget(renderer, layer);
-  SDL_RenderSetScale(renderer, 1.0f, 1.0f);
-  SDL_RenderSetViewport(renderer, nullptr);
-  SDL_RenderSetClipRect(renderer, nullptr);
+  SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+  SDL_SetRenderViewport(renderer, nullptr);
+  SDL_SetRenderClipRect(renderer, nullptr);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
   SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
   SDL_RenderClear(renderer);
   SDL_SetRenderDrawBlendMode(renderer, mode);
   draw(static_cast<float>(-box.x), static_cast<float>(-box.y));
-  SDL_RenderCopy(renderer, mask, nullptr, nullptr);
+  ZT_RenderCopy(renderer, mask, nullptr, nullptr);
   SDL_SetRenderTarget(renderer, was);
-  SDL_RenderSetScale(renderer, sx, sy);
-  SDL_RenderSetViewport(renderer, &view);
-  SDL_RenderSetClipRect(renderer, clipped ? &clip : nullptr);
-  SDL_RenderCopy(renderer, layer, nullptr, &box);
+  SDL_SetRenderScale(renderer, sx, sy);
+  SDL_SetRenderViewport(renderer, &view);
+  SDL_SetRenderClipRect(renderer, clipped ? &clip : nullptr);
+  ZT_RenderCopy(renderer, layer, nullptr, &box);
 }
 
 void UiGameScreen::showExhibit(int id) {

@@ -1,7 +1,7 @@
 #include "ResourceManager.hpp"
 
-#include "SDL_image.h"
-#include <SDL2/SDL.h>
+#include <SDL3_image/SDL_image.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -33,9 +33,9 @@ ResourceManager::ResourceManager(Config *config) : config(config) {
 ResourceManager::~ResourceManager() {
   clearAnimations();
   HdArt::setResources(nullptr);
-  Mix_HaltMusic();
+  Audio::haltMusic();
   if (this->intro_music != nullptr) {
-    Mix_FreeMusic(this->intro_music);
+    Audio::free(this->intro_music);
   }
 }
 
@@ -384,7 +384,7 @@ void ResourceManager::load_all(std::atomic<float> *progress,
   if (intro_music == nullptr && config->getPlayMenuMusic()) {
     intro_music = getMusic(config->getMenuMusic());
     if (intro_music)
-      Mix_PlayMusic(intro_music, -1);
+      Audio::playMusic(intro_music, -1);
   }
 
   *is_done = true;
@@ -517,7 +517,7 @@ static SDL_Texture *magnifiedTexture(SDL_Renderer *r, SDL_Surface *s,
     stem = stem.substr(0, dot);
   if (SDL_Surface *hd = ArtScaler::loadHdSurface(stem)) {
     SDL_Texture *t = ArtScaler::createHdTexture(r, hd, s->w, s->h, stem);
-    SDL_FreeSurface(hd);
+    SDL_DestroySurface(hd);
     if (t)
       return t;
   }
@@ -542,7 +542,7 @@ SDL_Texture *ResourceManager::getTexture(SDL_Renderer *r,
     s = IMG_Load(loc.c_str());
     if (!s) {
       SDL_Log("ResourceManager: Failed to load loose image %s: %s", loc.c_str(),
-              IMG_GetError());
+              SDL_GetError());
       return nullptr;
     }
   } else {
@@ -554,7 +554,7 @@ SDL_Texture *ResourceManager::getTexture(SDL_Renderer *r,
 
   SDL_Texture *t = magnified ? magnifiedTexture(r, s, name, factor, tileable)
                              : SDL_CreateTextureFromSurface(r, s);
-  SDL_FreeSurface(s);
+  SDL_DestroySurface(s);
   return t;
 }
 
@@ -649,11 +649,11 @@ static SDL_Surface *decodeZt1NToSurface(const uint8_t *data, int size,
           height, use_4byte ? "4" : "2");
 
   // 4. DECODE RLE PIXELS
-  SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32,
+  SDL_Surface *surf = ZT_CreateRGBSurfaceWithFormat(0, width, height, 32,
                                                      SDL_PIXELFORMAT_RGBA32);
   if (!surf)
     return nullptr;
-  SDL_FillRect(surf, nullptr, SDL_MapRGBA(surf->format, 0, 0, 0, 0));
+  SDL_FillSurfaceRect(surf, nullptr, ZT_MapRGBA(surf->format, 0, 0, 0, 0));
 
   uint32_t *pixels = (uint32_t *)surf->pixels;
   int ptr = data_start_offset;
@@ -681,7 +681,7 @@ static SDL_Surface *decodeZt1NToSurface(const uint8_t *data, int size,
             uint8_t g = (color >> 8) & 0xFF;
             uint8_t b = (color >> 16) & 0xFF;
             if (!(r == 255 && g == 0 && b == 255)) {
-              pixels[y * width + x] = SDL_MapRGBA(surf->format, r, g, b, 255);
+              pixels[y * width + x] = ZT_MapRGBA(surf->format, r, g, b, 255);
             }
           }
         }
@@ -742,10 +742,10 @@ SDL_Texture *ResourceManager::getZt1FrameTexture(SDL_Renderer *renderer,
     pos += 4 + 10; // frame size, then the 10-byte frame header
     if (frames > 0 && pal && width > 0 && height > 0 && width < 4096 &&
         height < 4096) {
-      SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(
+      SDL_Surface *surf = ZT_CreateRGBSurfaceWithFormat(
           0, width, height, 32, SDL_PIXELFORMAT_RGBA32);
       if (surf) {
-        SDL_FillRect(surf, nullptr, SDL_MapRGBA(surf->format, 0, 0, 0, 0));
+        SDL_FillSurfaceRect(surf, nullptr, ZT_MapRGBA(surf->format, 0, 0, 0, 0));
         uint32_t *pixels = (uint32_t *)surf->pixels;
         int pitch = surf->pitch / 4;
         for (int y = 0; y < height && pos < size; y++) {
@@ -757,7 +757,7 @@ SDL_Texture *ResourceManager::getZt1FrameTexture(SDL_Renderer *renderer,
             for (int i = 0; i < len && pos < size; i++, x++) {
               uint32_t c = pal->colors[data[pos++]];
               if (x >= 0 && x < width)
-                pixels[y * pitch + x] = SDL_MapRGBA(
+                pixels[y * pitch + x] = ZT_MapRGBA(
                     surf->format, c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF, 255);
             }
           }
@@ -768,7 +768,7 @@ SDL_Texture *ResourceManager::getZt1FrameTexture(SDL_Renderer *renderer,
           if (SDL_Surface *hd = ArtScaler::loadHdSurface(hdPath)) {
             texture = ArtScaler::createHdTexture(renderer, hd, width, height,
                                                  hdPath);
-            SDL_FreeSurface(hd);
+            SDL_DestroySurface(hd);
           }
           if (!texture)
             texture = ArtScaler::createTexture(renderer, surf,
@@ -778,7 +778,7 @@ SDL_Texture *ResourceManager::getZt1FrameTexture(SDL_Renderer *renderer,
         }
         if (texture)
           SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
-        SDL_FreeSurface(surf);
+        SDL_DestroySurface(surf);
       }
     }
   }
@@ -836,7 +836,7 @@ SDL_Texture *ResourceManager::getZt1Texture(SDL_Renderer *renderer,
   }
 
   SDL_Texture *t = magnifiedTexture(renderer, s, raw);
-  SDL_FreeSurface(s);
+  SDL_DestroySurface(s);
   return t;
 }
 
@@ -848,7 +848,7 @@ void *ResourceManager::getFileBytes(const std::string &name_raw, int *size) {
   return ZtdFile::getFileContent(loc, findActualResourceKey(name), size);
 }
 
-Mix_Music *ResourceManager::getMusic(const std::string &name_raw) {
+Audio::Clip *ResourceManager::getMusic(const std::string &name_raw) {
   std::string name = fixDoubleName(name_raw);
   std::string actual_key = findActualResourceKey(name);
   std::string loc = getResourceLocation(name);
@@ -1037,23 +1037,23 @@ SDL_Cursor *ResourceManager::getCursor(uint32_t id, int hotX, int hotY, int scal
     // (bigger: each pixel a scale x scale square - Game Options >
     // Accessibility > Cursor size)
     if (scale > 1) {
-      if (SDL_Surface *big = SDL_CreateRGBSurfaceWithFormat(0, s->w * scale, s->h * scale, 32, SDL_PIXELFORMAT_ARGB8888)) {
-        SDL_Surface *src = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0);
+      if (SDL_Surface *big = ZT_CreateRGBSurfaceWithFormat(0, s->w * scale, s->h * scale, 32, SDL_PIXELFORMAT_ARGB8888)) {
+        SDL_Surface *src = ZT_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0);
         if (src) {
           SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
-          SDL_BlitScaled(src, nullptr, big, nullptr);
-          SDL_FreeSurface(src);
-          SDL_FreeSurface(s);
+          SDL_BlitSurfaceScaled(src, nullptr, big, nullptr, SDL_SCALEMODE_NEAREST);
+          SDL_DestroySurface(src);
+          SDL_DestroySurface(s);
           s = big;
           hotX *= scale;
           hotY *= scale;
         } else {
-          SDL_FreeSurface(big);
+          SDL_DestroySurface(big);
         }
       }
     }
     SDL_Cursor *c = SDL_CreateColorCursor(s, hotX, hotY);
-    SDL_FreeSurface(s);
+    SDL_DestroySurface(s);
     return c;
   } catch (...) {
     return nullptr;
@@ -1073,7 +1073,7 @@ SDL_Texture *ResourceManager::getLoadTexture(SDL_Renderer *r) {
     if (!s)
       return nullptr;
     SDL_Texture *t = ArtScaler::createTexture(r, s);
-    SDL_FreeSurface(s);
+    SDL_DestroySurface(s);
     return t;
   } catch (...) {
     return nullptr;

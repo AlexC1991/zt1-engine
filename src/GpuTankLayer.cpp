@@ -34,8 +34,8 @@ GpuTankLayer::~GpuTankLayer() {
 // final copy uses ONE / ONE_MINUS_SRC_ALPHA, not a second alpha multiply.
 // https://wiki.libsdl.org/SDL2/SDL_ComposeCustomBlendMode
 bool GpuTankLayer::draw(SDL_Renderer *renderer,const std::function<void(SDL_Renderer *)> &paint) {
-  float sx,sy;SDL_RenderGetScale(renderer,&sx,&sy);
-  SDL_Rect viewport,clip;SDL_RenderGetViewport(renderer,&viewport);SDL_RenderGetClipRect(renderer,&clip);
+  float sx,sy;SDL_GetRenderScale(renderer,&sx,&sy);
+  SDL_Rect viewport,clip;SDL_GetRenderViewport(renderer,&viewport);SDL_GetRenderClipRect(renderer,&clip);
   // Fractional/full-screen transformed paths keep the proven renderer until
   // they have their own equivalence coverage. GPU FSR's native layer is 1:1.
   // The nonlinear FSR zoom-in pass can magnify the intermediate target's
@@ -44,14 +44,14 @@ bool GpuTankLayer::draw(SDL_Renderer *renderer,const std::function<void(SDL_Rend
   if(RenderSettings::lastWorldZoom>1.001f || sx!=1 || sy!=1 || viewport.x<0 || viewport.y<0)return false;
   SDL_Texture *target=SDL_GetRenderTarget(renderer);
   int width=0,height=0;
-  if(target)SDL_QueryTexture(target,nullptr,nullptr,&width,&height);
-  else SDL_GetRendererOutputSize(renderer,&width,&height);
+  if(target)ZT_QueryTexture(target,nullptr,nullptr,&width,&height);
+  else SDL_GetCurrentRenderOutputSize(renderer,&width,&height);
   if(width<=0 || height<=0 || viewport.x+viewport.w>width || viewport.y+viewport.h>height)return false;
-  const bool clipped=SDL_RenderIsClipEnabled(renderer);
+  const bool clipped=SDL_RenderClipEnabled(renderer);
   if(!attempted) {
     attempted=true;
     const size_t need=size_t(width)*height*4;
-    if(need>layerLimit || !SDL_RenderTargetSupported(renderer))return false;
+    if(need>layerLimit || !true)return false;
     const SDL_BlendMode over=SDL_ComposeCustomBlendMode(SDL_BLENDFACTOR_ONE,SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,SDL_BLENDOPERATION_ADD,
         SDL_BLENDFACTOR_ONE,SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,SDL_BLENDOPERATION_ADD);
     for(auto &p:pool)if(!p.busy && p.renderer==renderer && p.w==width && p.h==height){p.busy=true;texture=p.texture;break;}
@@ -62,29 +62,29 @@ bool GpuTankLayer::draw(SDL_Renderer *renderer,const std::function<void(SDL_Rend
       if(need>totalLimit-liveBytes)return false;
       texture=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_TARGET,width,height);
       if(!texture)return false;
-      if(SDL_SetTextureBlendMode(texture,over)!=0){SDL_DestroyTexture(texture);texture=nullptr;return false;}
+      if(!SDL_SetTextureBlendMode(texture,over)){SDL_DestroyTexture(texture);texture=nullptr;return false;}
       liveBytes+=need;pool.push_back({texture,renderer,width,height,true});
     }
     bytes=need;
     counters.peakBytes=std::max(counters.peakBytes,liveBytes);
     SDL_BlendMode blend;Uint8 red,green,blue,alpha;
     SDL_GetRenderDrawBlendMode(renderer,&blend);SDL_GetRenderDrawColor(renderer,&red,&green,&blue,&alpha);
-    if(SDL_SetRenderTarget(renderer,texture)!=0) {
+    if(!SDL_SetRenderTarget(renderer,texture)) {
       for(auto &p:pool)if(p.texture==texture)p.busy=false;
       texture=nullptr;bytes=0;return false;
     }
-    SDL_RenderSetViewport(renderer,&viewport);SDL_RenderSetScale(renderer,1,1);SDL_RenderSetClipRect(renderer,nullptr);
+    SDL_SetRenderViewport(renderer,&viewport);SDL_SetRenderScale(renderer,1,1);SDL_SetRenderClipRect(renderer,nullptr);
     SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);
     paint(renderer);
     ++counters.builds;
-    SDL_SetRenderTarget(renderer,target);SDL_RenderSetViewport(renderer,&viewport);
-    SDL_RenderSetScale(renderer,sx,sy);SDL_RenderSetClipRect(renderer,clipped?&clip:nullptr);
+    SDL_SetRenderTarget(renderer,target);SDL_SetRenderViewport(renderer,&viewport);
+    SDL_SetRenderScale(renderer,sx,sy);SDL_SetRenderClipRect(renderer,clipped?&clip:nullptr);
     SDL_SetRenderDrawBlendMode(renderer,blend);SDL_SetRenderDrawColor(renderer,red,green,blue,alpha);
   }
   if(!texture)return false;
   // The layer uses physical target coordinates; compensate the view's origin
   // while retaining the original viewport and strip clip for centred layouts.
   const SDL_Rect destination{-viewport.x,-viewport.y,width,height};
-  if(SDL_RenderCopy(renderer,texture,nullptr,&destination)!=0)return false;
+  if(ZT_RenderCopy(renderer,texture,nullptr,&destination)!=0)return false;
   ++counters.copies;return true;
 }

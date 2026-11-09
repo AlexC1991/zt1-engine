@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 // ours: an HD art mod's zoomed-in frames held on the GPU compressed (BC7:
 // Bc7.hpp), a quarter of the memory of the ordinary RGBA texture, drawn as

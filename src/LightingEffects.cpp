@@ -48,7 +48,7 @@ void DayNightLighting::actorEmission(Animation *art,int frame,LightingAssets::Po
   if(x< -200 || x>logicalW+200 || y< -300 || y>logicalH+200)return;
   bool visible=false;
   for(const auto &patch:art->emissionPatches(frameRenderer,side,frame,profile)) {
-    if(!patch.pixels)continue;SDL_RendererFlip flip;auto box=art->emissionRect(patch,x,y,side,&flip);
+    if(!patch.pixels)continue;SDL_FlipMode flip;auto box=art->emissionRect(patch,x,y,side,&flip);
     Light e{p.x,p.y,p.z,0,0,owner,0};e.distance=(x-logicalW*.5f)*(x-logicalW*.5f)+(y-logicalH*.5f)*(y-logicalH*.5f);
     e.sx=x+(flip==SDL_FLIP_HORIZONTAL?-patch.offset.x:patch.offset.x);e.sy=y+patch.offset.y;e.patch=box;e.texture=patch.texture;e.flip=flip;e.depth=depth;e.kind=profile;e.energy=std::clamp(intensity,0.0f,1.0f);e.glow=patch.glow;e.glowPad=patch.glowPad;emitters.push_back(e);visible=true;
   }

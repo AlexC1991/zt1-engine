@@ -5,7 +5,17 @@
 #ifdef _WIN32
 #include <windows.h>
 
-#include <SDL2/SDL_system.h>
+#include <SDL3/SDL_system.h>
+
+// ours: SDL2's SDL_RenderGetD3D11Device on SDL3 (Sdl3Compat.hpp): the
+// renderer's device from its properties, referenced for the caller as SDL2's was
+ID3D11Device *ZT_RenderGetD3D11Device(SDL_Renderer *renderer) {
+  auto *device = static_cast<ID3D11Device *>(
+      SDL_GetPointerProperty(SDL_GetRendererProperties(renderer), SDL_PROP_RENDERER_D3D11_DEVICE_POINTER, nullptr));
+  if (device)
+    device->AddRef();
+  return device;
+}
 
 namespace D3D11Util {
 namespace {
@@ -62,10 +72,10 @@ bool ready(SDL_Renderer *renderer) {
   if (g_tried)
     return g_ready;
   g_tried = true;
-  SDL_RendererInfo info{};
-  if (!renderer || SDL_GetRendererInfo(renderer, &info) != 0 || std::string(info.name) != "direct3d11")
+  ZT_RendererInfo info{};
+  if (!renderer || ZT_GetRendererInfo(renderer, &info) != 0 || std::string(info.name) != "direct3d11")
     return false;
-  g_dev = SDL_RenderGetD3D11Device(renderer);
+  g_dev = ZT_RenderGetD3D11Device(renderer);
   if (!g_dev)
     return false;
   if (g_dev->GetFeatureLevel() < D3D_FEATURE_LEVEL_11_0) {
@@ -215,10 +225,10 @@ ID3D11RenderTargetView *boundTarget(SDL_Renderer *renderer) {
   SDL_GetRenderDrawBlendMode(renderer, &mode);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
   SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-  SDL_RenderDrawPoint(renderer, 0, 0);
+  SDL_RenderPoint(renderer, 0, 0);
   SDL_SetRenderDrawColor(renderer, r, g, b, a);
   SDL_SetRenderDrawBlendMode(renderer, mode);
-  SDL_RenderFlush(renderer);
+  SDL_FlushRenderer(renderer);
   ID3D11RenderTargetView *rtv = nullptr;
   g_ctx->OMGetRenderTargets(1, &rtv, nullptr);
   return rtv;
@@ -230,7 +240,7 @@ ID3D11ShaderResourceView *viewOf(SDL_Texture *texture) {
     return nullptr;
   int w = 0, h = 0;
   Uint32 format = 0;
-  if (SDL_QueryTexture(texture, &format, nullptr, &w, &h) != 0)
+  if (ZT_QueryTexture(texture, &format, nullptr, &w, &h) != 0)
     return nullptr;
   const auto *record = reinterpret_cast<const SdlTexture *>(texture);
   if (record->w != w || record->h != h || record->format != format || !record->driverdata)

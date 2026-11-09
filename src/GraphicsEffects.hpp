@@ -1,7 +1,7 @@
 #ifndef GRAPHICS_EFFECTS_HPP
 #define GRAPHICS_EFFECTS_HPP
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 // addition: graphics effects for the map, as a modern game's graphics page
 // offers them - each one off unless picked (off: the map as the original

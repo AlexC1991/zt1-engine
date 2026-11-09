@@ -1,7 +1,7 @@
 #include "World.hpp"
 #include "ItemCatalog.hpp"
 #include "IniReader.hpp"
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -16,7 +16,7 @@ int runLightingBeaconAudit(World &world,ResourceManager *rm,SDL_Renderer *,const
   auto save=[&](const std::string &file,const std::string &state,Animation *a){if(!a)return;const auto dir="native/"+token(file)+"/"+token(state);fs::create_directories(fs::path(out)/dir);const char *names[]={"NE","SE","SW","NW"};int v=0;
     for(auto side:{CompassDirection::NE,CompassDirection::SE,CompassDirection::SW,CompassDirection::NW}){
       for(int f=0;f<a->frameCount();++f){auto native=a->lightingFrame(side,f);if(!native.surface)continue;const auto path=dir+"/"+names[v]+"-"+std::to_string(f)+".png";
-        if(!IMG_SavePNG(native.surface,(fs::path(out)/path).string().c_str())){csv<<file<<','<<state<<','<<names[v]<<','<<f<<','<<a->frameCount()<<','<<native.anchor.x<<','<<native.anchor.y<<','<<native.mirrored<<','<<path<<'\n';++count;}
+        if(IMG_SavePNG(native.surface,(fs::path(out)/path).string().c_str())){csv<<file<<','<<state<<','<<names[v]<<','<<f<<','<<a->frameCount()<<','<<native.anchor.x<<','<<native.anchor.y<<','<<native.mirrored<<','<<path<<'\n';++count;}
       }++v;SDL_PumpEvents();
     }
   };
@@ -51,9 +51,9 @@ int runLightingBeaconAudit(World &world,ResourceManager *rm,SDL_Renderer *,const
 int runLightingBeaconChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,const std::string &out,const std::function<void()> &draw) {
   using namespace LightingAssets;int failed=0;std::ostringstream log;
   auto check=[&](const std::string &name,bool ok){log<<(ok?"PASS ":"FAIL ")<<name<<'\n';failed+=!ok;};
-  auto snapshot=[&](const std::string &name){int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);auto *s=SDL_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);if(!s){++failed;return;}
-    if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,s->pixels,s->pitch) || IMG_SavePNG(s,(out+"/"+name+".png").c_str()))++failed;SDL_FreeSurface(s);};
-  auto checksum=[&](){int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);std::vector<Uint32> pixels(size_t(w)*h);SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4);uint64_t hash=1469598103934665603ull;for(auto p:pixels){hash^=p;hash*=1099511628211ull;}return hash;};
+  auto snapshot=[&](const std::string &name){int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);auto *s=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);if(!s){++failed;return;}
+    if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,s->pixels,s->pitch) || !IMG_SavePNG(s,(out+"/"+name+".png").c_str()))++failed;SDL_DestroySurface(s);};
+  auto checksum=[&](){int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);std::vector<Uint32> pixels(size_t(w)*h);ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4);uint64_t hash=1469598103934665603ull;for(auto p:pixels){hash^=p;hash*=1099511628211ull;}return hash;};
   const bool was=Features::dayNightLighting;world.loadBlank(80,80);world.setPaused(true);world.getCamera().zoom=1;
   auto &staff=world.getStaff();auto &map=world.getMap();auto &fences=world.getFences();fences.setEditing(true);int type=-1;
   for(size_t i=0;i<staff.types().size();++i)if(staff.types()[i].kind==Staff::Kind::Helicopter){type=int(i);break;}
@@ -68,7 +68,7 @@ int runLightingBeaconChecks(World &world,ResourceManager *rm,SDL_Renderer *rende
   auto regionsCount=[&](Animation *a,CompassDirection side,int f,PixelMask mask){int pixels=0;const auto native=a->lightingFrame(side,f);if(!native.surface)return 0;
     const auto *d=find("helibase");const auto v=viewIndex(int(side));auto *s=native.surface;
     for(const auto &r:d->views[v])if(r.pixels==mask)for(int y=0;y<s->h;++y)for(int x=0;x<s->w;++x){float px=x+.5f-native.anchor.x;if(native.mirrored)px=-px;
-      if(!inside(r,px,y+.5f-native.anchor.y))continue;Uint8 red,g,b,alpha;SDL_GetRGBA(reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(s->pixels)+y*s->pitch)[x],s->format,&red,&g,&b,&alpha);
+      if(!inside(r,px,y+.5f-native.anchor.y))continue;Uint8 red,g,b,alpha;ZT_GetRGBA(reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(s->pixels)+y*s->pitch)[x],s->format,&red,&g,&b,&alpha);
       pixels+=alpha>0 && pixelAllowed(mask,red,g,b);
     }return pixels;};
   check("helipad has native used animation",t.baseUsed && t.baseUsed->frameCount()==9);
@@ -122,7 +122,7 @@ int runLightingBeaconChecks(World &world,ResourceManager *rm,SDL_Renderer *rende
   std::ofstream(out+"/beacon-checks.txt")<<log.str();
   const bool video=std::string(std::getenv("ZT_LIGHTING_BENCH"))=="beacon-video";
   if(video && !failed) {
-    constexpr int fps=24,seconds=80;int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);if(auto *window=SDL_RenderGetWindow(renderer))SDL_HideWindow(window);
+    constexpr int fps=24,seconds=80;int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);if(auto *window=SDL_GetRenderWindow(renderer))SDL_HideWindow(window);
 #ifdef _WIN32
     _setmode(_fileno(stdout),_O_BINARY);
 #endif
@@ -143,8 +143,8 @@ int runLightingBeaconChecks(World &world,ResourceManager *rm,SDL_Renderer *rende
       m->animTime=q-start;m->baseAnimTime=time;world.objectsMutable().tick(1.0f/fps);draw();
       label="Native lighting review - view "+std::to_string(rot+1)+" of 4 - "+label;
       if(last!=label){rm->setTextScale(1);caption=rm->getStringTexture(renderer,25001,label,{255,232,172,255},25002);last=label;}
-      if(caption){int tw,th;SDL_QueryTexture(caption,nullptr,nullptr,&tw,&th);SDL_Rect bg{195,h-90,tw+24,th+18},dst{207,h-81,tw,th};SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(renderer,20,35,28,235);SDL_RenderFillRect(renderer,&bg);SDL_RenderCopy(renderer,caption,nullptr,&dst);}
-      if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4) || std::fwrite(pixels.data(),4,pixels.size(),stdout)!=pixels.size()){failed=1;break;}if(f%fps==0)std::fflush(stdout);
+      if(caption){int tw,th;ZT_QueryTexture(caption,nullptr,nullptr,&tw,&th);SDL_Rect bg{195,h-90,tw+24,th+18},dst{207,h-81,tw,th};SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(renderer,20,35,28,235);ZT_RenderFillRect(renderer,&bg);ZT_RenderCopy(renderer,caption,nullptr,&dst);}
+      if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4) || std::fwrite(pixels.data(),4,pixels.size(),stdout)!=pixels.size()){failed=1;break;}if(f%fps==0)std::fflush(stdout);
     }std::fflush(stdout);
   }
   light.previewHour=-1;Features::dayNightLighting=was;return failed?1:0;

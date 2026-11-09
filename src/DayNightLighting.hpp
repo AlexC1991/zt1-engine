@@ -1,7 +1,7 @@
 #ifndef DAY_NIGHT_LIGHTING_HPP
 #define DAY_NIGHT_LIGHTING_HPP
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <map>
 #include <set>
 #include <functional>
@@ -79,7 +79,7 @@ private:
   friend int runLightingChecks(World &,ResourceManager *,SDL_Renderer *,const std::string &,const std::function<void(const char*)> &,const SDL_Rect &);
   struct Type { float halfX = .25f, halfY = .25f; bool casts = false; int profile=0; bool foliage=false; };
   struct Light { float x, y, z, radius, lift; uint64_t owner; float distance;
-    float sx=0,sy=0,energy=1,depth=0;SDL_FRect patch{};SDL_Texture *texture=nullptr;SDL_Color colour{255,218,154,255};SDL_RendererFlip flip=SDL_FLIP_NONE;int kind=0;LightingAssets::Point normal{},axis{};bool reflective=false;float cone=0,sweep=0;
+    float sx=0,sy=0,energy=1,depth=0;SDL_FRect patch{};SDL_Texture *texture=nullptr;SDL_Color colour{255,218,154,255};SDL_FlipMode flip=SDL_FLIP_NONE;int kind=0;LightingAssets::Point normal{},axis{};bool reflective=false;float cone=0,sweep=0;
     // addition: a light on the ground only (not on surfaces), shown this much
     // this frame - a blinking beacon's - without its cached light changing
     bool groundOnly=false;float shown=1;
@@ -166,7 +166,7 @@ private:
   SDL_Texture *whiteMask();
   float terrainClearance(LightingAssets::Point,const WorldRenderer &)const;
   // addition: persistent submission storage; panning reuses allocated capacity.
-  std::vector<SDL_Vertex> surfaceVertices,shadowVertices,fieldVertices;
+  std::vector<ZT_Vertex> surfaceVertices,shadowVertices,fieldVertices;
   std::vector<int> surfaceIndices,shadowIndices,fieldIndices;
   LightingAssets::SunDepth sunMaps[2];float sunBlend=0;size_t sunHash=0;uint64_t projectedSunStamp[2]={},receiverSunStamp[2]={};
   struct Receiver {std::array<LightingAssets::Point,4> p;SDL_FPoint screen[4];LightingAssets::Point normal;int sample[4];};

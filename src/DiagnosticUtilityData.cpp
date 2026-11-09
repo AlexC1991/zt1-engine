@@ -119,13 +119,13 @@ void DiagnosticUtilityData::updateSystemStats(SDL_Renderer* renderer) {
 
     // 3. Renderer Info (One time fetch)
     if (renderer && renderer_info == "Unknown") {
-        SDL_RendererInfo info;
-        if (SDL_GetRendererInfo(renderer, &info) == 0) {
+        ZT_RendererInfo info;
+        if (ZT_GetRendererInfo(renderer, &info) == 0) {
             renderer_info = info.name;
         }
         
         int w, h;
-        if (SDL_GetRendererOutputSize(renderer, &w, &h) == 0) {
+        if (SDL_GetCurrentRenderOutputSize(renderer, &w, &h)) {
             std::stringstream ss;
             ss << w << "x" << h;
             resolution_info = ss.str();
@@ -141,23 +141,23 @@ void DiagnosticUtilityData::draw(SDL_Renderer* renderer) {
 
     // Resolution follows the window (it can be resized)
     int out_w, out_h;
-    if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0) {
+    if (SDL_GetCurrentRenderOutputSize(renderer, &out_w, &out_h)) {
         resolution_info = std::to_string(out_w) + "x" + std::to_string(out_h);
     }
 
     // RESET VIEWPORT (Fixes "Invisible Box" bug)
-    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
-    SDL_RenderSetViewport(renderer, NULL);
+    SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+    SDL_SetRenderViewport(renderer, NULL);
     
     // Background Box (Darker, slightly transparent)
     SDL_Rect box = { 10, 10, 260, 110 }; // Taller for more data
     SDL_SetRenderDrawColor(renderer, 10, 10, 10, 220); // Nearly Black
-    SDL_RenderFillRect(renderer, &box);
+    ZT_RenderFillRect(renderer, &box);
     
     // Border (Green if good FPS, Red if bad)
     if (current_fps < 30) SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
     else SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
-    SDL_RenderDrawRect(renderer, &box);
+    ZT_RenderDrawRect(renderer, &box);
 
     if (debug_font) {
         std::stringstream ss;
@@ -193,15 +193,15 @@ void DiagnosticUtilityData::draw(SDL_Renderer* renderer) {
 }
 
 void DiagnosticUtilityData::renderText(SDL_Renderer* renderer, std::string text, int x, int y, SDL_Color color) {
-    SDL_Surface* surface = TTF_RenderText_Solid(debug_font, text.c_str(), color);
+    SDL_Surface* surface = TTF_RenderText_Solid(debug_font, text.c_str(), 0, color);
     if (surface) {
         SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
         if (texture) {
             SDL_Rect dest = { x, y, surface->w, surface->h };
-            SDL_RenderCopy(renderer, texture, NULL, &dest);
+            ZT_RenderCopy(renderer, texture, NULL, &dest);
             SDL_DestroyTexture(texture);
         }
-        SDL_FreeSurface(surface);
+        SDL_DestroySurface(surface);
     }
 }
 

@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 // The Game Options' Display, Graphics and Accessibility settings (additions:
 // the original's only video settings were three fixed window sizes), kept in

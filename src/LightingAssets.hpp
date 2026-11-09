@@ -1,6 +1,6 @@
 #ifndef LIGHTING_ASSETS_HPP
 #define LIGHTING_ASSETS_HPP
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <array>
 #include <memory>
 #include <string>

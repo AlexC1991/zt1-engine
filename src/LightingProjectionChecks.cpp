@@ -5,7 +5,7 @@
 #include <filesystem>
 #include <memory>
 #include "RenderSettings.hpp"
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -19,14 +19,14 @@ namespace LightingDiagnostics {extern bool omitReceivers,fullReceiverClip;}
 int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,const std::string &out,const std::function<void()> &draw) {
   using namespace LightingAssets;int failed=0;std::ostringstream log;
   auto check=[&](const std::string &name,bool ok){log<<(ok?"PASS ":"FAIL ")<<name<<'\n';failed+=!ok;};
-  auto capture=[&](const std::string &name){draw();int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);auto *s=SDL_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);if(!s){++failed;return;}
-    if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,s->pixels,s->pitch) || IMG_SavePNG(s,(out+"/"+name+".png").c_str()))++failed;SDL_FreeSurface(s);};
-  auto pixels=[&]{int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);std::vector<Uint32> data(size_t(w)*h);if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,data.data(),w*4))data.clear();return data;};
-  auto coverage=[&]{int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);std::vector<Uint8> mask(size_t(w)*h);for(const auto &c:world.getLighting().covers){const auto f=c.art->lightingFrame(c.side,c.frame);auto *s=f.surface;if(!s)continue;
+  auto capture=[&](const std::string &name){draw();int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);auto *s=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);if(!s){++failed;return;}
+    if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,s->pixels,s->pitch) || !IMG_SavePNG(s,(out+"/"+name+".png").c_str()))++failed;SDL_DestroySurface(s);};
+  auto pixels=[&]{int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);std::vector<Uint32> data(size_t(w)*h);if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,data.data(),w*4))data.clear();return data;};
+  auto coverage=[&]{int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);std::vector<Uint8> mask(size_t(w)*h);for(const auto &c:world.getLighting().covers){const auto f=c.art->lightingFrame(c.side,c.frame);auto *s=f.surface;if(!s)continue;
     std::vector<Uint8> shadow(size_t(s->w)*s->h);if(f.shadowRuns)for(auto run:*f.shadowRuns)for(size_t i=size_t(run>>32);i<size_t(run>>32)+uint32_t(run);++i)shadow[i]=1;
     const float left=f.mirrored?c.x+f.anchor.x-s->w:c.x-f.anchor.x,top=c.y-f.anchor.y;
     for(int y=0;y<s->h;++y)for(int x=0;x<s->w;++x){int sx=f.mirrored?s->w-1-x:x;const auto pixel=reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(s->pixels)+y*s->pitch)[sx];int px=int(std::floor(left+x+.5f)),py=int(std::floor(top+y+.5f));
-      if(px>=0 && py>=0 && px<w && py<h && (pixel&s->format->Amask) && !shadow[size_t(y)*s->w+sx])mask[size_t(py)*w+px]=1;}}
+      if(px>=0 && py>=0 && px<w && py<h && (pixel&SDL_GetPixelFormatDetails(s->format)->Amask) && !shadow[size_t(y)*s->w+sx])mask[size_t(py)*w+px]=1;}}
     return mask;};
   auto changed=[](Uint32 a,Uint32 b){for(int shift:{0,8,16})if(std::abs(int((a>>shift)&255)-int((b>>shift)&255))>1)return true;return false;};
   const std::string mode=std::getenv("ZT_LIGHTING_BENCH");
@@ -44,14 +44,14 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
     check("isolated HD review pack is active",HdArt::active());
     auto atlas=[&](const std::vector<Animation::EmissionPatch> &patches,int w,int h,int scale) {
       std::vector<Uint8> alpha(size_t(w)*h*scale*scale);auto *target=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,w*scale,h*scale);
-      auto *surface=SDL_CreateRGBSurfaceWithFormat(0,w*scale,h*scale,32,SDL_PIXELFORMAT_RGBA32);auto *previous=SDL_GetRenderTarget(renderer);
-      if(!target || !surface){SDL_DestroyTexture(target);SDL_FreeSurface(surface);++failed;return alpha;}
-      SDL_SetRenderTarget(renderer,target);SDL_RenderSetScale(renderer,1,1);SDL_RenderSetViewport(renderer,nullptr);SDL_RenderSetClipRect(renderer,nullptr);SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);
+      auto *surface=ZT_CreateRGBSurfaceWithFormat(0,w*scale,h*scale,32,SDL_PIXELFORMAT_RGBA32);auto *previous=SDL_GetRenderTarget(renderer);
+      if(!target || !surface){SDL_DestroyTexture(target);SDL_DestroySurface(surface);++failed;return alpha;}
+      SDL_SetRenderTarget(renderer,target);SDL_SetRenderScale(renderer,1,1);SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderClipRect(renderer,nullptr);SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);
       for(const auto &patch:patches){SDL_BlendMode mode;Uint8 a;SDL_GetTextureBlendMode(patch.texture,&mode);SDL_GetTextureAlphaMod(patch.texture,&a);SDL_SetTextureBlendMode(patch.texture,SDL_BLENDMODE_NONE);SDL_SetTextureAlphaMod(patch.texture,255);
-        SDL_Rect rect{patch.rect.x*scale,patch.rect.y*scale,patch.rect.w*scale,patch.rect.h*scale};SDL_RenderCopy(renderer,patch.texture,nullptr,&rect);SDL_SetTextureBlendMode(patch.texture,mode);SDL_SetTextureAlphaMod(patch.texture,a);}
-      if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,surface->pixels,surface->pitch))++failed;
+        SDL_Rect rect{patch.rect.x*scale,patch.rect.y*scale,patch.rect.w*scale,patch.rect.h*scale};ZT_RenderCopy(renderer,patch.texture,nullptr,&rect);SDL_SetTextureBlendMode(patch.texture,mode);SDL_SetTextureAlphaMod(patch.texture,a);}
+      if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,surface->pixels,surface->pitch))++failed;
       for(int y=0;y<h*scale;++y)for(int x=0;x<w*scale;++x)alpha[size_t(y)*w*scale+x]=static_cast<Uint8*>(surface->pixels)[y*surface->pitch+x*4+3];
-      SDL_SetRenderTarget(renderer,previous);SDL_FreeSurface(surface);SDL_DestroyTexture(target);return alpha;
+      SDL_SetRenderTarget(renderer,previous);SDL_DestroySurface(surface);SDL_DestroyTexture(target);return alpha;
     };
     struct Case {const char *item,*state;};
     const Case cases[]={{"streetlt","idle"},{"lightho","idle"},{"restrant","idle"},{"restrant","used"},{"carousal","idle"},{"carousal","used"},{"helibase","idle"},{"helibase","used"}};
@@ -65,18 +65,18 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
         const int w=native.surface->w,h=native.surface->h;const bool sample=frame==0 || frame==art->frameCount()/2 || frame==art->frameCount()-1;
         std::vector<Uint8> nativeAlpha;if(sample)nativeAlpha=atlas(nativePatches,w,h,1);
         RenderSettings::worldZoomedIn=true;const auto &hd=art->emissionPatches(renderer,view,frame,a->id);bool baked=!hd.empty();size_t patchPixels=0;
-        for(const auto &p:hd){int tw=0,th=0;SDL_QueryTexture(p.texture,nullptr,nullptr,&tw,&th);baked &= std::string(p.material)=="baked HD material";
+        for(const auto &p:hd){int tw=0,th=0;ZT_QueryTexture(p.texture,nullptr,nullptr,&tw,&th);baked &= std::string(p.material)=="baked HD material";
           dimensions &= tw==p.rect.w*4 && th==p.rect.h*4 && p.rect.x>=0 && p.rect.y>=0 && p.rect.x+p.rect.w<=w && p.rect.y+p.rect.h<=h;patchPixels+=size_t(tw)*th;}
         paired &= lit?baked:hd.empty();active+=lit;int mismatches=0;
         if(sample && lit && baked){auto alpha=atlas(hd,w,h,4);
           // The bake's mask is the native material footprint intersected with
           // the finished HD frame's alpha; no bright pixel discovery is allowed.
           const int selected=a->animated?frame:0;const char *dirs[]={"NE","SE","SW","NW"};
-          std::unique_ptr<SDL_Surface,decltype(&SDL_FreeSurface)> colour{HdArt::load(art->lightingKey()+"/"+dirs[side]+"_"+std::to_string(selected)),SDL_FreeSurface};
+          std::unique_ptr<SDL_Surface,decltype(&SDL_DestroySurface)> colour{HdArt::load(art->lightingKey()+"/"+dirs[side]+"_"+std::to_string(selected)),SDL_DestroySurface};
           if(!colour || colour->w!=w*4 || colour->h!=h*4)footprint=false;
-          else {auto *rgba=SDL_ConvertSurfaceFormat(colour.get(),SDL_PIXELFORMAT_RGBA32,0);
+          else {auto *rgba=ZT_ConvertSurfaceFormat(colour.get(),SDL_PIXELFORMAT_RGBA32,0);
             for(int y=0;y<h*4;++y)for(int x=0;x<w*4;++x){const int expected=std::min(int(nativeAlpha[size_t(y/4)*w+x/4]),int(static_cast<Uint8*>(rgba->pixels)[y*rgba->pitch+x*4+3]));mismatches+=std::abs(int(alpha[size_t(y)*w*4+x])-expected)>1;}
-            SDL_FreeSurface(rgba);alphaCompared+=size_t(w)*h*16;}
+            SDL_DestroySurface(rgba);alphaCompared+=size_t(w)*h*16;}
           footprint &= mismatches==0;
         }
         rows<<c.item<<','<<c.state<<','<<side<<','<<frame<<','<<lit<<','<<baked<<','<<patchPixels<<','<<(lit?size_t(w)*h*16:0)<<','<<mismatches<<'\n';
@@ -98,7 +98,7 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
       auto baked=[&]{RenderSettings::worldZoomedIn=true;const auto &patches=art->emissionPatches(renderer,CompassDirection::NE,0,a->id);return !patches.empty() && std::string(patches[0].material)=="baked HD material";};
       std::error_code ec;fs::rename(file,backup,ec);check("review layer can be temporarily withheld",!ec);
       if(!ec){HdArt::refresh();check("missing HD map falls back to the native material",!baked());
-        auto *tiny=SDL_CreateRGBSurfaceWithFormat(0,1,1,32,SDL_PIXELFORMAT_RGBA32);SDL_FillRect(tiny,nullptr,0xffffffff);const bool saved=IMG_SavePNG(tiny,file.string().c_str())==0;SDL_FreeSurface(tiny);
+        auto *tiny=ZT_CreateRGBSurfaceWithFormat(0,1,1,32,SDL_PIXELFORMAT_RGBA32);SDL_FillSurfaceRect(tiny,nullptr,0xffffffff);const bool saved=IMG_SavePNG(tiny,file.string().c_str());SDL_DestroySurface(tiny);
         HdArt::refresh();check("incorrect HD map dimensions fall back without replacing the sprite",saved && !baked());fs::remove(file,ec);fs::rename(backup,file,ec);HdArt::refresh();check("restoring a map reloads the baked layer",!ec && baked());
       }
       world.getCamera().zoom=1.5f;Features::dayNightLighting=true;light.previewHour=0;draw();const auto on=pixels();
@@ -137,7 +137,7 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
       const auto side=CompassDirection(v);const auto native=art->lightingFrame(side,0);RenderSettings::worldZoomedIn=true;
       const auto &patches=art->emissionPatches(renderer,side,0,a->id);
       maps &= patches.size()==1 && std::string(patches[0].material)=="baked HD material";
-      if(!patches.empty()){int w=0,h=0;SDL_QueryTexture(patches[0].texture,nullptr,nullptr,&w,&h);scale &= native.surface && w==patches[0].rect.w*4 && h==patches[0].rect.h*4 && patches[0].rect.x>=0 && patches[0].rect.y>=0 && patches[0].rect.x+patches[0].rect.w<=native.surface->w && patches[0].rect.y+patches[0].rect.h<=native.surface->h;}
+      if(!patches.empty()){int w=0,h=0;ZT_QueryTexture(patches[0].texture,nullptr,nullptr,&w,&h);scale &= native.surface && w==patches[0].rect.w*4 && h==patches[0].rect.h*4 && patches[0].rect.x>=0 && patches[0].rect.y>=0 && patches[0].rect.x+patches[0].rect.w<=native.surface->w && patches[0].rect.y+patches[0].rect.h<=native.surface->h;}
       capture("hd_night_"+std::to_string(v));world.rotateView(1);
     }
     check("four native views load their matching baked emission layer",maps);
@@ -189,14 +189,14 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
     Features::dayNightLighting=false;draw();const auto original=pixels();Features::dayNightLighting=true;draw();Features::dayNightLighting=false;draw();
     check("fixture showcase restores exact original pixels when switched off",original==pixels());Features::dayNightLighting=true;
     log<<"Failures: "<<failed<<'\n';std::ofstream(out+"/fixture-checks.txt")<<log.str();SDL_Log("[FixtureChecks] %s",log.str().c_str());
-    if(mode=="fixtures-video" && !failed){constexpr int fps=24,frames=48*fps;int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);if(auto *window=SDL_RenderGetWindow(renderer))SDL_HideWindow(window);
+    if(mode=="fixtures-video" && !failed){constexpr int fps=24,frames=48*fps;int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);if(auto *window=SDL_GetRenderWindow(renderer))SDL_HideWindow(window);
 #ifdef _WIN32
       _setmode(_fileno(stdout),_O_BINARY);
 #endif
       std::printf("\nZT_LIGHTING_FRAMES %d %d %d %d\n",w,h,fps,frames);std::fflush(stdout);std::vector<Uint32> data(size_t(w)*h);int rotation=0;SDL_Texture *caption=nullptr;std::string last;
       for(int f=0;f<frames;++f){const int r=f/(12*fps);if(r!=rotation){world.rotateView(r-rotation);rotation=r;}light.previewBeamTime=float(f)/fps;draw();const std::string label="Stationary street-light cones - view "+std::to_string(r+1)+" of 4";
-        if(label!=last){caption=rm->getStringTexture(renderer,25001,label,{255,232,172,255},25002);last=label;}if(caption){int tw,th;SDL_QueryTexture(caption,nullptr,nullptr,&tw,&th);SDL_Rect bg{195,h-90,tw+24,th+18},dst{207,h-81,tw,th};SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(renderer,20,35,28,235);SDL_RenderFillRect(renderer,&bg);SDL_RenderCopy(renderer,caption,nullptr,&dst);}
-        if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,data.data(),w*4) || std::fwrite(data.data(),4,data.size(),stdout)!=data.size()){failed=1;break;}}
+        if(label!=last){caption=rm->getStringTexture(renderer,25001,label,{255,232,172,255},25002);last=label;}if(caption){int tw,th;ZT_QueryTexture(caption,nullptr,nullptr,&tw,&th);SDL_Rect bg{195,h-90,tw+24,th+18},dst{207,h-81,tw,th};SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(renderer,20,35,28,235);ZT_RenderFillRect(renderer,&bg);ZT_RenderCopy(renderer,caption,nullptr,&dst);}
+        if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,data.data(),w*4) || std::fwrite(data.data(),4,data.size(),stdout)!=data.size()){failed=1;break;}}
       std::fflush(stdout);
     }
     light.previewHour=light.previewBeamTime=-1;Features::dayNightLighting=was;return failed?1:0;
@@ -264,7 +264,7 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
   for(int r=0;r<4;++r){light.previewBeamTime=0;capture("projection_night_"+std::to_string(r));const auto lit=pixels();const auto support=coverage();
     LightingDiagnostics::fullReceiverClip=true;draw();fastParity &= lit==pixels();++parityFrames;LightingDiagnostics::fullReceiverClip=false;
     LightingDiagnostics::omitReceivers=true;capture("diagnostic_no_receivers_"+std::to_string(r));const auto bare=pixels();LightingDiagnostics::omitReceivers=false;
-    const float gx[]={-1,-1,1,1};const int rotation=world.getRenderer().getRotation();int width,height;SDL_GetRendererOutputSize(renderer,&width,&height);
+    const float gx[]={-1,-1,1,1};const int rotation=world.getRenderer().getRotation();int width,height;SDL_GetCurrentRenderOutputSize(renderer,&width,&height);
     for(float z:{-.5f,-1.0f,-2.0f})for(int y:{30,32,34,36,38}){const Point p{gx[rotation]>0?60.025f:45.975f,float(y),z};cameraHides &= light.terrainClearance(p,world.getRenderer())<0;
       const Point back{gx[rotation]>0?46.15f:59.85f,float(y),z};cameraHides &= light.terrainClearance(back,world.getRenderer())>=0;
       float x,sy,d;world.getRenderer().worldToScreenF(p.x,p.y,p.z,x,sy,d);int px=int(std::floor(x)),py=int(std::floor(sy));if(px<40 || py<10 || px>=width-10 || py>=height-80)continue;
@@ -294,7 +294,7 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
   for(int mode=0;mode<2;++mode){Features::dayNightLighting=mode!=0;for(int f=0;f<144;++f){light.previewBeamTime=f/24.0;world.getRenderer().centreOnWorld(44+std::sin(f*.03f)*2,36+std::cos(f*.03f)*2,0);const auto start=SDL_GetPerformanceCounter();draw();SDL_RenderPresent(renderer);if(f>=24)timing<<(mode?"night":"off")<<","<<f-24<<","<<1000.0*(SDL_GetPerformanceCounter()-start)/SDL_GetPerformanceFrequency()<<"\n";}}
   Features::dayNightLighting=true;world.getRenderer().centreOnWorld(44,36,0);
   const bool video=std::string(std::getenv("ZT_LIGHTING_BENCH"))=="projection-video";
-  if(video && !failed){constexpr int fps=24,seconds=48;int w,h;SDL_GetRendererOutputSize(renderer,&w,&h);if(auto *window=SDL_RenderGetWindow(renderer))SDL_HideWindow(window);
+  if(video && !failed){constexpr int fps=24,seconds=48;int w,h;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);if(auto *window=SDL_GetRenderWindow(renderer))SDL_HideWindow(window);
 #ifdef _WIN32
     _setmode(_fileno(stdout),_O_BINARY);
 #endif
@@ -303,8 +303,8 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
       for(const auto &member:animals.members())if(auto *m=animals.member(member.id))m->animTime=time;
       objects.tick(1.0f/fps);draw();std::string label="Projected lighthouse light and fluorescence - view "+std::to_string(rot+1)+" of 4";
       if(label!=last){rm->setTextScale(1);caption=rm->getStringTexture(renderer,25001,label,{255,232,172,255},25002);last=label;}
-      if(caption){int tw,th;SDL_QueryTexture(caption,nullptr,nullptr,&tw,&th);SDL_Rect bg{195,h-90,tw+24,th+18},dst{207,h-81,tw,th};SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(renderer,20,35,28,235);SDL_RenderFillRect(renderer,&bg);SDL_RenderCopy(renderer,caption,nullptr,&dst);}
-      if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4) || std::fwrite(pixels.data(),4,pixels.size(),stdout)!=pixels.size()){failed=1;break;}if(f%fps==0)std::fflush(stdout);
+      if(caption){int tw,th;ZT_QueryTexture(caption,nullptr,nullptr,&tw,&th);SDL_Rect bg{195,h-90,tw+24,th+18},dst{207,h-81,tw,th};SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(renderer,20,35,28,235);ZT_RenderFillRect(renderer,&bg);ZT_RenderCopy(renderer,caption,nullptr,&dst);}
+      if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4) || std::fwrite(pixels.data(),4,pixels.size(),stdout)!=pixels.size()){failed=1;break;}if(f%fps==0)std::fflush(stdout);
     }std::fflush(stdout);
   }
   light.previewBeamTime=-1;light.previewHour=-1;Features::dayNightLighting=was;return failed?1:0;

@@ -30,7 +30,7 @@
 #include <windows.h>
 #endif
 
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 
 #include "Animation.hpp"
 #include "ArtScaler.hpp"
@@ -44,6 +44,8 @@
 namespace fs = std::filesystem;
 
 namespace HdArt {
+// (a frame's blocks for the graphics card, kept with it: a surface property)
+constexpr const char *kBlocks = "zt1.hdart.blocks";
 
 namespace {
 std::vector<std::string> g_roots;
@@ -85,7 +87,7 @@ SDL_Surface *packedImage(const std::string &archive, const std::string &file) {
   void *data = ZtdFile::tryFileContent(archive, file, &size);
   if (!data)
     return nullptr;
-  SDL_Surface *s = IMG_Load_RW(SDL_RWFromConstMem(data, size), 1);
+  SDL_Surface *s = IMG_Load_IO(SDL_IOFromConstMem(data, size), 1);
   free(data);
   return s;
 }
@@ -96,7 +98,7 @@ void ensure() {
 }
 
 // A frame as RGBA32 (a new surface the caller frees)
-SDL_Surface *rgba(SDL_Surface *s) { return SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_RGBA32, 0); }
+SDL_Surface *rgba(SDL_Surface *s) { return ZT_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_RGBA32, 0); }
 
 // The clear pixels given their opaque neighbours' colour, a few pixels out
 // (still clear): an upscaler blends across the outline, and black there
@@ -216,7 +218,7 @@ SDL_Surface *load(const std::string &path) {
     }
     SDL_Surface *s = IMG_Load(file.c_str());
     if (!s)
-      SDL_Log("[HdArt] could not load %s: %s", file.c_str(), IMG_GetError());
+      SDL_Log("[HdArt] could not load %s: %s", file.c_str(), SDL_GetError());
     g_found++;
     return s;
   }
@@ -234,16 +236,16 @@ SDL_Surface *loadAt(const std::string &path, int level) {
   SDL_Surface *s = load(path);
   if (s && level == 2) {
     SDL_Surface *half = halve(s);
-    SDL_FreeSurface(s);
+    SDL_DestroySurface(s);
     s = half;
   }
   // ours: Graphics > Art Sharpness on HD art too, at the level it's drawn
   // at (after halving: where the softness is) - FSR's RCAS, as the game's
   // own art gets it
   if (const float stops = g_sharpStops; s && stops >= 0.0f) {
-    if (s->format->format != SDL_PIXELFORMAT_RGBA32) {
-      SDL_Surface *c = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_RGBA32, 0);
-      SDL_FreeSurface(s);
+    if (s->format != SDL_PIXELFORMAT_RGBA32) {
+      SDL_Surface *c = ZT_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_RGBA32, 0);
+      SDL_DestroySurface(s);
       s = c;
     }
     ArtScaler::sharpen(s, stops);
@@ -257,7 +259,7 @@ std::vector<SDL_Surface *> loadMany(const std::vector<std::string> &paths, int l
   ensure(); // (the roots read here, not on the threads)
   if (g_roots.empty() || paths.empty())
     return out;
-  IMG_Init(IMG_INIT_PNG); // (its decoder set up here, once, not by two threads at once)
+  // (SDL3_image needs no setting up before its decoders are used)
   // (the archives' reads take turns - ZtdFile's lock - the decoding doesn't)
   const unsigned n = std::min<unsigned>(std::max(1u, std::thread::hardware_concurrency()), unsigned(paths.size()));
   if (n <= 1) {
@@ -278,11 +280,11 @@ std::vector<SDL_Surface *> loadMany(const std::vector<std::string> &paths, int l
 }
 
 SDL_Surface *halve(SDL_Surface *s) {
-  SDL_Surface *in = s->format->format == SDL_PIXELFORMAT_RGBA32 ? s : rgba(s);
+  SDL_Surface *in = s->format == SDL_PIXELFORMAT_RGBA32 ? s : rgba(s);
   if (!in)
     return nullptr;
   const int w = in->w / 2, h = in->h / 2;
-  SDL_Surface *out = w > 0 && h > 0 ? SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32) : nullptr;
+  SDL_Surface *out = w > 0 && h > 0 ? ZT_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32) : nullptr;
   if (out) {
     SDL_LockSurface(in);
     for (int y = 0; y < h; y++) {
@@ -309,7 +311,7 @@ SDL_Surface *halve(SDL_Surface *s) {
     SDL_UnlockSurface(in);
   }
   if (in != s)
-    SDL_FreeSurface(in);
+    SDL_DestroySurface(in);
   return out;
 }
 
@@ -385,7 +387,7 @@ struct Loader {
           if (f) {
             auto *b = new GpuCompressed::Blocks;
             if (GpuCompressed::encode(f, job.encode == 2, *b, 1))
-              f->userdata = b;
+              SDL_SetPointerProperty(SDL_GetSurfaceProperties(f), kBlocks, b); // (SDL3: a surface's own property)
             else
               delete b;
           }
@@ -432,15 +434,17 @@ void dropLoaderWork() {
 }
 
 const GpuCompressed::Blocks *encodedOf(SDL_Surface *frame) {
-  return frame ? static_cast<const GpuCompressed::Blocks *>(frame->userdata) : nullptr;
+  return frame ? static_cast<const GpuCompressed::Blocks *>(SDL_GetPointerProperty(SDL_GetSurfaceProperties(frame), kBlocks, nullptr))
+               : nullptr;
 }
 
 void freeFrame(SDL_Surface *frame) {
   if (!frame)
     return;
-  delete static_cast<GpuCompressed::Blocks *>(frame->userdata);
-  frame->userdata = nullptr;
-  SDL_FreeSurface(frame);
+  const SDL_PropertiesID props = SDL_GetSurfaceProperties(frame);
+  delete static_cast<GpuCompressed::Blocks *>(SDL_GetPointerProperty(props, kBlocks, nullptr));
+  SDL_ClearProperty(props, kBlocks);
+  SDL_DestroySurface(frame);
 }
 
 void requestFrames(uint64_t owner, const std::string &key, int level, const std::vector<std::string> &paths,
@@ -571,7 +575,7 @@ SDL_Surface *loadModLight(const std::string &resource) {
   void *bytes = g_rm->getFileBytes(resource + ".png", &size);
   if (!bytes)
     return nullptr;
-  SDL_Surface *s = size > 0 ? IMG_Load_RW(SDL_RWFromConstMem(bytes, size), 1) : nullptr;
+  SDL_Surface *s = size > 0 ? IMG_Load_IO(SDL_IOFromConstMem(bytes, size), 1) : nullptr;
   free(bytes);
   return s;
 }
@@ -616,7 +620,7 @@ SDL_Surface *recolour(SDL_Surface *hd, SDL_Surface *painted, const std::string &
   if (!o || !p || !out) {
     for (SDL_Surface *s : {o, p, out})
       if (s)
-        SDL_FreeSurface(s);
+        SDL_DestroySurface(s);
     return hd;
   }
   // Each original pixel's change of colour (none: the frame as it is)
@@ -661,10 +665,10 @@ SDL_Surface *recolour(SDL_Surface *hd, SDL_Surface *painted, const std::string &
             px[c] = static_cast<uint8_t>(std::clamp(px[c] + delta[static_cast<size_t>(best) * 3 + c], 0, 255));
       }
     }
-  SDL_FreeSurface(o);
-  SDL_FreeSurface(p);
+  SDL_DestroySurface(o);
+  SDL_DestroySurface(p);
   if (!any) {
-    SDL_FreeSurface(out);
+    SDL_DestroySurface(out);
     return hd;
   }
   freeFrame(hd); // (its blocks, if any, were of the frame before recolouring)
@@ -704,12 +708,12 @@ void exportMaterialSeeds(Animation &art,const std::string &direction,int frame,S
     for(int side=0;side<8;++side){const auto dir=CompassDirection(side);auto native=art.lightingFrame(dir,frame);if(native.surface!=source)continue;
       const auto &patches=art.emissionPatches(exportRenderer,dir,frame,id);if(patches.empty())continue;
       auto *target=SDL_CreateTexture(exportRenderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,source->w,source->h);
-      auto *image=SDL_CreateRGBSurfaceWithFormat(0,source->w,source->h,32,SDL_PIXELFORMAT_RGBA32);if(!target || !image){SDL_DestroyTexture(target);SDL_FreeSurface(image);throw std::runtime_error("material seed allocation failed");}
-      auto *previous=SDL_GetRenderTarget(exportRenderer);SDL_SetRenderTarget(exportRenderer,target);SDL_RenderSetViewport(exportRenderer,nullptr);SDL_RenderSetClipRect(exportRenderer,nullptr);SDL_RenderSetScale(exportRenderer,1,1);SDL_SetRenderDrawColor(exportRenderer,0,0,0,0);SDL_RenderClear(exportRenderer);
-      for(const auto &p:patches){SDL_BlendMode blend;SDL_GetTextureBlendMode(p.texture,&blend);SDL_SetTextureBlendMode(p.texture,SDL_BLENDMODE_NONE);SDL_RenderCopy(exportRenderer,p.texture,nullptr,&p.rect);SDL_SetTextureBlendMode(p.texture,blend);}
+      auto *image=ZT_CreateRGBSurfaceWithFormat(0,source->w,source->h,32,SDL_PIXELFORMAT_RGBA32);if(!target || !image){SDL_DestroyTexture(target);SDL_DestroySurface(image);throw std::runtime_error("material seed allocation failed");}
+      auto *previous=SDL_GetRenderTarget(exportRenderer);SDL_SetRenderTarget(exportRenderer,target);SDL_SetRenderViewport(exportRenderer,nullptr);SDL_SetRenderClipRect(exportRenderer,nullptr);SDL_SetRenderScale(exportRenderer,1,1);SDL_SetRenderDrawColor(exportRenderer,0,0,0,0);SDL_RenderClear(exportRenderer);
+      for(const auto &p:patches){SDL_BlendMode blend;SDL_GetTextureBlendMode(p.texture,&blend);SDL_SetTextureBlendMode(p.texture,SDL_BLENDMODE_NONE);ZT_RenderCopy(exportRenderer,p.texture,nullptr,&p.rect);SDL_SetTextureBlendMode(p.texture,blend);}
       const std::string seed=std::to_string(id)+"@"+std::to_string(side)+"@"+flat;
-      fs::create_directories(fs::path(out)/"material-seeds");const bool ok=SDL_RenderReadPixels(exportRenderer,nullptr,SDL_PIXELFORMAT_RGBA32,image->pixels,image->pitch)==0 && IMG_SavePNG(image,(fs::path(out)/"material-seeds"/seed).string().c_str())==0;
-      SDL_SetRenderTarget(exportRenderer,previous);SDL_DestroyTexture(target);SDL_FreeSurface(image);if(!ok)throw std::runtime_error("could not write material seed");
+      fs::create_directories(fs::path(out)/"material-seeds");const bool ok=ZT_RenderReadPixels(exportRenderer,nullptr,SDL_PIXELFORMAT_RGBA32,image->pixels,image->pitch)==0 && IMG_SavePNG(image,(fs::path(out)/"material-seeds"/seed).string().c_str());
+      SDL_SetRenderTarget(exportRenderer,previous);SDL_DestroyTexture(target);SDL_DestroySurface(image);if(!ok)throw std::runtime_error("could not write material seed");
       std::string path=key+"/"+direction+"_"+std::to_string(frame)+".png";
       manifest<<seed<<'\t'<<"_lighting/"<<materialKey(id)<<'/'<<id<<'/'<<side<<'/'<<path<<'\t'<<flat<<'\n';
     }
@@ -744,11 +748,11 @@ int exportFrames(ResourceManager *rm, const std::string &outDir, const std::vect
         return;
       if (SDL_Surface *c = rgba(s)) {
         bleed(c);
-        if (IMG_SavePNG(c, file.c_str()) == 0){
+        if (IMG_SavePNG(c, file.c_str())){
           exportMaterialSeeds(*a,direction,frame,s,fs::path(file).filename().string(),outDir);
           written++;
-        }else {SDL_FreeSurface(c);delete a;throw std::runtime_error("could not export HD frame");}
-        SDL_FreeSurface(c);
+        }else {SDL_DestroySurface(c);delete a;throw std::runtime_error("could not export HD frame");}
+        SDL_DestroySurface(c);
       }
     });
     delete a; // addition: a million-frame batch must release each decoded animation.
@@ -820,9 +824,9 @@ int finishFrames(const std::string &framesDir, const std::string &upDir, const s
     SDL_Surface *u = IMG_Load(up.string().c_str());
     SDL_Surface *oc = o ? rgba(o) : nullptr, *uc = u ? rgba(u) : nullptr;
     if (o)
-      SDL_FreeSurface(o);
+      SDL_DestroySurface(o);
     if (u)
-      SDL_FreeSurface(u);
+      SDL_DestroySurface(u);
     int k = oc && uc && oc->w > 0 ? uc->w / oc->w : 0;
     if (k >= 2 && uc->w == oc->w * k && uc->h == oc->h * k) {
       // The outline: the original's alpha, scaled up smoothly (bilinear,
@@ -915,16 +919,16 @@ int finishFrames(const std::string &framesDir, const std::string &upDir, const s
         std::lock_guard<std::mutex> lock(dirs);
         fs::create_directories(out.parent_path(), wec);
       }
-      if (IMG_SavePNG(uc, out.string().c_str()) == 0)
+      if (IMG_SavePNG(uc, out.string().c_str()))
         done++;
     } else if (oc && uc) {
       SDL_Log("[HdArt] %s: %dx%d is not a whole multiple of %dx%d - left out", rel.string().c_str(), uc->w, uc->h,
               oc->w, oc->h);
     }
     if (oc)
-      SDL_FreeSurface(oc);
+      SDL_DestroySurface(oc);
     if (uc)
-      SDL_FreeSurface(uc);
+      SDL_DestroySurface(uc);
     }
   };
   std::vector<std::thread> workers;

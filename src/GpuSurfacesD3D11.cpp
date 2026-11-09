@@ -111,7 +111,7 @@ VSOut main(uint id : SV_VertexID) { VSOut o; o.index = id; return o; }
 )";
 
 // The CPU's drawSurfaceLighting, a face at a time: its corners' colours
-// (byte-rounded as SDL_Vertex's), mask coordinates, and clipping to the
+// (byte-rounded as ZT_Vertex's), mask coordinates, and clipping to the
 // terrain (clearance below 0) and to its sprite's bounds, in that order
 const char *kGeometry = R"(
 #include "sun"
@@ -484,7 +484,7 @@ bool drawGround(SDL_Renderer *renderer, const std::vector<uint32_t> &quads, cons
   UINT views = 1;
   ctx->RSGetViewports(&views, &vp);
   float sx = 1, sy = 1;
-  SDL_RenderGetScale(renderer, &sx, &sy);
+  SDL_GetRenderScale(renderer, &sx, &sy);
   if (!views || vp.Width <= 0 || vp.Height <= 0) {
     target->Release();
     return false;

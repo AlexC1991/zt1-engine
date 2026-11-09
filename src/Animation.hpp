@@ -8,7 +8,7 @@
 #include <map>
 #include <tuple>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include "AnimationData.hpp"
 #include "CompassDirection.hpp"
@@ -96,7 +96,7 @@ public:
     SDL_Texture *glow=nullptr; int glowPad=kGlowPad; }; // (glow: its soft light round it, glowPad past its rect)
   static constexpr int kGlowPad=6, kFireGlowPad=14;
   const std::vector<EmissionPatch> &emissionPatches(SDL_Renderer *,CompassDirection,int frame,int kind);
-  SDL_FRect emissionRect(const EmissionPatch &,float x,float y,CompassDirection,SDL_RendererFlip *flip=nullptr);
+  SDL_FRect emissionRect(const EmissionPatch &,float x,float y,CompassDirection,SDL_FlipMode *flip=nullptr);
 
   // Art drawn magnified (UI): upscaled per the art upscaling setting, and
   // frames can come from an HD pack at <hdDir>/<direction>_<frame>.png
@@ -206,7 +206,7 @@ private:
 
   int current_frame = 0;
   CompassDirection last_direction = CompassDirection::N;
-  SDL_RendererFlip renderer_flip = SDL_FLIP_NONE;
+  SDL_FlipMode renderer_flip = SDL_FLIP_NONE;
   uint32_t frame_start_time = 0;
 
   uint32_t frame_time_in_ms = 0;
@@ -263,10 +263,10 @@ private:
   // set once, as it loads; the frame sets' memo holds while textureGen does
   // (moved on whenever a set gains, loses or remakes frames). Each keeps the
   // mirroring (renderer_flip) the lookups it stands for left behind.
-  struct AnchorMemo { int8_t state = 0; SDL_RendererFlip flip = SDL_FLIP_NONE; SDL_Point anchor{}; };
+  struct AnchorMemo { int8_t state = 0; SDL_FlipMode flip = SDL_FLIP_NONE; SDL_Point anchor{}; };
   AnchorMemo anchorMemo[10];
   const AnchorMemo *anchorFor(CompassDirection direction);
-  struct FramesMemo { uint32_t gen = 0; bool setsFlip = false; SDL_RendererFlip flip = SDL_FLIP_NONE; std::vector<SDL_Texture *> *frames = nullptr; uint32_t levelGen = 0; std::string key; };
+  struct FramesMemo { uint32_t gen = 0; bool setsFlip = false; SDL_FlipMode flip = SDL_FLIP_NONE; std::vector<SDL_Texture *> *frames = nullptr; uint32_t levelGen = 0; std::string key; };
   // (a plain map-art frame made when first drawn: frameTextures' wanted)
   void makeLazyFrame(SDL_Renderer *renderer, std::vector<SDL_Texture *> &frames, const std::string &direction, bool relight, int wanted);
   FramesMemo framesMemo[4][10];

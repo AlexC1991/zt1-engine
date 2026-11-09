@@ -19,7 +19,7 @@
 #include "ZooReader.hpp"
 #include "Shows.hpp"
 #include "DayNightLighting.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <map>
 #include <string>
 
@@ -62,7 +62,7 @@ public:
     // Update world state (simulation)
     // inputSeconds<0 preserves existing callers; accelerated Play supplies
     // independent real time, once per display frame (0 on later substeps).
-    void update(const Uint8* state, float deltaTime, float inputSeconds = -1);
+    void update(const bool* state, float deltaTime, float inputSeconds = -1);
 
     // Render world (isometric terrain + entities)
     void draw(SDL_Renderer* renderer);
@@ -458,7 +458,7 @@ private:
     void layPathDrag(int tx, int ty);
     // The path tool over a walkway: that deck lit (it starts from there)
     std::pair<int, int> hoverDeck = {-1, -1};
-    std::vector<SDL_Vertex> deckOverlay; // (drawn after the decks)
+    std::vector<ZT_Vertex> deckOverlay; // (drawn after the decks)
     void planSmartPath();
     void aimLine(int x, int y);
     void startLine(int tx, int ty, bool fromDeck);
@@ -569,8 +569,8 @@ private:
     ZooReader zooReader;           // Map file parser
 
     // Input handling
-    void handleCameraInput(const Uint8* state, float deltaTime);
-    void handleDebugInput(const Uint8* state);
+    void handleCameraInput(const bool* state, float deltaTime);
+    void handleDebugInput(const bool* state);
 
     bool paused = false;
     int outputW = 1280, outputH = 720; // the map's area on the window

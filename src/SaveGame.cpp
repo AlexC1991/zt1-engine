@@ -1105,7 +1105,7 @@ std::string SaveGame::checkOriginalImport(World &world) {
     }
     const auto savedResearch = Research::get().branches();
     const auto temp = std::filesystem::temp_directory_path() /
-        ("zt1-native-import-check-" + std::to_string(SDL_GetTicks64()) + ".zt1save");
+        ("zt1-native-import-check-" + std::to_string(SDL_GetTicks()) + ".zt1save");
     bool written = save(temp.string(), world, testBooks, testHud, "freeform/ff01.scn");
     bool loaded = written && load(temp.string(), bootstrap, testBooks, testHud);
     check("full native v"+std::to_string(kVersion)+" file round-trip", loaded);
@@ -2912,7 +2912,7 @@ std::string SaveGame::checkOriginalWriter(World &world, const std::string &path,
     }
     std::string report=(projected&&wetCount==0&&dryCount==1&&bankCount==1?"PASS ":"FAIL ")+std::string("stock projection omits submerged dung and retains dry ground and tank-bank dung\n");
     for(const char *extension:{".zt1save",".zoo"}) {
-      const auto file=std::filesystem::temp_directory_path()/("zt1-wet-dung-"+std::to_string(SDL_GetTicks64())+extension);
+      const auto file=std::filesystem::temp_directory_path()/("zt1-wet-dung-"+std::to_string(SDL_GetTicks())+extension);
       const bool saved=save(file.string(),probe,books,hud,"freeform/ff01.scn");
       World restored(world.resourceManager);restored.loadBlank(32,32);
       const bool loaded=saved&&load(file.string(),restored,books,hud);
@@ -2943,7 +2943,7 @@ std::string SaveGame::checkOriginalWriter(World &world, const std::string &path,
     std::string report;
     const bool setting=Features::tankGroundBack;Features::tankGroundBack=true;
     for(const char *extension:{".zt1save",".zoo"}) {
-      const auto file=std::filesystem::temp_directory_path()/("zt1-ground-"+std::to_string(SDL_GetTicks64())+extension);
+      const auto file=std::filesystem::temp_directory_path()/("zt1-ground-"+std::to_string(SDL_GetTicks())+extension);
       const bool saved=save(file.string(),probe,books,hud,"freeform/ff01.scn");
       World restored(world.resourceManager);restored.loadBlank(32,32);
       const bool loaded=saved&&load(file.string(),restored,books,hud);

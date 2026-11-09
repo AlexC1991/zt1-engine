@@ -3,7 +3,7 @@
 
 #include <vector>
 #include <string>
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include "UiElement.hpp"
 #include "UiScrollBar.hpp"

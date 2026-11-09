@@ -3,7 +3,7 @@
 #include "../CompassDirection.hpp"
 #include "../IniReader.hpp"
 #include "../ResourceManager.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 
 namespace {

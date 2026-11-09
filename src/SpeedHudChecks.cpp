@@ -5,7 +5,7 @@
 #include "World.hpp"
 #include "ui/UiGameScreen.hpp"
 #include "ui/UiText.hpp"
-#include <SDL_image.h>
+#include <SDL3_image/SDL_image.h>
 #include <fstream>
 #include <functional>
 #include <cstdlib>
@@ -24,19 +24,19 @@ int runSpeedHudChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
   auto away=[&]{send({0,0},InputEvent::CURSOR_MOVE);};
   auto hash=[&](const char *file,SDL_Rect r){
     SDL_Surface *loaded=IMG_Load((out+"/"+file+".png").c_str());
-    SDL_Surface *s=loaded?SDL_ConvertSurfaceFormat(loaded,SDL_PIXELFORMAT_RGBA32,0):nullptr;
-    if(loaded)SDL_FreeSurface(loaded);uint64_t h=1469598103934665603ull;
+    SDL_Surface *s=loaded?ZT_ConvertSurfaceFormat(loaded,SDL_PIXELFORMAT_RGBA32,0):nullptr;
+    if(loaded)SDL_DestroySurface(loaded);uint64_t h=1469598103934665603ull;
     if(!s)return uint64_t(0);
     for(int y=r.y;y<r.y+r.h;++y)for(int x=r.x;x<r.x+r.w;++x){
       if(x<0||y<0||x>=s->w||y>=s->h)continue;
       auto p=reinterpret_cast<Uint32*>(static_cast<Uint8*>(s->pixels)+y*s->pitch)[x];h^=p;h*=1099511628211ull;
     }
-    SDL_FreeSurface(s);return h;
+    SDL_DestroySurface(s);return h;
   };
   const bool oldFeature=Features::fastForward,oldTime=Features::showGameTime,
       oldLight=Features::dayNightLighting,oldWide=widescreen,oldPause=world.isPaused();
   const float oldScale=RenderSettings::uiScaleSetting;
-  SDL_Window *window=SDL_RenderGetWindow(renderer);int oldW=0,oldH=0;SDL_GetWindowSize(window,&oldW,&oldH);
+  SDL_Window *window=SDL_GetRenderWindow(renderer);int oldW=0,oldH=0;SDL_GetWindowSize(window,&oldW,&oldH);
   SDL_SetWindowSize(window,800,600);widescreen=false;RenderSettings::uiScaleSetting=1;
   Features::fastForward=false;Features::showGameTime=false;Features::dayNightLighting=false;
   pause(false);away();syncSpeed();capture("speed-original-settle");away();capture("speed-original");
@@ -84,28 +84,28 @@ int runSpeedHudChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
     SDL_Surface *ref=IMG_Load(reference),*actual=IMG_Load((out+"/speed-clock-running.png").c_str());
     SDL_Texture *golden=ref?SDL_CreateTextureFromSurface(renderer,ref):nullptr;
     SDL_Texture *target=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_TARGET,800,600);
-    SDL_Surface *expected=SDL_CreateRGBSurfaceWithFormat(0,800,600,32,SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *expected=ZT_CreateRGBSurfaceWithFormat(0,800,600,32,SDL_PIXELFORMAT_RGBA32);
     bool valid=golden&&target&&expected&&actual;
     int compared=0,maxDelta=0;
     if(valid) {
       SDL_Texture *previous=SDL_GetRenderTarget(renderer);
-      SDL_Rect oldView{},oldClip{};SDL_RenderGetViewport(renderer,&oldView);SDL_RenderGetClipRect(renderer,&oldClip);
-      const bool clipped=SDL_RenderIsClipEnabled(renderer)==SDL_TRUE;
-      float oldX=1,oldY=1;SDL_RenderGetScale(renderer,&oldX,&oldY);
-      SDL_SetRenderTarget(renderer,target);SDL_RenderSetViewport(renderer,nullptr);SDL_RenderSetClipRect(renderer,nullptr);SDL_RenderSetScale(renderer,1,1);
+      SDL_Rect oldView{},oldClip{};SDL_GetRenderViewport(renderer,&oldView);SDL_GetRenderClipRect(renderer,&oldClip);
+      const bool clipped=SDL_RenderClipEnabled(renderer)==true;
+      float oldX=1,oldY=1;SDL_GetRenderScale(renderer,&oldX,&oldY);
+      SDL_SetRenderTarget(renderer,target);SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderClipRect(renderer,nullptr);SDL_SetRenderScale(renderer,1,1);
       SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);
-      SDL_SetTextureBlendMode(golden,SDL_BLENDMODE_NONE);SDL_SetTextureScaleMode(golden,SDL_ScaleModeLinear);
+      SDL_SetTextureBlendMode(golden,SDL_BLENDMODE_NONE);SDL_SetTextureScaleMode(golden,SDL_SCALEMODE_LINEAR);
       // Measured: approved crop (304,1020,108,66) in its 1448x1086 screen.
       const SDL_FRect destination{167.9558f,563.5359f,59.6685f,36.4641f};
-      SDL_RenderCopyF(renderer,golden,nullptr,&destination);
-      valid=SDL_RenderReadPixels(renderer,nullptr,expected->format->format,expected->pixels,expected->pitch)==0;
+      ZT_RenderCopyF(renderer,golden,nullptr,&destination);
+      valid=ZT_RenderReadPixels(renderer,nullptr,expected->format,expected->pixels,expected->pitch)==0;
       if(valid)IMG_SavePNG(expected,(out+"/speed-approved-reference-render.png").c_str());
-      SDL_SetRenderTarget(renderer,previous);SDL_RenderSetScale(renderer,oldX,oldY);SDL_RenderSetViewport(renderer,&oldView);SDL_RenderSetClipRect(renderer,clipped?&oldClip:nullptr);
+      SDL_SetRenderTarget(renderer,previous);SDL_SetRenderScale(renderer,oldX,oldY);SDL_SetRenderViewport(renderer,&oldView);SDL_SetRenderClipRect(renderer,clipped?&oldClip:nullptr);
       if(valid)for(int y=566;y<600;++y)for(int x=170;x<226;++x) {
         Uint8 r,g,b,a,rr,gg,bb,aa;
         const auto e=reinterpret_cast<Uint32*>(static_cast<Uint8*>(expected->pixels)+y*expected->pitch)[x];
         const auto v=reinterpret_cast<Uint32*>(static_cast<Uint8*>(actual->pixels)+y*actual->pitch)[x];
-        SDL_GetRGBA(e,expected->format,&r,&g,&b,&a);SDL_GetRGBA(v,actual->format,&rr,&gg,&bb,&aa);
+        ZT_GetRGBA(e,expected->format,&r,&g,&b,&a);ZT_GetRGBA(v,actual->format,&rr,&gg,&bb,&aa);
         if(a<254)continue;
         maxDelta=std::max({maxDelta,std::abs(int(r)-rr),std::abs(int(g)-gg),std::abs(int(b)-bb)});++compared;
       }
@@ -114,7 +114,7 @@ int runSpeedHudChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
     check(valid&&compared>1000,"approved external component reference loads and covers the complete face");
     check(valid&&compared>1000&&maxDelta<=3,"rendered 2x face rim and arrows match approved source colours");
     if(golden)SDL_DestroyTexture(golden);if(target)SDL_DestroyTexture(target);
-    if(ref)SDL_FreeSurface(ref);if(actual)SDL_FreeSurface(actual);if(expected)SDL_FreeSurface(expected);
+    if(ref)SDL_DestroySurface(ref);if(actual)SDL_DestroySurface(actual);if(expected)SDL_DestroySurface(expected);
   }
   send({speed.x+speed.w/2,speed.y+speed.h/2},InputEvent::LEFT_CLICK);capture("speed-pressed");
   send({speed.x+speed.w/2,speed.y+speed.h/2},InputEvent::LEFT_RELEASE);syncSpeed();away();capture("speed-clock-5x");

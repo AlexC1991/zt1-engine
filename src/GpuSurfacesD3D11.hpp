@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 // ours: the day and night lighting's receiving surfaces (DayNightLighting's
 // drawSurfaceLighting) shaded on the graphics card, on SDL's Direct3D 11

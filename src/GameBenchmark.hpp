@@ -1,7 +1,7 @@
 #ifndef GAME_BENCHMARK_HPP
 #define GAME_BENCHMARK_HPP
 
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #include <fstream>
 #include <string>
 

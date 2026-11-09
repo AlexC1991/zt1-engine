@@ -338,8 +338,8 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
     }
   }
   SDL_Texture *batch=nullptr;
-  auto flush=[&]{if(!vertices.empty())SDL_RenderGeometry(renderer,batch,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));vertices.clear();indices.clear();};
-  struct ClipVertex {SDL_Vertex v;float terrain;};std::vector<ClipVertex> polygon,clipped;polygon.reserve(12);clipped.reserve(12);
+  auto flush=[&]{if(!vertices.empty())ZT_RenderGeometry(renderer,batch,vertices.data(),int(vertices.size()),indices.data(),int(indices.size()));vertices.clear();indices.clear();};
+  struct ClipVertex {ZT_Vertex v;float terrain;};std::vector<ClipVertex> polygon,clipped;polygon.reserve(12);clipped.reserve(12);
   auto clip=[&](auto distance){if(polygon.empty())return;clipped.clear();auto a=polygon.back();float da=distance(a);
     for(auto b:polygon){float db=distance(b);if((da>=0)!=(db>=0)){float t=da/(da-db);ClipVertex c{};
       c.terrain=a.terrain+(b.terrain-a.terrain)*t;c.v.position={a.v.position.x+(b.v.position.x-a.v.position.x)*t,a.v.position.y+(b.v.position.y-a.v.position.y)*t};
@@ -403,7 +403,7 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
         Uint8(std::clamp(a.b*ratio*visibility+255*illumination[2]*sky.lamps,0.0f,255.0f)),255};
       const float x=f.p[k].x+ox,y=f.p[k].y+oy;SDL_FPoint uv{mask.uv.x,mask.uv.y};
       if(mask.required){float u=(x-mask.bounds.x)/mask.bounds.w,v=(y-mask.bounds.y)/mask.bounds.h;if(mask.mirrored)u=1-u;uv={mask.uv.x+u*mask.uv.w,mask.uv.y+v*mask.uv.h};}
-      SDL_Vertex vertex{{x*scale,y*scale},c,uv};if(needsClip)polygon.push_back({vertex,f.terrain[k]});else vertices.push_back(vertex);
+      ZT_Vertex vertex{{x*scale,y*scale},c,uv};if(needsClip)polygon.push_back({vertex,f.terrain[k]});else vertices.push_back(vertex);
     }
     if(!needsClip){indices.insert(indices.end(),{directFirst,directFirst+1,directFirst+2,directFirst,directFirst+2,directFirst+3});return;}
     if(terrainClip || LightingDiagnostics::fullReceiverClip)clip([](const auto &v){return v.terrain;});

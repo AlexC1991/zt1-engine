@@ -20,13 +20,13 @@ std::string runCameraRenderChecks(SDL_Renderer *renderer) {
   extern void worldTerrainCulling(bool);
   constexpr int width=517,height=389;
   SDL_Texture *saved=SDL_GetRenderTarget(renderer);
-  float xs=1,ys=1;SDL_RenderGetScale(renderer,&xs,&ys);
-  SDL_RenderSetScale(renderer,1,1);SDL_Rect viewport,clip;
-  SDL_RenderGetViewport(renderer,&viewport);SDL_RenderGetClipRect(renderer,&clip);
-  const bool clipped=SDL_RenderIsClipEnabled(renderer);
+  float xs=1,ys=1;SDL_GetRenderScale(renderer,&xs,&ys);
+  SDL_SetRenderScale(renderer,1,1);SDL_Rect viewport,clip;
+  SDL_GetRenderViewport(renderer,&viewport);SDL_GetRenderClipRect(renderer,&clip);
+  const bool clipped=SDL_RenderClipEnabled(renderer);
   SDL_Texture *target=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_TARGET,width,height);
-  if(!target) {SDL_RenderSetScale(renderer,xs,ys);return "FAIL camera render target unavailable";}
-  SDL_SetRenderTarget(renderer,target);SDL_RenderSetViewport(renderer,nullptr);SDL_RenderSetClipRect(renderer,nullptr);
+  if(!target) {SDL_SetRenderScale(renderer,xs,ys);return "FAIL camera render target unavailable";}
+  SDL_SetRenderTarget(renderer,target);SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderClipRect(renderer,nullptr);
   WorldMap map;map.makeBlank(200,120,0);
   for(int y=0;y<120;++y)for(int x=0;x<200;++x) {
     auto *t=map.getTileMutable(x,y);
@@ -51,12 +51,12 @@ std::string runCameraRenderChecks(SDL_Renderer *renderer) {
       for(bool partial:{false,true}) {
         std::vector<Uint32> reference(width*height),pixels(width*height);
         for(bool bounded:{false,true}) {
-          worldTerrainCulling(bounded);SDL_RenderSetScale(renderer,1,1);
-          SDL_SetRenderDrawColor(renderer,0,0,0,255);SDL_RenderClear(renderer);SDL_RenderSetScale(renderer,zoom,zoom);
+          worldTerrainCulling(bounded);SDL_SetRenderScale(renderer,1,1);
+          SDL_SetRenderDrawColor(renderer,0,0,0,255);SDL_RenderClear(renderer);SDL_SetRenderScale(renderer,zoom,zoom);
           if(partial)view.renderTerrainTiles(renderer,map,SpriteDatabase::get(),cover);
           else view.renderTerrain(renderer,map,SpriteDatabase::get());
-          SDL_RenderFlush(renderer);
-          const bool read=SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA8888,pixels.data(),width*4)==0;
+          SDL_FlushRenderer(renderer);
+          const bool read=ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA8888,pixels.data(),width*4)==0;
           equal &= read;
           if(!bounded) {reference=pixels;sawPixels |= std::any_of(pixels.begin(),pixels.end(),[](Uint32 p){return p!=0x000000ff;});}
           else equal &= pixels==reference;
@@ -67,8 +67,8 @@ std::string runCameraRenderChecks(SDL_Renderer *renderer) {
     view.rotateView(1);
   }
   worldTerrainCulling(true);SDL_SetRenderTarget(renderer,saved);
-  SDL_RenderSetScale(renderer,1,1);SDL_RenderSetViewport(renderer,&viewport);
-  SDL_RenderSetClipRect(renderer,clipped?&clip:nullptr);SDL_RenderSetScale(renderer,xs,ys);SDL_DestroyTexture(target);
+  SDL_SetRenderScale(renderer,1,1);SDL_SetRenderViewport(renderer,&viewport);
+  SDL_SetRenderClipRect(renderer,clipped?&clip:nullptr);SDL_SetRenderScale(renderer,xs,ys);SDL_DestroyTexture(target);
   std::ostringstream report;
   report<<(equal && sawPixels && cases==224?"PASS ":"FAIL ")<<cases
         <<" terrain pixel comparisons: four zooms, four rotations, map edges, raised cliffs, deep pits, paths and partial ground redraw";
@@ -91,7 +91,7 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
     Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
     for(const char *extension:{".zt1save",".zoo"}) {
       const auto file=std::filesystem::temp_directory_path()/
-        ("zt1-activity-save-"+std::to_string(SDL_GetTicks64())+extension);
+        ("zt1-activity-save-"+std::to_string(SDL_GetTicks())+extension);
       const bool written=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn");
       const bool loaded=written&&SaveGame::load(file.string(),world,books,hud);
       check(stage+" full-file "+extension+" preserves every actor",loaded&&
@@ -132,7 +132,7 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
     probeFrames.forEachFrame([&](const auto &,int,SDL_Surface *surface) {
       int pixels=0;for(int y=0;y<surface->h;++y)for(int x=0;x<surface->w;++x) {
         const auto pixel=reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(surface->pixels)+y*surface->pitch)[x];
-        pixels+=(pixel & surface->format->Amask)!=0;
+        pixels+=(pixel & SDL_GetPixelFormatDetails(surface->format)->Amask)!=0;
       }
       completeFrames+=pixels==4;
     });
@@ -292,17 +292,17 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
   ex->water=1; ex->testAnimals=2;
   // The animal pass nests inside the tank's device-pixel strips. A changed
   // clip or scale corrupts later glass, platform and filter drawing.
-  SDL_Surface *canvas=SDL_CreateRGBSurfaceWithFormat(0,512,512,32,SDL_PIXELFORMAT_RGBA32);
-  SDL_Renderer *probe=canvas?SDL_CreateSoftwareRenderer(canvas):nullptr;
+  SDL_Surface *canvas=ZT_CreateRGBSurfaceWithFormat(0,512,512,32,SDL_PIXELFORMAT_RGBA32);
+  SDL_Renderer *probe=canvas?SDL_CreateSoftwareRenderer(canvas):nullptr;if(probe)SDL_SetDefaultTextureScaleMode(probe,SDL_SCALEMODE_NEAREST); // (SDL2's default)
   bool restored=probe!=nullptr;const bool oldTankClip=Features::tankClip;Features::tankClip=true;
   world.centreOn(38,32);
   if(probe)for(float scale:{1.0f,1.5f,2.0f})for(int turn=0;turn<4;++turn) {
-    SDL_RenderSetScale(probe,1,1);SDL_Rect expected{17,23,3000,3000};
-    SDL_RenderSetClipRect(probe,&expected);SDL_RenderSetScale(probe,scale,scale);
+    SDL_SetRenderScale(probe,1,1);SDL_Rect expected{17,23,3000,3000};
+    SDL_SetRenderClipRect(probe,&expected);SDL_SetRenderScale(probe,scale,scale);
     animals.drawInTank(probe,world.getRenderer(),map,tankId,false);
-    float xScale=0,yScale=0;SDL_RenderGetScale(probe,&xScale,&yScale);
-    SDL_RenderSetScale(probe,1,1);SDL_Rect got;SDL_RenderGetClipRect(probe,&got);
-    restored &= SDL_RenderIsClipEnabled(probe) && got.x==expected.x && got.y==expected.y &&
+    float xScale=0,yScale=0;SDL_GetRenderScale(probe,&xScale,&yScale);
+    SDL_SetRenderScale(probe,1,1);SDL_Rect got;SDL_GetRenderClipRect(probe,&got);
+    restored &= SDL_RenderClipEnabled(probe) && got.x==expected.x && got.y==expected.y &&
       got.w==expected.w && got.h==expected.h && xScale==scale && yScale==scale;
     world.getRenderer().rotateView(1);
   }
@@ -323,10 +323,10 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
     std::vector<Uint8> reference;
     for(bool fast:{false,true}) {
       tankAnimalFastPaths(fast);
-      SDL_RenderSetScale(probe,1,1);SDL_RenderSetClipRect(probe,nullptr);
+      SDL_SetRenderScale(probe,1,1);SDL_SetRenderClipRect(probe,nullptr);
       SDL_SetRenderDrawColor(probe,0,0,0,0);SDL_RenderClear(probe);
-      SDL_Rect parent{17,23,450,450};SDL_RenderSetClipRect(probe,&parent);SDL_RenderSetScale(probe,scale,scale);
-      animals.drawInTank(probe,world.getRenderer(),map,tankId,false);SDL_RenderFlush(probe);
+      SDL_Rect parent{17,23,450,450};SDL_SetRenderClipRect(probe,&parent);SDL_SetRenderScale(probe,scale,scale);
+      animals.drawInTank(probe,world.getRenderer(),map,tankId,false);SDL_FlushRenderer(probe);
       const auto *bytes=static_cast<const Uint8*>(canvas->pixels);
       if(!fast) {
         reference.assign(bytes,bytes+canvas->pitch*canvas->h);
@@ -364,19 +364,19 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
           extra.push_back(half);
         }
         Fences::Drawable custom{};custom.depth=10000;
-        custom.custom=[](SDL_Renderer *r){SDL_SetRenderDrawColor(r,250,70,30,255);SDL_Rect box{10,10,8,8};SDL_RenderFillRect(r,&box);};
+        custom.custom=[](SDL_Renderer *r){SDL_SetRenderDrawColor(r,250,70,30,255);SDL_Rect box{10,10,8,8};ZT_RenderFillRect(r,&box);};
         extra.push_back(custom);
         // An off-screen custom strip must have no effect on visible pixels.
         custom.clip=true;custom.clipX0=-1000;custom.clipX1=-20;extra.push_back(custom);
         std::vector<Uint8> reference;
         for(bool cull:{false,true}) {
-          worldSpriteCulling(cull);SDL_RenderSetScale(probe,1,1);SDL_RenderSetClipRect(probe,nullptr);
+          worldSpriteCulling(cull);SDL_SetRenderScale(probe,1,1);SDL_SetRenderClipRect(probe,nullptr);
           SDL_SetRenderDrawColor(probe,0,0,0,0);SDL_RenderClear(probe);
-          SDL_Rect parent{7,9,499,497};SDL_RenderSetClipRect(probe,&parent);SDL_RenderSetScale(probe,scale,scale);
-          scene.draw(probe,world.getRenderer(),map,extra);SDL_RenderFlush(probe);
-          float xs=0,ys=0;SDL_RenderGetScale(probe,&xs,&ys);SDL_RenderSetScale(probe,1,1);
-          SDL_Rect got;SDL_RenderGetClipRect(probe,&got);
-          cullState &= xs==scale && ys==scale && SDL_RenderIsClipEnabled(probe) &&
+          SDL_Rect parent{7,9,499,497};SDL_SetRenderClipRect(probe,&parent);SDL_SetRenderScale(probe,scale,scale);
+          scene.draw(probe,world.getRenderer(),map,extra);SDL_FlushRenderer(probe);
+          float xs=0,ys=0;SDL_GetRenderScale(probe,&xs,&ys);SDL_SetRenderScale(probe,1,1);
+          SDL_Rect got;SDL_GetRenderClipRect(probe,&got);
+          cullState &= xs==scale && ys==scale && SDL_RenderClipEnabled(probe) &&
             got.x==parent.x && got.y==parent.y && got.w==parent.w && got.h==parent.h;
           const auto *bytes=static_cast<const Uint8*>(canvas->pixels);
           if(!cull) {reference.assign(bytes,bytes+canvas->pitch*canvas->h);
@@ -392,7 +392,7 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
   check("off-screen sprite pruning preserves pixels at four zooms, four rotations and five view positions",cullPixels && cullSawPixels && cullCases==80);
   check("sprite pruning preserves the parent clip and renderer scale",cullState && probe);
   // (the art drawn on the probe made its textures there: let them go first)
-  Features::tankClip=oldTankClip;if(probe){GpuTankLayer::releasePool(probe);Animation::releaseAllTextures();SDL_DestroyRenderer(probe);}if(canvas)SDL_FreeSurface(canvas);
+  Features::tankClip=oldTankClip;if(probe){GpuTankLayer::releasePool(probe);Animation::releaseAllTextures();SDL_DestroyRenderer(probe);}if(canvas)SDL_DestroySurface(canvas);
   const Fences::Edge sides[4]={{true,37,30},{false,40,31},{true,37,34},{false,36,31}};
   // Full save/load deliberately does not persist fake Lab animal counts.
   // Use a real occupant so the specialist still has work after restoration.
@@ -550,7 +550,7 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
     for(const char *extension:{".zt1save",".zoo"}) {
       const auto file=std::filesystem::temp_directory_path()/
-        ("zt1-parity-save-"+std::to_string(SDL_GetTicks64())+extension);
+        ("zt1-parity-save-"+std::to_string(SDL_GetTicks())+extension);
       const bool written=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn");
       const bool loaded=written&&SaveGame::load(file.string(),world,books,hud);
       check(stage+" full-file "+extension+" preserves actors and money",loaded&&books.cash()==1000000&&

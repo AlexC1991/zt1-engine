@@ -464,7 +464,7 @@ std::string runShowPolishChecks(World &world,ResourceManager *rm,bool demo) {
     Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
     for(const char *ext:{".zt1save",".zoo"}) {
       const auto file=std::filesystem::temp_directory_path()/
-          ("zt1-show-save-"+std::to_string(SDL_GetTicks64())+ext);
+          ("zt1-show-save-"+std::to_string(SDL_GetTicks())+ext);
       const bool saved=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn");
       const bool loaded=saved&&SaveGame::load(file.string(),world,books,hud);
       s=shows.show(tank);m=st.member(trainer);

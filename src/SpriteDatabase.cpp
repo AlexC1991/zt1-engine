@@ -2,7 +2,7 @@
 #include "ArtScaler.hpp"
 #include "AniFile.hpp"
 #include "Utils.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 // ============================================================================
 // SPRITE DATABASE IMPLEMENTATION
@@ -195,7 +195,7 @@ SpriteDatabase::getPathSprite(SDL_Renderer *renderer, const std::string &type,
       renderer, folder->second + "/" + std::to_string(frame), &sprite.anchorX,
       &sprite.anchorY);
   if (sprite.texture)
-    SDL_QueryTexture(sprite.texture, nullptr, nullptr, &sprite.width,
+    ZT_QueryTexture(sprite.texture, nullptr, nullptr, &sprite.width,
                      &sprite.height);
   else
     SDL_Log("[SpriteDatabase] Missing path art %s/%d", folder->second.c_str(),

@@ -1,7 +1,7 @@
 #include "World.hpp"
 #include "ItemCatalog.hpp"
 #include "SpriteDatabase.hpp"
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -35,23 +35,23 @@ int runLightingAssetAudit(World &world,ResourceManager *rm,SDL_Renderer *rendere
   for(int k=0;k<4;++k)for(int frame:poses) {
    const auto native=art->lightingFrame(sides[k],frame);if(!native.surface)continue;
    const std::string relative="art/"+token(resource)+"/"+token(state)+"/"+names[k]+"-"+std::to_string(frame)+".png";
-   if(IMG_SavePNG(native.surface,(fs::path(out)/relative).string().c_str())!=0){++missing;continue;}
+   if(!IMG_SavePNG(native.surface,(fs::path(out)/relative).string().c_str())){++missing;continue;}
    images<<cell(resource)<<','<<cell(state)<<','<<names[k]<<','<<frame<<','<<art->frameCount()<<','<<native.anchor.x<<','<<native.anchor.y<<','<<native.mirrored<<','<<cell(relative)<<'\n';++saved;
   }
   SDL_PumpEvents();
  };
  auto texture=[&](const std::string &resource,const std::string &state,SDL_Texture *tex) {
-  if(!tex){++missing;return;}int w,h;if(SDL_QueryTexture(tex,nullptr,nullptr,&w,&h)!=0)return;
+  if(!tex){++missing;return;}int w,h;if(ZT_QueryTexture(tex,nullptr,nullptr,&w,&h)!=0)return;
   auto *target=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,w,h);
-  auto *surface=SDL_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);if(!target || !surface){SDL_DestroyTexture(target);SDL_FreeSurface(surface);return;}
-  auto *previous=SDL_GetRenderTarget(renderer);SDL_Rect viewport,clip;float sx,sy;SDL_RenderGetViewport(renderer,&viewport);SDL_RenderGetClipRect(renderer,&clip);const bool clipped=SDL_RenderIsClipEnabled(renderer);SDL_RenderGetScale(renderer,&sx,&sy);
-  SDL_SetRenderTarget(renderer,target);SDL_RenderSetViewport(renderer,nullptr);SDL_RenderSetScale(renderer,1,1);SDL_RenderSetClipRect(renderer,nullptr);SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);SDL_RenderCopy(renderer,tex,nullptr,nullptr);
-  if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,surface->pixels,surface->pitch)==0) {
+  auto *surface=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);if(!target || !surface){SDL_DestroyTexture(target);SDL_DestroySurface(surface);return;}
+  auto *previous=SDL_GetRenderTarget(renderer);SDL_Rect viewport,clip;float sx,sy;SDL_GetRenderViewport(renderer,&viewport);SDL_GetRenderClipRect(renderer,&clip);const bool clipped=SDL_RenderClipEnabled(renderer);SDL_GetRenderScale(renderer,&sx,&sy);
+  SDL_SetRenderTarget(renderer,target);SDL_SetRenderViewport(renderer,nullptr);SDL_SetRenderScale(renderer,1,1);SDL_SetRenderClipRect(renderer,nullptr);SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);ZT_RenderCopy(renderer,tex,nullptr,nullptr);
+  if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,surface->pixels,surface->pitch)==0) {
    const std::string relative="art/"+token(resource)+"/"+token(state)+".png";fs::create_directories((fs::path(out)/relative).parent_path());
-   if(IMG_SavePNG(surface,(fs::path(out)/relative).string().c_str())==0){images<<cell(resource)<<','<<cell(state)<<",tile,0,1,0,0,0,"<<cell(relative)<<'\n';++saved;}
+   if(IMG_SavePNG(surface,(fs::path(out)/relative).string().c_str())){images<<cell(resource)<<','<<cell(state)<<",tile,0,1,0,0,0,"<<cell(relative)<<'\n';++saved;}
   }
-  SDL_SetRenderTarget(renderer,previous);SDL_RenderSetScale(renderer,sx,sy);SDL_RenderSetViewport(renderer,&viewport);SDL_RenderSetClipRect(renderer,clipped?&clip:nullptr);
-  SDL_DestroyTexture(target);SDL_FreeSurface(surface);
+  SDL_SetRenderTarget(renderer,previous);SDL_SetRenderScale(renderer,sx,sy);SDL_SetRenderViewport(renderer,&viewport);SDL_SetRenderClipRect(renderer,clipped?&clip:nullptr);
+  SDL_DestroyTexture(target);SDL_DestroySurface(surface);
  };
  auto record=[&](const std::string &resource,const std::string &name,const std::string &group,const std::string &key,const std::string &members) {
   std::unique_ptr<IniReader> ai{rm->hasResource(resource)?rm->getIniReader(resource):nullptr};std::map<std::string,std::string> ints,anims;

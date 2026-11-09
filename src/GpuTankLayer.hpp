@@ -1,7 +1,7 @@
 #ifndef GPU_TANK_LAYER_HPP
 #define GPU_TANK_LAYER_HPP
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <functional>
 
 // ours: a frame-local GPU composite shared by a tank's depth strips. Native

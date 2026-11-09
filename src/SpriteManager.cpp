@@ -1,6 +1,6 @@
 #include "SpriteManager.hpp"
 #include "AniFile.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 // ============================================================================
 // SPRITE MANAGER IMPLEMENTATION

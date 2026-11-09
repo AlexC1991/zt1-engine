@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include "Animation.hpp"
 #include "AnimationData.hpp"

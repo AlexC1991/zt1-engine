@@ -10,43 +10,41 @@
 
 bool g_showDiagnostics = false;
 
-#include "SDL_image.h"
-#include "SDL_mixer.h"
-#include "SDL_ttf.h"
+#include <SDL3_image/SDL_image.h>
+#include <SDL3_ttf/SDL_ttf.h>
+
+#include "Audio.hpp"
 
 Window::Window(const std::string &title, int width, int height, float fps_target) {
     // Sharp on any monitor: aware of each monitor's DPI, so a 125-200%
     // Windows scaling doesn't stretch the game's pixels (it was blurred);
     // the window's size is in real pixels, and the uiscale extra makes the
-    // screens bigger in whole steps instead
-    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_TIMER) != 0) {
+    // screens bigger in whole steps instead (SDL3 is aware of each monitor's
+    // DPI already: SDL2 needed SDL_HINT_WINDOWS_DPI_AWARENESS)
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "couldn't init SDL: %s", SDL_GetError());
         exit(1);
     }
 
-    if (TTF_Init() == -1) {
-        SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "couldn't init SDL_ttf: %s", TTF_GetError());
+    if (!TTF_Init()) {
+        SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "couldn't init SDL_ttf: %s", SDL_GetError());
         exit(2);
     }
 
-    if( Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 1024) == -1 ) {
-		SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "couldn't init SDL_mixer: %s", Mix_GetError());
+    if (!Audio::open()) {
+		SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "couldn't init SDL_mixer: %s", SDL_GetError());
         exit(3);
     }
-    Mix_VolumeMusic(MIX_MAX_VOLUME);
+    Audio::musicVolume(Audio::kMaxVolume);
     {
       int freq = 0, channels = 0;
-      Uint16 format = 0;
-      Mix_QuerySpec(&freq, &format, &channels);
+      Audio::spec(&freq, &channels);
       SDL_Log("[Sound] audio driver %s, %d Hz, %d channels", SDL_GetCurrentAudioDriver(), freq, channels);
-      for (int d = 0; d < SDL_GetNumAudioDevices(0); d++)
-        SDL_Log("[Sound]   output %d: %s", d, SDL_GetAudioDeviceName(d, 0));
-      char *def = nullptr;
-      SDL_AudioSpec spec;
-      if (SDL_GetDefaultAudioInfo(&def, &spec, 0) == 0) {
-        SDL_Log("[Sound]   Windows default: %s", def ? def : "?");
-        SDL_free(def);
+      int count = 0;
+      if (SDL_AudioDeviceID *devices = SDL_GetAudioPlaybackDevices(&count)) {
+        for (int d = 0; d < count; d++)
+          SDL_Log("[Sound]   output %d: %s", d, SDL_GetAudioDeviceName(devices[d]));
+        SDL_free(devices);
       }
     }
 
@@ -59,18 +57,19 @@ Window::Window(const std::string &title, int width, int height, float fps_target
     // with the original game full-screen, every time)
     {
       SDL_Rect usable;
-      if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.w > 0 && usable.h > 0) {
+      if (SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable) && usable.w > 0 && usable.h > 0) {
         width = (std::min)(width, usable.w - 16);
         height = (std::min)(height, usable.h - 48);
       }
     }
-    this->window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, SDL_WINDOW_RESIZABLE);
+    this->window = SDL_CreateWindow(title.c_str(), width, height, SDL_WINDOW_RESIZABLE);
     if (this->window) {
+      SDL_SetWindowPosition(this->window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
       SDL_Rect usable;
       int x = 0, y = 0, w = 0, h = 0;
       SDL_GetWindowPosition(this->window, &x, &y);
       SDL_GetWindowSize(this->window, &w, &h);
-      if (SDL_GetDisplayUsableBounds(0, &usable) == 0)
+      if (SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable))
         SDL_Log("[Window] %dx%d at %d,%d on a usable %dx%d at %d,%d", w, h, x, y, usable.w, usable.h, usable.x, usable.y);
     }
     if (this->window == nullptr) {
@@ -78,11 +77,16 @@ Window::Window(const std::string &title, int width, int height, float fps_target
         exit(4);
     }
 
-    this->renderer = SDL_CreateRenderer(this->window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    // (the renderer SDL_HINT_RENDER_DRIVER names: Display::startupRenderer)
+    this->renderer = SDL_CreateRenderer(this->window, nullptr);
     if (this->renderer == nullptr) {
         SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "couldn't create renderer: %s", SDL_GetError());
         exit(5);
     }
+    SDL_SetRenderVSync(this->renderer, 1);
+    // (new textures scaled as SDL2's were - nearest, each pixel kept - where
+    // SDL3's default is linear: the art was softened)
+    SDL_SetDefaultTextureScaleMode(this->renderer, SDL_SCALEMODE_NEAREST);
 
     SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
 
@@ -123,10 +127,12 @@ void keep(SDL_Window *w) {
 } // namespace
 
 SDL_Rect Window::usableArea(SDL_Window *w) {
-  int d = w ? SDL_GetWindowDisplayIndex(w) : 0;
+  SDL_DisplayID d = w ? SDL_GetDisplayForWindow(w) : 0;
+  if (!d)
+    d = SDL_GetPrimaryDisplay();
   SDL_Rect r{0, 0, 0, 0};
-  if (SDL_GetDisplayUsableBounds(d < 0 ? 0 : d, &r) != 0)
-    SDL_GetDisplayBounds(0, &r);
+  if (!SDL_GetDisplayUsableBounds(d, &r))
+    SDL_GetDisplayBounds(SDL_GetPrimaryDisplay(), &r);
   return r;
 }
 
@@ -143,15 +149,18 @@ void Window::placeSaved() {
   if (x != INT32_MIN && y != INT32_MIN) {
     int cw = 0, ch = 0;
     SDL_GetWindowSize(w, &cw, &ch);
-    for (int d = 0; d < SDL_GetNumVideoDisplays(); d++) {
+    int displays = 0;
+    SDL_DisplayID *ids = SDL_GetDisplays(&displays);
+    for (int d = 0; ids && d < displays; d++) {
       SDL_Rect b;
       // (its title bar on that monitor, so it can be grabbed)
-      if (SDL_GetDisplayUsableBounds(d, &b) == 0 && x + 40 < b.x + b.w && x + cw - 40 > b.x && y >= b.y - 8 &&
+      if (SDL_GetDisplayUsableBounds(ids[d], &b) && x + 40 < b.x + b.w && x + cw - 40 > b.x && y >= b.y - 8 &&
           y < b.y + b.h - 40) {
         SDL_SetWindowPosition(w, x, y);
         break;
       }
     }
+    SDL_free(ids);
   }
   if (Settings::getInt("user", "maximized", 0))
     SDL_MaximizeWindow(w);
@@ -204,14 +213,14 @@ void Window::present() {
     if (Embed::active()) {
         std::string shot = Embed::shotAsked();
         if (!shot.empty()) {
-            SDL_RenderSetViewport(this->renderer, nullptr);
-            SDL_RenderSetScale(this->renderer, 1, 1);
+            SDL_SetRenderViewport(this->renderer, nullptr);
+            SDL_SetRenderScale(this->renderer, 1, 1);
             int w = 0, h = 0;
-            SDL_GetRendererOutputSize(this->renderer, &w, &h);
-            if (SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 24, SDL_PIXELFORMAT_BGR24)) {
-                if (SDL_RenderReadPixels(this->renderer, nullptr, SDL_PIXELFORMAT_BGR24, s->pixels, s->pitch) == 0)
+            SDL_GetCurrentRenderOutputSize(this->renderer, &w, &h);
+            if (SDL_Surface *s = ZT_CreateRGBSurfaceWithFormat(0, w, h, 24, SDL_PIXELFORMAT_BGR24)) {
+                if (ZT_RenderReadPixels(this->renderer, nullptr, SDL_PIXELFORMAT_BGR24, s->pixels, s->pitch) == 0)
                     SDL_SaveBMP(s, shot.c_str());
-                SDL_FreeSurface(s);
+                SDL_DestroySurface(s);
             }
         }
     }
@@ -224,9 +233,8 @@ Window::~Window() {
     GpuTankLayer::releasePool(this->renderer);
     SDL_DestroyRenderer(this->renderer);
     SDL_DestroyWindow(this->window);
-    SDL_FreeCursor(this->default_cursor);
-    Mix_Quit();
-    Mix_CloseAudio();
-    IMG_Quit();
+    SDL_DestroyCursor(this->default_cursor);
+    Audio::close();
+    TTF_Quit();
     SDL_Quit();
 }

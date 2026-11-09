@@ -1,5 +1,5 @@
 #include "MemoryDumpLog.hpp"
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #include <sstream>
 #include <iomanip>
 #include <cstring>

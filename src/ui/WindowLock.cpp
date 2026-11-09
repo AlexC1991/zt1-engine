@@ -33,12 +33,12 @@ SDL_Texture *make(SDL_Renderer *renderer, ResourceManager *rm, bool locked, char
   Animation *close = rm ? rm->getAnimation("ui/sharedui/close/close") : nullptr;
   SDL_Surface *src = close ? close->frameSurface(std::string(1, frame), 0) : nullptr;
   if (src) {
-    SDL_Surface *s = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
+    SDL_Surface *s = ZT_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
     if (s) {
       Uint32 *px = static_cast<Uint32 *>(s->pixels);
       const int pitch = s->pitch / 4, w = s->w, h = s->h;
       auto rgb = [&](int x, int y, Uint8 &r, Uint8 &g, Uint8 &b, Uint8 &a) {
-        SDL_GetRGBA(px[y * pitch + x], s->format, &r, &g, &b, &a);
+        ZT_GetRGBA(px[y * pitch + x], s->format, &r, &g, &b, &a);
       };
       // The X's colour: where its strokes cross, the middle
       const int cx = w / 2, cy = h / 2;
@@ -69,7 +69,7 @@ SDL_Texture *make(SDL_Renderer *renderer, ResourceManager *rm, bool locked, char
           }
         }
       // The padlock in the X's colour
-      const Uint32 ink = SDL_MapRGBA(s->format, xr, xg, xb, 255);
+      const Uint32 ink = ZT_MapRGBA(s->format, xr, xg, xb, 255);
       const char *const *glyph = locked ? kShut : kOpen;
       for (int gy = 0; gy < 8; gy++)
         for (int gx = 0; gx < 7; gx++)
@@ -82,7 +82,7 @@ SDL_Texture *make(SDL_Renderer *renderer, ResourceManager *rm, bool locked, char
       t = SDL_CreateTextureFromSurface(renderer, s);
       if (t)
         SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
-      SDL_FreeSurface(s);
+      SDL_DestroySurface(s);
     }
   }
   g_made[{renderer, key}] = t;
@@ -100,7 +100,7 @@ void draw(SDL_Renderer *renderer, ResourceManager *rm, const SDL_Rect &at, bool 
   // mouse, lit)
   const char frame = pressed ? 'S' : lit ? 'H' : locked ? 'S' : 'N';
   if (SDL_Texture *t = make(renderer, rm, locked, frame))
-    SDL_RenderCopy(renderer, t, nullptr, &at);
+    ZT_RenderCopy(renderer, t, nullptr, &at);
 }
 
 } // namespace WindowLock

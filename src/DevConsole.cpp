@@ -7,11 +7,11 @@
 void DevConsole::toggle() {
   this->open = !this->open;
   if (this->open) {
-    SDL_StartTextInput();
+    SDL_StartTextInput(SDL_GetKeyboardFocus());
     if (this->lines.empty())
       this->print("Dev console - type 'help' for commands. ` or F10 closes.");
   } else {
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
   }
 }
 
@@ -53,7 +53,7 @@ void DevConsole::submit() {
 bool DevConsole::handleInputs(const std::vector<Input> &inputs) {
   // ` or F10 opens and closes it
   for (const Input &in : inputs)
-    if (in.event == InputEvent::KEY_DOWN && (in.key == SDLK_BACKQUOTE || in.key == SDLK_F10)) {
+    if (in.event == InputEvent::KEY_DOWN && (in.key == SDLK_GRAVE || in.key == SDLK_F10)) {
       this->toggle();
       return true;
     }
@@ -101,9 +101,9 @@ void DevConsole::draw(SDL_Renderer *renderer, ResourceManager *rm, int width, in
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
   SDL_Rect box = {0, 0, width, boxH};
   SDL_SetRenderDrawColor(renderer, 10, 16, 12, 215);
-  SDL_RenderFillRect(renderer, &box);
+  ZT_RenderFillRect(renderer, &box);
   SDL_SetRenderDrawColor(renderer, 120, 200, 120, 255);
-  SDL_RenderDrawLine(renderer, 0, boxH, width, boxH);
+  SDL_RenderLine(renderer, 0, boxH, width, boxH);
   rm->setTextScale(1.0f);
   auto text = [&](const std::string &s, int x, int y, SDL_Color c) {
     if (s.empty())
@@ -112,7 +112,7 @@ void DevConsole::draw(SDL_Renderer *renderer, ResourceManager *rm, int width, in
       int w = 0, h = 0;
       rm->getTextSize(t, &w, &h);
       SDL_Rect r = {x, y, w, h};
-      SDL_RenderCopy(renderer, t, nullptr, &r);
+      ZT_RenderCopy(renderer, t, nullptr, &r);
     }
   };
   int rows = (boxH - 12) / lineH - 1;

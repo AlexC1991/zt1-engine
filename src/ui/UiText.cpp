@@ -53,20 +53,20 @@ void UiText::beginEdit() {
   this->held_at_start = false;
   {
     int n = 0;
-    const Uint8 *keys = SDL_GetKeyboardState(&n);
+    const bool *keys = SDL_GetKeyboardState(&n);
     for (int k = 0; k < n && !this->held_at_start; k++)
       this->held_at_start = keys[k] != 0;
   }
   if (this->onBeginEdit)
     this->setText(this->onBeginEdit());
-  SDL_StartTextInput();
+  SDL_StartTextInput(SDL_GetKeyboardFocus());
 }
 
 void UiText::endEdit(bool keep) {
   if (s_editing != this)
     return;
   s_editing = nullptr;
-  SDL_StopTextInput();
+  SDL_StopTextInput(SDL_GetKeyboardFocus());
   std::string typed = this->text_string;
   this->setText(this->before_edit);
   if (keep && this->onCommit)
@@ -250,17 +250,17 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
     int lineH = resource_manager->getFontLineHeight(font, ini_reader->getInt(name, "fontsize", 0));
     SDL_Rect box = {dest_rect.x - 3, dest_rect.y - 2, dest_rect.w + 6, std::max(dest_rect.h, lineH) + 4};
     SDL_SetRenderDrawColor(renderer, 30, 30, 18, 255);
-    SDL_RenderFillRect(renderer, &box);
+    ZT_RenderFillRect(renderer, &box);
     // (sunken: dark top and left, light bottom and right, a gold edge)
     SDL_SetRenderDrawColor(renderer, 12, 12, 6, 255);
-    SDL_RenderDrawLine(renderer, box.x, box.y, box.x + box.w - 1, box.y);
-    SDL_RenderDrawLine(renderer, box.x, box.y, box.x, box.y + box.h - 1);
+    SDL_RenderLine(renderer, box.x, box.y, box.x + box.w - 1, box.y);
+    SDL_RenderLine(renderer, box.x, box.y, box.x, box.y + box.h - 1);
     SDL_SetRenderDrawColor(renderer, 150, 140, 90, 255);
-    SDL_RenderDrawLine(renderer, box.x, box.y + box.h - 1, box.x + box.w - 1, box.y + box.h - 1);
-    SDL_RenderDrawLine(renderer, box.x + box.w - 1, box.y, box.x + box.w - 1, box.y + box.h - 1);
+    SDL_RenderLine(renderer, box.x, box.y + box.h - 1, box.x + box.w - 1, box.y + box.h - 1);
+    SDL_RenderLine(renderer, box.x + box.w - 1, box.y, box.x + box.w - 1, box.y + box.h - 1);
     SDL_Rect edge = {box.x - 1, box.y - 1, box.w + 2, box.h + 2};
     SDL_SetRenderDrawColor(renderer, 255, 186, 16, 255);
-    SDL_RenderDrawRect(renderer, &edge);
+    ZT_RenderDrawRect(renderer, &edge);
   }
   if (border > 0) {
     dest_rect.x += border;
@@ -337,7 +337,7 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
             x += dest_rect.w - w;
           SDL_Rect dst = {x, y, w, h};
           if (RenderSettings::drawsUiText())
-            SDL_RenderCopy(renderer, t, NULL, &dst);
+            ZT_RenderCopy(renderer, t, NULL, &dst);
         }
         y += lineHeight;
       }
@@ -350,10 +350,10 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
       SDL_SetRenderDrawColor(renderer, 0, 0, 0, 60); // Dark background
       if (RenderSettings::drawsUiArt())
-          SDL_RenderFillRect(renderer, &dest_rect);
+          ZT_RenderFillRect(renderer, &dest_rect);
       
       // Set Clipping
-      SDL_RenderSetClipRect(renderer, &dest_rect);
+      SDL_SetRenderClipRect(renderer, &dest_rect);
   }
 
   // 3. Color Setup
@@ -401,13 +401,13 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
           
           SDL_Rect dst = {draw_x, y_pos, w, h};
           if (RenderSettings::drawsUiText())
-              SDL_RenderCopy(renderer, t, NULL, &dst);
+              ZT_RenderCopy(renderer, t, NULL, &dst);
       }
       y_pos += 14; 
   }
 
   // 5. Reset Clip
-  if (is_multiline) SDL_RenderSetClipRect(renderer, NULL);
+  if (is_multiline) SDL_SetRenderClipRect(renderer, NULL);
 
   // 6. Draw Scrollbar (Zoo Tycoon Style)
   int total_h = ((int)cached_lines.size() * 14) + 15;
@@ -419,7 +419,7 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
       // Track
       SDL_SetRenderDrawColor(renderer, 30, 30, 30, 100);
       SDL_Rect track = {bar_x, dest_rect.y, bar_w, bar_h};
-      SDL_RenderFillRect(renderer, &track);
+      ZT_RenderFillRect(renderer, &track);
       
       float view_ratio = (float)dest_rect.h / total_h;
       float scroll_ratio = (float)current / (total_h - dest_rect.h);
@@ -436,6 +436,6 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
       // Gold Thumb
       SDL_SetRenderDrawColor(renderer, 181, 159, 109, 255); 
       SDL_Rect thumb = {bar_x + 1, thumb_y, bar_w - 2, thumb_h};
-      SDL_RenderFillRect(renderer, &thumb);
+      ZT_RenderFillRect(renderer, &thumb);
   }
 }

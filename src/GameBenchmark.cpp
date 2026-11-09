@@ -6,8 +6,8 @@
 #include "Research.hpp"
 #include "RenderSettings.hpp"
 #include "DisplaySettings.hpp"
-#include <SDL_image.h>
-#include <SDL_opengl.h>
+#include <SDL3_image/SDL_image.h>
+#include <SDL3/SDL_opengl.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -64,11 +64,11 @@ bool GameBenchmark::start(World &world,ResourceManager *rm,SDL_Renderer *rendere
   world.getGuests().setEntrance(20,49);for(int k=0;k<300;++k)world.getGuests().admit(0);
   world.reindex();world.setPaused(true);world.zoomStep(-1);
   world.setView({0,0,1280,720},1);world.centreOn(36,32);
-  SDL_SetWindowSize(SDL_RenderGetWindow(renderer),1280,720);
+  SDL_SetWindowSize(SDL_GetRenderWindow(renderer),1280,720);
   // (ZT_GAME_BENCH_FPS: the frame limit to measure at, 0 for none; 60 unless set)
   const int fpsLimit=std::getenv("ZT_GAME_BENCH_FPS")?std::max(0,std::atoi(std::getenv("ZT_GAME_BENCH_FPS"))):60;
   Display::setFrameLimit(fpsLimit);Display::setVsync(false);RenderSettings::uiScaleSetting=1;
-  SDL_RendererInfo info{};SDL_GetRendererInfo(renderer,&info);
+  ZT_RendererInfo info{};ZT_GetRendererInfo(renderer,&info);
   status<<"\nname="<<name<<"\nrenderer="<<(info.name?info.name:"")<<"\nwidth=1280\nheight=720\nfps_limit="<<fpsLimit<<"\nvsync=0\nHD_pack=off\n"
         <<"zoom=0.5\nwarmup_seconds="<<warmup<<"\nminimum_seconds="<<minimum<<"\nfull_cycle_required="<<cycle<<"\nrequested_rate="<<speed
         <<"\nlighting="<<lighting<<"\nspeed_control="<<control<<"\nanimals="<<a.members().size()<<"\nstaff="<<staff.members().size()
@@ -103,9 +103,9 @@ void GameBenchmark::beforeFrame(World &world) {
 void GameBenchmark::beforeSimulation(){if(enabled())simulationStart=SDL_GetPerformanceCounter();}
 void GameBenchmark::afterSimulation(){if(enabled())simulationMs=1000*seconds(simulationStart);}
 void GameBenchmark::shot(SDL_Renderer *renderer,const char *name) {
-  int w=0,h=0;SDL_GetRendererOutputSize(renderer,&w,&h);
-  SDL_Surface *image=SDL_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);
-  if(image){if(SDL_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,image->pixels,image->pitch)==0)IMG_SavePNG(image,(out+"/"+name+".png").c_str());SDL_FreeSurface(image);}
+  int w=0,h=0;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);
+  SDL_Surface *image=ZT_CreateRGBSurfaceWithFormat(0,w,h,32,SDL_PIXELFORMAT_RGBA32);
+  if(image){if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,image->pixels,image->pitch)==0)IMG_SavePNG(image,(out+"/"+name+".png").c_str());SDL_DestroySurface(image);}
 }
 void GameBenchmark::beforePresent(World &,SDL_Renderer *renderer) {
   if(!enabled())return;

@@ -60,7 +60,7 @@ int runLightingBenchmarks(World &world,ResourceManager *rm,SDL_Renderer *rendere
  if(scenario=="materials") {extern int runLightingCatalogueChecks(World &,ResourceManager *,SDL_Renderer *,const std::string &);return runLightingCatalogueChecks(world,rm,renderer,out);}
  if(scenario=="coverage") {extern int runLightingAssetAudit(World &,ResourceManager *,SDL_Renderer *,const std::string &);return runLightingAssetAudit(world,rm,renderer,out);}
  const bool simulation=std::getenv("ZT_BENCH_SIM")!=nullptr;
- if(const char *height=std::getenv("ZT_BENCH_RES"))if(auto *window=SDL_RenderGetWindow(renderer))SDL_SetWindowSize(window,std::atoi(height)*16/9,std::atoi(height));
+ if(const char *height=std::getenv("ZT_BENCH_RES"))if(auto *window=SDL_GetRenderWindow(renderer))SDL_SetWindowSize(window,std::atoi(height)*16/9,std::atoi(height));
  world.loadBlank(scenario=="busy"?120:80,scenario=="busy"?120:80);
  world.getFences().setEditing(true);
  auto &map=world.getMap();auto &objects=world.objectsMutable();auto &animals=world.getAnimals();auto &staff=world.getStaff();auto &guests=world.getGuests();
@@ -136,8 +136,8 @@ int runLightingBenchmarks(World &world,ResourceManager *rm,SDL_Renderer *rendere
  auto &people=const_cast<std::vector<Guests::Guest>&>(guests.guests());
  for(size_t i=0;i<people.size();++i){auto &g=people[i];g.hidden=false;g.x=28.5f+(i%22)*.85f;g.y=31.5f+(i/22)*.85f;g.anim="walk";g.fx=0;g.fy=-1;}
  map.touch();world.reindex();world.setPaused(true);world.getCamera().zoom=1;
- auto &light=world.getLighting();SDL_RendererInfo info{};SDL_GetRendererInfo(renderer,&info);SDL_RenderSetVSync(renderer,0);
- int w=0,h=0;SDL_GetRendererOutputSize(renderer,&w,&h);
+ auto &light=world.getLighting();ZT_RendererInfo info{};ZT_GetRendererInfo(renderer,&info);SDL_SetRenderVSync(renderer,0);
+ int w=0,h=0;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);
  std::ofstream meta(out+"/fixture.txt");meta<<"scenario="<<scenario<<"\nrenderer="<<(info.name?info.name:"")<<"\nwidth="<<w<<"\nheight="<<h<<"\nobjects="<<objects.objects().size()<<"\nanimals="<<animals.members().size()<<"\nstaff="<<staff.members().size()<<"\nguests="<<people.size()<<"\n";
  auto animate=[&](int frame) {
   for(const auto &m:animals.members())if(auto *a=animals.member(m.id)){a->animTime=frame/60.0f;a->fx=std::sin(frame*.012f);a->fy=-std::cos(frame*.012f);}

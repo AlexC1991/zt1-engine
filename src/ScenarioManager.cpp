@@ -3,7 +3,7 @@
 #include "Utils.hpp"
 #include "Features.hpp"
 #include "IniReader.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <fstream>
 #include <set>

@@ -1,7 +1,7 @@
 #include "PalletManager.hpp"
 #include "Utils.hpp"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include "ZtdFile.hpp"
 
@@ -95,16 +95,12 @@ void PalletManager::loadPallet(const std::string &file_name) {
     return;
   }
 
-  SDL_RWops *pallet_rw = SDL_RWFromMem(pallet_file_content, pallet_file_size);
+  SDL_IOStream *pallet_rw = SDL_IOFromMem(pallet_file_content, pallet_file_size);
 
-  pallet.color_count = SDL_ReadLE32(pallet_rw);
-  SDL_RWread(
-    pallet_rw,
-    pallet.colors,
-    sizeof(uint32_t),
-    (size_t)pallet.color_count
+  pallet.color_count = ZT_ReadLE32(pallet_rw);
+  ZT_RWread(pallet_rw, pallet.colors, sizeof(uint32_t), (size_t)pallet.color_count
   );
-  SDL_RWclose(pallet_rw);
+  SDL_CloseIO(pallet_rw);
 
   this->pallet_map[file_name] = pallet;
 }

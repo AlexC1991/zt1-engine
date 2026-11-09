@@ -8,7 +8,7 @@
 #include <tuple>
 #include <unordered_map>
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include "ResourceManager.hpp"
 #include "Utils.hpp"

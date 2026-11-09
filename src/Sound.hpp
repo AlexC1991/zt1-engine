@@ -4,7 +4,7 @@
 #include <map>
 #include <string>
 
-#include "SDL_mixer.h"
+#include "Audio.hpp"
 
 class ResourceManager;
 
@@ -41,10 +41,10 @@ public:
 
 private:
   ResourceManager *rm = nullptr;
-  std::map<std::string, Mix_Chunk *> chunks;
+  std::map<std::string, Audio::Clip *> chunks;
   bool paused = false;
-  Mix_Chunk *chunk(const std::string &path);
-  int start(Mix_Chunk *c, int atten, float pan, int loops);
+  Audio::Clip *chunk(const std::string &path);
+  int start(Audio::Clip *c, int atten, float pan, int loops);
 };
 
 #endif // SOUND_HPP

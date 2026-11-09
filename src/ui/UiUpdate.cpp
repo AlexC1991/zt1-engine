@@ -3,7 +3,7 @@
 #include "UiLayout.hpp"
 #include "UiText.hpp"
 #include "UiOptions.hpp"
-#include <SDL_image.h>
+#include <SDL3_image/SDL_image.h>
 #include "../ResourceManager.hpp"
 #include "../IniReader.hpp"
 #include "../Utils.hpp"
@@ -80,9 +80,9 @@ void gear(SDL_Renderer *r, float x, float y, float radius, bool moving) {
     points[i] = {x + std::cos(a) * d, y + std::sin(a) * d};
   }
   SDL_SetRenderDrawColor(r, 255, 228, 173, 255);
-  SDL_RenderDrawLinesF(r, points, 33);
+  SDL_RenderLines(r, points, 33);
   SDL_FRect centre{x - 1, y - 1, 2, 2};
-  SDL_RenderDrawRectF(r, &centre);
+  SDL_RenderRect(r, &centre);
 }
 }
 
@@ -129,7 +129,7 @@ void UiUpdate::tick() {
     if (Updater::takeOffer(release)) visible = true;
     if (installWhenReady && Updater::state() == Updater::State::Ready) {
       if (!installAt) installAt = SDL_GetTicks() + 300;
-      if (SDL_TICKS_PASSED(SDL_GetTicks(), installAt)) {
+      if ((static_cast<Sint64>((SDL_GetTicks()) - (installAt)) >= 0)) {
         installWhenReady = false;
         if (!Updater::installNow(error)) visible = true;
       }
@@ -224,15 +224,15 @@ void UiUpdate::draw(SDL_Renderer *r, UiLayout *menu) {
   }
   if (!visible) return;
   SDL_Rect box{(800-kWidth)/2, (600-kHeight)/2, kWidth, kHeight};
-  SDL_SetRenderDrawColor(r, 37, 58, 44, 255); SDL_RenderFillRect(r, &box);
-  SDL_SetRenderDrawColor(r, 133, 147, 93, 255); SDL_RenderDrawRect(r, &box);
-  SDL_RenderDrawLine(r, box.x, box.y + 33, box.x + box.w - 1, box.y + 33);
+  SDL_SetRenderDrawColor(r, 37, 58, 44, 255); ZT_RenderFillRect(r, &box);
+  SDL_SetRenderDrawColor(r, 133, 147, 93, 255); ZT_RenderDrawRect(r, &box);
+  SDL_RenderLine(r, box.x, box.y + 33, box.x + box.w - 1, box.y + 33);
   panel->draw(r, &box);
   if (snap.state == Updater::State::Downloading && snap.totalBytes > 0) {
     SDL_Rect track{box.x + 16, box.y + 96, box.w - 32, 3};
-    SDL_SetRenderDrawColor(r, 66, 86, 58, 255); SDL_RenderFillRect(r, &track);
+    SDL_SetRenderDrawColor(r, 66, 86, 58, 255); ZT_RenderFillRect(r, &track);
     track.w = static_cast<int>(track.w * std::clamp(snap.downloadedBytes / static_cast<double>(snap.totalBytes), 0.0, 1.0));
-    SDL_SetRenderDrawColor(r, 237, 218, 150, 255); SDL_RenderFillRect(r, &track);
+    SDL_SetRenderDrawColor(r, 237, 218, 150, 255); ZT_RenderFillRect(r, &track);
   }
 }
 
@@ -254,8 +254,8 @@ int UiUpdate::checks(SDL_Renderer *r, ResourceManager *rm, const std::string &ou
   if (native && status)
     for (const char *key : {"font", "fontsize", "y", "dy", "border", "forecolor", "shadowtext"})
       check(ini->get(native->getName(), key) == ini->get(status->getName(), key), std::string("native footer ") + key);
-  SDL_RenderSetScale(r, 1, 1);
-  SDL_RenderSetViewport(r, nullptr);
+  SDL_SetRenderScale(r, 1, 1);
+  SDL_SetRenderViewport(r, nullptr);
   for (auto s : {Updater::State::Checking, Updater::State::Available, Updater::State::Downloading, Updater::State::Verifying, Updater::State::Ready, Updater::State::UpToDate, Updater::State::Failed}) {
     Updater::Snapshot snap{};
     snap.state = s; snap.release.version = "2099.1.1"; snap.downloadedBytes = 84 * 1024 * 1024;
@@ -274,10 +274,10 @@ int UiUpdate::checks(SDL_Renderer *r, ResourceManager *rm, const std::string &ou
       }
     }
     SDL_Rect capture{0, 0, 800, 600};
-    SDL_Surface *image = SDL_CreateRGBSurfaceWithFormat(0, capture.w, capture.h, 32, SDL_PIXELFORMAT_ARGB8888);
-    bool saved = image && SDL_RenderReadPixels(r, &capture, SDL_PIXELFORMAT_ARGB8888, image->pixels, image->pitch) == 0 &&
-        IMG_SavePNG(image, (out + "/update-" + std::to_string(static_cast<int>(s)) + ".png").c_str()) == 0;
-    if (image) SDL_FreeSurface(image);
+    SDL_Surface *image = ZT_CreateRGBSurfaceWithFormat(0, capture.w, capture.h, 32, SDL_PIXELFORMAT_ARGB8888);
+    bool saved = image && ZT_RenderReadPixels(r, &capture, SDL_PIXELFORMAT_ARGB8888, image->pixels, image->pitch) == 0 &&
+        IMG_SavePNG(image, (out + "/update-" + std::to_string(static_cast<int>(s)) + ".png").c_str());
+    if (image) SDL_DestroySurface(image);
     check(saved, "capture " + label(s));
     SDL_RenderPresent(r);
   }

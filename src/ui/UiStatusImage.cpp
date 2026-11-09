@@ -56,7 +56,7 @@ void UiStatusImage::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     SDL_Rect src = ArtScaler::toTexture(tex, {0, 0, std::min(w, tw), th});
     SDL_Rect dst = {rect.x, rect.y, w, th};
     RenderSettings::applyArtScaleMode(tex);
-    SDL_RenderCopy(renderer, tex, &src, &dst);
+    ZT_RenderCopy(renderer, tex, &src, &dst);
   }
   this->drawChildren(renderer, &rect);
 }

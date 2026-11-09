@@ -1,3 +1,4 @@
+#include <cmath>
 #include "InputManager.hpp"
 
 #include "Features.hpp"
@@ -28,22 +29,22 @@ std::vector<Input> InputManager::getInputs() {
     };
     
     switch (event.type) {
-      case SDL_QUIT:
+      case SDL_EVENT_QUIT:
         input.type = InputType::BUTTON;
         input.event = InputEvent::QUIT;
         break;
         
-      case SDL_KEYDOWN:
+      case SDL_EVENT_KEY_DOWN:
         input.type = InputType::BUTTON;
-        if (event.key.keysym.sym == SDLK_ESCAPE) {
+        if (event.key.key == SDLK_ESCAPE) {
           input.event = InputEvent::KEY_ESCAPE;
-        } else if (event.key.keysym.sym == SDLK_F3 && !event.key.repeat) {
+        } else if (event.key.key == SDLK_F3 && !event.key.repeat) {
           // Toggle the diagnostics overlay
           g_showDiagnostics = !g_showDiagnostics;
           input.event = InputEvent::NONE;
         } else if (Features::hotkeys && !event.key.repeat &&
-                   (event.key.keysym.sym == SDLK_F11 ||
-                    (event.key.keysym.sym == SDLK_RETURN && (event.key.keysym.mod & KMOD_ALT)))) {
+                   (event.key.key == SDLK_F11 ||
+                    (event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT)))) {
           // (the hotkeys extra) Alt+Enter or F11: full screen on or off, as
           // Windows games do (the original: the Game Options' button only)
           if (SDL_Window *w = SDL_GetWindowFromID(event.key.windowID))
@@ -51,28 +52,31 @@ std::vector<Input> InputManager::getInputs() {
           input.event = InputEvent::NONE;
         } else {
           input.event = InputEvent::KEY_DOWN;
-          input.key = event.key.keysym.sym;
+          input.key = event.key.key;
         }
         break;
 
-      case SDL_WINDOWEVENT:
-        // Moved, resized, maximised or back: the player's window, kept
-        if (event.window.event == SDL_WINDOWEVENT_MOVED || event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
-            event.window.event == SDL_WINDOWEVENT_MAXIMIZED || event.window.event == SDL_WINDOWEVENT_RESTORED)
-          Window::windowChanged(SDL_GetWindowFromID(event.window.windowID));
+      // Moved, resized, maximised or back: the player's window, kept (SDL3's
+      // window events are events of their own)
+      case SDL_EVENT_WINDOW_MOVED:
+      case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+      case SDL_EVENT_WINDOW_MAXIMIZED:
+      case SDL_EVENT_WINDOW_RESTORED:
+        Window::windowChanged(SDL_GetWindowFromID(event.window.windowID));
         break;
 
-      case SDL_TEXTINPUT:
+      case SDL_EVENT_TEXT_INPUT:
         input.type = InputType::BUTTON;
         input.event = InputEvent::TEXT_INPUT;
         SDL_strlcpy(input.text, event.text.text, sizeof(input.text));
         break;
 
-      case SDL_MOUSEBUTTONUP:
+      case SDL_EVENT_MOUSE_BUTTON_UP:
         input.type = InputType::POSITIONED;
         // Where it happened (the mouse may have moved on since: a press
         // and a drag can arrive in the same frame)
-        input.position = {event.button.x, event.button.y};
+        // (SDL3's are fractional: the whole pixel, as SDL2 gave)
+        input.position = {static_cast<int>(std::floor(event.button.x)), static_cast<int>(std::floor(event.button.y))};
         input.x = input.position.x;
         input.y = input.position.y;
         input.event = event.button.button == SDL_BUTTON_LEFT    ? InputEvent::LEFT_RELEASE
@@ -80,26 +84,26 @@ std::vector<Input> InputManager::getInputs() {
                                                                 : InputEvent::NONE;
         break;
         
-      case SDL_MOUSEBUTTONDOWN:
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
         input.type = InputType::POSITIONED;
-        input.position = {event.button.x, event.button.y};
+        input.position = {static_cast<int>(std::floor(event.button.x)), static_cast<int>(std::floor(event.button.y))};
         input.x = input.position.x;
         input.y = input.position.y;
         input.event = getEventFromMouseButton(event.button.button);
         break;
         
-      case SDL_MOUSEMOTION:
+      case SDL_EVENT_MOUSE_MOTION:
         input.type = InputType::POSITIONED;
         input.event = InputEvent::CURSOR_MOVE;
-        input.position = {event.motion.x, event.motion.y};
+        input.position = {static_cast<int>(std::floor(event.motion.x)), static_cast<int>(std::floor(event.motion.y))};
         input.x = input.position.x;
         input.y = input.position.y;
         break;
         
       // [PATCH] Handle mouse wheel scrolling
-      case SDL_MOUSEWHEEL:
+      case SDL_EVENT_MOUSE_WHEEL:
         input.type = InputType::POSITIONED;
-        SDL_GetMouseState(&input.position.x, &input.position.y);
+        input.position = {static_cast<int>(std::floor(event.wheel.mouse_x)), static_cast<int>(std::floor(event.wheel.mouse_y))};
         input.x = input.position.x;
         input.y = input.position.y;
         
@@ -113,7 +117,7 @@ std::vector<Input> InputManager::getInputs() {
         break;
     }
     
-    if (event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP) {
+    if (event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
       MouseEvents::x = input.position.x;
       MouseEvents::y = input.position.y;
     }

@@ -50,10 +50,55 @@ set(ZLIB_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/vendor/zlib" "${CMAKE_BINARY_DIR}/vend
 set(ZLIB_LIBRARY zlibstatic CACHE FILEPATH "ZLIB Library" FORCE)
 
 # 5. ADD LIBRARIES
+# ours: the port to SDL3 (its GPU API: one modern graphics path for new
+# effects - Direct3D 12, Vulkan, Metal - in place of the Direct3D 11 and
+# OpenGL twins), built in its own folder while it's made (build-sdl3:
+# -DZT1_SDL3=ON); off, SDL2 as always
+option(ZT1_SDL3 "Build on SDL3 (the port in progress); off, SDL2" OFF)
+if(ZT1_SDL3)
+    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+    set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+    set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+    add_subdirectory(vendor/SDL3)
+    # (images: the built-in decoders only, as the SDL2 build)
+    foreach(off SDLIMAGE_VENDORED SDLIMAGE_AVIF SDLIMAGE_JXL SDLIMAGE_TIF SDLIMAGE_WEBP SDLIMAGE_BACKEND_WIC
+                SDLIMAGE_PNG_LIBPNG SDLIMAGE_SAMPLES SDLIMAGE_TESTS SDLIMAGE_INSTALL SDLIMAGE_DEPS_SHARED)
+        set(${off} OFF CACHE BOOL "" FORCE)
+    endforeach()
+    set(SDLIMAGE_BACKEND_STB ON CACHE BOOL "" FORCE)
+    add_subdirectory(vendor/SDL3_image)
+    # (sound: the decoders built into SDL3_mixer - WAVE, dr_mp3, stb_vorbis,
+    # dr_flac, timidity - none downloaded)
+    foreach(off SDLMIXER_VENDORED SDLMIXER_FLAC_LIBFLAC SDLMIXER_GME SDLMIXER_MOD SDLMIXER_MP3_MPG123
+                SDLMIXER_MIDI_FLUIDSYNTH SDLMIXER_OPUS SDLMIXER_VORBIS_VORBISFILE SDLMIXER_WAVPACK
+                SDLMIXER_TESTS SDLMIXER_EXAMPLES SDLMIXER_INSTALL SDLMIXER_DEPS_SHARED)
+        set(${off} OFF CACHE BOOL "" FORCE)
+    endforeach()
+    add_subdirectory(vendor/SDL3_mixer)
+    # (text: FreeType from the copy SDL2_ttf brought, in SDL3_ttf/external;
+    # no HarfBuzz or colour emoji, as the SDL2 build)
+    set(SDLTTF_VENDORED ON CACHE BOOL "" FORCE)
+    foreach(off SDLTTF_HARFBUZZ SDLTTF_PLUTOSVG SDLTTF_SAMPLES SDLTTF_INSTALL)
+        set(${off} OFF CACHE BOOL "" FORCE)
+    endforeach()
+    # (FreeType's own: no compressed or colour fonts - as SDL2_ttf set them)
+    foreach(on FT_DISABLE_ZLIB FT_DISABLE_BZIP2 FT_DISABLE_PNG FT_DISABLE_BROTLI FT_DISABLE_HARFBUZZ)
+        set(${on} ON CACHE BOOL "" FORCE)
+    endforeach()
+    # (zlib is found for libzip, below; FreeType goes by ZLIB_FOUND, so it's
+    # hidden from SDL3_ttf, then shown again)
+    set(ZLIB_FOUND FALSE)
+    add_subdirectory(vendor/SDL3_ttf)
+    unset(ZLIB_FOUND)
+else()
 add_subdirectory(vendor/SDL)
 add_subdirectory(vendor/SDL_image)
 add_subdirectory(vendor/SDL_mixer)
 add_subdirectory(vendor/SDL_ttf)
+endif()
 add_subdirectory(vendor/zlib)
 add_subdirectory(vendor/libzip)
 add_subdirectory(vendor/pe-resource-loader)
@@ -66,8 +111,12 @@ list(FILTER SOURCES EXCLUDE REGEX "Entity.cpp$")
 list(FILTER SOURCES EXCLUDE REGEX "src/original/")
 # Dear ImGui (vendor/imgui): the Lab's panels (--lab)
 list(APPEND SOURCES
-    vendor/imgui/imgui.cpp vendor/imgui/imgui_draw.cpp vendor/imgui/imgui_tables.cpp vendor/imgui/imgui_widgets.cpp
-    vendor/imgui/backends/imgui_impl_sdl2.cpp vendor/imgui/backends/imgui_impl_sdlrenderer2.cpp)
+    vendor/imgui/imgui.cpp vendor/imgui/imgui_draw.cpp vendor/imgui/imgui_tables.cpp vendor/imgui/imgui_widgets.cpp)
+if(ZT1_SDL3)
+    list(APPEND SOURCES vendor/imgui/backends/imgui_impl_sdl3.cpp vendor/imgui/backends/imgui_impl_sdlrenderer3.cpp)
+else()
+    list(APPEND SOURCES vendor/imgui/backends/imgui_impl_sdl2.cpp vendor/imgui/backends/imgui_impl_sdlrenderer2.cpp)
+endif()
 
 # 7. FIX LINKER PATHS FOR MSVC
 if(MSVC)
@@ -117,12 +166,22 @@ target_include_directories(zt1-engine PRIVATE
 )
 
 # 10. LINK EVERYTHING TOGETHER (Single unified call with PRIVATE keyword)
+if(ZT1_SDL3)
+    # (the targets bring their own include folders: <SDL3/...>, <SDL3_image/...>)
+    target_link_libraries(zt1-engine PRIVATE SDL3::SDL3-static SDL3_image::SDL3_image-static
+        SDL3_mixer::SDL3_mixer-static SDL3_ttf::SDL3_ttf-static)
+    target_compile_definitions(zt1-engine PRIVATE ZT1_SDL3=1)
+    # (the SDL2 calls whose meaning changed, kept as the engine used them:
+    # before every source file)
+    if(MSVC)
+        target_compile_options(zt1-engine PRIVATE "/FI${CMAKE_SOURCE_DIR}/src/Sdl3Compat.hpp")
+    else()
+        target_compile_options(zt1-engine PRIVATE -include "${CMAKE_SOURCE_DIR}/src/Sdl3Compat.hpp")
+    endif()
+else()
+    target_link_libraries(zt1-engine PRIVATE SDL2-static SDL2_image-static SDL2_mixer-static SDL2_ttf)
+endif()
 target_link_libraries(zt1-engine PRIVATE
-    # SDL Libraries
-    SDL2-static
-    SDL2_image-static
-    SDL2_mixer-static
-    SDL2_ttf
     # Archive/Compression
     zip
     zlibstatic

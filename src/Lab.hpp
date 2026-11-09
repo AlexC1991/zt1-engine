@@ -6,7 +6,7 @@
 // Ghidra), see the engine code that implements it, and Build & Run a script
 // (re/lab/scripts/*.cpp, see re/lab/lab_api.h) that sets up a scene on our
 // own engine and steps through it with a log, watched values and graphs.
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <functional>
 #include <string>
 #include <vector>

@@ -2737,13 +2737,13 @@ auto spanAt = [](const std::vector<std::pair<float, float>> &poly, float x, floa
 // (the tank's body, column by column: the outline's own top and bottom at
 // that screen x, so a column never reaches past the tank's ends)
 float sxScale = 1.0f, syScale = 1.0f;
-SDL_RenderGetScale(renderer, &sxScale, &syScale);
-const bool hadClip = SDL_RenderIsClipEnabled(renderer);
+SDL_GetRenderScale(renderer, &sxScale, &syScale);
+const bool hadClip = SDL_RenderClipEnabled(renderer);
 SDL_Rect oldClip;
 // Parent tank strips use device pixels. Read and restore in that same space.
-SDL_RenderSetScale(renderer, 1.0f, 1.0f);
-SDL_RenderGetClipRect(renderer, &oldClip);
-SDL_RenderSetScale(renderer, sxScale, syScale);
+SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+SDL_GetRenderClipRect(renderer, &oldClip);
+SDL_SetRenderScale(renderer, sxScale, syScale);
 std::vector<SDL_FRect> bounds;
 float visibleLeft=1e9f,visibleRight=-1e9f;
 for(const auto &d:out) {
@@ -2764,7 +2764,7 @@ if (!hullTank.empty()) {
     maxX = std::max(maxX, p.first);
   }
   float pixelScaleX=1, pixelScaleY=1;
-  SDL_RenderGetScale(renderer,&pixelScaleX,&pixelScaleY);
+  SDL_GetRenderScale(renderer,&pixelScaleX,&pixelScaleY);
   const float step = 1.0f/std::max(0.001f,pixelScaleX);
   minX+=std::max(0.0f,std::floor((visibleLeft-minX)/step))*step;
   maxX=std::min(maxX,visibleRight+step);
@@ -2798,7 +2798,7 @@ std::vector<SDL_Rect> strips;
       if (rc.w <= 0 || rc.h <= 0) continue;
       if (hadClip) {
         SDL_Rect both;
-        if (!SDL_IntersectRect(&rc, &oldClip, &both)) continue;
+        if (!SDL_GetRectIntersection(&rc, &oldClip, &both)) continue;
         rc = both;
       }
       strips.push_back(rc);
@@ -2838,21 +2838,21 @@ std::vector<SDL_Rect> strips;
   for(size_t i=0;i<out.size();++i) {
     auto &d=out[i];const auto &box=bounds[i];
     const float right=box.x+box.w,bottom=box.y+box.h;
-    SDL_RenderSetScale(renderer,1,1);
+    SDL_SetRenderScale(renderer,1,1);
     if(d.airborne || (fastTankSprites && inside(box.x,box.y) && inside(right,box.y) && inside(right,bottom) && inside(box.x,bottom))) {
-      SDL_RenderSetClipRect(renderer,hadClip?&oldClip:nullptr);
-      SDL_RenderSetScale(renderer,sxScale,syScale);
+      SDL_SetRenderClipRect(renderer,hadClip?&oldClip:nullptr);
+      SDL_SetRenderScale(renderer,sxScale,syScale);
       d.art->drawAnchored(renderer,d.sx,d.sy,d.side,d.tinted?&d.tint:nullptr,d.frame);
     } else for(const auto &rc:strips) {
       if(rc.x+rc.w<=box.x*sxScale || rc.x>=right*sxScale || rc.y+rc.h<=box.y*syScale || rc.y>=bottom*syScale)continue;
-      SDL_RenderSetScale(renderer,1,1);SDL_RenderSetClipRect(renderer,&rc);
-      SDL_RenderSetScale(renderer,sxScale,syScale);
+      SDL_SetRenderScale(renderer,1,1);SDL_SetRenderClipRect(renderer,&rc);
+      SDL_SetRenderScale(renderer,sxScale,syScale);
       d.art->drawAnchored(renderer,d.sx,d.sy,d.side,d.tinted?&d.tint:nullptr,d.frame);
     }
   }
-  SDL_RenderSetScale(renderer,1,1);
-  SDL_RenderSetClipRect(renderer, hadClip ? &oldClip : nullptr);
-  SDL_RenderSetScale(renderer, sxScale, syScale);
+  SDL_SetRenderScale(renderer,1,1);
+  SDL_SetRenderClipRect(renderer, hadClip ? &oldClip : nullptr);
+  SDL_SetRenderScale(renderer, sxScale, syScale);
 }
 
 int Animals::pick(float px, float py, const WorldRenderer &view, const WorldMap &map) const {

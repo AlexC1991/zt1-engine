@@ -1,7 +1,7 @@
 #ifndef WINDOW_HPP
 #define WINDOW_HPP
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <string>
 
 // Diagnostics overlay visibility (F3)

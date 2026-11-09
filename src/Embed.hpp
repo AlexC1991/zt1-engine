@@ -17,7 +17,7 @@
 //                      the original's hook answers, so the Lab's Play
 //                      picture works for both games)
 //   volume <0-100>   (its own volume, src/SessionVolume.hpp)
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <string>
 
@@ -34,7 +34,7 @@ bool quitAsked();
 bool hidden();
 // Real keys plus keys held by the Lab's input commands. Synthetic SDL events
 // do not update SDL_GetKeyboardState; this does not change the user's keyboard.
-const Uint8 *keyboardState();
+const bool *keyboardState();
 // Asked for a screenshot (snap): true once, then cleared
 bool snapAsked();
 // Where the next frame is to be saved (shot <file>): the path once, then ""
