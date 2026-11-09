@@ -87,6 +87,10 @@ void DayNightLighting::buildIrradiance(const WorldMap &map) {
   // addition: static 3D occlusion and inverse-square irradiance are cached in
   // world space. Camera panning only projects these samples; it casts no rays.
   indexLocalLights();groundLight.clear();surfaceLight.clear();beamLights.clear();
+  // ours: the pools' boxes (composite) made again with the grids - kept by
+  // the grid's address, a new grid could land where another lamp's was, the
+  // same size, and take its box: that lamp's pool then left out on screen
+  groundBoxes.clear();
   for(size_t i=0;i<lights.size();++i)if(lights[i].cone>0 && lights[i].sweep!=0)beamLights.push_back(i);
   beamSurface.assign(beamLights.size(),std::vector<std::vector<BeamSamples>>(instances.size()));
   // addition: invalidate by each light's actual neighbourhood. A nearby

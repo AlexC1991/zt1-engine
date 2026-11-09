@@ -58,6 +58,8 @@ public:
   // addition: the HUD date bar displays the same hour used by sky and lamps.
   double displayedHour() const { return hour; }
   const Stats &stats() const { return counters; }
+  // ours (for the checks): every lamp pool's kept box is its own grid's
+  bool groundBoxesTrue(const WorldMap &map) const;
   const GpuLighting::Stats &gpuStats()const {return gpu.stats();}
   const std::string &gpuStatus()const {return gpu.reason();}
   size_t bufferBytes()const;
@@ -191,7 +193,7 @@ private:
   // and each tank's ground pass share in a frame (each worked it all out)
   LightingAssets::ActorCells receiverCells[2],faceCells[2];uint64_t projectionSerial=0;
   std::vector<uint8_t> receiverNear,faceNear;std::vector<Uint8> shadowAlpha;std::vector<uint32_t> shadowShown;
-  struct GroundBox{const void *data=nullptr;size_t count=0;LightingAssets::Point lo{},hi{};};std::vector<GroundBox> groundBoxes; // (composite's: each lamp's pool's box)
+  struct GroundBox{const void *data=nullptr;size_t count=0;LightingAssets::Point lo{},hi{};};std::vector<GroundBox> groundBoxes; // (composite's: each lamp's pool's box; cleared as buildIrradiance makes the grids)
   std::vector<ProjectedFace> faceScratch;std::vector<uint64_t> faceKeys,faceKeysSpare;
   std::vector<float> casterOpacity; // addition: by sun-map caster (instance+1): foliage lets light through
   GpuLighting gpu;

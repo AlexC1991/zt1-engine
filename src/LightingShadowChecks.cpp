@@ -107,11 +107,13 @@ int runLightingShadowChecks(World &world,ResourceManager *rm,SDL_Renderer *rende
   check("native land animal shadow geometry loaded",light.stats().actors>=4);
   check("keepers, guides and specialists are present in the shadow fixture",hired>=3);
   check("animated shadow geometry stays in its face budget",light.stats().actorFaces>0 && light.stats().actorFaces<=DayNightLighting::maxActorFaces);
+  bool boxesTrue=true; // (a stale one left a lamp's pool out, now and then: GPU renderer, night)
   for(int r=0;r<4;++r) {
-    light.previewHour=16;capture(("shadow_hills_afternoon_"+std::to_string(r)).c_str());
-    light.previewHour=17.5;capture(("shadow_hills_sunset_"+std::to_string(r)).c_str());
-    light.previewHour=0;capture(("shadow_hills_night_"+std::to_string(r)).c_str());world.rotateView(1);
+    light.previewHour=16;capture(("shadow_hills_afternoon_"+std::to_string(r)).c_str());boxesTrue&=light.groundBoxesTrue(map);
+    light.previewHour=17.5;capture(("shadow_hills_sunset_"+std::to_string(r)).c_str());boxesTrue&=light.groundBoxesTrue(map);
+    light.previewHour=0;capture(("shadow_hills_night_"+std::to_string(r)).c_str());boxesTrue&=light.groundBoxesTrue(map);world.rotateView(1);
   }
+  check("every lamp's ground pool is kept by its own box (none left out by another's)",boxesTrue);
   light.previewHour=16;
   for(int f=0;f<8;++f) {
     for(const auto &m:animals.members())if(auto *a=animals.member(m.id))a->animTime=f*.12f;

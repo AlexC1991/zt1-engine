@@ -566,6 +566,18 @@ std::string DayNightLighting::describeLights()const {
   return out;
 }
 
+bool DayNightLighting::groundBoxesTrue(const WorldMap &map) const {
+  for(size_t li=0;li<groundBoxes.size() && li<groundLight.size();++li) {
+    const auto &box=groundBoxes[li];const auto &grid=groundLight[li];
+    if(box.data!=grid.data() || box.count!=grid.size() || grid.empty())continue; // (made again when next drawn)
+    LightingAssets::Point lo{1e30f,1e30f,1e30f},hi{-1e30f,-1e30f,-1e30f};
+    for(const auto &s:grid){lo={std::min(lo.x,s.position.x),std::min(lo.y,s.position.y),std::min(lo.z,s.position.z)};
+      hi={std::max(hi.x,s.position.x),std::max(hi.y,s.position.y),std::max(hi.z,s.position.z)};}
+    hi.z=std::max(hi.z,float(map.getMaxHeight()));
+    if(lo.x!=box.lo.x || lo.y!=box.lo.y || lo.z!=box.lo.z || hi.x!=box.hi.x || hi.y!=box.hi.y || hi.z!=box.hi.z)return false;
+  }
+  return true;
+}
 float DayNightLighting::waterLevelAt(float x,float y)const {
   if(!frameFences)return -1e9f;
   const int id=frameFences->exhibitAt(int(std::floor(x)),int(std::floor(y)));
