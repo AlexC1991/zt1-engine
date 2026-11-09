@@ -335,7 +335,15 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
   for(auto &l:lights){const float a=float(fixtureClock*l.sweep),c=std::cos(a),s=std::sin(a);l.axis={l.normal.x*c-l.normal.y*s,l.normal.x*s+l.normal.y*c,l.normal.z};const float n=std::sqrt(l.axis.x*l.axis.x+l.axis.y*l.axis.y+l.axis.z*l.axis.z);if(n>.001f){l.axis.x/=n;l.axis.y/=n;l.axis.z/=n;}}
   for(const auto &source:lights){mix(source.colour.r);mix(source.colour.g);mix(source.colour.b);mix(source.owner);mix(std::hash<float>{}(source.x));mix(std::hash<float>{}(source.y));mix(std::hash<float>{}(source.z));for(float f:{source.energy,source.radius,source.normal.x,source.normal.y,source.normal.z,source.cone,source.sweep})mix(std::hash<float>{}(f));}
   mix(lights.size());mix(map.getGeneration());
-  if(hash!=sceneHash || groundLight.size()!=lights.size()) {sceneHash=hash;buildIrradiance(map);}
+  // ours: the lamps' light on the ground and the shapes made only while the
+  // lamps are lit at all (from about five in the afternoon to eight in the
+  // morning; by day it's multiplied by nought everywhere it's used) - in a
+  // big zoo, each new choice of shapes as the view moved cast every shape's
+  // rays again by day too, tens of milliseconds. The index of what each lamp
+  // can be blocked by (blocked: an animal's and fluorescence's light) is
+  // made with the scene, as before
+  if(hash!=sceneHash){sceneHash=hash;indexLocalLights();}
+  if(sky.lamps>0 && (irradianceHash!=sceneHash || groundLight.size()!=lights.size())){irradianceHash=sceneHash;buildIrradiance(map);++irradianceSerial;}
   finishEmitters();
   prepareBeamShapes();
   projectModels(view);counters.modelFaces=int(projectedFaces.size());
@@ -575,6 +583,7 @@ bool DayNightLighting::facesOnTheirShapes() const {
   return true;
 }
 bool DayNightLighting::groundBoxesTrue(const WorldMap &map) const {
+  if(irradianceHash!=sceneHash)return true; // (the lamps' light waits for the lamps, by day: nothing is drawn from its grids or boxes)
   for(size_t li=0;li<groundBoxes.size() && li<groundLight.size();++li) {
     const auto &box=groundBoxes[li];const auto &grid=groundLight[li];
     if(box.data!=grid.data() || box.count!=grid.size() || grid.empty())continue; // (made again when next drawn)

@@ -116,27 +116,39 @@ void DayNightLighting::buildIrradiance(const WorldMap &map) {
     for(size_t i:nearby)if(instances[i].owner!=l.owner)hashInstance(stamp,instances[i]);
     sourceStamps.push_back(stamp);
   }
+  // (ours: each light's grid stamped and looked up, then the grids not kept
+  // cast side by side on the processor's cores - one at a time, a busy zoo's
+  // view moving on stalled for tens of milliseconds - the same grids, in the
+  // lights' order)
+  groundLight.assign(lights.size(),{});
+  std::vector<uint64_t> gridStamps(lights.size());std::vector<int> gridCells(lights.size());std::vector<size_t> casting;
   for(size_t li=0;li<lights.size();++li) {
     // (as finely as the graphics quality's lamps have it: High, as always)
     const auto &l=lights[li];const int cells=std::max(8,int(std::lround((l.sweep!=0 && l.cone>0?48:l.cone>0?32:20)*GraphicsQuality::lampDetail())));
-    std::vector<Irradiance> grid;grid.reserve((cells+1)*(cells+1));
     uint64_t stamp=sourceStamps[li];
     auto mix=[&](uint64_t n){stamp^=n;stamp*=1099511628211ull;};
     for(int y=0;y<=cells;++y)for(int x=0;x<=cells;++x) {
       const float wx=l.x+(float(x)/cells*2-1)*l.radius,wy=l.y+(float(y)/cells*2-1)*l.radius;
       mix(std::hash<float>{}(LightingAssets::terrainHeight(map,wx,wy)));
     }
+    gridStamps[li]=stamp;gridCells[li]=cells;
     auto cached=groundIrradianceCache.find(stamp);
-    if(cached!=groundIrradianceCache.end()){cached->second.used=irradianceTick;groundLight.push_back(cached->second.samples);continue;}
+    if(cached!=groundIrradianceCache.end()){cached->second.used=irradianceTick;groundLight[li]=cached->second.samples;continue;}
+    casting.push_back(li);
+  }
+  std::vector<int> castRays(casting.size(),0);
+  parallelFor(casting.size(),[&](size_t first,size_t last){for(size_t at=first;at<last;++at) {
+    const size_t li=casting[at];const auto &l=lights[li];const int cells=gridCells[li];
+    auto &grid=groundLight[li];grid.reserve((cells+1)*(cells+1));
     for(int y=0;y<=cells;++y)for(int x=0;x<=cells;++x) {
       Point p{l.x+(float(x)/cells*2-1)*l.radius,l.y+(float(y)/cells*2-1)*l.radius,0};
       if(const auto *tile=map.getTile(int(std::floor(p.x)),int(std::floor(p.y))))p.z=LightingAssets::terrainHeight(map,p.x,p.y);
-      if(std::hypot(l.x-p.x,l.y-p.y)<l.radius && l.z>p.z)++counters.rays;
+      if(std::hypot(l.x-p.x,l.y-p.y)<l.radius && l.z>p.z)++castRays[at];
       const float raw=sourceEnergy(l,p,{0,0,1},uint64_t(-1),l.cone<=0 || l.sweep==0),energy=1-std::exp(-raw);
       grid.push_back({p,{Uint8(l.colour.r*energy),Uint8(l.colour.g*energy),Uint8(l.colour.b*energy),255},raw});
     }
-    groundIrradianceCache[stamp]={grid,irradianceTick};groundLight.push_back(std::move(grid));
-  }
+  }},1);
+  for(size_t at=0;at<casting.size();++at){const size_t li=casting[at];counters.rays+=castRays[at];groundIrradianceCache[gridStamps[li]]={groundLight[li],irradianceTick};}
   surfaceLight.resize(instances.size());int budget=std::min(maxModelFaces,GraphicsQuality::shapeFaceBudget());
   // (the shapes whose samples aren't kept: their rays cast side by side on
   // the processor's cores, then kept in the shapes' order - ours, the same
@@ -333,7 +345,7 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
         }},4096);
         G::setFaces(faces,key);
       }
-      const uint64_t lightKey=hash({key,uint64_t(sceneHash),projectedSunStamp[0],projectedSunStamp[1]});
+      const uint64_t lightKey=hash({key,uint64_t(sceneHash),irradianceSerial,projectedSunStamp[0],projectedSunStamp[1]});
       if(G::faceLightKey()!=lightKey) {
         auto &light=surfaceLightSent;light.resize(projectedFaces.size());
         parallelFor(projectedFaces.size(),[&](size_t begin,size_t end){for(size_t i=begin;i<end;++i) {
