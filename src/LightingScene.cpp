@@ -233,6 +233,7 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
   std::stable_sort(order.begin(),order.end(),[this](uint32_t a,uint32_t b){return projectedFaces[a].depth<projectedFaces[b].depth;});
   std::vector<ProjectedFace> sorted;sorted.reserve(projectedFaces.size());for(uint32_t i:order)sorted.push_back(std::move(projectedFaces[i]));
   projectedFaces.swap(sorted);
+  for(auto &sun:projectedSun)sun.assign(projectedFaces.size(),{0,0,0,0});
 }
 
 void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer &view,float scale,float mapMiddle) {
@@ -297,7 +298,7 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
         std::vector<G::FaceLight> light(projectedFaces.size());
         for(size_t i=0;i<projectedFaces.size();++i) {
           const auto &f=projectedFaces[i];auto &g=light[i];
-          for(int k=0;k<4;++k){g.sun0[k]=f.sun[0][k];g.sun1[k]=f.sun[1][k];}
+          for(int k=0;k<4;++k){g.sun0[k]=projectedSun[0][i][k];g.sun1[k]=projectedSun[1][i][k];}
           const bool lit=f.instance<surfaceLight.size() && f.localIndex<surfaceLight[f.instance].size();
           for(int c=0;c<3;++c)g.local[c]=lit?surfaceLight[f.instance][f.localIndex][c]:0.0f;
         }
@@ -437,8 +438,9 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
       float occlusion=0;
       if(sky.sun>.001f) {
         const bool moving=f.instance>=instances.size();
-        const bool affected=moving || faceNear[size_t(&f-projectedFaces.data())*4+k];
-        occlusion=affected?sunShadow(f.world[k],f.normal,uint32_t(f.instance+1)):f.sun[0][k]*(1-sunBlend)+f.sun[1][k]*sunBlend;
+        const size_t at=size_t(&f-projectedFaces.data());
+        const bool affected=moving || faceNear[at*4+k];
+        occlusion=affected?sunShadow(f.world[k],f.normal,uint32_t(f.instance+1)):projectedSun[0][at][k]*(1-sunBlend)+projectedSun[1][at][k]*sunBlend;
       }
       const float visibility=1-.39f*sky.shadow*occlusion;
       SDL_Color c{Uint8(std::clamp(a.r*ratio*visibility+255*illumination[0]*sky.lamps,0.0f,255.0f)),

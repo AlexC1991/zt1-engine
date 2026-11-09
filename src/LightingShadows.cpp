@@ -141,7 +141,7 @@ bool DayNightLighting::takeSunJob(int k,double time,float left,float top,float e
      job->scene->facePoints.size()!=projectedFaces.size() || job->opacity!=casterOpacity)return false;
   sunMaps[k]=std::move(job->map);sunMaps[k].opacity=&casterOpacity;++counters.sunBuilds;
   projectedSunStamp[k]=sunMaps[k].stamp;
-  for(size_t i=0;i<projectedFaces.size();++i)if(projectedFaces[i].visible)for(int n=0;n<4;++n)projectedFaces[i].sun[k][n]=job->faceSun[i][n];
+  projectedSun[k]=std::move(job->faceSun); // (a face not drawn: 0 in it, as here)
   faceCells[k]=std::move(job->faceCells);
   if(job->ground->generation==gpuReceiverGeneration && job->receiverSun.size()==receiverPoints.size()) {
     for(size_t i=0;i<receiverPoints.size();++i)receiverPoints[i].sun[k]=job->receiverSun[i];
@@ -202,7 +202,7 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
   const bool changed=sunHash!=sceneHash;sunHash=sceneHash;
   if(!changed && std::abs(sunMaps[1].hour-h0)<.000001 && sunMaps[1].x0==left && sunMaps[1].y0==top && sunMaps[1].span==extent){
     std::swap(sunMaps[0],sunMaps[1]);std::swap(projectedSunStamp[0],projectedSunStamp[1]);std::swap(receiverSunStamp[0],receiverSunStamp[1]);
-    for(auto &f:projectedFaces)for(int v=0;v<4;++v)std::swap(f.sun[0][v],f.sun[1][v]);
+    std::swap(projectedSun[0],projectedSun[1]);
     for(auto &p:receiverPoints)std::swap(p.sun[0],p.sun[1]);
     std::swap(receiverCells[0],receiverCells[1]);std::swap(faceCells[0],faceCells[1]); // ours: (keyed by map: kept)
   }
@@ -240,8 +240,9 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
     if(projectedSunStamp[k]!=atlas.stamp) {
       projectedSunStamp[k]=atlas.stamp;
       // addition: back-facing surfaces still cast; only drawn faces need receiver samples.
-      parallelFor(projectedFaces.size(),[&](size_t b,size_t e){for(size_t i=b;i<e;++i){auto &f=projectedFaces[i];
-        if(f.visible)for(int n=0;n<4;++n)f.sun[k][n]=atlas.shadow(f.world[n],f.normal,uint32_t(f.instance+1),true);}});
+      auto &faceSun=projectedSun[k];faceSun.resize(projectedFaces.size());
+      parallelFor(projectedFaces.size(),[&](size_t b,size_t e){for(size_t i=b;i<e;++i){const auto &f=projectedFaces[i];
+        if(f.visible)for(int n=0;n<4;++n)faceSun[i][n]=atlas.shadow(f.world[n],f.normal,uint32_t(f.instance+1),true);}});
     }
   }
   for(int k=0;k<2;++k) {

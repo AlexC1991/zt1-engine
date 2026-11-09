@@ -155,10 +155,14 @@ private:
   void indexLocalLights();
   struct ProjectedFace {
     SDL_FPoint p[4];LightingAssets::Point world[4];float height[4],depth;LightingAssets::Point normal,outward;
-    SurfaceSamples local;float terrain[4]{1,1,1,1};float sun[2][4]{};size_t instance,localIndex=0;
+    SurfaceSamples local;float terrain[4]{1,1,1,1};size_t instance,localIndex=0;
     SDL_FRect bounds{};bool visible=true;
   };
   std::vector<ProjectedFace> projectedFaces,actorFaces;
+  // ours: each scenery face's corners' sun in sun map 0 and 1 (projectedFaces'
+  // order; 0 for a face not drawn), kept apart from the faces: a new map's
+  // taken whole, and the two swapped whole as the hour moves on
+  std::vector<std::array<float,4>> projectedSun[2];
   // ours: each scenery face's depth, screen box, shape and facing, kept beside
   // projectedFaces (remade when projectionSerial moves on), so a frame's test
   // of what's on the screen reads 28 bytes a face rather than the whole face
