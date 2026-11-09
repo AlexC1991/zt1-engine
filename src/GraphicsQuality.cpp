@@ -27,7 +27,8 @@ uint64_t g_serial = 1;
 // (each preset's lighting: shadows, range, creatures, lamps)
 constexpr int kPresets[4][4] = {
     {0, 0, 1, 0}, // Low: small hard-edged shadow maps, the nearest shapes, animals' shadows only
-    {1, 1, 2, 1}, // Medium
+    {1, 1, 1, 1}, // Medium: sharper shadows over more shapes than Low, animals' shadows only
+                  // (their 3D light was most of Medium's cost on the owner's APU laptop)
     {2, 2, 2, 2}, // High: the lighting as it always was
     {3, 2, 2, 2}, // Ultra: sharper shadows (the range as High's: Farthest cost too much for its gain)
 };
@@ -153,8 +154,10 @@ int recommend(std::string *why) {
           }
           if (software)
             return Low;
+          // (measured on an APU laptop, Ryzen 7 7730U: Low 45 fps, Medium 30,
+          // High 25 on the busy benchmark zoo with day and night)
           if (integrated)
-            return intel ? Low : Medium;
+            return Low;
           return High;
         }
         factory->Release();

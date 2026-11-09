@@ -13,7 +13,8 @@
 // spend more on it. Kept in zoo.ini [user]: graphicspreset, shadowquality,
 // shadowrange, creatureshadows, lampquality, lightingdevice. The first time
 // the game starts on a PC (no graphicspreset yet) the preset is the one
-// recommend() picks for its graphics.
+// recommend() picks for its graphics: Low for integrated graphics (a
+// laptop's, an APU's), High for a graphics card.
 namespace GraphicsQuality {
 
 enum Preset { Low, Medium, High, Ultra, Custom };
