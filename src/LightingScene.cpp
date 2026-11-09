@@ -234,6 +234,7 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
   std::vector<ProjectedFace> sorted;sorted.reserve(projectedFaces.size());for(uint32_t i:order)sorted.push_back(std::move(projectedFaces[i]));
   projectedFaces.swap(sorted);
   for(auto &sun:projectedSun)sun.assign(projectedFaces.size(),{0,0,0,0});
+  projectedOwners.resize(projectedFaces.size());for(size_t i=0;i<projectedFaces.size();++i)projectedOwners[i]=instances[projectedFaces[i].instance].owner;
 }
 
 void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer &view,float scale,float mapMiddle) {

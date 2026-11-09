@@ -251,10 +251,6 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
   // The scene hash is independent of the camera: a pan reuses 3D irradiance.
   // Keep source selection stable for normal zoos; the cap bounds extreme maps.
   mix(collectStructures(world));
-  // ours: the shapes' part, for the faces' projection (the lights mixed in
-  // below only change the lamps' light on them); and whether it's night,
-  // when fences and solid tank walls are shaded too (projectModels' visible)
-  geometryHash=hash^(sky.shadow<.02f?0x9e3779b97f4a7c15ull:0);
   // addition: over the shape budget, the ones nearest the screen's middle.
   // (projectModels took them in the zoo's object order: in a big zoo every
   // building after the first ~60 thousand faces had no shadow or shading,
@@ -289,6 +285,13 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
       keptOwners.clear();
     }
   }
+  // ours: the shapes' part, for the faces' projection (the lights mixed in
+  // below only change the lamps' light on them) - with the shapes chosen
+  // over the budget, just above: taken before them, a new choice kept the
+  // old projection, its faces pointing at other buildings in the new list
+  // (their masks and light) and some past its end; and whether it's night,
+  // when fences and solid tank walls are shaded too (projectModels' visible)
+  geometryHash=hash^(sky.shadow<.02f?0x9e3779b97f4a7c15ull:0);
   // addition: fence pieces with lights of their own (Fences::litPieces: the
   // electrified bars' beacons) - their glow as the piece's pose shows it, and
   // a small light on the ground under it, there while it glows
@@ -566,6 +569,11 @@ std::string DayNightLighting::describeLights()const {
   return out;
 }
 
+bool DayNightLighting::facesOnTheirShapes() const {
+  if(projectedOwners.size()!=projectedFaces.size())return false;
+  for(size_t i=0;i<projectedFaces.size();++i){const size_t k=projectedFaces[i].instance;if(k>=instances.size() || instances[k].owner!=projectedOwners[i])return false;}
+  return true;
+}
 bool DayNightLighting::groundBoxesTrue(const WorldMap &map) const {
   for(size_t li=0;li<groundBoxes.size() && li<groundLight.size();++li) {
     const auto &box=groundBoxes[li];const auto &grid=groundLight[li];

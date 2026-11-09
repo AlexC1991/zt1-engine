@@ -60,6 +60,11 @@ public:
   const Stats &stats() const { return counters; }
   // ours (for the checks): every lamp pool's kept box is its own grid's
   bool groundBoxesTrue(const WorldMap &map) const;
+  // ours (for the checks): the shapes are over the budget (the ones nearest
+  // the view chosen), and every projected face is on the shape it was
+  // projected from
+  bool shapesChosen() const { return !keptOwners.empty(); }
+  bool facesOnTheirShapes() const;
   const GpuLighting::Stats &gpuStats()const {return gpu.stats();}
   const std::string &gpuStatus()const {return gpu.reason();}
   size_t bufferBytes()const;
@@ -163,6 +168,7 @@ private:
   // order; 0 for a face not drawn), kept apart from the faces: a new map's
   // taken whole, and the two swapped whole as the hour moves on
   std::vector<std::array<float,4>> projectedSun[2];
+  std::vector<uint64_t> projectedOwners; // ours: each face's shape's owner as projected (facesOnTheirShapes)
   // ours: each scenery face's depth, screen box, shape and facing, kept beside
   // projectedFaces (remade when projectionSerial moves on), so a frame's test
   // of what's on the screen reads 28 bytes a face rather than the whole face

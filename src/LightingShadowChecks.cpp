@@ -1,3 +1,4 @@
+#include "GraphicsQuality.hpp"
 #include "World.hpp"
 #include "Features.hpp"
 #include "ItemCatalog.hpp"
@@ -142,6 +143,22 @@ int runLightingShadowChecks(World &world,ResourceManager *rm,SDL_Renderer *rende
       light.previewHour=0;capture("shadow_tank_night");
       for(int i=0;i<4;++i){light.previewHour=16;capture(("shadow_tank_view_"+std::to_string(i)).c_str());world.rotateView(1);}
     } else check("marine shadow tank closes correctly",false);
+  }
+  {
+    // A zoo over the shapes' budget (the shadow range at its nearest): the
+    // shapes nearest the view are chosen, and chosen again after a long pan -
+    // every face still on its own building (it once kept the old projection)
+    const GraphicsQuality::Settings quality=GraphicsQuality::settings();GraphicsQuality::Settings nearest=quality;nearest.range=0;GraphicsQuality::set(nearest);
+    const char *kinds[]={"scenery/building/restrant.ai","scenery/building/carousal.ai","scenery/building/bgrstnd.ai"};int n=0;
+    for(int y=4;y<76;y+=8)for(int x=4;x<76;x+=8)if(x<26 || x>44 || y<20 || y>34)objects.add(kinds[(n++)%3],x+.5f,y+.5f,0);
+    map.touch();world.reindex();light.previewHour=14;
+    world.getRenderer().centreOnWorld(16,16,0);for(int i=0;i<6;++i)world.draw(renderer);
+    const bool chosen=light.shapesChosen();bool onTheirOwn=light.facesOnTheirShapes();
+    world.getRenderer().centreOnWorld(64,64,0);for(int i=0;i<6;++i)world.draw(renderer);
+    onTheirOwn=onTheirOwn && light.facesOnTheirShapes();
+    check("over the shapes' budget, the ones nearest the view are chosen",chosen);
+    check("chosen again after a long pan, every face is on its own building",onTheirOwn);
+    GraphicsQuality::set(quality);
   }
   log<<"Actors="<<light.stats().actors<<" actorFaces="<<light.stats().actorFaces<<" modelsBuilt="<<light.stats().actorBuilds<<" fallbackPoses="<<light.stats().actorFallbacks<<"\n";
   log<<"Failures: "<<failed<<"\n";std::ofstream(out+"/shadow-checks.txt")<<log.str();SDL_Log("[ShadowChecks] %s",log.str().c_str());
