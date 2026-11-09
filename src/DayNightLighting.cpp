@@ -3,6 +3,7 @@
 #include "Fences.hpp"
 #include "Animation.hpp"
 #include "World.hpp"
+#include "ParallelFor.hpp"
 #include "IniReader.hpp"
 #include "ItemCatalog.hpp"
 #include "PlacedObjects.hpp"
@@ -385,9 +386,39 @@ void DayNightLighting::composite(SDL_Renderer *renderer,WorldRenderer &view,cons
   // or prepainted radial pool substitutes for object occlusion.
   SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_ADD);
   vertices.clear();indices.clear();
+  // ours: a lamp's pool wholly off the lightmap draws nothing, so it isn't
+  // sent: its samples' box (to the map's top: a tank's water can lift one),
+  // put on the screen - the projection keeps every sample inside it - and
+  // left out when the box misses the lightmap. The same pixels: its
+  // triangles fell outside, and lamps add (in any order)
+  groundBoxes.resize(groundLight.size());
+  auto offMap=[&](size_t li) {
+    const auto &grid=groundLight[li];auto &box=groundBoxes[li];
+    if(box.data!=grid.data() || box.count!=grid.size()) {
+      box.data=grid.data();box.count=grid.size();box.lo={1e30f,1e30f,1e30f};box.hi={-1e30f,-1e30f,-1e30f};
+      for(const auto &s:grid){box.lo={std::min(box.lo.x,s.position.x),std::min(box.lo.y,s.position.y),std::min(box.lo.z,s.position.z)};
+        box.hi={std::max(box.hi.x,s.position.x),std::max(box.hi.y,s.position.y),std::max(box.hi.z,s.position.z)};}
+      box.hi.z=std::max(box.hi.z,float(map.getMaxHeight()));
+    }
+    if(grid.empty())return true;
+    float l=1e30f,r=-1e30f,tp=1e30f,b=-1e30f;
+    for(int k=0;k<8;++k){float x,y,d;view.worldToScreenF(k&1?box.hi.x:box.lo.x,k&2?box.hi.y:box.lo.y,k&4?box.hi.z:box.lo.z,x,y,d);
+      l=std::min(l,x*scale);r=std::max(r,x*scale);tp=std::min(tp,y*scale);b=std::max(b,y*scale);}
+    return r< -2 || l>w+2 || b< -2 || tp>h+2;
+  };
+  // (each lamp's vertices and triangles given their place, then made side
+  // by side on the cores - the same ones, in the same order)
+  struct GroundJob{size_t light,vertex,index;int cells;};std::vector<GroundJob> groundJobs;size_t groundVertices=0,groundIndices=0;
   if(sky.lamps>.001f)for(size_t li=0;li<groundLight.size();++li) {
-    const auto &grid=groundLight[li];const auto &source=lights[li];const int cells=source.sweep!=0 && source.cone>0?48:source.cone>0?32:20;
-    const int first=int(vertices.size());
+    if(offMap(li))continue;
+    const auto &source=lights[li];const int cells=source.sweep!=0 && source.cone>0?48:source.cone>0?32:20;
+    groundJobs.push_back({li,groundVertices,groundIndices,cells});groundVertices+=groundLight[li].size();groundIndices+=size_t(cells)*cells*6;
+  }
+  vertices.resize(groundVertices);indices.resize(groundIndices);
+  parallelFor(groundJobs.size(),[&](size_t begin,size_t end){for(size_t job=begin;job<end;++job) {
+    const size_t li=groundJobs[job].light;const int cells=groundJobs[job].cells;
+    const auto &grid=groundLight[li];const auto &source=lights[li];
+    const int first=int(groundJobs[job].vertex);size_t at=groundJobs[job].vertex,ix=groundJobs[job].index;
     for(const auto &sample:grid) {
       // (on a tank's water: laid on its surface and mostly taken in by it -
       // the glints on top are drawEmission's - not lit as ground would be)
@@ -396,13 +427,13 @@ void DayNightLighting::composite(SDL_Renderer *renderer,WorldRenderer &view,cons
       float x,y,d;view.worldToScreenF(sample.position.x,sample.position.y,z,x,y,d);
       auto colour=sample.colour;if(source.cone>0 && source.sweep!=0){const float e=1-std::exp(-sample.energy*sourceDirection(source,sample.position));colour={Uint8(source.colour.r*e),Uint8(source.colour.g*e),Uint8(source.colour.b*e),255};}colour.a=Uint8(255*sky.lamps*std::clamp(source.shown,0.0f,1.0f));
       if(water>-1e8f){colour.r=Uint8(colour.r*.3f);colour.g=Uint8(colour.g*.3f);colour.b=Uint8(colour.b*.3f);}
-      vertices.push_back({{x*scale,y*scale},colour,{0,0}});
+      vertices[at++]={{x*scale,y*scale},colour,{0,0}};
     }
     for(int y=0;y<cells;++y)for(int x=0;x<cells;++x) {
       int a=first+y*(cells+1)+x,b=a+1,c=a+cells+1,d=c+1;
-      indices.insert(indices.end(),{a,b,d,a,d,c});
+      for(int v:{a,b,d,a,d,c})indices[ix++]=v;
     }
-  }
+  }},4);
   if(sky.lamps>.001f)for(const auto &l:transientLights) {
     constexpr int pulseCells=12;const int first=int(vertices.size());
     for(int y=0;y<=pulseCells;++y)for(int x=0;x<=pulseCells;++x) {
