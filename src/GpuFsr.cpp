@@ -7,6 +7,7 @@
 #include <SDL3/SDL_opengl.h>
 
 #include "GpuFsrD3D11.hpp"
+#include "GpuFsrSdlGpu.hpp"
 
 // The shaders are the float path of ffx_fsr1.h, written for GLSL 1.20:
 //   Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
@@ -53,7 +54,7 @@ static bool g_available = false;
 // ours: which renderer the passes run on - OpenGL (this file's), or
 // Direct3D 11 (GpuFsrD3D11.cpp: the same passes, without the switch to the
 // much slower OpenGL renderer)
-enum class Backend { None, Gl, D3d };
+enum class Backend { None, Gl, D3d, SdlGpu };
 static Backend g_backend = Backend::None;
 static bool g_upscaling = true; // (FSR picked for the art)
 static float g_con = 1.0f; // RCAS sharpness, as 2^-stops
@@ -405,6 +406,14 @@ bool init(SDL_Renderer *renderer, float sharpness) {
     SDL_Log("[GpuFsr] GPU FSR 1 on Direct3D 11 %s (sharpness %.2f)", g_available ? "ready" : "unavailable", sharpness);
     return g_available;
   }
+  if (renderer && ZT_GetRendererInfo(renderer, &info) == 0 && std::strcmp(info.name, "gpu") == 0) {
+    // (ours: SDL3's GPU renderer - the upscaling only so far; the colour
+    // pass and the effects need the window's frame, which it doesn't share)
+    g_available = (info.flags & ZT_RENDERER_TARGETTEXTURE) && SdlGpu::init(renderer);
+    g_backend = g_available ? Backend::SdlGpu : Backend::None;
+    SDL_Log("[GpuFsr] GPU FSR 1 on SDL GPU %s (sharpness %.2f)", g_available ? "ready" : "unavailable", sharpness);
+    return g_available;
+  }
   if (!renderer || ZT_GetRendererInfo(renderer, &info) != 0 ||
       std::strcmp(info.name, "opengl") != 0) {
     SDL_Log("[GpuFsr] needs the OpenGL renderer (have %s)",
@@ -486,6 +495,8 @@ void finishFrame(SDL_Renderer *renderer) {
       D3D11::colourPass(renderer, g_matrix, g_gamma);
     return;
   }
+  if (g_backend == Backend::SdlGpu)
+    return;
   if (!g_available || !g_colour || !g_colourOn || !renderer)
     return;
   SDL_Texture *was = SDL_GetRenderTarget(renderer);
@@ -596,6 +607,8 @@ unsigned compileEffect(const std::string &glsl, const std::string &hlsl, const s
                        std::string &log) {
   if (g_backend == Backend::D3d)
     return D3D11::compile(hlsl, params, log);
+  if (g_backend == Backend::SdlGpu)
+    return log = "effects aren't on SDL's GPU renderer yet", 0;
   return compileShader(glsl, log);
 }
 
@@ -647,6 +660,8 @@ bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pa
     return false;
   if (g_backend == Backend::D3d)
     return D3D11::screenPass(renderer, prog, uniforms, smooth);
+  if (g_backend == Backend::SdlGpu)
+    return false;
   SDL_Texture *was = SDL_GetRenderTarget(renderer);
   SDL_SetRenderTarget(renderer, nullptr);
   int w = 0, h = 0;
@@ -742,6 +757,11 @@ void endLayer(SDL_Renderer *renderer, Layer layer, float viewW, float viewH,
   if (g_backend == Backend::D3d) {
     D3D11::endLayer(renderer, static_cast<int>(layer), lt.low, lt.lowW, lt.lowH, viewW, viewH, blend, dstRect, g_styled,
                     g_con, std::clamp(g_con * 1.15f, 0.0f, 1.0f));
+    return;
+  }
+  if (g_backend == Backend::SdlGpu) {
+    SdlGpu::endLayer(renderer, static_cast<int>(layer), lt.low, lt.lowW, lt.lowH, viewW, viewH, blend, dstRect,
+                     g_styled, g_con, std::clamp(g_con * 1.15f, 0.0f, 1.0f));
     return;
   }
 
