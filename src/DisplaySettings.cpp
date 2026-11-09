@@ -270,12 +270,36 @@ const char *picked(const char *r) { return g_atStart = r; }
 }
 int rendererChoice() {
   const std::string pick = Settings::get("user", "renderer", "auto");
-  return pick == "direct3d11" ? 1 : pick == "opengl" ? 2 : 0;
+  return pick == "direct3d11" ? 1 : pick == "opengl" ? 2 : pick == "gpu-vulkan" ? 3 : 0;
 }
 void setRendererChoice(int choice) {
-  Settings::set("user", "renderer", choice == 1 ? "direct3d11" : choice == 2 ? "opengl" : "auto");
+  Settings::set("user", "renderer",
+                choice == 1 ? "direct3d11" : choice == 2 ? "opengl" : choice == 3 ? "gpu-vulkan" : "auto");
 }
 const char *rendererAtStart() { return g_atStart; }
+void noteRunning(SDL_Renderer *renderer) {
+  static std::string name;
+  const char *n = renderer ? SDL_GetRendererName(renderer) : nullptr;
+  if (n)
+    g_atStart = (name = n).c_str();
+}
+std::string runningName() {
+  const std::string r = g_atStart;
+  if (r == "direct3d11")
+    return "Direct3D 11";
+  if (r == "opengl")
+    return "OpenGL";
+  if (r == "gpu") {
+    // (SDL3's GPU renderer: the API under it)
+    SDL_Renderer *renderer = g_renderer;
+    SDL_GPUDevice *device = renderer ? static_cast<SDL_GPUDevice *>(SDL_GetPointerProperty(
+                                           SDL_GetRendererProperties(renderer), SDL_PROP_RENDERER_GPU_DEVICE_POINTER, nullptr))
+                                     : nullptr;
+    const std::string driver = device ? SDL_GetGPUDeviceDriver(device) : "";
+    return driver == "vulkan" ? "Vulkan" : driver == "direct3d12" ? "Direct3D 12" : "SDL GPU";
+  }
+  return r;
+}
 const char *startupRenderer() {
 #ifdef _WIN32
   // (ours: ZT_RENDERER=opengl|direct3d11 for one run - the benchmarks'
@@ -284,6 +308,13 @@ const char *startupRenderer() {
   const std::string pick = forced && *forced ? forced : Settings::get("user", "renderer", "auto");
   if (pick == "opengl" || pick == "direct3d11")
     return picked(pick == "opengl" ? "opengl" : "direct3d11");
+  // (ours: SDL3's GPU renderer on Vulkan, picked on Game Options > Display;
+  // a PC whose Vulkan won't start gets Direct3D 11 - SDL tries the names in
+  // turn)
+  if (pick == "gpu-vulkan") {
+    SDL_SetHint(SDL_HINT_GPU_DRIVER, "vulkan");
+    return picked("gpu,direct3d11");
+  }
   // (ours: SDL3's GPU renderer - Direct3D 12 or Vulkan underneath - and its
   // own Direct3D 12 and Vulkan renderers, for this run only while the
   // engine's passes are made for them)

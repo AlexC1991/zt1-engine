@@ -236,7 +236,7 @@ enum : int {
   kModeLabel = 1, kModeWin, kModeBorder = 4, kModeFull = 6, kModeSet = 8,
   kResLabel, kResBar, kFpsLimLabel, kFpsLimBar, kVsync, kVsyncText = 14,
   kBrightLabel, kBrightBar, kFps, kFpsText = 18,
-  kApiLabel = 19, kApiAuto = 20, kApiD3d = 22, kApiGl = 24, kApiSet = 26, kApiNote = 27,
+  kApiLabel = 19, kApiAuto = 20, kApiD3d = 22, kApiGl = 24, kApiSet = 26, kApiNote = 27, kApiVk = 28,
 }; // Display
 enum : int {
   kScaleLabel = 1, kScaleBar, kScaleAuto, kScaleNote,
@@ -533,7 +533,11 @@ std::string optionsLayout() {
   choice(pageId(kDisplay, kApiAuto), kControlX, y, 30);
   choice(pageId(kDisplay, kApiD3d), kControlX + 62, y, 70);
   choice(pageId(kDisplay, kApiGl), kControlX + 164, y, 56);
-  t += radioSet(pageId(kDisplay, kApiSet), {pageId(kDisplay, kApiAuto), pageId(kDisplay, kApiD3d), pageId(kDisplay, kApiGl)});
+  y += kRow;
+  // (SDL3's GPU renderer on Vulkan: under Direct3D 11, the row's full)
+  choice(pageId(kDisplay, kApiVk), kControlX + 62, y, 70);
+  t += radioSet(pageId(kDisplay, kApiSet), {pageId(kDisplay, kApiAuto), pageId(kDisplay, kApiD3d), pageId(kDisplay, kApiGl),
+                                            pageId(kDisplay, kApiVk)});
   y += kRow;
   t += bodyText(pageId(kDisplay, kApiNote), kLabelX, y, kW - 222);
   y += 22;
@@ -1361,8 +1365,7 @@ void UiOptions::tick(SDL_Renderer *renderer) {
         t->setText(want);
     }
     if (UiText *t = dynamic_cast<UiText *>(L->getElementById(pageId(kDisplay, kApiNote)))) {
-      const char *running = std::string(Display::rendererAtStart()) == "direct3d11" ? "Direct3D 11" : "OpenGL";
-      const std::string want = std::string("Running now: ") + running + ".";
+      const std::string want = "Running now: " + Display::runningName() + ".";
       if (t->getText() != want)
         t->setText(want);
     }
@@ -1608,12 +1611,14 @@ void UiOptions::wire() {
   // The graphics API (DisplaySettings' startupRenderer): from the next start
   {
     text(pageId(kDisplay, kApiLabel), "Graphics API");
-    choices(kDisplay, {kApiAuto, kApiD3d, kApiGl}, {"Auto", "Direct3D 11", "OpenGL"}, Display::rendererChoice(),
-            [](int i) { Display::setRendererChoice(i); });
+    choices(kDisplay, {kApiAuto, kApiD3d, kApiGl, kApiVk}, {"Auto", "Direct3D 11", "OpenGL", "Vulkan"},
+            Display::rendererChoice(), [](int i) { Display::setRendererChoice(i); });
     describe({pageId(kDisplay, kApiLabel), pageId(kDisplay, kApiAuto), pageId(kDisplay, kApiAuto + 1),
-              pageId(kDisplay, kApiD3d), pageId(kDisplay, kApiD3d + 1), pageId(kDisplay, kApiGl), pageId(kDisplay, kApiGl + 1)},
+              pageId(kDisplay, kApiD3d), pageId(kDisplay, kApiD3d + 1), pageId(kDisplay, kApiGl), pageId(kDisplay, kApiGl + 1),
+              pageId(kDisplay, kApiVk), pageId(kDisplay, kApiVk + 1)},
              "What the game draws with. Auto: Direct3D 11 (the faster), or OpenGL while a shader mod is on (they need "
-             "it). Used from the next time the game starts.");
+             "it). Vulkan: SDL3's newer renderer (Direct3D 11 if this PC's Vulkan won't start). Used from the next "
+             "time the game starts.");
   }
   // Brightness: a gamma, 0.5 to 2 (the slider's middle as drawn)
   {

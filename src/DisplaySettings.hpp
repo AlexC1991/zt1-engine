@@ -95,17 +95,22 @@ void setEdgeScroll(bool on);
 // identical); OpenGL is needed by the shader passes - brightness, the
 // colour filter, the Stylized look, shader mods, the GPU lighting - so it's
 // used when one of those is on as the game starts. zoo.ini [user]
-// renderer = auto (the default), opengl or direct3d11.
+// renderer = auto (the default), opengl, direct3d11 or gpu-vulkan (SDL3's
+// GPU renderer on Vulkan, Direct3D 11 where Vulkan won't start).
 const char *startupRenderer();
 // Picked automatically and not OpenGL: a setting that needs OpenGL, turned
 // on now, works from the next time the game starts
 bool openGlNextStart();
 // ours: the graphics API picked on Game Options > Display (zoo.ini [user]
-// renderer): 0 auto, 1 Direct3D 11, 2 OpenGL - used from the next start -
-// and the one the game started with ("direct3d11" or "opengl")
+// renderer): 0 auto, 1 Direct3D 11, 2 OpenGL, 3 Vulkan - used from the next
+// start - and the one the game started with (SDL's renderer's name:
+// "direct3d11", "opengl", "gpu"...; noteRunning tells it once it's made)
 int rendererChoice();
 void setRendererChoice(int choice);
 const char *rendererAtStart();
+void noteRunning(SDL_Renderer *renderer);
+// The one running, in words: "Direct3D 11", "OpenGL", "Vulkan"...
+std::string runningName();
 
 } // namespace Display
 

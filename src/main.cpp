@@ -4253,6 +4253,10 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     check("the Options window opens in place of the Game Options panel", opened);
     // (its Gameplay page: every switch above the description box)
     if (g_hud->options) {
+      // (its Display page: the graphics API row offers SDL3's Vulkan too)
+      g_hud->options->showPage(1);
+      capture("options_window_display");
+      check("the Display page offers Auto, Direct3D 11, OpenGL and Vulkan", Display::rendererChoice() >= 0 && Display::rendererChoice() <= 3);
       g_hud->options->showPage(7);
       capture("options_window_gameplay");
       g_hud->options->showPage(UiOptions::kModsPage);
@@ -9336,6 +9340,7 @@ int main(int argc, char *argv[]) {
   // The Display, Graphics and Accessibility settings at work (frame rate,
   // vsync, colours, the art's look)
   Display::init(window.window, window.renderer);
+  Display::noteRunning(window.renderer); // (what SDL made of the pick: a fallback shows)
   const Display::Art artAtStart = Display::artAtStart();
   // The Game Options' volumes and scrolling at work (after the window: it
   // opens the audio)
