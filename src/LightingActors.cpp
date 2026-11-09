@@ -1,6 +1,7 @@
 #include "DayNightLighting.hpp"
 #include "GraphicsQuality.hpp"
 #include "World.hpp"
+#include "ParallelFor.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -172,13 +173,23 @@ void DayNightLighting::collectActors(World &world) {
     if(oldest==actorModels.end())break;actorModels.erase(oldest);modelTop.clear(); // (keyed by shape: one may go)
   }
   float ox,oy,od;view.worldToScreenF(0,0,0,ox,oy,od);int budget=maxActorFaces;
+  // ours: which actors' faces fit the budget, and where each one's go - then
+  // their faces made side by side on the cores (each corner's terrain
+  // clearance asks the map 25 times: the most of this frame's work), every
+  // actor writing its own faces, in the same order as one loop made them
+  struct Job {size_t actor,first;};std::vector<Job> jobs;jobs.reserve(actors.size());size_t total=0;
   for(size_t i=0;i<actors.size();++i) {
     const auto &o=actors[i];if(int(o.model->faces.size())>budget)continue;
     if(creatureLight<2 && !(((o.owner>>56)&1) && ((o.owner>>48)&1)))continue; // (a creature, simple: its sprite's shadow only; a gate always)
     budget-=int(o.model->faces.size());
+    jobs.push_back({i,total});total+=o.model->faces.size();
+  }
+  actorFaces.assign(total,ProjectedFace{});
+  parallelFor(jobs.size(),[&](size_t begin,size_t end){for(size_t j=begin;j<end;++j) {
+    const size_t i=jobs[j].actor;const auto &o=actors[i];size_t at=jobs[j].first;
     const auto local=irradiance({o.position.x,o.position.y,o.position.z+1},{0,0,1},uint64_t(-1));
     for(const auto &f:o.model->faces) {
-      ProjectedFace d{};d.instance=instances.size()+i;d.local=local;
+      ProjectedFace &d=actorFaces[at++];d.instance=instances.size()+i;d.local=local;
       auto rotate=[&](Point p){return Point{p.x*o.cosine-p.y*o.sine,p.x*o.sine+p.y*o.cosine,p.z};};d.normal=rotate(f.normal);d.outward=rotate(f.outward);
       for(int k=0;k<4;++k){auto p=toWorld(o,f.p[k]);float sx,sy,depth;view.worldToScreenF(p.x,p.y,p.z,sx,sy,depth);d.p[k]={sx-ox,sy-oy};d.world[k]=p;d.terrain[k]=terrainClearance(p,view);d.height[k]=f.p[k].z;d.depth+=.25f*(depth+p.z*.5f);}
       float l=d.p[0].x,t=d.p[0].y,r=l,b=t;
@@ -187,14 +198,15 @@ void DayNightLighting::collectActors(World &world) {
       const float gx[]={-1,-1,1,1},gy[]={1,-1,-1,1};
       // (a gate, as a fence, is not shaded itself, but lit at night - LightingStructures)
       d.visible=(o.shaded || (o.nightReceiver && sky.shadow<.02f)) && d.outward.x*gx[view.getRotation()]+d.outward.y*gy[view.getRotation()]+d.outward.z*2>0;
-      actorFaces.push_back(d);
     }
-  }
+  }},8);
   // ours: sorted by index, then moved into that order once (the same order:
   // a stable sort of the faces moved each large face about many times)
-  faceOrder.resize(actorFaces.size());for(size_t i=0;i<faceOrder.size();++i)faceOrder[i]=uint32_t(i);
-  std::stable_sort(faceOrder.begin(),faceOrder.end(),[this](uint32_t a,uint32_t b){return actorFaces[a].depth<actorFaces[b].depth;});
-  faceScratch.clear();faceScratch.reserve(actorFaces.size());for(uint32_t i:faceOrder)faceScratch.push_back(std::move(actorFaces[i]));
+  // (each face's depth and place side by side, sorted by both: the order a
+  // stable sort by depth gives, without reaching into the faces each time)
+  faceKeys.resize(actorFaces.size());for(size_t i=0;i<faceKeys.size();++i)faceKeys[i]={actorFaces[i].depth,uint32_t(i)};
+  std::sort(faceKeys.begin(),faceKeys.end());
+  faceScratch.clear();faceScratch.reserve(actorFaces.size());for(const auto &k:faceKeys)faceScratch.push_back(std::move(actorFaces[k.second]));
   actorFaces.swap(faceScratch);
   finishEmitters();
   counters.actors=int(actors.size());counters.actorFaces=int(actorFaces.size());

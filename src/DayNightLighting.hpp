@@ -178,7 +178,7 @@ private:
   // and each tank's ground pass share in a frame (each worked it all out)
   LightingAssets::ActorCells receiverCells[2],faceCells[2];uint64_t projectionSerial=0;
   std::vector<uint8_t> receiverNear,faceNear;std::vector<Uint8> shadowAlpha;std::vector<uint32_t> shadowShown;
-  std::vector<ProjectedFace> faceScratch;std::vector<uint32_t> faceOrder;
+  std::vector<ProjectedFace> faceScratch;std::vector<std::pair<float,uint32_t>> faceKeys;
   std::vector<float> casterOpacity; // addition: by sun-map caster (instance+1): foliage lets light through
   GpuLighting gpu;
   bool gpuSunReady=false;
