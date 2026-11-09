@@ -491,6 +491,9 @@ static void drawLayoutCentered(SDL_Renderer *renderer, UiLayout *layout,
 static UiGameScreen *g_hud = nullptr;
 static ZooSim g_sim; // the game clock and the zoo's books
 namespace FrameProfile {void start();void begin();void end();void phase(const char *name);}
+#ifdef _WIN32
+namespace D3D11Util {void installTextureMaker(SDL_Renderer *renderer);} // (D3D11Util.hpp)
+#endif
 static DevConsole g_console;    // ` or F10: commands to set up test states
 static float g_gameSpeed = 1.0f; // addition: HUD speed control and developer override
 static GameSpeedClock g_speedClock;
@@ -9341,6 +9344,9 @@ int main(int argc, char *argv[]) {
   // vsync, colours, the art's look)
   Display::init(window.window, window.renderer);
   Display::noteRunning(window.renderer); // (what SDL made of the pick: a fallback shows)
+#ifdef _WIN32
+  D3D11Util::installTextureMaker(window.renderer); // (ours: new textures made with their pixels)
+#endif
   const Display::Art artAtStart = Display::artAtStart();
   // The Game Options' volumes and scrolling at work (after the window: it
   // opens the audio)

@@ -1,3 +1,4 @@
+#include <cstring>
 #include "D3D11Util.hpp"
 
 // ours: see D3D11Util.hpp
@@ -263,6 +264,90 @@ bool updateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *pixel
   }
   g_ctx->UpdateSubresource(resource, 0, &box, pixels, UINT(pitch), 0);
   return true;
+}
+
+// ours: SDL3's Direct3D 11 renderer makes a texture empty, then fills it
+// through a staging texture it makes and frees - about a tenth of a
+// millisecond each, and a busy zoo's sprites ask for a couple of hundred new
+// frames at once as their animations first reach them. The same texture
+// (SDL's format for the surface's own, static, sRGB) made with its pixels,
+// then handed to SDL to keep; anything SDL would convert or treat specially
+// is left to SDL.
+namespace {
+SDL_Renderer *g_maker = nullptr;
+void *g_makerDevice = nullptr;
+SDL_Texture *makeTexture(SDL_Renderer *renderer, SDL_Surface *s) {
+  const SDL_PropertiesID rp = SDL_GetRendererProperties(renderer);
+  auto *device = static_cast<ID3D11Device *>(SDL_GetPointerProperty(rp, SDL_PROP_RENDERER_D3D11_DEVICE_POINTER, nullptr));
+  if (!device || device != g_makerDevice || !s || !s->pixels || s->w <= 0 || s->h <= 0 || SDL_ISPIXELFORMAT_INDEXED(s->format) ||
+      SDL_SurfaceHasColorKey(s) || SDL_MUSTLOCK(s) || SDL_GetSurfaceColorspace(s) != SDL_COLORSPACE_SRGB ||
+      SDL_GetNumberProperty(rp, SDL_PROP_RENDERER_OUTPUT_COLORSPACE_NUMBER, SDL_COLORSPACE_SRGB) != SDL_COLORSPACE_SRGB)
+    return nullptr;
+  DXGI_FORMAT format; // (SDL's own choice for these, SDLPixelFormatToDXGITextureFormat)
+  switch (s->format) {
+  case SDL_PIXELFORMAT_ARGB8888: format = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+  case SDL_PIXELFORMAT_ABGR8888: format = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+  case SDL_PIXELFORMAT_XRGB8888: format = DXGI_FORMAT_B8G8R8X8_UNORM; break;
+  default: return nullptr;
+  }
+  bool takes = false; // (and the renderer's: SDL_CreateTextureFromSurface then keeps the surface's)
+  for (auto *f = static_cast<const SDL_PixelFormat *>(SDL_GetPointerProperty(rp, SDL_PROP_RENDERER_TEXTURE_FORMATS_POINTER, nullptr));
+       f && *f != SDL_PIXELFORMAT_UNKNOWN; ++f)
+    takes |= *f == s->format;
+  if (!takes)
+    return nullptr;
+  D3D11_TEXTURE2D_DESC desc{};
+  desc.Width = UINT(s->w);
+  desc.Height = UINT(s->h);
+  desc.MipLevels = 1;
+  desc.ArraySize = 1;
+  desc.Format = format;
+  desc.SampleDesc.Count = 1;
+  desc.Usage = D3D11_USAGE_DEFAULT;
+  desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+  const D3D11_SUBRESOURCE_DATA pixels{s->pixels, UINT(s->pitch), 0};
+  ID3D11Texture2D *made = nullptr;
+  if (FAILED(device->CreateTexture2D(&desc, &pixels, &made)) || !made)
+    return nullptr;
+  const SDL_PropertiesID props = SDL_CreateProperties();
+  SDL_SetNumberProperty(props, SDL_PROP_TEXTURE_CREATE_FORMAT_NUMBER, s->format);
+  SDL_SetNumberProperty(props, SDL_PROP_TEXTURE_CREATE_ACCESS_NUMBER, SDL_TEXTUREACCESS_STATIC);
+  SDL_SetNumberProperty(props, SDL_PROP_TEXTURE_CREATE_WIDTH_NUMBER, s->w);
+  SDL_SetNumberProperty(props, SDL_PROP_TEXTURE_CREATE_HEIGHT_NUMBER, s->h);
+  SDL_SetNumberProperty(props, SDL_PROP_TEXTURE_CREATE_COLORSPACE_NUMBER, SDL_COLORSPACE_SRGB);
+  SDL_SetPointerProperty(props, SDL_PROP_TEXTURE_CREATE_D3D11_TEXTURE_POINTER, made);
+  SDL_Texture *t = SDL_CreateTextureWithProperties(renderer, props);
+  SDL_DestroyProperties(props);
+  made->Release(); // (SDL keeps its own reference)
+  if (!t)
+    return nullptr;
+  // (as SDL_CreateTextureFromSurface: the surface's colour and alpha mods and
+  // blend mode go to the texture - GpuUploadSdlGpu::create's)
+  Uint8 r = 255, g = 255, b = 255, a = 255;
+  SDL_GetSurfaceColorMod(s, &r, &g, &b);
+  SDL_SetTextureColorMod(t, r, g, b);
+  SDL_GetSurfaceAlphaMod(s, &a);
+  SDL_SetTextureAlphaMod(t, a);
+  SDL_BlendMode mode = SDL_BLENDMODE_BLEND;
+  SDL_GetSurfaceBlendMode(s, &mode);
+  SDL_SetTextureBlendMode(t, mode);
+  return t;
+}
+} // namespace
+
+void installTextureMaker(SDL_Renderer *renderer) {
+  const char *off = SDL_getenv("ZT_D3D11_UPLOADS");
+  ZT_RendererInfo info{};
+  if ((off && std::strcmp(off, "0") == 0) || !renderer || ZT_GetRendererInfo(renderer, &info) != 0 ||
+      std::string(info.name) != "direct3d11")
+    return;
+  ZT_StandIn &s = ZT_WindowStandIn();
+  if (s.renderer && s.renderer != renderer)
+    return; // (another renderer's stand-in: the GPU renderer's)
+  g_maker = renderer;
+  g_makerDevice = SDL_GetPointerProperty(SDL_GetRendererProperties(renderer), SDL_PROP_RENDERER_D3D11_DEVICE_POINTER, nullptr);
+  s.renderer = renderer;
+  s.create = makeTexture;
 }
 
 ID3D11ShaderResourceView *viewOf(SDL_Texture *texture) {

@@ -50,6 +50,11 @@ ID3D11ShaderResourceView *viewOf(SDL_Texture *texture);
 // context - only for a part nothing SDL has queued draws from (the masks'
 // fresh atlas space); false when it can't be, for SDL_UpdateTexture instead
 bool updateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch);
+// New textures of surfaces (SDL_CreateTextureFromSurface, Sdl3Compat.hpp's
+// hook) made on renderer's device with their pixels from the start, rather
+// than made empty and filled through a staging texture; ZT_D3D11_UPLOADS=0
+// leaves them to SDL, for comparing
+void installTextureMaker(SDL_Renderer *renderer);
 
 } // namespace D3D11Util
 #endif
