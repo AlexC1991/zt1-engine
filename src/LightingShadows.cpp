@@ -280,9 +280,20 @@ void DayNightLighting::prepareReceivers(const WorldMap &map,const WorldRenderer 
     float x,y;view.screenToWorldAt((k&1)?logicalW:0,(k&2)?logicalH:0,z,x,y);
     x0=std::min(x0,x);x1=std::max(x1,x);y0=std::min(y0,y);y1=std::max(y1,y);
   }
-  const int l=std::max(0,int(std::floor(x0/8))*8-2),t=std::max(0,int(std::floor(y0/8))*8-2);
-  const int r=std::min(map.getWidth(),int(std::ceil(x1/8))*8+2),b=std::min(map.getHeight(),int(std::ceil(y1/8))*8+2);
-  if(receiverGeneration==map.getGeneration() && receiverRotation==view.getRotation() && l==receiverX0 && r==receiverX1 && t==receiverY0 && b==receiverY1)return;
+  int l=std::max(0,int(std::floor(x0/8))*8-2),t=std::max(0,int(std::floor(y0/8))*8-2);
+  int r=std::min(map.getWidth(),int(std::ceil(x1/8))*8+2),b=std::min(map.getHeight(),int(std::ceil(y1/8))*8+2);
+  // ours: the ground made a block wider on every side, and kept while the
+  // view's own stays inside it - panning remade it at every block's edge the
+  // screen crossed, each time a stall. The same points and quads under the
+  // screen either way (on the same quarter-tile lattice, each point's normal
+  // from the same first quad), only more of them off it; made again too when
+  // it's far bigger than the view needs (after zooming in)
+  constexpr int kMargin=8;
+  const int wl=std::max(0,l-kMargin),wt=std::max(0,t-kMargin),wr=std::min(map.getWidth(),r+kMargin),wb=std::min(map.getHeight(),b+kMargin);
+  const bool inside=l>=receiverX0 && t>=receiverY0 && r<=receiverX1 && b<=receiverY1;
+  const long long keptArea=(long long)(receiverX1-receiverX0)*(receiverY1-receiverY0),wanted=(long long)(wr-wl)*(wb-wt);
+  if(receiverGeneration==map.getGeneration() && receiverRotation==view.getRotation() && inside && keptArea<=2*wanted)return;
+  l=wl;t=wt;r=wr;b=wb;
   // ours: the points about to be made again kept, with the sun maps they
   // were asked of - a point that stays (the same place and normal) keeps its
   // sun rather than asking the map again (a pan across a block of tiles had
