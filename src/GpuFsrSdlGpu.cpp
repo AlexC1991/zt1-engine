@@ -24,6 +24,8 @@ namespace SdlGpu {
 namespace {
 
 SDL_GPUDevice *g_dev = nullptr;
+// The form the device takes the shaders in: DXIL (Direct3D 12) or SPIR-V (Vulkan)
+SDL_GPUShaderFormat g_format = SDL_GPU_SHADERFORMAT_INVALID;
 SDL_GPURenderState *g_easu = nullptr, *g_rcas = nullptr, *g_style = nullptr, *g_colour = nullptr;
 
 struct Program {
@@ -58,12 +60,13 @@ int g_screenAsked = 0;
 // The frame already copied to the window (by finishFrame) this frame
 bool g_finished = false;
 
-SDL_GPURenderState *makeState(SDL_Renderer *renderer, const unsigned char *code, size_t size, const char *what) {
+SDL_GPURenderState *makeState(SDL_Renderer *renderer, const Code &code, const char *what) {
   SDL_GPUShaderCreateInfo info{};
-  info.code = code;
-  info.code_size = size;
+  const bool dxil = g_format == SDL_GPU_SHADERFORMAT_DXIL;
+  info.code = dxil ? code.dxil : code.spv;
+  info.code_size = dxil ? code.dxilSize : code.spvSize;
   info.entrypoint = "main";
-  info.format = SDL_GPU_SHADERFORMAT_DXIL;
+  info.format = g_format;
   info.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
   info.num_samplers = 1;
   info.num_uniform_buffers = 1;
@@ -203,15 +206,19 @@ bool init(SDL_Renderer *renderer) {
       SDL_GetPointerProperty(SDL_GetRendererProperties(renderer), SDL_PROP_RENDERER_GPU_DEVICE_POINTER, nullptr));
   if (!g_dev)
     return false;
-  if (!(SDL_GetGPUShaderFormats(g_dev) & SDL_GPU_SHADERFORMAT_DXIL)) {
-    SDL_Log("[GpuFsr] SDL GPU on %s takes no DXIL: no shaders yet", SDL_GetGPUDeviceDriver(g_dev));
+  const SDL_GPUShaderFormat formats = SDL_GetGPUShaderFormats(g_dev);
+  g_format = (formats & SDL_GPU_SHADERFORMAT_DXIL)    ? SDL_GPU_SHADERFORMAT_DXIL
+             : (formats & SDL_GPU_SHADERFORMAT_SPIRV) ? SDL_GPU_SHADERFORMAT_SPIRV
+                                                      : SDL_GPU_SHADERFORMAT_INVALID;
+  if (g_format == SDL_GPU_SHADERFORMAT_INVALID) {
+    SDL_Log("[GpuFsr] SDL GPU on %s takes neither DXIL nor SPIR-V: no shaders", SDL_GetGPUDeviceDriver(g_dev));
     g_dev = nullptr;
     return false;
   }
-  g_easu = makeState(renderer, kEasuDxil, sizeof(kEasuDxil), "EASU");
-  g_rcas = makeState(renderer, kRcasDxil, sizeof(kRcasDxil), "RCAS");
-  g_style = makeState(renderer, kStyleDxil, sizeof(kStyleDxil), "stylized");
-  g_colour = makeState(renderer, kColourDxil, sizeof(kColourDxil), "colour");
+  g_easu = makeState(renderer, kEasuCode, "EASU");
+  g_rcas = makeState(renderer, kRcasCode, "RCAS");
+  g_style = makeState(renderer, kStyleCode, "stylized");
+  g_colour = makeState(renderer, kColourCode, "colour");
   const bool ok = g_easu && g_rcas;
   if (ok) {
     ZT_StandIn &s = ZT_WindowStandIn();
@@ -231,7 +238,7 @@ unsigned compile(const std::string &hlsl, const std::vector<std::string> &params
   for (const Effect &e : kEffects)
     if (e.hash == h) {
       Program p;
-      p.state = makeState(renderer, e.code, e.size, "effect");
+      p.state = makeState(renderer, e.code, "effect");
       if (!p.state)
         return log = "the shader couldn't be made", 0;
       p.params = params;

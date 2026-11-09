@@ -9,17 +9,17 @@
 
 // ours: GpuFsr's passes on SDL3's GPU renderer ("gpu": Direct3D 12 or
 // Vulkan underneath). The shaders are the Direct3D 11 ones (GpuFsrD3D11.cpp,
-// GraphicsEffects.cpp), compiled ahead to DXIL (GpuFsrSdlGpuShaders.hpp),
+// GraphicsEffects.cpp), compiled ahead (GpuFsrSdlGpuShaders.hpp) and
 // run as SDL_GPURenderState fragment shaders on ordinary SDL_RenderTexture
 // draws, so SDL keeps its own command buffer and state. The renderer keeps
 // the window's frame to itself, so while a pass needs to read it the frame
 // is drawn into a texture standing in for the window (Sdl3Compat.hpp's
-// ZT_WindowStandIn), copied to the window at the end. Direct3D 12 only for
-// now (Vulkan needs SPIR-V). Used through GpuFsr (GpuFsr.hpp).
+// ZT_WindowStandIn), copied to the window at the end. DXIL for Direct3D 12,
+// SPIR-V for Vulkan. Used through GpuFsr (GpuFsr.hpp).
 namespace GpuFsr {
 namespace SdlGpu {
 
-// Sets up on a "gpu" SDL renderer whose device takes DXIL
+// Sets up on a "gpu" SDL renderer whose device takes DXIL or SPIR-V
 bool init(SDL_Renderer *renderer);
 // A built-in effect, found by its HLSL among those compiled ahead; 0 and
 // log if it isn't one of them

@@ -730,6 +730,7 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
   // Zoomed in past 1x, map art comes from its upscaled textures
   const bool hires = RenderSettings::worldZoomedIn;
 
+  constexpr float kTexelNudge = 1.0f / 64.0f; // (paint's, below)
   struct TexInfo {
     SDL_Texture *texture = nullptr;
     float tilesPerTexture = 1.0f;
@@ -921,6 +922,14 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
         float k = tex.tilesPerTexture;
         float baseU = std::fmod(float(x), k) / k;
         float baseV = std::fmod(float(y), k) / k;
+        // (ours: a 64th of a texel on, so no pixel's centre lands exactly
+        // between two texels - there Direct3D 11, Direct3D 12 and OpenGL
+        // each picked their own (streaks across the ground); this way they
+        // all pick the one Direct3D 11 always did)
+        if (tex.texture) {
+          baseU += kTexelNudge / tex.texture->w;
+          baseV += kTexelNudge / tex.texture->h;
+        }
         ZT_Vertex vtx[4];
         SDL_Texture *texture = tex.texture;
         for (int i = 0; i < 4; i++) {
