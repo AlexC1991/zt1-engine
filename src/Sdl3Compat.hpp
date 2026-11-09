@@ -10,6 +10,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
@@ -41,6 +43,386 @@ inline int ZT_GetRendererInfo(SDL_Renderer *r, ZT_RendererInfo *info) {
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// SDL2's render scale, viewport and clip. SDL2 turned a viewport or clip into
+// the target's pixels the moment it was set (times the scale then), and a
+// later scale changed only what was drawn after; switching to a texture
+// target gave it scale 1, all of it as the viewport and no clip, and coming
+// back to the window brought the window's back. SDL3 keeps them in the scale's
+// units and works them out again when the scale changes, and each texture
+// keeps its own - so the engine's device-pixel viewports and clips (the
+// world's offset view, its strips of buildings, the fences' layers) moved
+// with the zoom. Here SDL3's own scale stays 1: the viewport and clip go to
+// SDL3 as SDL2's backends had them (each value floored), and every drawing
+// call below puts the scale on its coordinates as SDL2 did.
+struct ZT_View2 {
+  bool whole = true;              // (the viewport: all of the target)
+  double vx = 0, vy = 0, vw = 0, vh = 0;
+  bool clip = false;
+  double cx = 0, cy = 0, cw = 0, ch = 0;
+  float sx = 1.0f, sy = 1.0f;
+};
+struct ZT_Render2 {
+  ZT_View2 cur, backup;          // (backup: the window's, while on a texture)
+  SDL_Texture *target = nullptr; // (as the engine chose it: null is the window)
+};
+inline std::unordered_map<SDL_Renderer *, ZT_Render2> &ZT_Renders2() {
+  static std::unordered_map<SDL_Renderer *, ZT_Render2> all;
+  return all;
+}
+inline SDL_Renderer *&ZT_LastRenderer2() {
+  static SDL_Renderer *r = nullptr;
+  return r;
+}
+inline ZT_Render2 *&ZT_LastRender2() {
+  static ZT_Render2 *s = nullptr;
+  return s;
+}
+// (asked for every drawing call: the last renderer's kept to hand)
+inline ZT_Render2 &ZT_R2(SDL_Renderer *r) {
+  if (r == ZT_LastRenderer2() && ZT_LastRender2())
+    return *ZT_LastRender2();
+  ZT_Render2 &s = ZT_Renders2()[r];
+  ZT_LastRenderer2() = r;
+  ZT_LastRender2() = &s;
+  return s;
+}
+inline bool ZT_Scaled2(const ZT_View2 &v) { return v.sx != 1.0f || v.sy != 1.0f; }
+
+// (SDL's GPU renderer passes the clip on as the graphics card's scissor as it
+// is; one reaching past the target - left of it or above it, or past its far
+// side - is invalid on Vulkan and trips SDL's own checks: there it's cut at
+// the target's edges - the same pixels, those beyond don't exist)
+inline SDL_Rect ZT_GpuClip2(SDL_Renderer *r, const ZT_View2 &v, SDL_Rect c) {
+  const char *name = SDL_GetRendererName(r);
+  if (!name || std::strcmp(name, "gpu") != 0)
+    return c;
+  int outW = 0, outH = 0;
+  SDL_GetCurrentRenderOutputSize(r, &outW, &outH);
+  const int px = v.whole ? 0 : int(std::floor(v.vx)), py = v.whole ? 0 : int(std::floor(v.vy));
+  const int x0 = std::max(px + c.x, 0), y0 = std::max(py + c.y, 0);
+  const int x1 = std::min(px + c.x + c.w, outW), y1 = std::min(py + c.y + c.h, outH);
+  if (x1 <= x0 || y1 <= y0) // (empty: draws nothing, wherever it is - put inside)
+    return SDL_Rect{std::clamp(-px, std::min(0, outW - px), std::max(0, outW - px)),
+                    std::clamp(-py, std::min(0, outH - py), std::max(0, outH - py)), 0, 0};
+  return SDL_Rect{x0 - px, y0 - py, x1 - x0, y1 - y0};
+}
+// The engine's view onto SDL3's current target, in its pixels
+inline void ZT_PushViewport2(SDL_Renderer *r, const ZT_View2 &v) {
+  if (v.whole) {
+    SDL_SetRenderViewport(r, nullptr);
+  } else {
+    const SDL_Rect p{int(std::floor(v.vx)), int(std::floor(v.vy)), int(std::floor(v.vw)), int(std::floor(v.vh))};
+    SDL_SetRenderViewport(r, &p);
+  }
+}
+inline void ZT_PushClip2(SDL_Renderer *r, const ZT_View2 &v) {
+  if (!v.clip) {
+    SDL_SetRenderClipRect(r, nullptr);
+    return;
+  }
+  const SDL_Rect c = ZT_GpuClip2(r, v, SDL_Rect{int(std::floor(v.cx)), int(std::floor(v.cy)), int(std::floor(v.cw)),
+                                                int(std::floor(v.ch))});
+  SDL_SetRenderClipRect(r, &c);
+}
+inline void ZT_PushView2(SDL_Renderer *r) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  SDL_SetRenderScale(r, 1.0f, 1.0f);
+  ZT_PushViewport2(r, v);
+  ZT_PushClip2(r, v);
+}
+
+// The engine's view kept and put back whole (no rounding through SDL2's
+// getters), and a plain one - the target's pixels, all of it - for a pass
+inline ZT_View2 ZT_SaveView2(SDL_Renderer *r) { return ZT_R2(r).cur; }
+inline void ZT_RestoreView2(SDL_Renderer *r, const ZT_View2 &v) {
+  ZT_R2(r).cur = v;
+  ZT_PushView2(r);
+}
+inline void ZT_PixelView2(SDL_Renderer *r) {
+  ZT_R2(r).cur = ZT_View2{};
+  ZT_PushView2(r);
+}
+// The viewport and clip in the target's pixels, as drawn
+inline SDL_Rect ZT_PixelViewport2(SDL_Renderer *r) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  if (v.whole) {
+    int w = 0, h = 0;
+    SDL_GetCurrentRenderOutputSize(r, &w, &h);
+    return SDL_Rect{0, 0, w, h};
+  }
+  return SDL_Rect{int(std::floor(v.vx)), int(std::floor(v.vy)), int(std::floor(v.vw)), int(std::floor(v.vh))};
+}
+inline bool ZT_PixelClip2(SDL_Renderer *r, SDL_Rect *clip) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  if (clip)
+    *clip = SDL_Rect{int(std::floor(v.cx)), int(std::floor(v.cy)), int(std::floor(v.cw)), int(std::floor(v.ch))};
+  return v.clip;
+}
+
+// SDL2's setters and getters
+inline bool ZT_SetRenderScale(SDL_Renderer *r, float sx, float sy) {
+  ZT_View2 &v = ZT_R2(r).cur;
+  v.sx = sx;
+  v.sy = sy;
+  return true;
+}
+inline bool ZT_GetRenderScale(SDL_Renderer *r, float *sx, float *sy) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  if (sx)
+    *sx = v.sx;
+  if (sy)
+    *sy = v.sy;
+  return true;
+}
+inline bool ZT_SetRenderViewport(SDL_Renderer *r, const SDL_Rect *rect) {
+  ZT_View2 &v = ZT_R2(r).cur;
+  v.whole = rect == nullptr;
+  if (rect) {
+    v.vx = double(rect->x) * v.sx;
+    v.vy = double(rect->y) * v.sy;
+    v.vw = double(rect->w) * v.sx;
+    v.vh = double(rect->h) * v.sy;
+  }
+  ZT_PushViewport2(r, v);
+  if (v.clip)
+    ZT_PushClip2(r, v); // (its cut at the target's edges moves with the viewport)
+  return true;
+}
+inline bool ZT_GetRenderViewport(SDL_Renderer *r, SDL_Rect *rect) {
+  if (!rect)
+    return true;
+  const ZT_View2 &v = ZT_R2(r).cur;
+  double w = v.vw, h = v.vh, x = v.vx, y = v.vy;
+  if (v.whole) {
+    int ow = 0, oh = 0;
+    SDL_GetCurrentRenderOutputSize(r, &ow, &oh);
+    x = y = 0;
+    w = ow;
+    h = oh;
+  }
+  *rect = SDL_Rect{int(std::floor(x / v.sx)), int(std::floor(y / v.sy)), int(std::floor(w / v.sx)), int(std::floor(h / v.sy))};
+  return true;
+}
+inline bool ZT_SetRenderClipRect(SDL_Renderer *r, const SDL_Rect *rect) {
+  ZT_View2 &v = ZT_R2(r).cur;
+  if (rect && rect->w >= 0 && rect->h >= 0) {
+    v.clip = true;
+    v.cx = double(rect->x) * v.sx;
+    v.cy = double(rect->y) * v.sy;
+    v.cw = double(rect->w) * v.sx;
+    v.ch = double(rect->h) * v.sy;
+  } else {
+    v.clip = false;
+    v.cx = v.cy = v.cw = v.ch = 0;
+  }
+  ZT_PushClip2(r, v);
+  return true;
+}
+inline bool ZT_GetRenderClipRect(SDL_Renderer *r, SDL_Rect *rect) {
+  if (!rect)
+    return true;
+  const ZT_View2 &v = ZT_R2(r).cur;
+  *rect = SDL_Rect{int(std::floor(v.cx / v.sx)), int(std::floor(v.cy / v.sy)), int(std::floor(v.cw / v.sx)),
+                   int(std::floor(v.ch / v.sy))};
+  return true;
+}
+inline bool ZT_RenderClipEnabled(SDL_Renderer *r) { return ZT_R2(r).cur.clip; }
+inline bool ZT_DestroyRenderer(SDL_Renderer *r) {
+  ZT_Renders2().erase(r);
+  ZT_LastRenderer2() = nullptr;
+  ZT_LastRender2() = nullptr;
+  SDL_DestroyRenderer(r);
+  return true;
+}
+
+// Drawing, the scale on its coordinates as SDL2's
+inline SDL_FRect ZT_ScaleRect2(const ZT_View2 &v, const SDL_FRect &d) { return SDL_FRect{d.x * v.sx, d.y * v.sy, d.w * v.sx, d.h * v.sy}; }
+inline bool ZT_RenderTexture(SDL_Renderer *r, SDL_Texture *t, const SDL_FRect *src, const SDL_FRect *dst) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  if (!dst || !ZT_Scaled2(v))
+    return SDL_RenderTexture(r, t, src, dst);
+  const SDL_FRect d = ZT_ScaleRect2(v, *dst);
+  return SDL_RenderTexture(r, t, src, &d);
+}
+inline bool ZT_RenderTextureRotated(SDL_Renderer *r, SDL_Texture *t, const SDL_FRect *src, const SDL_FRect *dst, double angle,
+                                    const SDL_FPoint *centre, SDL_FlipMode flip) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  if (!dst || !ZT_Scaled2(v))
+    return SDL_RenderTextureRotated(r, t, src, dst, angle, centre, flip);
+  const SDL_FRect d = ZT_ScaleRect2(v, *dst);
+  SDL_FPoint c;
+  if (centre)
+    c = SDL_FPoint{centre->x * v.sx, centre->y * v.sy};
+  return SDL_RenderTextureRotated(r, t, src, &d, angle, centre ? &c : nullptr, flip);
+}
+inline bool ZT_RenderGeometryRaw(SDL_Renderer *r, SDL_Texture *t, const float *xy, int xyStride, const SDL_FColor *colour,
+                                 int colourStride, const float *uv, int uvStride, int n, const void *indices, int ni,
+                                 int indexSize) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  if (!ZT_Scaled2(v) || !xy || n <= 0)
+    return SDL_RenderGeometryRaw(r, t, xy, xyStride, colour, colourStride, uv, uvStride, n, indices, ni, indexSize);
+  thread_local std::vector<float> scaled;
+  scaled.resize(size_t(n) * 2);
+  for (int i = 0; i < n; i++) {
+    const float *p = reinterpret_cast<const float *>(reinterpret_cast<const Uint8 *>(xy) + size_t(i) * xyStride);
+    scaled[size_t(i) * 2] = p[0] * v.sx;
+    scaled[size_t(i) * 2 + 1] = p[1] * v.sy;
+  }
+  return SDL_RenderGeometryRaw(r, t, scaled.data(), int(sizeof(float) * 2), colour, colourStride, uv, uvStride, n, indices, ni,
+                               indexSize);
+}
+inline bool ZT_RenderFillRects2(SDL_Renderer *r, const SDL_FRect *rects, int n) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  if (!ZT_Scaled2(v))
+    return SDL_RenderFillRects(r, rects, n);
+  thread_local std::vector<SDL_FRect> scaled;
+  scaled.resize(size_t(std::max(n, 0)));
+  for (int i = 0; i < n; i++)
+    scaled[size_t(i)] = ZT_ScaleRect2(v, rects[i]);
+  return SDL_RenderFillRects(r, scaled.data(), n);
+}
+inline bool ZT_RenderFillRect2(SDL_Renderer *r, const SDL_FRect *rect) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  if (!rect || !ZT_Scaled2(v))
+    return SDL_RenderFillRect(r, rect);
+  const SDL_FRect d = ZT_ScaleRect2(v, *rect);
+  return SDL_RenderFillRect(r, &d);
+}
+// (scaled points and lines as SDL2 drew them: each point a rectangle the
+// scale's size, a line's straight runs one rectangle, its slopes SDL2's
+// Bresenham points - RenderDrawPointsWithRectsF, RenderDrawLinesWithRectsF,
+// RenderDrawLineBresenham)
+inline bool ZT_ScaledPoints2(SDL_Renderer *r, const ZT_View2 &v, const SDL_FPoint *points, int n) {
+  thread_local std::vector<SDL_FRect> rects;
+  rects.resize(size_t(std::max(n, 0)));
+  for (int i = 0; i < n; i++)
+    rects[size_t(i)] = SDL_FRect{points[i].x * v.sx, points[i].y * v.sy, v.sx, v.sy};
+  return n <= 0 || SDL_RenderFillRects(r, rects.data(), n);
+}
+inline void ZT_Bresenham2(SDL_Renderer *r, const ZT_View2 &v, int x1, int y1, int x2, int y2, bool last) {
+  int vw = 0, vh = 0;
+  {
+    const SDL_Rect pv = ZT_PixelViewport2(r);
+    vw = pv.w;
+    vh = pv.h;
+  }
+  const SDL_Rect bounds{0, 0, vw, vh};
+  if (!SDL_GetRectAndLineIntersection(&bounds, &x1, &y1, &x2, &y2))
+    return;
+  const int dx = std::abs(x2 - x1), dy = std::abs(y2 - y1);
+  int count, d, dinc1, dinc2, xinc1, xinc2, yinc1, yinc2;
+  if (dx >= dy) {
+    count = dx + 1;
+    d = 2 * dy - dx;
+    dinc1 = dy * 2;
+    dinc2 = (dy - dx) * 2;
+    xinc1 = 1;
+    xinc2 = 1;
+    yinc1 = 0;
+    yinc2 = 1;
+  } else {
+    count = dy + 1;
+    d = 2 * dx - dy;
+    dinc1 = dx * 2;
+    dinc2 = (dx - dy) * 2;
+    xinc1 = 0;
+    xinc2 = 1;
+    yinc1 = 1;
+    yinc2 = 1;
+  }
+  if (x1 > x2) {
+    xinc1 = -xinc1;
+    xinc2 = -xinc2;
+  }
+  if (y1 > y2) {
+    yinc1 = -yinc1;
+    yinc2 = -yinc2;
+  }
+  if (!last)
+    --count;
+  std::vector<SDL_FPoint> points(size_t(std::max(count, 0)));
+  int x = x1, y = y1;
+  for (int i = 0; i < count; ++i) {
+    points[size_t(i)] = SDL_FPoint{float(x), float(y)};
+    if (d < 0) {
+      d += dinc1;
+      x += xinc1;
+      y += yinc1;
+    } else {
+      d += dinc2;
+      x += xinc2;
+      y += yinc2;
+    }
+  }
+  ZT_ScaledPoints2(r, v, points.data(), count);
+}
+inline bool ZT_ScaledLines2(SDL_Renderer *r, const ZT_View2 &v, const SDL_FPoint *p, int n) {
+  if (n < 2)
+    return true;
+  std::vector<SDL_FRect> rects;
+  bool drew = false, last = false;
+  for (int i = 0; i < n - 1; ++i) {
+    const bool sameX = p[i].x == p[i + 1].x, sameY = p[i].y == p[i + 1].y;
+    if (i == n - 2) {
+      if (!drew || p[i + 1].x != p[0].x || p[i + 1].y != p[0].y)
+        last = true;
+    } else if (sameX && sameY) {
+      continue;
+    }
+    if (sameX) {
+      const float minY = std::min(p[i].y, p[i + 1].y), maxY = std::max(p[i].y, p[i + 1].y);
+      SDL_FRect f{p[i].x * v.sx, minY * v.sy, v.sx, (maxY - minY + (last ? 1 : 0)) * v.sy};
+      if (!last && p[i + 1].y < p[i].y)
+        f.y += v.sy;
+      rects.push_back(f);
+    } else if (sameY) {
+      const float minX = std::min(p[i].x, p[i + 1].x), maxX = std::max(p[i].x, p[i + 1].x);
+      SDL_FRect f{minX * v.sx, p[i].y * v.sy, (maxX - minX + (last ? 1 : 0)) * v.sx, v.sy};
+      if (!last && p[i + 1].x < p[i].x)
+        f.x += v.sx;
+      rects.push_back(f);
+    } else {
+      ZT_Bresenham2(r, v, int(std::lround(p[i].x)), int(std::lround(p[i].y)), int(std::lround(p[i + 1].x)),
+                    int(std::lround(p[i + 1].y)), last);
+    }
+    drew = true;
+  }
+  return rects.empty() || SDL_RenderFillRects(r, rects.data(), int(rects.size()));
+}
+inline bool ZT_RenderPoints(SDL_Renderer *r, const SDL_FPoint *points, int n) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  return ZT_Scaled2(v) ? ZT_ScaledPoints2(r, v, points, n) : SDL_RenderPoints(r, points, n);
+}
+inline bool ZT_RenderPoint(SDL_Renderer *r, float x, float y) {
+  const SDL_FPoint p{x, y};
+  return ZT_RenderPoints(r, &p, 1);
+}
+inline bool ZT_RenderLines(SDL_Renderer *r, const SDL_FPoint *points, int n) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  return ZT_Scaled2(v) ? ZT_ScaledLines2(r, v, points, n) : SDL_RenderLines(r, points, n);
+}
+inline bool ZT_RenderLine(SDL_Renderer *r, float x1, float y1, float x2, float y2) {
+  const SDL_FPoint p[2] = {{x1, y1}, {x2, y2}};
+  return ZT_RenderLines(r, p, 2);
+}
+inline bool ZT_RenderRect(SDL_Renderer *r, const SDL_FRect *rect) {
+  const ZT_View2 &v = ZT_R2(r).cur;
+  if (!ZT_Scaled2(v))
+    return SDL_RenderRect(r, rect);
+  SDL_FRect f;
+  if (rect) {
+    f = *rect;
+  } else {
+    SDL_Rect whole{};
+    ZT_GetRenderViewport(r, &whole);
+    f = SDL_FRect{0, 0, float(whole.w), float(whole.h)};
+  }
+  // (SDL2's outline: its four corners as a closed line)
+  const SDL_FPoint p[5] = {{f.x, f.y}, {f.x + f.w - 1, f.y}, {f.x + f.w - 1, f.y + f.h - 1}, {f.x, f.y + f.h - 1}, {f.x, f.y}};
+  return ZT_ScaledLines2(r, v, p, 5);
+}
+
 // A vertex as SDL2's: its colour 0-255 a channel
 struct ZT_Vertex {
   SDL_FPoint position;
@@ -55,8 +437,8 @@ inline int ZT_RenderGeometry(SDL_Renderer *r, SDL_Texture *t, const ZT_Vertex *v
   colours.resize(size_t(n));
   for (int i = 0; i < n; i++)
     colours[i] = SDL_FColor{v[i].color.r / 255.0f, v[i].color.g / 255.0f, v[i].color.b / 255.0f, v[i].color.a / 255.0f};
-  const bool ok = SDL_RenderGeometryRaw(r, t, &v[0].position.x, int(sizeof(ZT_Vertex)), colours.data(), int(sizeof(SDL_FColor)),
-                                        &v[0].tex_coord.x, int(sizeof(ZT_Vertex)), n, indices, ni, indices ? 4 : 0);
+  const bool ok = ZT_RenderGeometryRaw(r, t, &v[0].position.x, int(sizeof(ZT_Vertex)), colours.data(), int(sizeof(SDL_FColor)),
+                                       &v[0].tex_coord.x, int(sizeof(ZT_Vertex)), n, indices, ni, indices ? 4 : 0);
   return ok ? 0 : -1;
 }
 
@@ -67,20 +449,20 @@ inline int ZT_RenderCopy(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *src, c
     s = ZT_FRect(*src);
   if (dst)
     d = ZT_FRect(*dst);
-  return SDL_RenderTexture(r, t, src ? &s : nullptr, dst ? &d : nullptr) ? 0 : -1;
+  return ZT_RenderTexture(r, t, src ? &s : nullptr, dst ? &d : nullptr) ? 0 : -1;
 }
 inline int ZT_RenderCopyF(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *src, const SDL_FRect *dst) {
   SDL_FRect s;
   if (src)
     s = ZT_FRect(*src);
-  return SDL_RenderTexture(r, t, src ? &s : nullptr, dst) ? 0 : -1;
+  return ZT_RenderTexture(r, t, src ? &s : nullptr, dst) ? 0 : -1;
 }
 inline int ZT_RenderCopyExF(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *src, const SDL_FRect *dst, double angle,
                             const SDL_FPoint *centre, SDL_FlipMode flip) {
   SDL_FRect s;
   if (src)
     s = ZT_FRect(*src);
-  return SDL_RenderTextureRotated(r, t, src ? &s : nullptr, dst, angle, centre, flip) ? 0 : -1;
+  return ZT_RenderTextureRotated(r, t, src ? &s : nullptr, dst, angle, centre, flip) ? 0 : -1;
 }
 inline int ZT_RenderCopyEx(SDL_Renderer *r, SDL_Texture *t, const SDL_Rect *src, const SDL_Rect *dst, double angle,
                            const SDL_Point *centre, SDL_FlipMode flip) {
@@ -96,15 +478,14 @@ inline int ZT_RenderFillRect(SDL_Renderer *r, const SDL_Rect *rect) {
   SDL_FRect f;
   if (rect)
     f = ZT_FRect(*rect);
-  return SDL_RenderFillRect(r, rect ? &f : nullptr) ? 0 : -1;
+  return ZT_RenderFillRect2(r, rect ? &f : nullptr) ? 0 : -1;
 }
 inline int ZT_RenderDrawRect(SDL_Renderer *r, const SDL_Rect *rect) {
   SDL_FRect f;
   if (rect)
     f = ZT_FRect(*rect);
-  return SDL_RenderRect(r, rect ? &f : nullptr) ? 0 : -1;
+  return ZT_RenderRect(r, rect ? &f : nullptr) ? 0 : -1;
 }
-// SDL2's: the pixels into the caller's memory, in the format asked for
 // ours: SDL3's GPU renderer's hooks (GpuFsrSdlGpu.cpp, GpuUploadSdlGpu.cpp),
 // set for that renderer only; nothing changes while they're unset.
 // - The window's stand-in: the renderer keeps the window's frame to itself,
@@ -127,6 +508,7 @@ inline ZT_StandIn &ZT_WindowStandIn() {
   return s;
 }
 
+// SDL2's: the pixels into the caller's memory, in the format asked for
 inline int ZT_RenderReadPixels(SDL_Renderer *r, const SDL_Rect *rect, Uint32 format, void *pixels, int pitch) {
   if (ZT_WindowStandIn().flush && r == ZT_WindowStandIn().renderer)
     ZT_WindowStandIn().flush(r);
@@ -267,9 +649,23 @@ struct ID3D11Device;
 ID3D11Device *ZT_RenderGetD3D11Device(SDL_Renderer *r); // (D3D11Util.cpp)
 #endif
 
+// The target as SDL2's: the stand-in for the window when there is one, and
+// SDL2's view rules - a texture starts with scale 1, all of it and no clip,
+// the window gets its own back - with the engine's view put on whatever
+// SDL3 now draws into
 inline bool ZT_SetRenderTarget(SDL_Renderer *r, SDL_Texture *t) {
   const ZT_StandIn &s = ZT_WindowStandIn();
-  return SDL_SetRenderTarget(r, !t && r == s.renderer ? s.texture : t);
+  if (!SDL_SetRenderTarget(r, !t && r == s.renderer ? s.texture : t))
+    return false;
+  ZT_Render2 &st = ZT_R2(r);
+  if (t != st.target) {
+    if (t && !st.target)
+      st.backup = st.cur;
+    st.cur = t ? ZT_View2{} : st.backup;
+    st.target = t;
+  }
+  ZT_PushView2(r);
+  return true;
 }
 inline SDL_Texture *ZT_GetRenderTarget(SDL_Renderer *r) {
   SDL_Texture *t = SDL_GetRenderTarget(r);
@@ -298,5 +694,23 @@ inline SDL_Texture *ZT_CreateTextureFromSurface(SDL_Renderer *r, SDL_Surface *su
 #define SDL_RenderPresent ZT_RenderPresent
 #define SDL_RenderReadPixels ZT_RenderReadPixelsSurface
 #define SDL_CreateTextureFromSurface ZT_CreateTextureFromSurface
+#define SDL_SetRenderScale ZT_SetRenderScale
+#define SDL_GetRenderScale ZT_GetRenderScale
+#define SDL_SetRenderViewport ZT_SetRenderViewport
+#define SDL_GetRenderViewport ZT_GetRenderViewport
+#define SDL_SetRenderClipRect ZT_SetRenderClipRect
+#define SDL_GetRenderClipRect ZT_GetRenderClipRect
+#define SDL_RenderClipEnabled ZT_RenderClipEnabled
+#define SDL_DestroyRenderer ZT_DestroyRenderer
+#define SDL_RenderTexture ZT_RenderTexture
+#define SDL_RenderTextureRotated ZT_RenderTextureRotated
+#define SDL_RenderGeometryRaw ZT_RenderGeometryRaw
+#define SDL_RenderFillRect ZT_RenderFillRect2
+#define SDL_RenderFillRects ZT_RenderFillRects2
+#define SDL_RenderPoint ZT_RenderPoint
+#define SDL_RenderPoints ZT_RenderPoints
+#define SDL_RenderLine ZT_RenderLine
+#define SDL_RenderLines ZT_RenderLines
+#define SDL_RenderRect ZT_RenderRect
 
 #endif // SDL3_COMPAT_HPP

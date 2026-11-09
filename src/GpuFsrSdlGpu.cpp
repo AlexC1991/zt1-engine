@@ -14,10 +14,9 @@
 #include "GpuFsrSdlGpuShaders.hpp"
 #include "GpuUploadSdlGpu.hpp"
 
-// (this file runs the window's stand-in, so it calls SDL's own functions;
-// standIn() is the window as the rest of the engine sees it)
-#undef SDL_SetRenderTarget
-#undef SDL_GetRenderTarget
+// (this file presents the frames, so it calls SDL's own present; choosing
+// the window as the target chooses the stand-in while there is one -
+// Sdl3Compat.hpp's ZT_SetRenderTarget)
 #undef SDL_RenderPresent
 
 namespace GpuFsr {
@@ -98,32 +97,14 @@ bool ensure(SDL_Renderer *renderer, Tex &m, int w, int h) {
   return m.t != nullptr;
 }
 
-// The window as the engine sees it: the stand-in while there is one
-SDL_Texture *standIn() { return ZT_WindowStandIn().texture; }
-
-// A target's viewport, clip and scale: kept and set aside for a pass drawn
-// in its pixels (as the other backends' raw passes are), then put back
-struct View {
-  SDL_Rect view{}, clip{};
-  bool clipped = false;
-  float sx = 1.0f, sy = 1.0f;
-};
-View keepView(SDL_Renderer *renderer) {
-  View v;
-  SDL_GetRenderViewport(renderer, &v.view);
-  v.clipped = SDL_RenderClipEnabled(renderer);
-  SDL_GetRenderClipRect(renderer, &v.clip);
-  SDL_GetRenderScale(renderer, &v.sx, &v.sy);
-  SDL_SetRenderScale(renderer, 1.0f, 1.0f);
-  SDL_SetRenderViewport(renderer, nullptr);
-  SDL_SetRenderClipRect(renderer, nullptr);
+// A pass drawn in the target's pixels: the engine's view (Sdl3Compat.hpp's,
+// SDL2's) set aside for it and put back exactly
+ZT_View2 keepView(SDL_Renderer *renderer) {
+  const ZT_View2 v = ZT_SaveView2(renderer);
+  ZT_PixelView2(renderer);
   return v;
 }
-void restoreView(SDL_Renderer *renderer, const View &v) {
-  SDL_SetRenderViewport(renderer, &v.view);
-  SDL_SetRenderClipRect(renderer, v.clipped ? &v.clip : nullptr);
-  SDL_SetRenderScale(renderer, v.sx, v.sy);
-}
+void restoreView(SDL_Renderer *renderer, const ZT_View2 &v) { ZT_RestoreView2(renderer, v); }
 
 // One pass: from drawn over dst on the current target through st
 void pass(SDL_Renderer *renderer, SDL_GPURenderState *st, const Consts &c, SDL_Texture *from, const SDL_FRect &src,
@@ -148,7 +129,7 @@ void finish(SDL_Renderer *renderer, bool colour) {
   SDL_Texture *frame = s.texture;
   s.texture = nullptr;
   SDL_SetRenderTarget(renderer, nullptr);
-  const View v = keepView(renderer);
+  const ZT_View2 v = keepView(renderer);
   const SDL_FRect all{0, 0, float(g_frame.w), float(g_frame.h)};
   if (colour && g_colour) {
     Consts c{};
@@ -184,7 +165,7 @@ void arm(SDL_Renderer *renderer) {
     return;
   }
   s.texture = g_frame.t;
-  SDL_SetRenderTarget(renderer, g_frame.t);
+  SDL_SetRenderTarget(renderer, nullptr); // (the window: now the stand-in, with the window's view)
 }
 
 bool present(SDL_Renderer *renderer) {
@@ -269,13 +250,10 @@ bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pa
     return false;
   const Program &p = g_programs[prog - 1];
   SDL_Texture *was = SDL_GetRenderTarget(renderer);
-  // The frame through prog into the spare, which becomes the frame (with the
-  // frame's viewport, clip and scale)
-  SDL_SetRenderTarget(renderer, g_frame.t);
-  const View v = keepView(renderer);
-  restoreView(renderer, v);
+  // The frame through prog into the spare (a texture target: SDL2's rules
+  // give it the plain view), which becomes the frame - the window's view
+  // goes on it as the window is chosen again
   SDL_SetRenderTarget(renderer, g_spare.t);
-  keepView(renderer);
   Consts c{};
   c.uSize[0] = float(g_frame.w);
   c.uSize[1] = float(g_frame.h);
@@ -288,10 +266,9 @@ bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pa
   SDL_SetTextureScaleMode(g_frame.t, smooth ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
   pass(renderer, p.state, c, g_frame.t, all, all, SDL_BLENDMODE_NONE);
   SDL_SetTextureScaleMode(g_frame.t, SDL_SCALEMODE_NEAREST);
-  restoreView(renderer, v);
   std::swap(g_frame, g_spare);
   s.texture = g_frame.t;
-  SDL_SetRenderTarget(renderer, was == g_spare.t ? g_frame.t : was);
+  SDL_SetRenderTarget(renderer, was);
   return true;
 }
 
@@ -310,7 +287,7 @@ void endLayer(SDL_Renderer *renderer, int layer, SDL_Texture *low, int lowW, int
   if (!g_easu || !g_rcas || layer < 0 || layer > 1 || !low)
     return;
   // The window (the target from here on, as GpuFsr's OpenGL endLayer leaves it)
-  SDL_SetRenderTarget(renderer, standIn());
+  SDL_SetRenderTarget(renderer, nullptr);
   int outW = 0, outH = 0;
   SDL_GetCurrentRenderOutputSize(renderer, &outW, &outH);
   Tex &mid = g_mid[layer];
@@ -340,8 +317,8 @@ void endLayer(SDL_Renderer *renderer, int layer, SDL_Texture *low, int lowW, int
   c2.p[5] = dst.y;
   c2.p[6] = dst.w;
   c2.p[7] = dst.h;
-  SDL_SetRenderTarget(renderer, standIn());
-  const View v = keepView(renderer);
+  SDL_SetRenderTarget(renderer, nullptr);
+  const ZT_View2 v = keepView(renderer);
   pass(renderer, style ? g_style : g_rcas, c2, mid.t, dst, dst,
        blend ? SDL_BLENDMODE_BLEND_PREMULTIPLIED : SDL_BLENDMODE_NONE);
   restoreView(renderer, v);

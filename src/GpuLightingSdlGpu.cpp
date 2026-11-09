@@ -305,33 +305,19 @@ bool setup(SDL_Renderer *renderer) {
   return sunReady && g_clip && g_surface && g_ground && g_point && g_composite;
 }
 
-// A target's viewport, clip and scale set aside for drawing in its pixels
-struct View {
-  SDL_Rect view{}, clip{};
-  bool clipped = false;
-  float sx = 1.0f, sy = 1.0f;
-};
-View keepView(SDL_Renderer *renderer) {
-  View v;
-  SDL_GetRenderViewport(renderer, &v.view);
-  v.clipped = SDL_RenderClipEnabled(renderer);
-  SDL_GetRenderClipRect(renderer, &v.clip);
-  SDL_GetRenderScale(renderer, &v.sx, &v.sy);
-  SDL_SetRenderScale(renderer, 1.0f, 1.0f);
-  SDL_SetRenderViewport(renderer, nullptr);
-  SDL_SetRenderClipRect(renderer, nullptr);
+// A target's view (Sdl3Compat.hpp's, SDL2's) set aside for drawing in its
+// pixels, and put back exactly
+ZT_View2 keepView(SDL_Renderer *renderer) {
+  const ZT_View2 v = ZT_SaveView2(renderer);
+  ZT_PixelView2(renderer);
   return v;
 }
-void restoreView(SDL_Renderer *renderer, const View &v) {
-  SDL_SetRenderViewport(renderer, &v.view);
-  SDL_SetRenderClipRect(renderer, v.clipped ? &v.clip : nullptr);
-  SDL_SetRenderScale(renderer, v.sx, v.sy);
-}
+void restoreView(SDL_Renderer *renderer, const ZT_View2 &v) { ZT_RestoreView2(renderer, v); }
 
 // The layer onto SDL's current target, texel for texel (premultiplied); the
 // draw recorded at once, so the layer can be drawn into again
 void composite(SDL_Renderer *renderer, const Layer &layer) {
-  const View v = keepView(renderer);
+  const ZT_View2 v = keepView(renderer);
   const SDL_FRect all{0, 0, float(layer.w), float(layer.h)};
   SDL_SetGPURenderState(renderer, g_composite);
   SDL_RenderTexture(renderer, layer.t, &all, &all);
@@ -531,20 +517,15 @@ bool drawGround(SDL_Renderer *renderer, const std::vector<uint32_t> &quads, cons
     return false;
   // (SDL's own view and clip in its target's pixels, as SDL works them out:
   // the Direct3D 11 pass draws under the view and scissor SDL left bound)
-  SDL_Rect view{}, clip{};
-  SDL_GetRenderViewport(renderer, &view);
+  const SDL_Rect px = ZT_PixelViewport2(renderer);
   float sx = 1, sy = 1;
   SDL_GetRenderScale(renderer, &sx, &sy);
-  const SDL_Rect px{int(SDL_floorf(view.x * sx)), int(SDL_floorf(view.y * sy)), int(SDL_ceilf(view.w * sx)),
-                    int(SDL_ceilf(view.h * sy))};
   if (px.w <= 0 || px.h <= 0)
     return false;
-  const bool clipped = SDL_RenderClipEnabled(renderer);
-  SDL_GetRenderClipRect(renderer, &clip);
+  SDL_Rect clip{};
   SDL_Rect scissor{0, 0, outW, outH};
-  if (clipped) {
-    const SDL_Rect pc{px.x + int(SDL_floorf(clip.x * sx)), px.y + int(SDL_floorf(clip.y * sy)), int(SDL_ceilf(clip.w * sx)),
-                      int(SDL_ceilf(clip.h * sy))};
+  if (ZT_PixelClip2(renderer, &clip)) {
+    const SDL_Rect pc{px.x + clip.x, px.y + clip.y, clip.w, clip.h};
     const SDL_Rect whole{0, 0, outW, outH};
     if (!SDL_GetRectIntersection(&pc, &whole, &scissor))
       return true;
