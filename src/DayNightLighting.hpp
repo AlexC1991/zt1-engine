@@ -241,6 +241,13 @@ private:
   bool spriteShadow(const Instance &,const WorldMap &,bool actor)const; // addition: cast from its sprite, not the sun's map
 
   size_t projectionHash=0;int projectionRotation=-1;float projectionUnit=0;
+  // ours: each shape's projected faces kept (by its owner, model, place and
+  // turn) while the view's turn and height scale, the map and day or night
+  // stay: chosen again in a big zoo, only the shapes new to the choice are
+  // projected; dropped when unused for four projections
+  struct ProjectedShape {std::vector<ProjectedFace> faces;uint64_t used=0;};
+  std::unordered_map<uint64_t,ProjectedShape> projectedShapes;uint64_t projectedShapesKey=0,projectedShapesTick=0;
+  std::vector<uint64_t> projectedKeys,projectedKeysSpare;std::vector<uint32_t> projectedShapeAt; // (projectModels' sort)
   // ours: sceneHash's shapes part only (and whether night's on), not its
   // lights - what projectModels' faces depend on
   size_t geometryHash=0;

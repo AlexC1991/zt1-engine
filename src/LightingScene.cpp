@@ -1,3 +1,4 @@
+#include <cstring>
 #include <string_view>
 #include "DayNightLighting.hpp"
 #include "GpuSurfaces.hpp"
@@ -203,14 +204,28 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
   std::vector<size_t> start(instances.size()+1,0),taken;
   for(size_t i=0;i<instances.size();++i){const int faces=int(instances[i].model->faces.size());start[i+1]=start[i];
     if(faces>budget)continue;budget-=faces;start[i+1]+=size_t(faces);taken.push_back(i);}
-  projectedFaces.resize(start.back());
-  parallelFor(taken.size(),[&](size_t first,size_t last){for(size_t at=first;at<last;++at) {
-    const size_t i=taken[at];const auto &o=instances[i];
+  // (ours: each shape's faces taken from projectedShapes, or projected now
+  // and kept there - the same faces, given their place in the list and the
+  // lamps' light below)
+  auto mixed=[](std::initializer_list<uint64_t> values){uint64_t key=1469598103934665603ULL;for(uint64_t v:values){key^=v;key*=1099511628211ULL;}return key;};
+  auto bits=[](float f){uint32_t u;std::memcpy(&u,&f,sizeof u);return uint64_t(u);};
+  const uint64_t shapesKey=mixed({uint64_t(view.getRotation()),bits(view.getHeightUnitPixels()),uint64_t(frameMap?frameMap->getGeneration():0),uint64_t(sky.shadow<.02f)});
+  if(shapesKey!=projectedShapesKey){projectedShapes.clear();projectedShapesKey=shapesKey;}
+  ++projectedShapesTick;
+  std::vector<ProjectedShape*> shapeOf(taken.size());std::vector<size_t> toProject;
+  for(size_t at=0;at<taken.size();++at) {
+    const auto &o=instances[taken[at]];
+    const uint64_t key=mixed({o.owner,uint64_t(reinterpret_cast<uintptr_t>(o.model)),bits(o.position.x),bits(o.position.y),bits(o.position.z),bits(o.cosine),bits(o.sine),uint64_t(o.shaded),uint64_t(o.nightReceiver)});
+    auto [it,added]=projectedShapes.try_emplace(key);it->second.used=projectedShapesTick;shapeOf[at]=&it->second;
+    if(added || it->second.faces.size()!=o.model->faces.size())toProject.push_back(at);
+  }
+  parallelFor(toProject.size(),[&](size_t first,size_t last){for(size_t n=first;n<last;++n) {
+    const size_t at=toProject[n];const size_t i=taken[at];const auto &o=instances[i];
+    auto &faces=shapeOf[at]->faces;faces.resize(o.model->faces.size());
     for(size_t j=0;j<o.model->faces.size();++j) {
-      const auto &f=o.model->faces[j];ProjectedFace d{};d.instance=i;d.localIndex=j;
+      const auto &f=o.model->faces[j];ProjectedFace d{};d.localIndex=j;
       auto rotate=[&](Point p){return Point{p.x*o.cosine-p.y*o.sine,p.x*o.sine+p.y*o.cosine,p.z};};
       d.normal=rotate(f.normal);d.outward=rotate(f.outward);
-      if(i<surfaceLight.size() && j<surfaceLight[i].size())d.local=surfaceLight[i][j];
       for(int k=0;k<4;++k) {
         auto p=toWorld(o,f.p[k]);float sx,sy,depth;view.worldToScreenF(p.x,p.y,p.z,sx,sy,depth);
         d.p[k]={sx-ox,sy-oy};d.world[k]=p;d.terrain[k]=terrainClearance(p,view);d.height[k]=f.p[k].z;d.depth+=.25f*(depth+p.z*.5f);
@@ -224,15 +239,37 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
       // (at night, with no sun shadow to fall on itself, it is lit as any
       // wall: a lamp or the lighthouse's beam on a fence, a solid tank wall)
       d.visible=(o.shaded || (o.nightReceiver && sky.shadow<.02f)) && d.outward.x*gx[view.getRotation()]+d.outward.y*gy[view.getRotation()]+d.outward.z*2>0;
-      projectedFaces[start[i]+j]=d;
+      faces[j]=d;
     }
   }},1);
-  // (sorted by index, then moved into that order once: the same order as a
-  // stable sort of the faces, which moved each large face about many times)
-  std::vector<uint32_t> order(projectedFaces.size());for(size_t i=0;i<order.size();++i)order[i]=uint32_t(i);
-  std::stable_sort(order.begin(),order.end(),[this](uint32_t a,uint32_t b){return projectedFaces[a].depth<projectedFaces[b].depth;});
-  std::vector<ProjectedFace> sorted;sorted.reserve(projectedFaces.size());for(uint32_t i:order)sorted.push_back(std::move(projectedFaces[i]));
-  projectedFaces.swap(sorted);
+  // (ours: put in depth order - ties in list order, as the stable sort of the
+  // faces did - by a stable radix sort of each face's depth bits and place,
+  // then each face written once, from its shape, straight into its place;
+  // -0 taken as 0, as the comparison did)
+  const size_t count=start.back();
+  auto &keys=projectedKeys,&spare=projectedKeysSpare;keys.resize(count);spare.resize(count);
+  auto &shapeAt=projectedShapeAt;shapeAt.resize(count);
+  parallelFor(taken.size(),[&](size_t first,size_t last){for(size_t at=first;at<last;++at) {
+    const size_t i=taken[at];const auto &faces=shapeOf[at]->faces;
+    for(size_t j=0;j<faces.size();++j) {
+      const size_t place=start[i]+j;const float depth=faces[j].depth==0?0.0f:faces[j].depth;uint32_t bits;std::memcpy(&bits,&depth,sizeof bits);
+      bits=bits&0x80000000u?~bits:bits|0x80000000u; // (ordered as the floats are)
+      keys[place]=uint64_t(bits)<<32|uint32_t(place);shapeAt[place]=uint32_t(at);
+    }
+  }},4);
+  for(int shift=32;shift<64;shift+=8) {
+    size_t at[257]{};for(const uint64_t k:keys)++at[((k>>shift)&255)+1];
+    for(int b=0;b<256;++b)at[b+1]+=at[b];
+    for(const uint64_t k:keys)spare[at[(k>>shift)&255]++]=k;
+    keys.swap(spare);
+  }
+  projectedFaces.resize(count);
+  parallelFor(count,[&](size_t first,size_t last){for(size_t s=first;s<last;++s) {
+    const uint32_t place=uint32_t(keys[s]);const size_t at=shapeAt[place],i=taken[at],j=place-start[i];
+    ProjectedFace &d=projectedFaces[s];d=shapeOf[at]->faces[j];d.instance=i;
+    if(i<surfaceLight.size() && j<surfaceLight[i].size())d.local=surfaceLight[i][j];
+  }},4096);
+  for(auto it=projectedShapes.begin();it!=projectedShapes.end();)if(it->second.used+4<projectedShapesTick)it=projectedShapes.erase(it);else ++it;
   for(auto &sun:projectedSun)sun.assign(projectedFaces.size(),{0,0,0,0});
   projectedOwners.resize(projectedFaces.size());for(size_t i=0;i<projectedFaces.size();++i)projectedOwners[i]=instances[projectedFaces[i].instance].owner;
 }
