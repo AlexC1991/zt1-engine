@@ -16,6 +16,7 @@
 #include "LightingAssets.hpp"
 #include "LightingSun.hpp"
 #include "GpuLighting.hpp"
+#include "GpuSurfacesD3D11.hpp"
 
 class Animation;
 class ResourceManager;
@@ -156,6 +157,15 @@ private:
     SDL_FRect bounds{};bool visible=true;
   };
   std::vector<ProjectedFace> projectedFaces,actorFaces;
+  // ours: each scenery face's depth, screen box, shape and facing, kept beside
+  // projectedFaces (remade when projectionSerial moves on), so a frame's test
+  // of what's on the screen reads 28 bytes a face rather than the whole face
+  struct FaceCull {float depth,left,top,right,bottom;uint32_t instance,visible;};
+  std::vector<FaceCull> faceCull;uint64_t faceCullSerial=0;
+  // ours: a frame's lists for the surface lighting on the graphics card, kept
+  // so their memory is reused, not asked of Windows again (and faulted in) each frame
+  std::vector<GpuSurfacesD3D11::Draw> surfaceOrder;std::vector<GpuSurfacesD3D11::Face> surfaceMoving;
+  std::vector<uint32_t> surfaceActorAt,surfaceActorRank;std::vector<uint8_t> surfaceActorOn,surfaceHasMask;
   struct MaskPage {SDL_Texture *texture=nullptr;int x=4,y=4,row=0;size_t used=0;};
   struct MaskEntry {int page,x,y,w,h;};
   struct ReceiverMask {SDL_Texture *texture=nullptr;SDL_FRect bounds{},uv{};bool mirrored=false,required=false;};

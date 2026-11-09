@@ -306,28 +306,68 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
         s.bounds[0]=m.bounds.x;s.bounds[1]=m.bounds.y;s.bounds[2]=m.bounds.w;s.bounds[3]=m.bounds.h;
         s.uv[0]=m.uv.x;s.uv[1]=m.uv.y;s.uv[2]=m.uv.w;s.uv[3]=m.uv.h;
         s.flags[0]=m.texture?1u:0u;s.flags[1]=m.required?1u:0u;s.flags[2]=m.mirrored?1u:0u;}
-      std::vector<G::Draw> order;order.reserve(projectedFaces.size()/4+actorFaces.size());
-      std::vector<G::Face> moving;moving.reserve(actorFaces.size());
       const bool sunUp=sky.sun>.001f;
       auto onScreen=[&](const ProjectedFace &f){return f.visible && !(f.bounds.x+f.bounds.w<left || f.bounds.x>right || f.bounds.y+f.bounds.h<top || f.bounds.y>bottom) && masks[f.instance].texture;};
-      size_t i=0,j=0;
-      while(i<projectedFaces.size() || j<actorFaces.size()) {
-        if(j==actorFaces.size() || (i<projectedFaces.size() && projectedFaces[i].depth<actorFaces[j].depth)) {
-          const auto &f=projectedFaces[i];const uint32_t index=uint32_t(i++);if(!onScreen(f))continue;
-          uint32_t live=0;
-          if(sunUp){const size_t at=size_t(index)*4;for(int k=0;k<4;++k)if(faceNear[at+k])live|=1u<<k;}
-          order.push_back({index,live});
-        } else {
-          const auto &f=actorFaces[j++];if(!onScreen(f))continue;
-          G::Face g;
+      // ours: the same list in depth order as merging the scenery's faces with
+      // the actors' one at a time, made side by side on the cores:
+      // (each scenery face's depth, screen box, shape and facing kept in a
+      // short list until the faces are projected again - 28 bytes, not 220)
+      if(faceCullSerial!=projectionSerial || faceCull.size()!=projectedFaces.size()) {
+        faceCull.resize(projectedFaces.size());
+        for(size_t i=0;i<projectedFaces.size();++i){const auto &f=projectedFaces[i];
+          faceCull[i]={f.depth,f.bounds.x,f.bounds.y,f.bounds.x+f.bounds.w,f.bounds.y+f.bounds.h,uint32_t(f.instance),f.visible?1u:0u};}
+        faceCullSerial=projectionSerial;
+      }
+      auto &hasMask=surfaceHasMask;hasMask.resize(masks.size());for(size_t m=0;m<masks.size();++m)hasMask[m]=masks[m].texture?1:0;
+      const size_t scenery=projectedFaces.size(),actorCount=actorFaces.size();
+      const FaceCull *const cull=faceCull.data();const uint8_t *const shaped=hasMask.data();const uint8_t *const near=sunUp?faceNear.data():nullptr;
+      auto drawn=[cull,shaped,left,right,top,bottom](size_t i){const FaceCull &f=cull[i];
+        return (f.visible!=0) & !((f.right<left) | (f.left>right) | (f.bottom<top) | (f.top>bottom)) & (shaped[f.instance]!=0);};
+      // (both lists are sorted by depth, so where an actor's face goes - after
+      // every scenery face nearer than it, where the merge put it - is found
+      // on its own; and which of them are drawn)
+      auto &actorOn=surfaceActorOn;actorOn.resize(actorCount);
+      auto &actorAt=surfaceActorAt;actorAt.resize(actorCount);
+      parallelFor(actorCount,[&](size_t begin,size_t end){for(size_t j=begin;j<end;++j){const auto &f=actorFaces[j];actorOn[j]=onScreen(f)?1:0;
+        actorAt[j]=uint32_t(std::lower_bound(faceCull.begin(),faceCull.end(),f.depth,[](const FaceCull &c,float d){return c.depth<d;})-faceCull.begin());}},2048);
+      // (the scenery cut into slices: each slice's drawn faces counted, so
+      // each knows where its part of the list starts, then each writes its own
+      // part - its scenery faces and the actors' that go among them)
+      constexpr size_t kSlices=32;
+      auto sliceStart=[scenery](size_t s){return scenery*s/kSlices;};
+      size_t sliceDrawn[kSlices],sliceOut[kSlices],sliceActor[kSlices+1];
+      parallelFor(kSlices,[&](size_t begin,size_t end){for(size_t s=begin;s<end;++s){size_t n=0;for(size_t i=sliceStart(s),e=sliceStart(s+1);i<e;++i)n+=drawn(i);sliceDrawn[s]=n;}},1);
+      auto &actorRank=surfaceActorRank;actorRank.resize(actorCount+1);
+      {uint32_t r=0;for(size_t j=0;j<actorCount;++j){actorRank[j]=r;r+=actorOn[j];}actorRank[actorCount]=r;}
+      size_t sceneryBefore=0;
+      for(size_t s=0;s<kSlices;++s) {
+        sliceActor[s]=size_t(std::lower_bound(actorAt.begin(),actorAt.end(),uint32_t(sliceStart(s)))-actorAt.begin());
+        sliceOut[s]=sceneryBefore+actorRank[sliceActor[s]];sceneryBefore+=sliceDrawn[s];
+      }
+      sliceActor[kSlices]=actorCount;
+      auto &order=surfaceOrder;order.resize(sceneryBefore+actorRank[actorCount]);
+      // (every field not set below is zero in every face ever made here)
+      auto &moving=surfaceMoving;moving.resize(actorRank[actorCount]);
+      const uint32_t actorLive=sunUp?0xFu:0u;
+      parallelFor(kSlices,[&](size_t begin,size_t end){for(size_t s=begin;s<end;++s) {
+        G::Draw *const to=order.data();G::Draw spare;size_t o=sliceOut[s],j=sliceActor[s];const size_t jEnd=sliceActor[s+1];
+        auto actor=[&](size_t j){if(!actorOn[j])return;const uint32_t r=actorRank[j];to[o].face=0x80000000u|r;to[o].live=actorLive;++o;
+          const auto &f=actorFaces[j];G::Face &g=moving[r];
           for(int k=0;k<4;++k){g.world[k][0]=f.world[k].x;g.world[k][1]=f.world[k].y;g.world[k][2]=f.world[k].z;g.world[k][3]=f.terrain[k];
             g.screen[k][0]=f.p[k].x;g.screen[k][1]=f.p[k].y;}
           g.normal[0]=f.normal.x;g.normal[1]=f.normal.y;g.normal[2]=f.normal.z;g.normal[3]=1.0f;
           for(int c=0;c<3;++c)g.local[c]=f.local[c];
-          g.info[0]=uint32_t(f.instance);
-          order.push_back({0x80000000u|uint32_t(moving.size()),sunUp?0xFu:0u});moving.push_back(g);
+          g.info[0]=uint32_t(f.instance);};
+        for(size_t i=sliceStart(s),e=sliceStart(s+1);i<e;++i) {
+          for(;j<jEnd && actorAt[j]==i;++j)actor(j);
+          uint32_t live=0;
+          if(near){const uint8_t *n=near+i*4;live=uint32_t(n[0]!=0)|uint32_t(n[1]!=0)<<1|uint32_t(n[2]!=0)<<2|uint32_t(n[3]!=0)<<3;}
+          // (a face not drawn is written to a spare, never to a slot that
+          // belongs to the next slice)
+          const bool shown=drawn(i);G::Draw *const d=shown?to+o:&spare;d->face=uint32_t(i);d->live=live;o+=shown;
         }
-      }
+        for(;j<jEnd;++j)actor(j);
+      }},1);
       timer.mark("surface order");
       G::Frame frame;frame.originX=ox;frame.originY=oy;frame.scale=scale;frame.lamps=sky.lamps;
       frame.sun[0]=sun.x;frame.sun[1]=sun.y;frame.sun[2]=sun.z;frame.direct=direct;frame.reference=reference;
