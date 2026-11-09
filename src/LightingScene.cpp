@@ -283,25 +283,27 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
       auto hash=[](std::initializer_list<uint64_t> values){uint64_t key=1469598103934665603ULL;for(uint64_t v:values){key^=v;key*=1099511628211ULL;}return key;};
       const uint64_t key=hash({uint64_t(projectionSerial),uint64_t(projectedFaces.size())});
       if(G::facesKey()!=key) {
-        std::vector<G::Face> faces(projectedFaces.size());
-        for(size_t i=0;i<projectedFaces.size();++i) {
-          const auto &f=projectedFaces[i];auto &g=faces[i];
+        // (ours: made side by side on the cores, into a list kept for the next
+        // time - each field set, the same faces)
+        auto &faces=surfaceFacesSent;faces.resize(projectedFaces.size());
+        parallelFor(projectedFaces.size(),[&](size_t begin,size_t end){for(size_t i=begin;i<end;++i) {
+          const auto &f=projectedFaces[i];auto &g=faces[i];g=G::Face{};
           for(int k=0;k<4;++k){g.world[k][0]=f.world[k].x;g.world[k][1]=f.world[k].y;g.world[k][2]=f.world[k].z;g.world[k][3]=f.terrain[k];
             g.screen[k][0]=f.p[k].x;g.screen[k][1]=f.p[k].y;}
           g.normal[0]=f.normal.x;g.normal[1]=f.normal.y;g.normal[2]=f.normal.z;g.normal[3]=f.visible?1.0f:0.0f;
           g.info[0]=uint32_t(f.instance);
-        }
+        }},4096);
         G::setFaces(faces,key);
       }
       const uint64_t lightKey=hash({key,uint64_t(sceneHash),projectedSunStamp[0],projectedSunStamp[1]});
       if(G::faceLightKey()!=lightKey) {
-        std::vector<G::FaceLight> light(projectedFaces.size());
-        for(size_t i=0;i<projectedFaces.size();++i) {
-          const auto &f=projectedFaces[i];auto &g=light[i];
+        auto &light=surfaceLightSent;light.resize(projectedFaces.size());
+        parallelFor(projectedFaces.size(),[&](size_t begin,size_t end){for(size_t i=begin;i<end;++i) {
+          const auto &f=projectedFaces[i];auto &g=light[i];g=G::FaceLight{};
           for(int k=0;k<4;++k){g.sun0[k]=projectedSun[0][i][k];g.sun1[k]=projectedSun[1][i][k];}
           const bool lit=f.instance<surfaceLight.size() && f.localIndex<surfaceLight[f.instance].size();
           for(int c=0;c<3;++c)g.local[c]=lit?surfaceLight[f.instance][f.localIndex][c]:0.0f;
-        }
+        }},4096);
         G::setFaceLight(light,lightKey);
       }
       timer.mark("surface upload");

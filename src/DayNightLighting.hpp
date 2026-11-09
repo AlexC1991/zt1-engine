@@ -170,7 +170,7 @@ private:
   std::vector<FaceCull> faceCull;uint64_t faceCullSerial=0;
   // ours: a frame's lists for the surface lighting on the graphics card, kept
   // so their memory is reused, not asked of Windows again (and faulted in) each frame
-  std::vector<GpuSurfacesD3D11::Draw> surfaceOrder;std::vector<GpuSurfacesD3D11::Face> surfaceMoving;
+  std::vector<GpuSurfacesD3D11::Draw> surfaceOrder;std::vector<GpuSurfacesD3D11::Face> surfaceMoving,surfaceFacesSent;std::vector<GpuSurfacesD3D11::FaceLight> surfaceLightSent;
   std::vector<uint32_t> surfaceActorAt,surfaceActorRank;std::vector<uint8_t> surfaceActorOn,surfaceHasMask;
   struct MaskPage {SDL_Texture *texture=nullptr;int x=4,y=4,row=0;size_t used=0;};
   struct MaskEntry {int page,x,y,w,h;};
