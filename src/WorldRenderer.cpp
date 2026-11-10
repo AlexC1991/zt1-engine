@@ -735,17 +735,28 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
     SDL_Texture *texture = nullptr;
     float tilesPerTexture = 1.0f;
   };
+  // (ours: each terrain's texture and repeat asked once a frame, not for
+  // every tile's ground, cliff and blend - the same answers)
+  TexInfo known[256];
+  bool asked[256] = {};
   auto textureFor = [&](int terrainType) {
+    const bool cached = terrainType >= 0 && terrainType < 256;
+    if (cached && asked[terrainType])
+      return known[terrainType];
     TexInfo info;
-    if (debugTerrainIds)
-      return info;
-    info.texture = spriteDB.getTerrainTexture(renderer, terrainType, hires);
-    if (!info.texture && hires)
-      info.texture = spriteDB.getTerrainTexture(renderer, terrainType);
-    if (info.texture) {
-      int texW = 0;
-      ArtScaler::querySize(info.texture, &texW, nullptr);
-      info.tilesPerTexture = std::max(1.0f, std::round(texW / kTexelsPerTile));
+    if (!debugTerrainIds) {
+      info.texture = spriteDB.getTerrainTexture(renderer, terrainType, hires);
+      if (!info.texture && hires)
+        info.texture = spriteDB.getTerrainTexture(renderer, terrainType);
+      if (info.texture) {
+        int texW = 0;
+        ArtScaler::querySize(info.texture, &texW, nullptr);
+        info.tilesPerTexture = std::max(1.0f, std::round(texW / kTexelsPerTile));
+      }
+    }
+    if (cached) {
+      known[terrainType] = info;
+      asked[terrainType] = true;
     }
     return info;
   };
