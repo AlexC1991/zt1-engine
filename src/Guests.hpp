@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <map>
+#include <memory>
 #include <random>
 #include <set>
 #include <string>
@@ -305,6 +306,17 @@ private:
   float artSweepIn = 15.0f; // (game seconds to the next freeing of art no guest wears)
   uint32_t artGen = 1; // (moved on as art's freed: each guest's artMemo)
   Animation *artUncached(const Guest &g, const std::string &name) const;
+  // ours: each guest animation loaded once in a palette whose every entry is
+  // a colour of its own (by its type's full palette and path); an outfit is
+  // a copy of it with the outfit's colours (Animation::recolouredCopy) - a
+  // new guest's art was read and decoded again for every outfit, 2-4 ms a
+  // guest and most of a zoo's opening. Never drawn itself
+  mutable std::map<std::string, std::shared_ptr<Animation>> indexArt;
+  Animation *outfit(const Type &t, const int colours[4], const std::string &path, bool copied) const;
+public:
+  // (checks) an outfit made as a copy and loaded as before: the same art
+  std::string outfitCheck() const;
+private:
   Animation *selectArrow = nullptr;
   std::mt19937 rng{1977};
   // crowd sounds

@@ -169,6 +169,16 @@ public:
   // a second time on the way out)
   static void releaseAllTextures();
   void setBlackIsBody(bool value){blackIsBody=value;}
+  // ours: a copy in other colours - each colour of its frames put through
+  // map (its directions' tables, or each pixel of one with more than 256) -
+  // its shapes, anchors, shadows, timing and options as they are, no
+  // textures yet. Null when a direction isn't packed. (A guest's outfit:
+  // the same frames in other colours, made from one load rather than read
+  // and decoded again for every outfit)
+  Animation *recolouredCopy(const std::function<uint32_t(uint32_t)> &map) const;
+  // ours: (checks) the same art: every frame's pixels, its shadows, anchors,
+  // timing and options
+  bool sameArt(const Animation &other) const;
 
 private:
   // Per direction: frame 0's offset from its surface's corner to where the

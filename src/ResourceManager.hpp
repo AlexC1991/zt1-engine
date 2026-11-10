@@ -80,6 +80,10 @@ public:
   // A file of the game's as text (empty when there's none)
   std::string getGameText(const std::string &file_name);
   Animation *getAnimation(const std::string &file_name);
+  // ours: one the caller owns (it frees it), not this manager; and one made
+  // elsewhere given to this manager to free with the rest (as getAnimation's)
+  Animation *getAnimationUnowned(const std::string &file_name) { return loadAnimation(file_name); }
+  Animation *adoptAnimation(Animation *a) { return own(a); }
   // ours: an animation read and its frames made on another thread, one at a
   // time (the animals' art loaded ahead): asked for (false: one's still
   // loading), then collected by its name once it's done (false: not that

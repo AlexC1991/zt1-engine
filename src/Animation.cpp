@@ -129,6 +129,98 @@ size_t textureBytes(const std::unordered_map<std::string, std::vector<SDL_Textur
 
 Animation::Animation() { liveAdd(this); }
 
+Animation *Animation::recolouredCopy(const std::function<uint32_t(uint32_t)> &map) const {
+  for (const auto &[direction, frames] : this->surfaces)
+    if (!frames.empty() && !this->packed.count(direction))
+      return nullptr;
+  auto *c = new Animation();
+  // (as a fresh load leaves it)
+  c->last_direction = CompassDirection::S;
+  c->anchor_offsets = this->anchor_offsets;
+  c->upscale = this->upscale;
+  c->world_art = this->world_art;
+  c->hd_dir = this->hd_dir;
+  c->recoloured = this->recoloured;
+  c->frame_time_in_ms = this->frame_time_in_ms;
+  c->has_background = this->has_background;
+  c->frame_count = this->frame_count;
+  c->paletteShadows = this->paletteShadows;
+  c->blackIsBody = this->blackIsBody;
+  c->shadowRuns = this->shadowRuns;
+  c->anchor_points = this->anchor_points;
+  for (const auto &[direction, frames] : this->surfaces)
+    c->surfaces[direction].assign(frames.size(), nullptr);
+  for (const auto &[direction, pd] : this->packed) {
+    PackedDirection &out = c->packed[direction] = pd;
+    if (out.indexed) {
+      for (uint32_t &colour : out.colours)
+        colour = map(colour);
+      continue;
+    }
+    // (four bytes a colour: each run's, row by row)
+    for (PackedFrame &f : out.frames) {
+      uint8_t *p = f.data.data(), *end = p + f.data.size();
+      for (int y = 0; y < f.h && p + 2 <= end; y++) {
+        const unsigned runs = p[0] | (p[1] << 8);
+        p += 2;
+        for (unsigned r = 0; r < runs && p + 4 <= end; r++) {
+          const unsigned length = p[2] | (p[3] << 8);
+          p += 4;
+          for (unsigned k = 0; k < length && p + 4 <= end; k++, p += 4) {
+            uint32_t v;
+            std::memcpy(&v, p, 4);
+            v = map(v);
+            std::memcpy(p, &v, 4);
+          }
+        }
+      }
+    }
+  }
+  return c;
+}
+
+bool Animation::sameArt(const Animation &o) const {
+  if (frame_time_in_ms != o.frame_time_in_ms || frame_count != o.frame_count || has_background != o.has_background ||
+      paletteShadows != o.paletteShadows || blackIsBody != o.blackIsBody || world_art != o.world_art ||
+      upscale != o.upscale || hd_dir != o.hd_dir || recoloured != o.recoloured || shadowRuns != o.shadowRuns)
+    return false;
+  auto samePoints = [](const std::unordered_map<std::string, SDL_Point> &a,
+                       const std::unordered_map<std::string, SDL_Point> &b) {
+    if (a.size() != b.size())
+      return false;
+    for (const auto &[k, v] : a) {
+      auto it = b.find(k);
+      if (it == b.end() || it->second.x != v.x || it->second.y != v.y)
+        return false;
+    }
+    return true;
+  };
+  if (!samePoints(anchor_points, o.anchor_points) || !samePoints(anchor_offsets, o.anchor_offsets) ||
+      surfaces.size() != o.surfaces.size())
+    return false;
+  for (const auto &[direction, frames] : surfaces) {
+    auto it = o.surfaces.find(direction);
+    if (it == o.surfaces.end() || it->second.size() != frames.size())
+      return false;
+    for (size_t i = 0; i < frames.size(); i++) {
+      SDL_Surface *a = sourceFrame(direction, i), *b = o.sourceFrame(direction, i);
+      if (!a || !b) {
+        if (a != b)
+          return false;
+        continue;
+      }
+      if (a->w != b->w || a->h != b->h || a->format != b->format)
+        return false;
+      for (int y = 0; y < a->h; y++)
+        if (std::memcmp(static_cast<const uint8_t *>(a->pixels) + size_t(y) * a->pitch,
+                        static_cast<const uint8_t *>(b->pixels) + size_t(y) * b->pitch,
+                        size_t(a->w) * SDL_BYTESPERPIXEL(a->format)) != 0)
+          return false;
+    }
+  }
+  return true;
+}
+
 std::string Animation::memoryStats() {
   std::lock_guard<std::mutex> lock(g_liveMutex);
   size_t surfaces = 0, frames = 0, normal = 0, lit = 0, hi = 0;

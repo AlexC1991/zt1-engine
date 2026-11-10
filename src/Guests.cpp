@@ -196,35 +196,101 @@ Animation *Guests::artUncached(const Guest &g, const std::string &name) const {
   auto c = this->artCache.find(key);
   if (c != this->artCache.end())
     return c->second;
-  Animation *a = nullptr;
-  if (this->rm && this->rm->hasResource(path + ".ani")) {
-    PalletManager *pm = this->rm->getPalletManager();
-    std::string full = t.fullPal;
-    Pallet *base = full.empty() ? nullptr : pm->getPallet(full);
-    if (base) {
-      // The full palette with its four 16-colour ranges (192, 208, 224,
-      // 240) from the guest's shirt, pants or skirt, hair and skin
-      Pallet variant = *base;
-      for (int s = 0; s < 4; s++) {
-        if (t.slots[s].empty())
-          continue;
-        std::string name = t.slots[s][g.colours[s] % t.slots[s].size()];
-        Pallet *p = pm->getPallet(name);
-        for (int i = 0; p && i < 16; i++)
-          if (p->color_count > static_cast<uint32_t>(i + 1))
-            variant.colors[192 + s * 16 + i] = p->colors[i + 1];
-      }
-      std::string name2 = t.fullPal + "#" + key;
-      pm->addPallet(name2, variant);
-      PalletManager::setOverride(t.fullPal, name2);
-      a = this->rm->getAnimation(path);
-      PalletManager::clearOverrides();
-    } else {
-      a = this->rm->getAnimation(path);
-    }
-  }
+  Animation *a = this->outfit(t, g.colours, path, true);
   this->artCache[key] = a;
   return a;
+}
+
+// A guest's animation in its outfit: copied: from its art loaded once
+// (indexArt), the colours put in; or (copied false, and when that can't be
+// made) loaded in the outfit's palette, as it was
+Animation *Guests::outfit(const Type &t, const int colours[4], const std::string &path, bool copied) const {
+  if (!this->rm || !this->rm->hasResource(path + ".ani"))
+    return nullptr;
+  PalletManager *pm = this->rm->getPalletManager();
+  std::string full = t.fullPal;
+  Pallet *base = full.empty() ? nullptr : pm->getPallet(full);
+  if (!base)
+    return this->rm->getAnimation(path);
+  // The full palette with its four 16-colour ranges (192, 208, 224,
+  // 240) from the guest's shirt, pants or skirt, hair and skin
+  Pallet variant = *base;
+  for (int s = 0; s < 4; s++) {
+    if (t.slots[s].empty())
+      continue;
+    std::string name = t.slots[s][colours[s] % t.slots[s].size()];
+    Pallet *p = pm->getPallet(name);
+    for (int i = 0; p && i < 16; i++)
+      if (p->color_count > static_cast<uint32_t>(i + 1))
+        variant.colors[192 + s * 16 + i] = p->colors[i + 1];
+  }
+  std::string key = path;
+  for (int i = 0; i < 4; i++)
+    key += "#" + std::to_string(colours[i]);
+  if (copied) {
+    std::shared_ptr<Animation> &index = this->indexArt[t.fullPal + "|" + path];
+    if (!index) {
+      // (its palette: entry i drawn as the colour i + 1, each its own - the
+      // loader makes every pixel its entry's colour, in full alpha. Entry 1
+      // keeps its black where the palette has it: that black is the art's
+      // shadow, its pixels marked as the shadow's)
+      Pallet numbered = *base;
+      for (uint32_t i = 0; i < 256; i++)
+        numbered.colors[i] = i + 1;
+      if (base->color_count > 1 && (base->colors[1] & 0xFFFFFF) == 0)
+        numbered.colors[1] = base->colors[1];
+      const std::string name = t.fullPal + "#numbered";
+      pm->addPallet(name, numbered);
+      PalletManager::setOverride(t.fullPal, name);
+      index.reset(this->rm->getAnimationUnowned(path));
+      PalletManager::clearOverrides();
+      if (!index)
+        index = std::make_shared<Animation>(); // (none: loaded as before)
+    }
+    // (a colour i + 1 is entry i's in the outfit; black - the shadow's, or
+    // entry 1's - stays black, as loaded)
+    if (Animation *copy = index->recolouredCopy([&variant](uint32_t v) {
+          const uint32_t n = v & 0xFFFFFF;
+          return n == 0 || n > 256 ? v : (variant.colors[n - 1] | 0xFF000000);
+        }))
+      return this->rm->adoptAnimation(copy);
+  }
+  std::string name2 = t.fullPal + "#" + key;
+  pm->addPallet(name2, variant);
+  PalletManager::setOverride(t.fullPal, name2);
+  Animation *a = this->rm->getAnimation(path);
+  PalletManager::clearOverrides();
+  return a;
+}
+
+std::string Guests::outfitCheck() const {
+  int compared = 0, same = 0, copies = 0;
+  std::string firstBad;
+  for (const Type &t : this->typeList) {
+    for (const auto &[anim, path] : t.anims) {
+      for (int k = 0; k < 3; k++) {
+        const int colours[4] = {k * 3 + 1, k * 5 + 2, k * 7, k * 2 + 3};
+        Animation *copy = this->outfit(t, colours, path, true);
+        Animation *loaded = this->outfit(t, colours, path, false);
+        if (!copy && !loaded)
+          continue;
+        ++compared;
+        if (copy && loaded && copy->sameArt(*loaded))
+          ++same;
+        else if (firstBad.empty())
+          firstBad = path;
+        delete copy;
+        delete loaded;
+      }
+    }
+  }
+  // (and made as copies: each one's art loaded once, in its numbered palette)
+  for (const auto &[name, index] : this->indexArt)
+    copies += index && index->frameCount() > 0;
+  return std::string(compared && same == compared && copies > 0 ? "PASS " : "FAIL ") +
+         "a guest's outfit made as a copy of its art in the outfit's colours is the art loaded in them (" +
+         std::to_string(same) + " of " + std::to_string(compared) + " the same, every frame's pixels, shadows and anchors; " + std::to_string(copies) + " animations loaded once for them" +
+         (firstBad.empty() ? "" : "; first different: " + firstBad) + ")";
 }
 
 Animation *Guests::listIcon(const Guest &g) const {

@@ -142,6 +142,11 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
           taken && ahead && ahead!=direct && !a.empty() && a==b && ahead->frameTimeMs()==direct->frameTimeMs());
     delete direct;delete ahead;
   }
+  // ours: a guest's outfit made as a copy of its art is the art loaded in it
+  {
+    const std::string r=world.getGuests().outfitCheck();
+    check(r.substr(5),r.rfind("PASS ",0)==0);
+  }
   auto fileRoundTrip=[&](const std::string &stage) {
     const auto na=world.getAnimals().members().size(),ns=world.getStaff().members().size(),ng=world.getGuests().guests().size();
     ZooSim books;books.start(1000000,50);UiGameScreen hud(rm,"","");
