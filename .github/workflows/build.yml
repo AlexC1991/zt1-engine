@@ -20,11 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -S . -B build-x64 -A x64 -DZT1_STATIC_RUNTIME=ON
+        run: cmake -S . -B build-x64 -A x64 -DZT1_STATIC_RUNTIME=ON -DZT1_SDL3=ON
       - name: Build
-        run: |
-          cmake --build build-x64 --config Release --target SDL2_image SDL2_mixer --parallel
-          cmake --build build-x64 --config Release --target zt1-engine --parallel
+        run: cmake --build build-x64 --config Release --target zt1-engine --parallel
       - uses: actions/upload-artifact@v4
         with:
           name: zt1-engine-${{ github.run_number }}

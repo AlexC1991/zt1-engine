@@ -50,11 +50,11 @@ set(ZLIB_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/vendor/zlib" "${CMAKE_BINARY_DIR}/vend
 set(ZLIB_LIBRARY zlibstatic CACHE FILEPATH "ZLIB Library" FORCE)
 
 # 5. ADD LIBRARIES
-# ours: the port to SDL3 (its GPU API: one modern graphics path for new
-# effects - Direct3D 12, Vulkan, Metal - in place of the Direct3D 11 and
-# OpenGL twins), built in its own folder while it's made (build-sdl3:
-# -DZT1_SDL3=ON); off, SDL2 as always
-option(ZT1_SDL3 "Build on SDL3 (the port in progress); off, SDL2" OFF)
+# ours: SDL3, the engine's library (its GPU API: one modern graphics path
+# for new effects - Direct3D 12, Vulkan, Metal - in place of the Direct3D 11
+# and OpenGL twins). -DZT1_SDL3=OFF builds on SDL2, as the engine did up to
+# 2026.11 (its vendor/ copies kept for that while the SDL3 build settles)
+option(ZT1_SDL3 "Build on SDL3; off, the SDL2 build it replaced" ON)
 if(ZT1_SDL3)
     set(SDL_SHARED OFF CACHE BOOL "" FORCE)
     set(SDL_STATIC ON CACHE BOOL "" FORCE)
