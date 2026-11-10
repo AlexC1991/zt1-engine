@@ -2468,14 +2468,29 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
                                    : ex.floorHeight + ex.water * (ex.wallTop() - kWaterOffset - ex.floorHeight);
     if (ex.water > 0 && level > ex.floorHeight + 0.01f) {
       const bool scum = !scumSuffix(ex.purity).empty();
-      auto variant = [&](const std::string &part, const std::string &scumPart, int x, int y) {
+      // (ours: each part's art and its three scum ones looked up once for the
+      // tank, not by name for every tile every frame - the same art)
+      struct Parts {
+        Animation *plain = nullptr, *scummed[4] = {};
+      };
+      auto parts = [&](const char *part, const char *scumPart) {
+        Parts ps;
+        ps.plain = this->waterPart(set, part);
+        if (scum)
+          for (int n = 1; n < 4; n++)
+            ps.scummed[n] = this->waterPart(set, scumPart + std::to_string(n));
+        return ps;
+      };
+      const Parts tops = parts("top", "tscum"), fronts = parts("front", "fscum"), rights = parts("right", "rscum");
+      auto variant = [&](const Parts &ps, int x, int y) {
         if (!scum)
-          return this->waterPart(set, part);
+          return ps.plain;
         unsigned h = static_cast<unsigned>(x * 73856093) ^ static_cast<unsigned>(y * 19349663);
         int n = h % 4;
-        Animation *a = n == 0 ? nullptr : this->waterPart(set, scumPart + std::to_string(n));
-        return a ? a : this->waterPart(set, part);
+        Animation *a = n == 0 ? nullptr : ps.scummed[n];
+        return a ? a : ps.plain;
       };
+      Animation *const ripple = ex.purity >= 60 ? this->objectArt("objects/edgrip/idle/idle") : nullptr;
       const SDL_Color see{255, 255, 255, kWaterAlpha};
       for (auto [x, y] : ex.tiles) {
         float cx, cy, cd;
@@ -2489,7 +2504,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           bool left = side == CompassDirection::SW, right = side == CompassDirection::SE;
           if (!left && !right)
             continue;
-          Animation *face = variant(left ? "front" : "right", left ? "fscum" : "rscum", x, y);
+          Animation *face = variant(left ? fronts : rights, x, y);
           if (!face)
             continue;
           Edge e = o[0] ? Edge{false, x + (o[0] > 0 ? 1 : 0), y} : Edge{true, x, y + (o[1] > 0 ? 1 : 0)};
@@ -2505,7 +2520,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
             water.push_back({cd + 0.25f, sx, sy, face, CompassDirection::N, see, true});
           }
         }
-        if (Animation *surface = variant("top", "tscum", x, y)) {
+        if (Animation *surface = variant(tops, x, y)) {
           Sprite sp{cd, cx, cy, surface, CompassDirection::N, see, true};
           sp.quad = true;
           const float wx[4] = {0, 1, 1, 0}, wy[4] = {0, 0, 1, 1};
@@ -2529,7 +2544,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
         // The ripple along each wall on the surface (tankripl: edgrip, 19
         // frames of 83 ms, each started 0-2 s in; clean water only)
         if (ex.purity >= 60)
-          if (Animation *rip = this->objectArt("objects/edgrip/idle/idle"))
+          if (Animation *rip = ripple)
             for (auto &o : dd) {
               if (ex.tiles.count({x + o[0], y + o[1]}))
                 continue;
