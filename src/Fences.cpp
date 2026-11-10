@@ -2387,10 +2387,8 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     int frame = -1;
     bool quad = false;    // (laid over its tile's diamond: q, top left right bottom)
     SDL_FPoint q[4] = {};
-    // (a ripple's start, or a wave's place in the tank's list: their frames
-    // follow the clock, a kept tank's too)
+    // (a ripple's start: its frame follows the clock, a kept tank's too)
     long long ripple = -1;
-    int wave = -1;
   };
   // Its edges (for the waterline and the outline at the ground)
   struct Rim {
@@ -2405,19 +2403,24 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
   struct Shared {
     std::vector<Sprite> back, water, frontLow;
     std::vector<Rim> rims;
+    // (its waves, made each frame, and the ones that reach into each strip -
+    // the strips' screen columns)
+    std::vector<Sprite> waves;
+    std::vector<std::vector<uint32_t>> wavePicks;
+    std::vector<std::pair<float, float>> stripX;
   };
   // ours: each tank's inside - its sprites, strips and the ground over its
   // pit - kept from the frame it was made, with everything it was made from
   // (the view, the map, the fences, the tanks); made again only when one of
   // those has changed. A still view made it all again every frame: most of
-  // the fences' time. Only its ripples' and waves' frames move on the clock;
-  // its GPU layer (a frame's) is a new one each frame, as before
+  // the fences' time. Its ripples' frames move on the clock; its waves - they
+  // come and go every few hundred ms, more often at speed - are made each
+  // frame; its GPU layer (a frame's) is a new one each frame, as before
   struct Kept {
     std::vector<uint8_t> key;
     std::vector<Drawable> parts;
     std::shared_ptr<Shared> shared;
     std::vector<std::pair<uint32_t, unsigned>> ripples;
-    std::vector<std::pair<uint32_t, int>> waves;
     std::shared_ptr<std::shared_ptr<GpuTankLayer>> gpu;
     bool onGpu = false;
   };
@@ -2481,22 +2484,56 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       };
       put(ex.id), put(ex.level), put(ex.salt), put(ex.purity >= 60), put(set.size());
       key.insert(key.end(), set.begin(), set.end());
-      put(ex.waves.size());
-      Animation *wv = ex.purity >= 60 ? this->objectArt(ex.salt ? "objects/waterwv1/idle/idle" : "objects/frshwav/idle/idle")
-                                      : nullptr;
-      put(wv);
-      for (const Exhibit::Wave &w : ex.waves) {
-        put(w.x), put(w.y), put(w.facing);
-        put(wv && static_cast<int>(w.age / (ex.salt ? 125.0f : 83.0f)) < std::max(1, wv->frameCount()));
-      }
     }
+    // Waves: salt twaterwv (waterwv1, 125 ms a frame), fresh frshwav (83 ms),
+    // on the surface while the water's clean. Made each frame, the tank kept
+    // or not, and drawn in among the water's sprites by depth - as when they
+    // were sorted with them (they came after the tiles', so the water's
+    // first at the same depth)
+    const float waveLevel = ex.level > -1e8f ? ex.level
+                                             : ex.floorHeight + ex.water * (ex.wallTop() - kWaterOffset - ex.floorHeight);
+    auto makeWaves = [&](Shared &into) {
+      into.waves.clear();
+      into.wavePicks.assign(into.stripX.size(), {});
+      if (!(ex.water > 0 && waveLevel > ex.floorHeight + 0.01f) || ex.purity < 60)
+        return;
+      Animation *wv = this->objectArt(ex.salt ? "objects/waterwv1/idle/idle" : "objects/frshwav/idle/idle");
+      if (!wv)
+        return;
+      for (const Exhibit::Wave &w : ex.waves) {
+        int frames = std::max(1, wv->frameCount());
+        int frame = static_cast<int>(w.age / (ex.salt ? 125.0f : 83.0f));
+        if (frame >= frames)
+          continue; // (played once)
+        float wx, wy, wd;
+        view.worldToScreenF(w.x + 0.5f, w.y + 0.5f, waveLevel, wx, wy, wd);
+        static const CompassDirection four[4] = {CompassDirection::NE, CompassDirection::SE, CompassDirection::SW,
+                                                 CompassDirection::NW};
+        Sprite sp{wd + 0.3f, wx, wy, wv, four[(w.facing / 2) % 4], SDL_Color{255, 255, 255, 255}, false};
+        sp.frame = frame;
+        into.waves.push_back(sp);
+      }
+      std::stable_sort(into.waves.begin(), into.waves.end(),
+                       [](const Sprite &p, const Sprite &q) { return p.depth < q.depth; });
+      // (each strip draws the ones that reach into it, as the water's)
+      for (uint32_t i = 0; i < into.waves.size(); i++) {
+        const Sprite &s = into.waves[i];
+        float l, t, rr, b;
+        if (!s.art->anchoredBounds(s.sx, s.sy, s.side, l, t, rr, b)) {
+          l = s.sx - 64;
+          rr = s.sx + 64;
+        }
+        for (size_t k = 0; k < into.stripX.size(); k++)
+          if (rr > into.stripX[k].first - 2.0f && l < into.stripX[k].second + 2.0f)
+            into.wavePicks[k].push_back(i);
+      }
+    };
     seen.insert(ex.id);
     if (auto found = kept.find(ex.id); reuseFenceWork && found != kept.end() && found->second.key == key) {
       Kept &k = found->second;
       for (auto [i, h] : k.ripples)
         k.shared->water[i].frame = static_cast<int>((this->rippleClock + static_cast<float>(h % 2000)) / 83.0f) % 19;
-      for (auto [i, w] : k.waves)
-        k.shared->water[i].frame = static_cast<int>(ex.waves[w].age / (ex.salt ? 125.0f : 83.0f));
+      makeWaves(*k.shared);
       if (k.onGpu)
         *k.gpu = std::make_shared<GpuTankLayer>();
       out.insert(out.end(), k.parts.begin(), k.parts.end());
@@ -2662,23 +2699,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
               water.push_back(sp);
             }
       }
-      // Waves: salt twaterwv (waterwv1, 125 ms a frame), fresh frshwav (83 ms)
-      if (ex.purity >= 60)
-        if (Animation *wv = this->objectArt(ex.salt ? "objects/waterwv1/idle/idle" : "objects/frshwav/idle/idle"))
-          for (const Exhibit::Wave &w : ex.waves) {
-            int frames = std::max(1, wv->frameCount());
-            int frame = static_cast<int>(w.age / (ex.salt ? 125.0f : 83.0f));
-            if (frame >= frames)
-              continue; // (played once)
-            float wx, wy, wd;
-            view.worldToScreenF(w.x + 0.5f, w.y + 0.5f, level, wx, wy, wd);
-            static const CompassDirection four[4] = {CompassDirection::NE, CompassDirection::SE, CompassDirection::SW,
-                                                     CompassDirection::NW};
-            Sprite sp{wd + 0.3f, wx, wy, wv, four[(w.facing / 2) % 4], SDL_Color{255, 255, 255, 255}, false};
-            sp.frame = frame;
-            sp.wave = static_cast<int>(&w - ex.waves.data());
-            water.push_back(sp);
-          }
+      // (its waves: made each frame, makeWaves)
       std::stable_sort(water.begin(), water.end(),
                        [](const Sprite &p, const Sprite &q) { return p.depth < q.depth; });
     }
@@ -2878,17 +2899,31 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       coverAt.push_back({sx, {cx, cy}});
     }
     const int tankId=ex.id;
-    auto paintInterior=[this,tankId,level](SDL_Renderer *r,const Shared &all,const Picks *only) {
+    auto paintInterior=[this,tankId,level](SDL_Renderer *r,const Shared &all,const Picks *only,int strip) {
       auto each=[](const std::vector<Sprite> &list,const std::vector<uint32_t> *pick,const auto &draw) {
         if(pick)for(uint32_t i:*pick)draw(list[i]);
         else for(const Sprite &s:list)draw(s);
+      };
+      // (the water's sprites with the waves among them by depth, the water's
+      // first at the same depth: the order they had sorted together)
+      auto eachWater=[&all,only,strip](const auto &draw) {
+        const std::vector<uint32_t> *pick=only?&only->water:nullptr;
+        const std::vector<uint32_t> *wavePick=strip>=0?&all.wavePicks[size_t(strip)]:nullptr;
+        const size_t n=pick?pick->size():all.water.size(),m=wavePick?wavePick->size():all.waves.size();
+        auto water=[&](size_t k)->const Sprite &{return pick?all.water[(*pick)[k]]:all.water[k];};
+        auto wave=[&](size_t k)->const Sprite &{return wavePick?all.waves[(*wavePick)[k]]:all.waves[k];};
+        size_t i=0,j=0;
+        while(i<n || j<m) {
+          if(j<m && (i>=n || wave(j).depth<water(i).depth))draw(wave(j++));
+          else draw(water(i++));
+        }
       };
       auto anchored=[r](const Sprite &s){s.art->drawAnchored(r,s.sx,s.sy,s.side,s.tinted?&s.tint:nullptr,s.frame);};
       layered(r,[&]{each(all.back,only?&only->back:nullptr,anchored);});
       if(this->drawTankContents)this->drawTankContents(r,tankId,false,level);
       layered(r,[&]{
         static const SDL_FPoint diamond[4]={{.5f,2.f/32},{1.f-4.f/62,.5f},{.5f,1.f-2.f/32},{4.f/62,.5f}};
-        each(all.water,only?&only->water:nullptr,[&](const Sprite &s){
+        eachWater([&](const Sprite &s){
           if(s.quad)s.art->drawMapped(r,s.side,s.frame,s.q,diamond,s.tint);
           else anchored(s);
         });
@@ -2902,11 +2937,15 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     const bool onGpu=composeTanksOnGpu && ex.tiles.size()>=64 && strips.size()>=8;
     if(onGpu) {
       *gpu=std::make_shared<GpuTankLayer>();
-      whole=std::make_shared<std::function<void(SDL_Renderer*)>>([paintInterior,shared](SDL_Renderer *r){paintInterior(r,*shared,nullptr);});
+      whole=std::make_shared<std::function<void(SDL_Renderer*)>>([paintInterior,shared](SDL_Renderer *r){paintInterior(r,*shared,nullptr,-1);});
     }
+    for (const Strip &st : strips)
+      shared->stripX.push_back({st.x0, st.x1});
+    makeWaves(*shared);
     const float halfTile = view.getTileWidth() * 0.5f;
     const size_t firstPart = out.size();
     for (const Strip &st : strips) {
+      const int si = static_cast<int>(&st - strips.data());
       Picks picks{within(backSpan, st), within(waterSpan, st), within(frontSpan, st), within(rimSpan, st)};
       std::vector<std::pair<int, int>> cover1; // (sorted, as redrawGround takes them)
       for (const auto &[sx, tile] : coverAt)
@@ -2921,7 +2960,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       part.clipX1 = st.x1;
       part.clipY1 = st.y1;
       auto held = std::make_shared<const StripParts>(StripParts{std::move(picks), std::move(cover1)});
-      part.custom = [this, shared, held, wet, level, vp, paintInterior, gpu, whole](SDL_Renderer *r) {
+      part.custom = [this, shared, held, si, wet, level, vp, paintInterior, gpu, whole](SDL_Renderer *r) {
       const Picks &picks = held->picks;
       const std::vector<std::pair<int, int>> &cover = held->cover;
       // The tank's walls and water are pieces laid edge to edge (a height
@@ -2932,7 +2971,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       // So each group of them is drawn at the art's own size into a layer and
       // the layer enlarged as one picture (Fences::layered); what swims in
       // the tank is drawn between them, at the zoom, as it was
-      if(!*gpu || !(*gpu)->draw(r,*whole))paintInterior(r,*shared,&picks);
+      if(!*gpu || !(*gpu)->draw(r,*whole))paintInterior(r,*shared,&picks,si);
       (void)wet;
       (void)level;
       if (this->redrawGround)
@@ -2960,8 +2999,6 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     for (size_t i = 0; i < shared->water.size(); i++) {
       if (shared->water[i].ripple >= 0)
         k.ripples.push_back({static_cast<uint32_t>(i), static_cast<unsigned>(shared->water[i].ripple)});
-      if (shared->water[i].wave >= 0)
-        k.waves.push_back({static_cast<uint32_t>(i), shared->water[i].wave});
     }
   }
   // (a tank gone: its kept inside with it)
