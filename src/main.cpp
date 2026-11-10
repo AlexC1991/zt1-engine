@@ -3547,6 +3547,294 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     SDL_RenderPresent(renderer);
     note(name);
   };
+  // ZT_FREEFORM_TOUR=1: every freeform map in turn, started as the freeform
+  // menu starts one, looked at, and a tiny zoo made on it with the player's
+  // own tools - a chain-link exhibit (named), a path to it from the
+  // entrance, a zebra, a keeper, a food stand - then a minute of it played.
+  // Nothing is saved. A line a map in <out>/freeform-tour.txt (PASS, or FAIL
+  // and what failed), its pictures beside it. ZT_TOUR_FROM=<n> starts at the
+  // n-th map (after a crash, the next one on); ZT_TOUR_ONLY=<stem> one map
+  if (std::getenv("ZT_FREEFORM_TOUR")) {
+    std::ofstream tour(outDir + "/freeform-tour.txt", std::ios::app);
+    const int from = std::getenv("ZT_TOUR_FROM") ? std::atoi(std::getenv("ZT_TOUR_FROM")) : 0;
+    const char *only = std::getenv("ZT_TOUR_ONLY");
+    static const bool noKeys[SDL_SCANCODE_COUNT] = {};
+    int failedMaps = 0, maps = 0;
+    for (int i = 0; const FreeformMap *fm = sm->getFreeformMap(i); i++) {
+      const std::string stem = getFileStem(fm->path);
+      if (i < from || (only && stem != only))
+        continue;
+      tour << "START " << i << " " << stem << " (" << fm->name << ")\n";
+      tour.flush();
+      maps++;
+      std::vector<std::string> failed;
+      std::ostringstream info;
+      auto need = [&](bool ok, const std::string &what) {
+        if (!ok)
+          failed.push_back(what);
+        return ok;
+      };
+      const bool loaded = world->loadFreeform(fm->path);
+      g_currentMapPath = fm->path;
+      createHud(rm, world, CASH_START);
+      startGoals(rm, fm->path);
+      world->edgeScroll = false;
+      world->setPaused(false);
+      WorldMap &map = world->getMap();
+      Fences &fences = world->getFences();
+      int ex = -1, ey = -1;
+      // (a few of its first moments: the game finds the entrance in its first)
+      for (int f = 0; f < 3; f++)
+        world->update(noKeys, 1.0f / 60.0f);
+      const bool mapOk = need(loaded && map.getWidth() > 0 && map.getHeight() > 0, "the map loads");
+      const bool gateOk = need(world->getGuests().entrance(ex, ey), "it has an entrance");
+      info << "size " << map.getWidth() << "x" << map.getHeight() << ", entrance " << ex << "," << ey;
+      // (any message or dialog the start brought up answered first)
+      auto settle = [&] {
+        for (int k = 0; k < 4 && g_hud && g_hud->hasDialog(); k++) {
+          Input in{};
+          in.type = InputType::BUTTON;
+          in.event = InputEvent::KEY_DOWN;
+          in.key = SDLK_RETURN;
+          std::vector<Input> inputs = {in};
+          g_hud->handleInputs(inputs);
+        }
+      };
+      settle();
+      auto show = [&](float x, float y) {
+        world->centreOn(x, y);
+        world->setView(gameViewRect(renderer), getUiTransform(renderer).scale);
+        world->draw(renderer);
+      };
+      if (gateOk)
+        show(ex + 0.5f, ey + 0.5f);
+      capture((stem + "-1-loaded").c_str());
+      const double cashStart = g_sim.cash();
+      if (mapOk && gateOk) {
+        // Zoo ground walkable from the entrance: inside the zoo, not water,
+        // in no exhibit, a path or room for one, each step level with the
+        // last (the route the path takes, by parent)
+        const int W = map.getWidth(), H = map.getHeight();
+        auto open = [&](int x, int y) {
+          const MapTile *t = map.getTile(x, y);
+          // (a path is walked wherever it is - by the gate it can run along
+          // the zoo's wall line; new ground must be zoo ground: canLayPath)
+          return t && fences.exhibitAt(x, y) < 0 && t->terrainType != 9 && t->terrainType != 10 &&
+                 (map.isPath(x, y) || world->canLayPath(x, y));
+        };
+        auto level = [&](int x, int y, int nx, int ny) {
+          const MapTile *a = map.getTile(x, y), *b = map.getTile(nx, ny);
+          int a0, a1, b0, b1;
+          if (nx > x) { a0 = a->cornerHeight[CORNER_X1Y0]; a1 = a->cornerHeight[CORNER_X1Y1]; b0 = b->cornerHeight[CORNER_X0Y0]; b1 = b->cornerHeight[CORNER_X0Y1]; }
+          else if (nx < x) { a0 = a->cornerHeight[CORNER_X0Y0]; a1 = a->cornerHeight[CORNER_X0Y1]; b0 = b->cornerHeight[CORNER_X1Y0]; b1 = b->cornerHeight[CORNER_X1Y1]; }
+          else if (ny > y) { a0 = a->cornerHeight[CORNER_X0Y1]; a1 = a->cornerHeight[CORNER_X1Y1]; b0 = b->cornerHeight[CORNER_X0Y0]; b1 = b->cornerHeight[CORNER_X1Y0]; }
+          else { a0 = a->cornerHeight[CORNER_X0Y0]; a1 = a->cornerHeight[CORNER_X1Y0]; b0 = b->cornerHeight[CORNER_X0Y1]; b1 = b->cornerHeight[CORNER_X1Y1]; }
+          return a0 == b0 && a1 == b1;
+        };
+        // (the zoo's own path picked first: where a path can go depends on it)
+        std::string pathKey = "path";
+        if (int pt = map.getPathType(ex, ey); pt >= 0 && pt < static_cast<int>(map.getPathTypes().size()))
+          pathKey = map.getPathTypes()[pt];
+        int pathCost = 0;
+        for (const CatalogItem &item : ItemCatalog::get().all())
+          if (item.file == "paths/" + pathKey + ".ai")
+            pathCost = item.cost;
+        world->setPathTool(pathKey, pathCost);
+        std::vector<int> parent;
+        std::vector<std::pair<int, int>> order;
+        auto walk = [&] {
+          parent.assign(static_cast<size_t>(W) * H, -2);
+          order.clear();
+          std::queue<std::pair<int, int>> q;
+          parent[static_cast<size_t>(ey) * W + ex] = -1;
+          q.push({ex, ey});
+          while (!q.empty()) {
+            auto [x, y] = q.front();
+            q.pop();
+            order.push_back({x, y});
+            const int d4[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            for (auto &d : d4) {
+              const int nx = x + d[0], ny = y + d[1];
+              if (nx < 0 || ny < 0 || nx >= W || ny >= H || parent[static_cast<size_t>(ny) * W + nx] != -2 ||
+                  !open(nx, ny) || !level(x, y, nx, ny))
+                continue;
+              parent[static_cast<size_t>(ny) * W + nx] = y * W + x;
+              q.push({nx, ny});
+            }
+          }
+        };
+        walk();
+        world->setPathTool("", 0);
+        auto reached = [&](int x, int y) {
+          return x >= 0 && y >= 0 && x < W && y < H && parent[static_cast<size_t>(y) * W + x] != -2;
+        };
+        info << ", " << order.size() << " tiles walkable from it";
+        // (few: why each step from the entrance was refused)
+        if (order.size() < 50) {
+          const int d4[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+          for (auto &d : d4) {
+            const int nx = ex + d[0], ny = ey + d[1];
+            const MapTile *t = map.getTile(nx, ny);
+            info << " [" << nx << "," << ny << " path " << map.isPath(nx, ny) << " zoo " << fences.insideZoo(nx, ny)
+                 << " exhibit " << fences.exhibitAt(nx, ny) << " canPath " << world->canLayPath(nx, ny)
+                 << " terrain " << (t ? int(t->terrainType) : -1) << " level " << (t ? level(ex, ey, nx, ny) : false) << "]";
+          }
+        }
+        // A 4 x 4 block, nearest the entrance first: level all over, its
+        // ring walkable too, no path, fence or thing in or near it
+        const int n = 4;
+        int bx = -1, by = -1;
+        for (auto [ox, oy] : order) {
+          if (bx >= 0)
+            break;
+          const int x0 = ox - n / 2, y0 = oy - n / 2;
+          if (std::abs(x0 - ex) < 4 && std::abs(y0 - ey) < 4)
+            continue; // (not on the gate)
+          // (slopes as fences take them, as a player builds: but no cliff
+          // between any two of its tiles, and all of it zoo ground)
+          bool ok = true;
+          for (int y = y0 - 1; y <= y0 + n && ok; y++)
+            for (int x = x0 - 1; x <= x0 + n && ok; x++) {
+              ok = map.getTile(x, y) && reached(x, y) && !map.isPath(x, y) && fences.insideZoo(x, y);
+              if (ok && x < x0 + n)
+                ok = map.getTile(x + 1, y) && level(x, y, x + 1, y);
+              if (ok && y < y0 + n)
+                ok = map.getTile(x, y + 1) && level(x, y, x, y + 1);
+              for (int e = 0; e < 2 && ok; e++)
+                ok = !fences.at({e == 0, x, y}) && !fences.at({e == 0, x + 1, y + 1});
+            }
+          for (const PlacedObjects::Object &o : world->getObjects().objects())
+            if (ok && o.x > x0 - 3 && o.x < x0 + n + 3 && o.y > y0 - 3 && o.y < y0 + n + 3)
+              ok = false;
+          if (ok) {
+            bx = x0;
+            by = y0;
+          }
+        }
+        if (need(bx >= 0, "clear ground with no cliffs for a 4x4 exhibit near the entrance")) {
+          info << ", exhibit at " << bx << "," << by;
+          show(bx + n / 2.0f, by + n / 2.0f);
+          auto window = [&](int x, int y, int &wx, int &wy) {
+            int ax, ay, cx, cy;
+            const bool a = world->vertexToWindow(x, y, ax, ay), c = world->vertexToWindow(x + 1, y + 1, cx, cy);
+            wx = (ax + cx) / 2;
+            wy = (ay + cy) / 2;
+            return a && c;
+          };
+          auto clickTile = [&](int x, int y) {
+            int wx, wy;
+            window(x, y, wx, wy);
+            world->mouseMove(wx, wy);
+            handleToolResult(world->mouseDown(wx, wy), rm);
+            handleToolResult(world->mouseUp(wx, wy), rm);
+          };
+          // The exhibit: chain-link round it, a side at a time, named
+          const size_t exhibitsBefore = fences.exhibits().size();
+          world->setFenceTool(fences.typeIndex("chainlnk"));
+          const std::pair<int, int> loop[] = {{bx, by}, {bx + n, by}, {bx + n, by + n}, {bx, by + n}, {bx, by}};
+          for (int s = 0; s < 4; s++) {
+            int x0, y0, x1, y1;
+            world->vertexToWindow(loop[s].first, loop[s].second, x0, y0);
+            world->vertexToWindow(loop[s + 1].first, loop[s + 1].second, x1, y1);
+            handleToolResult(world->mouseDown(x0, y0), rm);
+            world->mouseMove(x1, y1);
+            handleToolResult(world->mouseUp(x1, y1), rm);
+          }
+          world->setFenceTool(-1);
+          settle();
+          const int exhibitId = fences.exhibitAt(bx + 1, by + 1);
+          const Fences::Exhibit *made = fences.exhibit(exhibitId);
+          need(made && made->tiles.size() == size_t(n * n) && fences.exhibits().size() > exhibitsBefore,
+               "the fence loop makes an exhibit of 16 tiles");
+          // A path from the entrance to the tile below its corner (the way
+          // found again: the exhibit now stands where it may have gone)
+          const int tx = bx, ty = by + n;
+          world->setPathTool(pathKey, pathCost);
+          walk();
+          need(reached(tx, ty), "the exhibit's front reachable from the entrance");
+          std::vector<std::pair<int, int>> route;
+          for (int at = ty * W + tx; at >= 0; at = parent[static_cast<size_t>(at)])
+            route.push_back({at % W, at / W});
+          const std::string &key = pathKey;
+          world->setPathTool(pathKey, pathCost);
+          int laid = 0, missing = 0;
+          for (auto it = route.rbegin(); it != route.rend(); ++it) {
+            if (map.isPath(it->first, it->second))
+              continue;
+            show(it->first + 0.5f, it->second + 0.5f);
+            clickTile(it->first, it->second);
+            if (map.isPath(it->first, it->second))
+              laid++;
+            else
+              missing++;
+          }
+          world->setPathTool("", 0);
+          info << ", path " << key << " " << laid << " tiles laid";
+          need(map.isPath(tx, ty) && missing == 0,
+               "a path laid from the entrance to the exhibit (" + std::to_string(missing) + " tiles refused)");
+          // A zebra in it, a keeper by it, a food stand beside the path
+          show(bx + n / 2.0f, by + n / 2.0f);
+          Animals &animals = world->getAnimals();
+          const size_t animalsBefore = animals.members().size();
+          world->setAnimalTool(animals.typeOfFile("animals/zebra.ai"), true);
+          clickTile(bx + 1, by + 1);
+          world->setAnimalTool(-1, false);
+          const bool adopted = need(animals.members().size() == animalsBefore + 1 &&
+                                        animals.members().back().exhibit == exhibitId,
+                                    "a zebra adopted into the exhibit");
+          const int zebra = adopted ? animals.members().back().id : -1;
+          Staff &staff = world->getStaff();
+          const size_t staffBefore = staff.members().size();
+          world->setStaffTool(staff.typeOfFile("staff/keeper.ai"));
+          clickTile(tx, ty);
+          world->setStaffTool(-1);
+          need(staff.members().size() == staffBefore + 1, "a keeper hired by the exhibit");
+          int standCost = 0;
+          const std::string stand = "scenery/building/hdogstnd.ai";
+          for (const CatalogItem &item : ItemCatalog::get().all())
+            if (item.file == stand)
+              standCost = item.cost;
+          world->setObjectTool(stand, standCost, 0);
+          const size_t objectsBefore = world->getObjects().objects().size();
+          for (int r = 1; r <= 3 && world->getObjects().objects().size() == objectsBefore; r++)
+            for (int dy = -r; dy <= r && world->getObjects().objects().size() == objectsBefore; dy++)
+              for (int dx = -r; dx <= r && world->getObjects().objects().size() == objectsBefore; dx++) {
+                const int x = tx + dx, y = ty + dy;
+                if (!reached(x, y) || map.isPath(x, y) || fences.exhibitAt(x, y) >= 0)
+                  continue;
+                clickTile(x, y);
+              }
+          world->setObjectTool("", 0, 0);
+          need(world->getObjects().objects().size() == objectsBefore + 1, "a food stand built beside the path");
+          info << ", spent $" << std::lround(cashStart - g_sim.cash());
+          // A minute of it played
+          for (int f = 0; f < 3600; f++)
+            world->update(noKeys, 1.0f / 60.0f);
+          if (zebra >= 0) {
+            const Animals::Member *z = nullptr;
+            for (const Animals::Member &m : animals.members())
+              if (m.id == zebra)
+                z = &m;
+            need(z && z->exhibit == exhibitId && !z->escaped, "after a minute the zebra is still in its exhibit");
+          }
+          info << ", after a minute " << world->getGuests().guests().size() << " guests";
+          show(bx + n / 2.0f, by + n / 2.0f);
+        }
+      }
+      capture((stem + "-2-zoo").c_str());
+      if (!failed.empty())
+        failedMaps++;
+      tour << (failed.empty() ? "PASS " : "FAIL ") << i << " " << stem << " (" << fm->name << "): " << info.str();
+      for (const std::string &f : failed)
+        tour << "\n     failed: " << f;
+      tour << "\n";
+      tour.flush();
+    }
+    tour << "DONE " << maps << " maps, " << failedMaps << " with failures\n";
+    if (timings)
+      std::fclose(timings);
+    return failedMaps ? 1 : 0;
+  }
   if (std::getenv("ZT_SPEED_HUD_CHECKS")) {
     SDL_HideWindow(SDL_GetRenderWindow(renderer));
     extern int runSpeedHudChecks(World &,UiGameScreen &,ResourceManager *,SDL_Renderer *,const std::string &,bool &,

@@ -182,6 +182,12 @@ public:
     this->entranceY = y;
   }
   bool hasEntrance() const { return this->entranceX >= 0; }
+  // (where it is: false, none)
+  bool entrance(int &x, int &y) const {
+    x = this->entranceX;
+    y = this->entranceY;
+    return this->entranceX >= 0;
+  }
   // A building's door tiles as it stands (its entrpos turned with it; none
   // when its .ai gives no entrpos: any path tile beside it serves)
   std::vector<std::pair<int, int>> doorTiles(const PlacedObjects::Object &o) const;
