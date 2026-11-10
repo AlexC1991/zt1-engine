@@ -113,6 +113,7 @@ SDL_Texture *SpriteDatabase::getTerrainTexture(SDL_Renderer *renderer,
     destroyAll(terrainTextures);
     destroyAll(terrainTexturesHi);
     textureRenderer = renderer;
+    ++epoch;
   }
 
   auto &cache = hires ? terrainTexturesHi : terrainTextures;
@@ -214,5 +215,6 @@ void SpriteDatabase::clear() {
   destroyAll(terrainTextures);
   destroyAll(terrainTexturesHi);
   textureRenderer = nullptr;
+  ++epoch;
   SDL_Log("[SpriteDatabase] Cache cleared");
 }

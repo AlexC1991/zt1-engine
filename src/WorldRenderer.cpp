@@ -479,6 +479,14 @@ void WorldRenderer::addTriangle(SDL_Renderer *renderer, SDL_Texture *texture,
 
 void WorldRenderer::flushBatch(SDL_Renderer *renderer) {
   if (!batchIndices.empty()) {
+    // (kept, to be made again while nothing has changed: renderTerrain)
+    if (replay.recording) {
+      replay.calls.push_back({batchTexture, static_cast<uint32_t>(replay.vertices.size()),
+                              static_cast<uint32_t>(batchVertices.size()), static_cast<uint32_t>(replay.indices.size()),
+                              static_cast<uint32_t>(batchIndices.size())});
+      replay.vertices.insert(replay.vertices.end(), batchVertices.begin(), batchVertices.end());
+      replay.indices.insert(replay.indices.end(), batchIndices.begin(), batchIndices.end());
+    }
     if (ZT_RenderGeometry(renderer, batchTexture, batchVertices.data(),
                            static_cast<int>(batchVertices.size()),
                            batchIndices.data(),
@@ -665,6 +673,57 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
   mapHeightCache = mapHeight;
   if (cache.map != &map || cache.generation != map.getGeneration())
     rebuildCache(map, spriteDB);
+
+  // ours: the whole ground as it was last drawn, while nothing it's made
+  // from has changed - the same calls again (TerrainReplay)
+  TerrainReplayKey key;
+  if (!onlyTiles) {
+    key.map = &map;
+    key.renderer = renderer;
+    key.generation = map.getGeneration();
+    key.textureEpoch = spriteDB.textureEpoch();
+    key.cameraX = camera.x;
+    key.cameraY = camera.y;
+    key.centreX = camera.screenCenterX;
+    key.centreY = camera.screenCenterY;
+    key.zoom = camera.zoom;
+    key.unitPx = getHeightUnitPixels();
+    key.tileWidth = tileWidth;
+    key.tileHeight = tileHeight;
+    key.rotation = viewRotation;
+    key.mapWidth = mapWidth;
+    key.mapHeight = mapHeight;
+    key.drawDistance = drawDistance;
+    key.shadingMode = shadingMode;
+    key.hires = RenderSettings::worldZoomedIn;
+    key.elevation = elevationEnabled;
+    key.debugIds = debugTerrainIds;
+    key.grid = gridVisible;
+    key.toolGrid = toolGrid;
+    key.culled = cullTerrainTiles;
+    if (replay.valid && replay.key == key) {
+      SDL_BlendMode previous;
+      SDL_GetRenderDrawBlendMode(renderer, &previous);
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+      for (const TerrainCall &c : replay.calls)
+        if (ZT_RenderGeometry(renderer, c.texture, replay.vertices.data() + c.vertexFrom, static_cast<int>(c.vertexCount),
+                              replay.indices.data() + c.indexFrom, static_cast<int>(c.indexCount)) != 0) {
+          static bool logged = false;
+          if (!logged) {
+            SDL_Log("[WorldRenderer] SDL_RenderGeometry failed: %s", SDL_GetError());
+            logged = true;
+          }
+        }
+      SDL_SetRenderDrawBlendMode(renderer, previous);
+      ++replay.replays;
+      return;
+    }
+    replay.valid = false;
+    replay.recording = true;
+    replay.calls.clear();
+    replay.vertices.clear();
+    replay.indices.clear();
+  }
 
   // View grid size (u across, v deep)
   const bool swapped = (viewRotation % 2) == 0;
@@ -1060,6 +1119,11 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
   flushBatch(renderer);
   batchTexture = nullptr;
   SDL_SetRenderDrawBlendMode(renderer, previousBlend);
+  if (replay.recording) {
+    replay.recording = false;
+    replay.valid = true;
+    replay.key = key;
+  }
 }
 
 void WorldRenderer::renderTerrainTiles(SDL_Renderer *renderer, const WorldMap &map,

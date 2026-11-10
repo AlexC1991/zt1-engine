@@ -176,6 +176,9 @@ int runFastForwardChecks(ResourceManager *rm,SDL_Renderer *renderer,const std::s
         const std::string phase=hour<0?"off":hour==12?"day":hour==0?"night":"sunset";
         const std::string label=phase+"-r"+std::to_string(rotation)+"-z"+std::to_string(zoom)+(centred?"-centred":"");
         check(original==reused,"CPU geometry and portal reuse retains exact pixels "+label);
+        // (drawn again, nothing changed: each tank's inside as kept)
+        const auto kept=draw();
+        check(original==kept,"tank insides kept from the last frame retain exact pixels "+label);
         GpuTankLayer::resetStats();fenceGpuComposition(true);const auto gpu=draw();
         const auto used=GpuTankLayer::stats();
         log<<"GPU layer usage "<<label<<" builds="<<used.builds<<" copies="<<used.copies<<" peak_bytes="<<used.peakBytes<<'\n';

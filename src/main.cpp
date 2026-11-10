@@ -3567,7 +3567,8 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   // marine activity), its report in <out>/activity-checks.txt
   if (std::getenv("ZT_ACTIVITY_CHECKS")) {
     extern std::string runActivityPolishChecks(World &, ResourceManager *, bool);
-    const std::string result = runActivityPolishChecks(*world, rm, false);
+    extern std::string runCameraRenderChecks(SDL_Renderer *);
+    const std::string result = runActivityPolishChecks(*world, rm, false) + runCameraRenderChecks(renderer) + "\n";
     std::ofstream(outDir + "/activity-checks.txt") << result;
     if(timings)std::fclose(timings);return result.find("FAIL ") == std::string::npos ? 0 : 1;
   }

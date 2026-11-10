@@ -5,6 +5,7 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -548,6 +549,9 @@ private:
   // ours: the shared wall's portal location depends on topology, not the
   // animation tick. Filling, water height and show classification stay live.
   mutable std::map<std::pair<int,int>, Edge> sharedPortalCache;
+  // ours: each tank's inside as collect last made it, with what it was made
+  // from (collect's own types, so held without naming them)
+  mutable std::shared_ptr<void> keptTanks;
   FilterType filterKind;
   std::map<std::string, FilterType> filterKinds;
   std::string selectedFilter = "scenery/other/filter1.ai";

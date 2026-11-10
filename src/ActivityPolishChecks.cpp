@@ -42,7 +42,7 @@ std::string runCameraRenderChecks(SDL_Renderer *renderer) {
   view.renderTerrain(renderer,map,SpriteDatabase::get());
   std::set<std::pair<int,int>> cover;
   for(int y=26;y<54;++y)for(int x=56;x<84;++x)cover.insert({x,y});
-  bool equal=true,sawPixels=false;int cases=0;
+  bool equal=true,sawPixels=false;int cases=0,replayed=0;
   const SDL_Point positions[]={{0,0},{199,0},{199,119},{0,119},{100,60},{70,40},{138,80}};
   for(float zoom:{0.45f,1.0f,1.1f,2.25f})for(int rotation=0;rotation<4;++rotation) {
     camera.zoom=zoom;
@@ -61,17 +61,51 @@ std::string runCameraRenderChecks(SDL_Renderer *renderer) {
           if(!bounded) {reference=pixels;sawPixels |= std::any_of(pixels.begin(),pixels.end(),[](Uint32 p){return p!=0x000000ff;});}
           else equal &= pixels==reference;
         }
+        // (the whole ground once more, nothing changed: its kept calls)
+        if(!partial) {
+          const int before=view.terrainReplays();
+          SDL_SetRenderScale(renderer,1,1);SDL_SetRenderDrawColor(renderer,0,0,0,255);SDL_RenderClear(renderer);
+          SDL_SetRenderScale(renderer,zoom,zoom);view.renderTerrain(renderer,map,SpriteDatabase::get());
+          SDL_FlushRenderer(renderer);
+          equal &= ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA8888,pixels.data(),width*4)==0;
+          const bool same=pixels==reference;equal &= same;replayed+=view.terrainReplays()==before+1;
+        }
         ++cases;
       }
     }
     view.rotateView(1);
   }
+  // (a change to the ground: drawn afresh, the kept calls not used - its
+  // pixels as a fresh renderer's)
+  bool fresh=false;
+  {
+    camera.zoom=1.0f;view.centreOnWorld(70.5f,40.5f,map.getTile(70,40)->height);
+    auto draw=[&](WorldRenderer &v,std::vector<Uint32> &out) {
+      SDL_SetRenderScale(renderer,1,1);SDL_SetRenderDrawColor(renderer,0,0,0,255);SDL_RenderClear(renderer);
+      v.renderTerrain(renderer,map,SpriteDatabase::get());SDL_FlushRenderer(renderer);
+      return ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA8888,out.data(),width*4)==0;
+    };
+    std::vector<Uint32> a(width*height),b(width*height),c(width*height);
+    bool ok=draw(view,a);
+    for(int y=36;y<45;++y)for(int x=66;x<75;++x)map.getTileMutable(x,y)->terrainType=(map.getTile(x,y)->terrainType+3)%6;
+    map.setPath(71,41,"path");map.touch();
+    const int before=view.terrainReplays();
+    ok&=draw(view,b);
+    WorldRenderer other;
+    for(int k=0;k<view.getRotation();++k)other.rotateView(1);
+    other.getCamera()=camera;
+    ok&=draw(other,c);
+    fresh=ok && view.terrainReplays()==before && b==c && b!=a;
+  }
+  equal&=fresh;
   worldTerrainCulling(true);SDL_SetRenderTarget(renderer,saved);
   SDL_SetRenderScale(renderer,1,1);SDL_SetRenderViewport(renderer,&viewport);
   SDL_SetRenderClipRect(renderer,clipped?&clip:nullptr);SDL_SetRenderScale(renderer,xs,ys);SDL_DestroyTexture(target);
   std::ostringstream report;
-  report<<(equal && sawPixels && cases==224?"PASS ":"FAIL ")<<cases
-        <<" terrain pixel comparisons: four zooms, four rotations, map edges, raised cliffs, deep pits, paths and partial ground redraw";
+  report<<(equal && sawPixels && cases==224 && replayed==112?"PASS ":"FAIL ")<<cases
+        <<" terrain pixel comparisons: four zooms, four rotations, map edges, raised cliffs, deep pits, paths and partial ground redraw; "
+        <<replayed<<" of 112 whole-ground draws again from the kept calls, the same pixels; a changed ground drawn afresh"
+        <<(fresh?"":" (FAILED)");
   SDL_Log("[CameraRender] %s",report.str().c_str());return report.str();
 }
 

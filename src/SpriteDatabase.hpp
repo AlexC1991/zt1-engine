@@ -63,6 +63,10 @@ public:
     // Clear all cached sprites
     void clear();
 
+    // ours: how many times its textures have been freed or its art dropped
+    // (a renderer change, clear): what was drawn with them is stale after
+    uint32_t textureEpoch() const { return epoch; }
+
 private:
     SpriteDatabase() = default;
     ~SpriteDatabase() = default;
@@ -89,6 +93,7 @@ private:
     std::unordered_map<int, SDL_Texture*> terrainTextures;
     std::unordered_map<int, SDL_Texture*> terrainTexturesHi;
     SDL_Renderer* textureRenderer = nullptr;
+    uint32_t epoch = 0;
     std::unordered_map<std::string, Sprite> pathSprites;
     std::unordered_map<std::string, std::string> pathArtFolders;
 

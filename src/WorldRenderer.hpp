@@ -155,6 +155,8 @@ public:
 
   void toggleTerrainDebug() { debugTerrainIds = !debugTerrainIds; }
   bool isTerrainDebugEnabled() const { return debugTerrainIds; }
+  // (checks) how many whole-ground draws were the last one's calls again
+  int terrainReplays() const { return replay.replays; }
 
 private:
   Camera camera;
@@ -232,6 +234,35 @@ private:
                    const ZT_Vertex &c);
   void flushBatch(SDL_Renderer *renderer);
   const std::vector<std::pair<int, int>> *onlyTiles = nullptr; // (renderTerrainTiles; sorted)
+
+  // ours: the whole ground's draw calls kept from the last time it was
+  // drawn, with everything they were made from; while none of that has
+  // changed (a still camera, the same map, view and art), the same calls are
+  // made again rather than worked out again tile by tile - making them was
+  // three quarters of the ground's time. Moving the camera, or any change
+  // to the ground (its generation), makes them afresh
+  struct TerrainReplayKey {
+    const WorldMap *map = nullptr;
+    SDL_Renderer *renderer = nullptr;
+    uint32_t generation = 0, textureEpoch = 0;
+    int cameraX = 0, cameraY = 0, centreX = 0, centreY = 0;
+    float zoom = 0, unitPx = 0;
+    int tileWidth = 0, tileHeight = 0, rotation = 0, mapWidth = 0, mapHeight = 0, drawDistance = 0, shadingMode = 0;
+    bool hires = false, elevation = false, debugIds = false, grid = false, toolGrid = false, culled = false;
+    bool operator==(const TerrainReplayKey &) const = default;
+  };
+  struct TerrainCall {
+    SDL_Texture *texture;
+    uint32_t vertexFrom, vertexCount, indexFrom, indexCount;
+  };
+  struct TerrainReplay {
+    bool valid = false, recording = false;
+    int replays = 0;
+    TerrainReplayKey key;
+    std::vector<TerrainCall> calls;
+    std::vector<ZT_Vertex> vertices;
+    std::vector<int> indices;
+  } replay;
 };
 
 #endif // WORLD_RENDERER_HPP
