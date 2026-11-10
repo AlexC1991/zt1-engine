@@ -299,6 +299,8 @@ struct ColourTable {
 
 void Animation::packAll() {
   for (auto &[direction, frames] : this->surfaces) {
+    if (this->packed.count(direction))
+      continue; // (packed as it loaded: loadSurfaces)
     PackedDirection pd;
     bool packable = !frames.empty();
     ColourTable index;
@@ -1373,6 +1375,147 @@ void Animation::loadSurfaces(std::string direction_string,
   this->surfaces[direction_string] = std::vector<SDL_Surface *>();
   shadowRuns[direction_string].clear();
 
+  // ours: each frame packed as it's drawn, a row at a time - the same
+  // packed frame (and shadow runs) as drawing it whole and packing it after
+  // (packAll, compressShadow), which drew every frame on a canvas the size
+  // of the art's box, mostly clear, then read it all twice: most of an
+  // animation's loading time. Colours go in as a byte each while the
+  // direction has at most 256 (as packAll decides), four bytes once it has
+  // more
+  struct Packer {
+    PackedDirection pd;
+    ColourTable table;
+    bool fits = true;
+    int w = 0, lo = 0, hi = 0;
+    std::vector<uint32_t> row;
+    std::vector<Uint8> mask, index;
+    PackedFrame f;
+    std::vector<uint64_t> runs;
+    void begin(int W, int H) {
+      w = W;
+      row.assign(size_t(W), 0);
+      mask.assign(size_t(W), 0);
+      index.assign(size_t(W), 0);
+      lo = W;
+      hi = 0;
+      f = PackedFrame{};
+      f.present = true;
+      f.w = W;
+      f.h = H;
+      runs.clear();
+    }
+    void set(int x, uint32_t colour, bool shadow) {
+      row[x] = colour;
+      mask[x] = shadow;
+      lo = std::min(lo, x);
+      hi = std::max(hi, x + 1);
+    }
+    // (a direction past 256 colours: what's packed so far made four bytes
+    // a colour - its earlier frames, and this one's rows)
+    static std::vector<uint8_t> widened(const std::vector<uint8_t> &data, int rows, const std::vector<uint32_t> &colours) {
+      std::vector<uint8_t> out;
+      out.reserve(data.size() * 2);
+      const uint8_t *q = data.data();
+      for (int y = 0; y < rows; y++) {
+        const unsigned count = get16(q);
+        put16(out, count);
+        for (unsigned r = 0; r < count; r++) {
+          put16(out, get16(q));
+          const unsigned length = get16(q);
+          put16(out, length);
+          for (unsigned k = 0; k < length; k++) {
+            const uint32_t v = colours[*q++];
+            const uint8_t *b = reinterpret_cast<const uint8_t *>(&v);
+            out.insert(out.end(), b, b + 4);
+          }
+        }
+      }
+      return out;
+    }
+    void endRow(int y) {
+      if (fits)
+        for (int x = lo; x < hi; x++) {
+          if (!row[x])
+            continue;
+          int at = table.find(row[x]);
+          if (at < 0) {
+            if (table.size == 256) {
+              fits = false;
+              for (PackedFrame &done : pd.frames)
+                done.data = widened(done.data, done.h, pd.colours);
+              f.data = widened(f.data, y, pd.colours);
+              break;
+            }
+            at = table.size;
+            table.add(row[x], static_cast<uint8_t>(at));
+            pd.colours.push_back(row[x]);
+          }
+          index[x] = static_cast<uint8_t>(at);
+        }
+      const size_t countAt = f.data.size();
+      put16(f.data, 0);
+      unsigned count = 0;
+      for (int x = lo, end = 0; x < hi;) {
+        while (x < hi && !row[x])
+          x++;
+        if (x >= hi)
+          break;
+        const int from = x;
+        while (x < hi && row[x])
+          x++;
+        put16(f.data, static_cast<unsigned>(from - end));
+        put16(f.data, static_cast<unsigned>(x - from));
+        const size_t at = f.data.size();
+        if (fits) {
+          f.data.resize(at + size_t(x - from));
+          std::memcpy(f.data.data() + at, index.data() + from, size_t(x - from));
+        } else {
+          f.data.resize(at + size_t(x - from) * 4);
+          std::memcpy(f.data.data() + at, row.data() + from, size_t(x - from) * 4);
+        }
+        end = x;
+        count++;
+      }
+      f.data[countAt] = static_cast<uint8_t>(count & 0xFF);
+      f.data[countAt + 1] = static_cast<uint8_t>(count >> 8);
+      // (shadow runs over the frame's pixels in order: one ending a row
+      // goes on into the next)
+      for (int x = lo; x < hi;) {
+        if (!mask[x]) {
+          ++x;
+          continue;
+        }
+        const int from = x;
+        while (x < hi && mask[x])
+          ++x;
+        const uint64_t at = uint64_t(y) * uint64_t(w) + uint64_t(from);
+        if (!runs.empty() && (runs.back() >> 32) + uint32_t(runs.back()) == at)
+          runs.back() += uint64_t(x - from);
+        else
+          runs.push_back(at << 32 | uint32_t(x - from));
+      }
+      if (lo < hi) {
+        std::fill(row.begin() + lo, row.begin() + hi, 0u);
+        std::fill(mask.begin() + lo, mask.begin() + hi, Uint8(0));
+      }
+      lo = w;
+      hi = 0;
+    }
+    void endFrame(std::vector<std::vector<uint64_t>> &shadows) {
+      f.data.shrink_to_fit();
+      pd.frames.push_back(std::move(f));
+      shadows.push_back(std::move(runs));
+      runs = {};
+    }
+    PackedDirection finish() {
+      pd.indexed = fits;
+      if (!fits)
+        pd.colours.clear();
+      return std::move(pd);
+    }
+  };
+  auto packer = std::make_unique<Packer>(); // (its colour table: 5 KB)
+
   // A building with a background frame (zoo.exe's FATZ flag): every frame
   // is the background with that frame drawn over it, each placed by its
   // anchor (the header's offset_y the x anchor, offset_x the y) in a
@@ -1393,48 +1536,49 @@ void Animation::loadSurfaces(std::string direction_string,
       if (i == 0 || t + f.height > maxY) maxY = t + f.height;
     }
     const int W = std::max(1, maxX - minX), H = std::max(1, maxY - minY);
+    if (W > 65535) { // (wider than a packed row can say)
+      AniFile::freeAnimationData(data);
+      return;
+    }
     const SDL_Point anchor = {-minX, -minY};
     this->anchor_points[direction_string] = anchor;
     this->anchor_offsets[direction_string] = {W / 2 - anchor.x, H / 2 - anchor.y};
-    auto paint = [&](SDL_Surface *s, const AnimationFrameData &f,std::vector<Uint8> &mask) {
+    // (row yy of the surface: this frame's part of it)
+    auto paint = [&](const AnimationFrameData &f, int yy) {
       if (!f.lines)
         return;
       const int left = anchor.x - f.offset_y, top = anchor.y - f.offset_x;
-      uint32_t *pixels = static_cast<uint32_t *>(s->pixels);
-      const int pitch = s->pitch / 4;
-      for (int y = 0; y < f.height; y++) {
-        int x = left;
-        if (!f.lines[y].instructions)
-          continue;
-        for (int k = 0; k < f.lines[y].instruction_count; k++) {
-          const auto &ins = f.lines[y].instructions[k];
-          x += ins.offset;
-          for (int p = 0; p < ins.color_count; p++, x++) {
-            int yy = y + top;
-            if (x < 0 || x >= W || yy < 0 || yy >= H)
+      const int y = yy - top;
+      if (y < 0 || y >= f.height || !f.lines[y].instructions)
+        return;
+      int x = left;
+      for (int k = 0; k < f.lines[y].instruction_count; k++) {
+        const auto &ins = f.lines[y].instructions[k];
+        x += ins.offset;
+        for (int p = 0; p < ins.color_count; p++, x++) {
+          if (x < 0 || x >= W)
+            continue;
+          uint32_t color = 0xFF000000;
+          if (!f.is_shadow) {
+            if (!data->pallet || !data->pallet->colors || !ins.colors)
               continue;
-            uint32_t color = 0xFF000000;
-            if (!f.is_shadow) {
-              if (!data->pallet || !data->pallet->colors || !ins.colors)
-                continue;
-              color = data->pallet->colors[ins.colors[p]] | 0xFF000000;
-            }
-            pixels[yy * pitch + x] = color;
-            mask[size_t(yy)*W+x]=f.is_shadow || (reservedBlack && ins.colors && ins.colors[p]==1);
+            color = data->pallet->colors[ins.colors[p]] | 0xFF000000;
           }
+          packer->set(x, color, f.is_shadow || (reservedBlack && ins.colors && ins.colors[p] == 1));
         }
       }
     };
     for (int i = 0; i < count; i++) {
-      std::vector<Uint8> mask(size_t(W)*H);
-      SDL_Surface *s = SDL_CreateSurface(W, H, SDL_PIXELFORMAT_RGBA32);
-      if (s) {
-        SDL_FillSurfaceRect(s, NULL, 0x00000000);
-        paint(s, data->frames[count],mask);
-        paint(s, data->frames[i],mask);
+      packer->begin(W, H);
+      for (int yy = 0; yy < H; yy++) {
+        paint(data->frames[count], yy);
+        paint(data->frames[i], yy);
+        packer->endRow(yy);
       }
-      this->surfaces[direction_string].push_back(s);shadowRuns[direction_string].push_back(compressShadow(mask));
+      packer->endFrame(shadowRuns[direction_string]);
     }
+    this->surfaces[direction_string].assign(size_t(count), nullptr);
+    this->packed[direction_string] = packer->finish();
     AniFile::freeAnimationData(data);
     return;
   }
@@ -1460,95 +1604,48 @@ void Animation::loadSurfaces(std::string direction_string,
   this->anchor_points[direction_string]={frameAnchorX,frameAnchorY};
   this->anchor_offsets[direction_string]={first.width/2-frameAnchorX,first.height/2-frameAnchorY};
 
-  int loop_limit = (int)data->frame_count + (int)data->has_background;
-
-  for (int i = 0; i < loop_limit; i++) {
-    SDL_Surface *new_surface = SDL_CreateSurface(data->width, data->height, SDL_PIXELFORMAT_RGBA32);
-    if (!new_surface) {
-      this->surfaces[direction_string].push_back(nullptr);shadowRuns[direction_string].push_back({});
-      continue;
-    }
-    std::vector<Uint8> mask(size_t(data->width)*data->height);
-    SDL_FillSurfaceRect(new_surface, NULL, 0x00000000);
-    this->surfaces[direction_string].push_back(new_surface);
-
+  const int W = data->width, H = data->height;
+  for (int i = 0; i < static_cast<int>(data->frame_count); i++) {
+    const AnimationFrameData &f = data->frames[i];
+    packer->begin(W, H);
     // Each frame placed by its own anchor (the header's offset_x is its y
     // anchor, offset_y its x anchor), lined up on frame 0's: frames whose
     // anchors differ (a zebra's walk: x anchor 11 to 15) no longer shift
     // about (they shook)
-    const int anchorX = frameAnchorX;
-    const int anchorY = frameAnchorY;
-    // (art with a background frame, the UI's, kept as it was: matched)
-    const int left = data->has_background ? offset_x - data->frames[i].offset_x
-                                          : anchorX - data->frames[i].offset_y;
-    const int top = data->has_background ? offset_y - data->frames[i].offset_y
-                                         : anchorY - data->frames[i].offset_x;
-    for (int y = 0; y < data->frames[i].height; y++) {
-      int x = left;
-      if (!data->frames[i].lines)
-        continue;
-
-      for (int instruction = 0;
-           instruction < data->frames[i].lines[y].instruction_count;
-           instruction++) {
-        if (!data->frames[i].lines[y].instructions)
-          continue;
-        x += data->frames[i].lines[y].instructions[instruction].offset;
-
-        for (int p = 0;
-             p < data->frames[i].lines[y].instructions[instruction].color_count;
-             p++, x++) {
-          if (x < 0 || x >= data->width || y < 0 || y >= data->height)
+    const int left = frameAnchorX - f.offset_y;
+    const int top = frameAnchorY - f.offset_x;
+    for (int yy = 0; yy < H; yy++) {
+      // (its own row y: one past the surface's height is left out, as it
+      // always was)
+      const int y = yy - top;
+      if (f.lines && y >= 0 && y < f.height && y < H) {
+        int x = left;
+        for (int instruction = 0; instruction < f.lines[y].instruction_count; instruction++) {
+          if (!f.lines[y].instructions)
             continue;
-          uint32_t color = 0xFFFF00FF;
-          if (data->frames[i].is_shadow) {
-            color = 0xFF000000;
-          } else if (data->pallet && data->pallet->colors) {
-            if (!data->frames[i].lines[y].instructions[instruction].colors)
+          const auto &ins = f.lines[y].instructions[instruction];
+          x += ins.offset;
+          for (int p = 0; p < ins.color_count; p++, x++) {
+            if (x < 0 || x >= W)
               continue;
-            uint8_t index =
-                data->frames[i].lines[y].instructions[instruction].colors[p];
-            color = data->pallet->colors[index];
-            color |= 0xFF000000;
-
-            // DEBUG: Log specific pixel colors for Terrain ID 2 (Sand) to catch
-            // the Yellow Bug We check if this is likely the first
-            // non-transparent pixel of the frame
-            static bool loggedSand = false;
-            if (!loggedSand && color != 0 && (color & 0xFFFFFF) != 0) {
-              // We don't have Terrain ID easily accessible here, but we can
-              // verify color range If color is Yellow (FFFF00), log it!
-              if ((color & 0xFFFFFF) == 0xFFFF00 ||
-                  (color & 0xFFFFFF) == 0x00FFFF) {
-                SDL_Log(
-                    "[Animation] DEBUG: FOUND YELLOW PIXEL! 0x%08X (Idx %d)",
-                    color, index);
-                loggedSand = true;
-              }
-              // Log Brown as well to see if it's working
-              if ((color & 0xFFFFFF) == 0x3D6E9A ||
-                  (color & 0xFFFFFF) == 0x9A6E3D) { // Check both endianness
-                SDL_Log("[Animation] DEBUG: FOUND BROWN PIXEL! 0x%08X (Idx %d)",
-                        color, index);
-                loggedSand = true;
-              }
+            uint32_t color = 0xFFFF00FF;
+            if (f.is_shadow) {
+              color = 0xFF000000;
+            } else if (data->pallet && data->pallet->colors) {
+              if (!ins.colors)
+                continue;
+              color = data->pallet->colors[ins.colors[p]] | 0xFF000000;
             }
-          }
-          int pitch = new_surface->pitch / 4;
-          uint32_t *pixels = (uint32_t *)new_surface->pixels;
-          int y_final = y + top;
-          int x_final = x;
-          if (y_final >= 0 && y_final < data->height && x_final >= 0 &&
-              x_final < data->width) {
-            pixels[y_final * pitch + x_final] = color;
-            const auto *codes=data->frames[i].lines[y].instructions[instruction].colors;
-            mask[size_t(y_final)*data->width+x_final]=data->frames[i].is_shadow || (reservedBlack && codes && codes[p]==1);
+            packer->set(x, color, f.is_shadow || (reservedBlack && ins.colors && ins.colors[p] == 1));
           }
         }
       }
+      packer->endRow(yy);
     }
-    shadowRuns[direction_string].push_back(compressShadow(mask));
+    packer->endFrame(shadowRuns[direction_string]);
   }
+  this->surfaces[direction_string].assign(size_t(data->frame_count), nullptr);
+  this->packed[direction_string] = packer->finish();
   if (data)
     AniFile::freeAnimationData(data);
 }

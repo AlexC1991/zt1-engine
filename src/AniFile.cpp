@@ -2,6 +2,7 @@
 #include <chrono>
 #include <thread>
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 
@@ -85,6 +86,41 @@ std::string AniFile::getAnimationDirectory(IniReader *ini_reader) {
   return directory;
 }
 
+// ours: the file read from memory as SDL's memory stream reads it (a value
+// running past the end: the bytes there and zeros after, the place moved
+// past them; a seek kept inside the file). Through SDL it was a call for
+// every byte read: most of the time spent reading the art
+namespace {
+struct MemReader {
+  const uint8_t *base;
+  Sint64 size, here;
+  size_t read(void *to, size_t unit, size_t count) {
+    if (!unit || !count)
+      return 0;
+    const size_t n = static_cast<size_t>(std::min<Sint64>(static_cast<Sint64>(unit * count), size - here));
+    std::memcpy(to, base + here, n);
+    here += static_cast<Sint64>(n);
+    return n / unit;
+  }
+  Uint32 le32() {
+    Uint32 v = 0;
+    read(&v, 1, 4);
+    return SDL_Swap32LE(v);
+  }
+  Uint16 le16() {
+    Uint16 v = 0;
+    read(&v, 1, 2);
+    return SDL_Swap16LE(v);
+  }
+  Uint8 u8() {
+    Uint8 v = 0;
+    read(&v, 1, 1);
+    return v;
+  }
+  void seek(Sint64 at) { here = std::clamp<Sint64>(at, 0, size); }
+};
+} // namespace
+
 AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
                                           const std::string &ztd_file,
                                           const std::string &directory) {
@@ -95,12 +131,9 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   if (file_data == NULL)
     return NULL;
 
-  // 2. Wrap in RWops so we can read it like a file
-  SDL_IOStream *rw = SDL_IOFromMem(file_data, raw_size);
-  if (rw == NULL) {
-    free(file_data);
-    return NULL;
-  }
+  // 2. Read it from memory (MemReader)
+  MemReader reader{static_cast<const uint8_t *>(file_data), raw_size, 0};
+  MemReader *rw = &reader;
 
   Sint64 file_size = raw_size;
 
@@ -108,7 +141,6 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   AnimationData *animation_data =
       (AnimationData *)calloc(1, sizeof(AnimationData));
   if (!animation_data) {
-    SDL_CloseIO(rw);
     free(file_data);
     return NULL;
   }
@@ -119,35 +151,34 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   animation_data->frame_time_in_ms = 100;
 
   // --- HEADER PARSING ---
-  uint32_t timing_or_height = ZT_ReadLE32(rw);
+  uint32_t timing_or_height = rw->le32();
   uint32_t str_len;
 
   // Check for FATZ header (0x5A544146)
   if (timing_or_height == 0x5A544146) {
     // SDL_Log("AniFile: Detected FATZ header");
-    ZT_ReadLE32(rw);           // Skip unknown 0x00000000
+    rw->le32();           // Skip unknown 0x00000000
     // The byte after it: 1 when the art has a background frame (its last:
     // a building's whole picture, the others drawn over it), then the
     // timing (shifted)
-    uint32_t flagAndTiming = ZT_ReadLE32(rw);
+    uint32_t flagAndTiming = rw->le32();
     animation_data->has_background = (flagAndTiming & 0xFF) != 0;
     if ((flagAndTiming >> 8) > 0 && (flagAndTiming >> 8) < 10000)
       animation_data->frame_time_in_ms = flagAndTiming >> 8;
-    str_len = ZT_ReadLE32(rw); // Read Length (shifted)
+    str_len = rw->le32(); // Read Length (shifted)
     str_len >>= 8;              // Fix shift
-    ZT_ReadU8(rw);             // Skip padding byte (0x00)
+    rw->u8();             // Skip padding byte (0x00)
   } else {
     // (the first word is the art's own frame time, ms: the electric fence's
     // sparks 83 - it was played at 100 for everything)
     if (timing_or_height > 0 && timing_or_height < 10000)
       animation_data->frame_time_in_ms = timing_or_height;
-    str_len = ZT_ReadLE32(rw);
+    str_len = rw->le32();
   }
 
   // [SAFETY] Validate string length against file size
-  if (SDL_TellIO(rw) + str_len > file_size) {
+  if (rw->here + str_len > file_size) {
     SDL_Log("AniFile: CRITICAL - Palette string length exceeds file size!");
-    SDL_CloseIO(rw);
     free(file_data);
     free(animation_data);
     return NULL;
@@ -155,7 +186,7 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
 
   // Read Palette String
   char *pal_str = (char *)calloc(1, str_len + 1);
-  ZT_RWread(rw, pal_str, 1, str_len);
+  rw->read(pal_str, 1, str_len);
 
   std::string palette_path = pal_str;
   free(pal_str);
@@ -171,8 +202,8 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   animation_data->pallet = pallet_manager->getPallet(palette_path);
 
   // Skip the 4-byte field after palette
-  if (SDL_TellIO(rw) + 4 <= file_size) {
-    ZT_ReadLE32(rw); // Skip this field
+  if (rw->here + 4 <= file_size) {
+    rw->le32(); // Skip this field
   }
 
   animation_data->width = 0;
@@ -181,29 +212,29 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
   // --- DYNAMIC FRAME LOADING ---
   std::vector<AnimationFrameData> temp_frames;
 
-  while (SDL_TellIO(rw) < file_size) {
+  while (rw->here < file_size) {
     // [SAFETY] Check if we have enough bytes for a frame header (14 bytes)
-    if (SDL_TellIO(rw) + 14 > file_size) {
+    if (rw->here + 14 > file_size) {
       break;
     }
 
     AnimationFrameData frame;
 
     // 1. FRAME HEADER
-    frame.size = ZT_ReadLE32(rw);
+    frame.size = rw->le32();
 
     // EOF / Garbage check
     if (frame.size == 0 || frame.size > 10000000)
       break;
     // The size counts from here: this header (10 bytes) and the pixels (a
     // seagull's six flapping frames read end to end this way)
-    long frame_header_start = SDL_TellIO(rw);
+    long frame_header_start = rw->here;
 
-    frame.height = ZT_ReadLE16(rw);
-    frame.width = ZT_ReadLE16(rw);
-    frame.offset_x = ZT_ReadLE16(rw);
-    frame.offset_y = ZT_ReadLE16(rw);
-    frame.mystery_bytes = ZT_ReadLE16(rw);
+    frame.height = rw->le16();
+    frame.width = rw->le16();
+    frame.offset_x = rw->le16();
+    frame.offset_y = rw->le16();
+    frame.mystery_bytes = rw->le16();
     // The height's top bit: a shadow frame (Marine Mania's "shadow" + art,
     // on a tank's floor). Its lines' runs are (skip, length) with no colours:
     // every pixel of a run is shadow. Read as a height, it was 32 thousand
@@ -228,12 +259,12 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
 
     for (int y = 0; y < frame.height; y++) {
       // [SAFETY] Global bounds check
-      if (SDL_TellIO(rw) >= frame_data_end)
+      if (rw->here >= frame_data_end)
         break;
-      if (SDL_TellIO(rw) >= file_size)
+      if (rw->here >= file_size)
         break;
 
-      frame.lines[y].instruction_count = ZT_ReadU8(rw);
+      frame.lines[y].instruction_count = rw->u8();
 
       if (frame.lines[y].instruction_count > 0) {
         frame.lines[y].instructions = (AnimationDrawInstruction *)calloc(
@@ -244,17 +275,17 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
 
         for (int x = 0; x < frame.lines[y].instruction_count; x++) {
 
-          if (SDL_TellIO(rw) + 2 > frame_data_end) {
+          if (rw->here + 2 > frame_data_end) {
             break;
           }
 
-          frame.lines[y].instructions[x].offset = ZT_ReadU8(rw);
-          frame.lines[y].instructions[x].color_count = ZT_ReadU8(rw);
+          frame.lines[y].instructions[x].offset = rw->u8();
+          frame.lines[y].instructions[x].color_count = rw->u8();
 
           // (a shadow run has no colours: its length is all)
           if (frame.lines[y].instructions[x].color_count > 0 && !frame.is_shadow) {
 
-            if (SDL_TellIO(rw) + frame.lines[y].instructions[x].color_count >
+            if (rw->here + frame.lines[y].instructions[x].color_count >
                 frame_data_end) {
               frame.lines[y].instructions[x].color_count = 0;
               break;
@@ -264,7 +295,7 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
                 frame.lines[y].instructions[x].color_count, sizeof(uint8_t));
 
             if (frame.lines[y].instructions[x].colors) {
-              ZT_RWread(rw, frame.lines[y].instructions[x].colors, sizeof(uint8_t), frame.lines[y].instructions[x].color_count);
+              rw->read(frame.lines[y].instructions[x].colors, sizeof(uint8_t), frame.lines[y].instructions[x].color_count);
             }
           }
         }
@@ -274,7 +305,7 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
     temp_frames.push_back(frame);
 
     // Align to next frame
-    SDL_SeekIO(rw, frame_data_end, SDL_IO_SEEK_SET);
+    rw->seek(frame_data_end);
   }
 
   // --- CONVERT VECTOR TO ARRAY ---
@@ -290,7 +321,6 @@ AnimationData *AniFile::loadAnimationData(PalletManager *pallet_manager,
     }
   }
 
-  SDL_CloseIO(rw);
   free(file_data); // Free the raw memory
   return animation_data;
 }
