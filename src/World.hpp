@@ -134,6 +134,8 @@ public:
     };
     // Where a world grid vertex is on the window (pixels), on the ground
     bool vertexToWindow(int vx, int vy, int &x, int &y);
+    // (checks) where on the map a window pixel is, as a click finds it
+    bool pickWindow(int x, int y, float &wx, float &wy) { return this->pick(x, y, wx, wy); }
     // Where a point at a height is on the window (pixels)
     void pointToWindow(float wx, float wy, float h, int &x, int &y);
     // A walkway being laid: stopped (true if there was one)

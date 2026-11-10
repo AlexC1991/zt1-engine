@@ -3658,6 +3658,12 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
               if (nx < 0 || ny < 0 || nx >= W || ny >= H || parent[static_cast<size_t>(ny) * W + nx] != -2 ||
                   !open(nx, ny) || !level(x, y, nx, ny))
                 continue;
+              // (not through a fence: Arctic Maze's walls are fences - but along
+              // the map's own path where it runs through a fence line, as
+              // Sandy's entrance court does)
+              if (const Fences::Piece *p = fences.at({nx == x, std::max(x, nx), std::max(y, ny)});
+                  p && !p->gate && !(map.isPath(x, y) && map.isPath(nx, ny)))
+                continue;
               parent[static_cast<size_t>(ny) * W + nx] = y * W + x;
               q.push({nx, ny});
             }
@@ -3669,6 +3675,36 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           return x >= 0 && y >= 0 && x < W && y < H && parent[static_cast<size_t>(y) * W + x] != -2;
         };
         info << ", " << order.size() << " tiles walkable from it";
+        // (debug: the ground round the entrance - P path, . a path can go,
+        // F not zoo ground the fences take, S too steep, T something in the
+        // way, E an exhibit, # the entrance; lower case where reached)
+        if (std::getenv("ZT_TOUR_DEBUG")) {
+          world->setPathTool(pathKey, pathCost);
+          for (int y = ey - 14; y <= ey + 14; y++) {
+            std::string row;
+            for (int x = ex - 20; x <= ex + 20; x++) {
+              char c = ' ';
+              if (map.getTile(x, y)) {
+                c = x == ex && y == ey               ? '#'
+                    : map.isPath(x, y)                ? 'P'
+                    : fences.exhibitAt(x, y) >= 0     ? 'E'
+                    : fences.tileFit(x, y, map) != Fences::Fit::Ok ? 'F'
+                    : !map.pathShapeOk(x, y)          ? 'S'
+                    : !world->canLayPath(x, y)        ? 'T'
+                                                      : '.';
+                if (reached(x, y) && c != '#')
+                  c = static_cast<char>(std::tolower(c == '.' ? ',' : c));
+              }
+              row += c;
+            }
+            SDL_Log("[Tour] map %3d %s", y, row.c_str());
+          }
+          for (const auto &[e, p] : fences.pieces())
+            if (std::abs(e.x - ex) <= 8 && std::abs(e.y - ey) <= 4)
+              SDL_Log("[Tour] fence %s %d,%d %s%s", e.alongX ? "h" : "v", e.x, e.y,
+                      fences.types()[p.type].key.c_str(), p.gate ? " gate" : "");
+          world->setPathTool("", 0);
+        }
         // (few: why each step from the entrance was refused)
         if (order.size() < 50) {
           const int d4[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
@@ -3680,6 +3716,31 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                  << " terrain " << (t ? int(t->terrainType) : -1) << " level " << (t ? level(ex, ey, nx, ny) : false) << "]";
           }
         }
+        // (a corner or a tile where a click on it finds it: on the screen
+        // where it is drawn, and not behind something nearer)
+        auto vertexSeen = [&](int x, int y) {
+          int wx, wy;
+          float px, py;
+          world->vertexToWindow(x, y, wx, wy);
+          return world->pickWindow(wx, wy, px, py) && std::lround(px) == x && std::lround(py) == y;
+        };
+        auto tileSeen = [&](int x, int y) {
+          int ax, ay, cx, cy;
+          float px, py;
+          world->vertexToWindow(x, y, ax, ay);
+          world->vertexToWindow(x + 1, y + 1, cx, cy);
+          return world->pickWindow((ax + cx) / 2, (ay + cy) / 2, px, py) && static_cast<int>(std::floor(px)) == x &&
+                 static_cast<int>(std::floor(py)) == y;
+        };
+        // (the view turned until a tile is seen, as a player turns it)
+        auto face = [&](int x, int y) {
+          show(x + 0.5f, y + 0.5f);
+          for (int r = 0; r < 3 && !tileSeen(x, y); r++) {
+            world->rotateView(1);
+            show(x + 0.5f, y + 0.5f);
+          }
+          return tileSeen(x, y);
+        };
         // A 4 x 4 block, nearest the entrance first: level all over, its
         // ring walkable too, no path, fence or thing in or near it
         const int n = 4;
@@ -3703,9 +3764,56 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
               for (int e = 0; e < 2 && ok; e++)
                 ok = !fences.at({e == 0, x, y}) && !fences.at({e == 0, x + 1, y + 1});
             }
+          // (nothing standing in it or on its ring: trees around it are
+          // fine, as a player fences among them)
           for (const PlacedObjects::Object &o : world->getObjects().objects())
-            if (ok && o.x > x0 - 3 && o.x < x0 + n + 3 && o.y > y0 - 3 && o.y < y0 + n + 3)
+            if (ok && o.x > x0 - 1 && o.x < x0 + n + 1 && o.y > y0 - 1 && o.y < y0 + n + 1)
               ok = false;
+          // (and not plugging the only way into its own pocket - Arctic
+          // Maze's corridors: some tile beside it still reached round it)
+          if (ok) {
+            std::vector<uint8_t> seen(static_cast<size_t>(W) * H, 0);
+            std::queue<std::pair<int, int>> q;
+            seen[static_cast<size_t>(ey) * W + ex] = 1;
+            q.push({ex, ey});
+            auto inBlock = [&](int x, int y) { return x >= x0 && x < x0 + n && y >= y0 && y < y0 + n; };
+            bool beside = false;
+            while (!q.empty() && !beside) {
+              auto [x, y] = q.front();
+              q.pop();
+              beside = !inBlock(x, y) && x >= x0 - 1 && x <= x0 + n && y >= y0 - 1 && y <= y0 + n &&
+                       (x >= x0 && x < x0 + n || y >= y0 && y < y0 + n);
+              const int d4[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+              for (auto &d : d4) {
+                const int nx = x + d[0], ny = y + d[1];
+                if (!reached(nx, ny) || inBlock(nx, ny) || seen[static_cast<size_t>(ny) * W + nx] ||
+                    !level(x, y, nx, ny))
+                  continue;
+                if (const Fences::Piece *p = fences.at({nx == x, std::max(x, nx), std::max(y, ny)});
+                    p && !p->gate && !(map.isPath(x, y) && map.isPath(nx, ny)))
+                  continue;
+                seen[static_cast<size_t>(ny) * W + nx] = 1;
+                q.push({nx, ny});
+              }
+            }
+            ok = beside;
+          }
+          // (and its corners where a click finds them, from some side - in a
+          // pit, a corner behind its front wall isn't: a player turns round)
+          if (ok) {
+            show(x0 + n / 2.0f, y0 + n / 2.0f);
+            auto corners = [&] {
+              return vertexSeen(x0, y0) && vertexSeen(x0 + n, y0) && vertexSeen(x0 + n, y0 + n) &&
+                     vertexSeen(x0, y0 + n);
+            };
+            bool seen = corners();
+            for (int r = 0; r < 3 && !seen; r++) {
+              world->rotateView(1);
+              show(x0 + n / 2.0f, y0 + n / 2.0f);
+              seen = corners();
+            }
+            ok = seen;
+          }
           if (ok) {
             bx = x0;
             by = y0;
@@ -3722,6 +3830,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             return a && c;
           };
           auto clickTile = [&](int x, int y) {
+            face(x, y);
             int wx, wy;
             window(x, y, wx, wy);
             world->mouseMove(wx, wy);
@@ -3732,12 +3841,34 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           const size_t exhibitsBefore = fences.exhibits().size();
           world->setFenceTool(fences.typeIndex("chainlnk"));
           const std::pair<int, int> loop[] = {{bx, by}, {bx + n, by}, {bx + n, by + n}, {bx, by + n}, {bx, by}};
+          const bool debug = std::getenv("ZT_TOUR_DEBUG") != nullptr;
+          if (debug)
+            for (int y = by - 1; y <= by + n; y++) {
+              std::ostringstream row;
+              for (int x = bx - 1; x <= bx + n; x++) {
+                const MapTile *t = map.getTile(x, y);
+                row << " " << (t ? t->cornerHeight[0] : -99) << "/" << (t ? t->cornerHeight[1] : -99) << "/"
+                    << (t ? t->cornerHeight[2] : -99) << "/" << (t ? t->cornerHeight[3] : -99);
+              }
+              SDL_Log("[Tour] heights row %d:%s", y, row.str().c_str());
+            }
           for (int s = 0; s < 4; s++) {
             int x0, y0, x1, y1;
             world->vertexToWindow(loop[s].first, loop[s].second, x0, y0);
             world->vertexToWindow(loop[s + 1].first, loop[s + 1].second, x1, y1);
             handleToolResult(world->mouseDown(x0, y0), rm);
             world->mouseMove(x1, y1);
+            if (debug) {
+              float px0, py0, px1, py1;
+              world->pickWindow(x0, y0, px0, py0);
+              world->pickWindow(x1, y1, px1, py1);
+              std::string pv;
+              for (auto &pp : fences.preview)
+                pv += std::string(" ") + (pp.first.alongX ? "x" : "y") + std::to_string(pp.first.x) + "," + std::to_string(pp.first.y);
+              SDL_Log("[Tour] side %d: %d,%d -> %d,%d at window %d,%d -> %d,%d picked %.2f,%.2f -> %.2f,%.2f preview:%s", s,
+                      loop[s].first, loop[s].second, loop[s + 1].first, loop[s + 1].second, x0, y0, x1, y1, px0, py0, px1,
+                      py1, pv.c_str());
+            }
             handleToolResult(world->mouseUp(x1, y1), rm);
           }
           world->setFenceTool(-1);
@@ -3748,9 +3879,24 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                "the fence loop makes an exhibit of 16 tiles");
           // A path from the entrance to the tile below its corner (the way
           // found again: the exhibit now stands where it may have gone)
-          const int tx = bx, ty = by + n;
+          // (its front: the first tile beside it the entrance still reaches -
+          // in a maze's corridor the exhibit cuts one side off)
+          int tx = bx, ty = by + n;
           world->setPathTool(pathKey, pathCost);
           walk();
+          for (int k = 0; k < 4 * n && !reached(tx, ty); k++) {
+            const int s = k / n, i = k % n;
+            tx = s == 0 ? bx + i : s == 1 ? bx + n : s == 2 ? bx + i : bx - 1;
+            ty = s == 0 ? by + n : s == 1 ? by + i : s == 2 ? by - 1 : by + i;
+          }
+          if (debug && !reached(tx, ty))
+            for (int k = 0; k < 4 * n; k++) {
+              const int s = k / n, i = k % n;
+              const int rx = s == 0 ? bx + i : s == 1 ? bx + n : s == 2 ? bx + i : bx - 1;
+              const int ry = s == 0 ? by + n : s == 1 ? by + i : s == 2 ? by - 1 : by + i;
+              SDL_Log("[Tour] beside %d,%d: exhibit %d canPath %d path %d", rx, ry, fences.exhibitAt(rx, ry),
+                      world->canLayPath(rx, ry) ? 1 : 0, map.isPath(rx, ry) ? 1 : 0);
+            }
           need(reached(tx, ty), "the exhibit's front reachable from the entrance");
           std::vector<std::pair<int, int>> route;
           for (int at = ty * W + tx; at >= 0; at = parent[static_cast<size_t>(at)])
