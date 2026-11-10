@@ -168,6 +168,21 @@ int Guests::averageHappiness() const {
 // Art: each guest's animations in its own colours
 // ----------------------------------------------------------------------------
 Animation *Guests::art(const Guest &g, const std::string &name) const {
+  // ours: what it was last time (the key below made and looked up for every
+  // guest, drawn and lit, every frame)
+  if (g.artMemo && g.artMemoGen == this->artGen && g.artMemoType == g.type && g.artMemoName == name &&
+      std::equal(std::begin(g.colours), std::end(g.colours), std::begin(g.artMemoColours)))
+    return g.artMemo;
+  Animation *found = this->artUncached(g, name);
+  g.artMemo = found;
+  g.artMemoName = name;
+  g.artMemoType = g.type;
+  std::copy(std::begin(g.colours), std::end(g.colours), std::begin(g.artMemoColours));
+  g.artMemoGen = this->artGen;
+  return found;
+}
+
+Animation *Guests::artUncached(const Guest &g, const std::string &name) const {
   const Type &t = this->typeList[g.type];
   auto it = t.anims.find(name);
   if (it == t.anims.end())
@@ -1499,6 +1514,7 @@ void Guests::update(float seconds, int zooRating, double admission) {
       if (at != std::string::npos && it->first.rfind("guests/ls", 0) != 0 && !worn.count(it->first.substr(at))) {
         delete it->second;
         it = this->artCache.erase(it);
+        ++this->artGen;
       } else {
         ++it;
       }

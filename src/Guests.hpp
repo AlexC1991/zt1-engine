@@ -107,6 +107,12 @@ public:
     // Attacked by a loose predator (never twice), and getting up after
     bool attacked = false;
     int caughtStage = 0;
+    // ours: its art for the animation last asked for (Guests::art), for its
+    // type and clothes, while the art cache has let none go (artGen)
+    mutable Animation *artMemo = nullptr;
+    mutable std::string artMemoName;
+    mutable int artMemoType = -1, artMemoColours[4] = {};
+    mutable uint32_t artMemoGen = 0;
   };
 
   void load(ResourceManager *rm);
@@ -297,6 +303,8 @@ private:
   std::vector<int> messages;
   mutable std::map<std::string, Animation *> artCache;
   float artSweepIn = 15.0f; // (game seconds to the next freeing of art no guest wears)
+  uint32_t artGen = 1; // (moved on as art's freed: each guest's artMemo)
+  Animation *artUncached(const Guest &g, const std::string &name) const;
   Animation *selectArrow = nullptr;
   std::mt19937 rng{1977};
   // crowd sounds
