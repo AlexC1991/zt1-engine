@@ -1,7 +1,9 @@
 // ours: see SampleProfiler.hpp
 #include "SampleProfiler.hpp"
 
-#ifdef _WIN32
+// (its stack walk reads the x64 context and unwind tables: a 32-bit build
+// has it off, as other systems do)
+#if defined(_WIN32) && defined(_M_X64)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>

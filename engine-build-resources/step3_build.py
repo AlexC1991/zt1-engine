@@ -162,7 +162,8 @@ def main():
     # x64, like the project's CI and the README's manual build. Win32 also
     # "works" but is not what the shipped/verified binaries are built as.
     arch = os.environ.get("ZT1_ARCH", "x64").strip() or "x64"
-    code, log = run_smart_build(["cmake", "-A", arch, ".."], BUILD_DIR, "Configuring")
+    # (SDL3, said: a folder first set up on SDL2 would keep it)
+    code, log = run_smart_build(["cmake", "-A", arch, "-DZT1_SDL3=ON", ".."], BUILD_DIR, "Configuring")
     if code != 0:
         print_error_box(log)
         return 1
