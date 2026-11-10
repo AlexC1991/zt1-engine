@@ -1,6 +1,7 @@
 # Every push to main: the engine's open-source tree is mirrored to the
 # zt1-engine project on CodeRook (a save of it; releases are named there
-# separately, with their downloads).
+# separately, with their downloads). A push to In-Works-Prototype is mirrored
+# to that line of the project, so GitHub and CodeRook hold the same work.
 #
 # CodeRook needs a personal access token (CodeRook > account settings) saved
 # as this repository's secret CODEROOK_TOKEN. Without it, nothing is mirrored.
@@ -8,10 +9,10 @@ name: Mirror
 
 on:
   push:
-    branches: [main]
+    branches: [main, In-Works-Prototype]
 
 concurrency:
-  group: mirror
+  group: mirror-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -32,9 +33,22 @@ jobs:
           # Send exactly the committed tree, including tracked files that an
           # ignore rule may name. No local ignored files enter this export.
           mirror="$(mktemp -d)"
-          git archive HEAD | tar -x -C "$mirror"
-          cd "$mirror"
-          cbx link zt1-engine .
+          if [ "$GITHUB_REF_NAME" = main ]; then
+            git archive HEAD | tar -x -C "$mirror"
+            cd "$mirror"
+            cbx link zt1-engine .
+          else
+            # Another branch saves to its own line (started from main the
+            # first time). The folder is first brought to that line's latest
+            # save, so this one follows it rather than waiting as a merge, then
+            # emptied for the committed tree.
+            cd "$mirror"
+            cbx link zt1-engine .
+            cbx track "$GITHUB_REF_NAME" || cbx track "$GITHUB_REF_NAME" --new
+            cbx get
+            find . -mindepth 1 -maxdepth 1 ! -name .coderook -exec rm -rf {} +
+            git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C "$mirror"
+          fi
           # This checkout never had CodeRook's private release tooling. Preserve
           # it, while --sync still removes public files deliberately deleted in Git.
           NODE_PATH="$(npm root -g)" node .github/scripts/coderook-retain-private.cjs
