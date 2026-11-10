@@ -42,6 +42,7 @@ struct DayNightLighting::SunScene {
   size_t scene=0;uint64_t projection=0;
   struct Caster{std::array<Point,4> p;Point outward;uint32_t id;};std::vector<Caster> casters;
   std::vector<std::array<Point,4>> facePoints;std::vector<Point> faceNormals;std::vector<uint32_t> faceIds;std::vector<char> faceVisible;
+  std::vector<uint64_t> shapeKeys;std::vector<uint32_t> faceShape,faceLocal; // ours: the shapes projected (projectedShapes' keys), each face's among them and its place in it
 };
 struct DayNightLighting::SunGround {uint64_t generation=0;std::vector<Point> points,normals;};
 
@@ -101,17 +102,32 @@ struct DayNightLighting::SunJob {
 };
 
 void DayNightLighting::startSunJob(const WorldMap &map,double time,float left,float top,float extent) {
-  if(!sunScene || sunScene->scene!=sceneHash || sunScene->projection!=projectionSerial) {
-    auto made=std::make_shared<SunScene>();made->scene=sceneHash;made->projection=projectionSerial;
-    for(const auto &f:projectedFaces) {
-      if(f.instance<instances.size() && instances[f.instance].sprite)continue;
-      made->casters.push_back({{f.world[0],f.world[1],f.world[2],f.world[3]},f.outward,uint32_t(f.instance+1)});
-    }
-    made->facePoints.reserve(projectedFaces.size());
-    for(const auto &f:projectedFaces) {
-      made->facePoints.push_back({f.world[0],f.world[1],f.world[2],f.world[3]});made->faceNormals.push_back(f.normal);
-      made->faceIds.push_back(uint32_t(f.instance+1));made->faceVisible.push_back(f.visible);
-    }
+  sunJob=launchSunJob(map,time,left,top,extent);
+}
+std::future<std::shared_ptr<DayNightLighting::SunJob>> DayNightLighting::launchSunJob(const WorldMap &map,double time,float left,float top,float extent) {
+  if(!sunScene || sunScene->scene!=casterHash || sunScene->projection!=projectionSerial) {
+    auto made=std::make_shared<SunScene>();made->scene=casterHash;made->projection=projectionSerial;
+    // (ours: each caster's place counted first, then the list filled side
+    // by side on the cores - the same casters in the same order: the faces
+    // projected, then the shapes not chosen to be lit, which cast too)
+    const size_t faceCount=projectedFaces.size();
+    std::vector<uint32_t> faceAt(faceCount+1,0);
+    for(size_t s=0;s<faceCount;++s){const auto &f=projectedFaces[s];faceAt[s+1]=faceAt[s]+uint32_t(!(f.instance<instances.size() && instances[f.instance].sprite));}
+    std::vector<size_t> shapeAt(instances.size()+1,0);
+    for(size_t i=0;i<instances.size();++i){const auto &o=instances[i];shapeAt[i+1]=shapeAt[i]+(o.kept || o.sprite?0:o.model->faces.size());}
+    made->casters.resize(faceAt[faceCount]+shapeAt[instances.size()]);
+    auto &casters=made->casters;
+    parallelFor(faceCount,[&](size_t b,size_t e){for(size_t s=b;s<e;++s)if(faceAt[s+1]!=faceAt[s]){const auto &f=projectedFaces[s];
+      casters[faceAt[s]]={{f.world[0],f.world[1],f.world[2],f.world[3]},f.outward,uint32_t(f.instance+1)};}},4096);
+    const size_t afterFaces=faceAt[faceCount];
+    parallelFor(instances.size(),[&](size_t b,size_t e){for(size_t i=b;i<e;++i){const auto &o=instances[i];if(o.kept || o.sprite)continue;size_t at=afterFaces+shapeAt[i];
+      for(const auto &f:o.model->faces){const Point out{f.outward.x*o.cosine-f.outward.y*o.sine,f.outward.x*o.sine+f.outward.y*o.cosine,f.outward.z};
+        casters[at++]={{toWorld(o,f.p[0]),toWorld(o,f.p[1]),toWorld(o,f.p[2]),toWorld(o,f.p[3])},out,uint32_t(i+1)};}}},8);
+    made->facePoints.resize(faceCount);made->faceNormals.resize(faceCount);made->faceIds.resize(faceCount);made->faceVisible.resize(faceCount);made->faceLocal.resize(faceCount);
+    parallelFor(faceCount,[&](size_t b,size_t e){for(size_t s=b;s<e;++s){const auto &f=projectedFaces[s];
+      made->facePoints[s]={f.world[0],f.world[1],f.world[2],f.world[3]};made->faceNormals[s]=f.normal;
+      made->faceIds[s]=uint32_t(f.instance+1);made->faceVisible[s]=f.visible;made->faceLocal[s]=uint32_t(f.localIndex);}},4096);
+    if(projectedFaceAt.size()==faceCount){made->faceShape=projectedFaceAt;made->shapeKeys=projectedTakenKeys;}
     sunScene=made;
   }
   if(!sunGround || sunGround->generation!=gpuReceiverGeneration || sunGround->points.size()!=receiverPoints.size()) {
@@ -127,22 +143,49 @@ void DayNightLighting::startSunJob(const WorldMap &map,double time,float left,fl
   }
   auto job=std::make_shared<SunJob>();
   job->time=time;job->left=left;job->top=top;job->extent=extent;
-  job->scene=sunScene;job->ground=sunGround;job->terrain=sunTerrain;job->opacity=casterOpacity;
+  job->scene=sunScene;job->ground=sunGround;job->terrain=sunTerrain;
+  // (ours: the shapes' part only - the made-ahead map casts no actors, and
+  // the animals' and guests' part, all 1, changed length as one came into
+  // view: the map was thrown away and both made again while the frame waited)
+  job->opacity.assign(casterOpacity.begin(),casterOpacity.begin()+std::min(casterOpacity.size(),instances.size()+1));
   job->size=sunMapSize(extent);job->soften=sunMapSoften(time);
-  sunJob=std::async(std::launch::async,[job]{job->run();return job;});
+  return std::async(std::launch::async,[job]{job->run();return job;});
 }
 
 // (the job's map for map k, if it was made from what is there now)
 bool DayNightLighting::takeSunJob(int k,double time,float left,float top,float extent,const WorldMap &map) {
   if(!sunJob.valid())return false;
-  auto job=sunJob.get(); // (made 0.6 s ago: done; if not, waited for rather than made twice)
+  return adoptSunJob(k,sunJob.get(),time,left,top,extent,map); // (made 0.6 s ago: done; if not, waited for rather than made twice)
+}
+void DayNightLighting::retireRecentre() {
+  for(auto &job:recentreJobs)if(job.valid())retiredSunJobs.push_back(std::move(job));
+  recentring=false;
+}
+bool DayNightLighting::adoptSunJob(int k,const std::shared_ptr<SunJob> &job,double time,float left,float top,float extent,const WorldMap &map) {
   if(!job || std::abs(job->time-time)>.000001 || job->left!=left || job->top!=top || job->extent!=extent ||
-     job->scene->scene!=sceneHash || job->scene->projection!=projectionSerial || job->terrain->generation!=map.getGeneration() ||
-     job->scene->facePoints.size()!=projectedFaces.size() || job->opacity!=casterOpacity)return false;
+     job->scene->scene!=casterHash || job->terrain->generation!=map.getGeneration() || casterOpacity.size()<job->opacity.size() ||
+     !std::equal(job->opacity.begin(),job->opacity.end(),casterOpacity.begin()) || job->opacity.size()!=instances.size()+1)return false;
   sunMaps[k]=std::move(job->map);sunMaps[k].opacity=&casterOpacity;++counters.sunBuilds;
-  projectedSunStamp[k]=sunMaps[k].stamp;
-  projectedSun[k]=std::move(job->faceSun); // (a face not drawn: 0 in it, as here)
-  faceCells[k]=std::move(job->faceCells);
+  // (ours: its faces' sun only if they're the faces projected now - the
+  // lit shapes chosen again since, the map's still right: every shape casts)
+  if(job->scene->projection==projectionSerial && job->scene->facePoints.size()==projectedFaces.size()) {
+    projectedSunStamp[k]=sunMaps[k].stamp;
+    projectedSun[k]=std::move(job->faceSun); // (a face not drawn: 0 in it, as here)
+    faceCells[k]=std::move(job->faceCells);
+  } else if(job->faceSun.size()==job->scene->faceShape.size() && job->scene->faceLocal.size()==job->faceSun.size()) {
+    // (ours: made for the faces before the shapes were chosen again - each
+    // one's sun given to its shape, then taken by the faces now; the shapes
+    // new since ask the map)
+    const auto &scene=*job->scene;const uint64_t stamp=sunMaps[k].stamp;
+    std::vector<ProjectedShape*> shapes(scene.shapeKeys.size(),nullptr); // (each shape looked up once)
+    for(size_t at=0;at<shapes.size();++at){auto it=projectedShapes.find(scene.shapeKeys[at]);if(it==projectedShapes.end())continue;
+      ProjectedShape &shape=it->second;if(shape.sun[k].size()!=shape.faces.size())shape.sun[k].assign(shape.faces.size(),{0,0,0,0});shape.sunStamp[k]=stamp;shapes[at]=&shape;}
+    for(size_t i=0;i<scene.faceShape.size();++i) {
+      ProjectedShape *shape=scene.faceShape[i]<shapes.size()?shapes[scene.faceShape[i]]:nullptr;
+      if(shape && scene.faceLocal[i]<shape->sun[k].size())shape->sun[k][scene.faceLocal[i]]=job->faceSun[i];
+    }
+    carryProjectedSun(k);
+  }
   if(job->ground->generation==gpuReceiverGeneration && job->receiverSun.size()==receiverPoints.size()) {
     for(size_t i=0;i<receiverPoints.size();++i)receiverPoints[i].sun[k]=job->receiverSun[i];
     receiverSunStamp[k]=sunMaps[k].stamp;receiverCells[k]=std::move(job->receiverCells);
@@ -175,9 +218,17 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
   // further, or their size changes. Even then the view is well inside them
   float left=sunLeft,top=sunTop;
   const float allowance=extent/4-8;
-  if(sunExtent!=extent || !(std::abs(cx-(left+extent*.5f))<=allowance && std::abs(cy-(top+extent*.5f))<=allowance)) {
-    left=std::floor(cx/16)*16-extent*.5f;top=std::floor(cy/16)*16-extent*.5f;
-  }
+  auto within=[&](float l,float t,float reach){return std::abs(cx-(l+extent*.5f))<=reach && std::abs(cy-(t+extent*.5f))<=reach;};
+  const float wantLeft=std::floor(cx/16)*16-extent*.5f,wantTop=std::floor(cy/16)*16-extent*.5f;
+  retiredSunJobs.erase(std::remove_if(retiredSunJobs.begin(),retiredSunJobs.end(),[](auto &job){
+    if(job.wait_for(std::chrono::seconds(0))!=std::future_status::ready)return false;job.get();return true;}),retiredSunJobs.end());
+  // (ours: past the allowance, the maps made ahead for where the view was
+  // heading are taken - waited for if not quite done - when they fit it)
+  bool recentred=false;
+  if(sunExtent!=extent || !within(left,top,allowance)) {
+    if(recentring && sunExtent==extent && recentreExtent==extent && within(recentreLeft,recentreTop,allowance)){left=recentreLeft;top=recentreTop;recentred=true;}
+    else {left=wantLeft;top=wantTop;retireRecentre();}
+  } else if(recentring && within(left,top,allowance*.5f))retireRecentre(); // (back near the middle: not wanted)
   sunLeft=left;sunTop=top;sunExtent=extent;
   constexpr double interval=.02;const double h0=std::floor(hour/interval)*interval;
   sunBlend=float((hour-h0)/interval);
@@ -209,7 +260,16 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
     gpuAtlasReady=gpu.buildSun(frameRenderer,parameters,sunBlend,sky.shadow,gpuStaticCasters,gpuActorCasters,gpuCasterGeneration,base);
     if(gpuAtlasReady){gpuSunReady=true;return;}
   }
-  const bool changed=sunHash!=sceneHash;sunHash=sceneHash;
+  const bool changed=sunHash!=casterHash;sunHash=casterHash; // (ours: the casters' scene - not the lit shapes' choice, nor the lamps)
+  std::shared_ptr<SunJob> recentreMade[3];
+  if(changed){retireRecentre();recentred=false;}
+  else if(recentred){for(int j=0;j<3;++j)if(recentreJobs[j].valid())recentreMade[j]=recentreJobs[j].get();recentring=false;}
+  auto adoptRecentre=[&](int k,double time) {
+    for(auto &made:recentreMade)if(made && std::abs(made->time-time)<.000001) {
+      const auto job=std::move(made);made.reset();if(adoptSunJob(k,job,time,left,top,extent,map))return true;
+    }
+    return false;
+  };
   if(!changed && std::abs(sunMaps[1].hour-h0)<.000001 && sunMaps[1].x0==left && sunMaps[1].y0==top && sunMaps[1].span==extent){
     std::swap(sunMaps[0],sunMaps[1]);std::swap(projectedSunStamp[0],projectedSunStamp[1]);std::swap(receiverSunStamp[0],receiverSunStamp[1]);
     std::swap(projectedSun[0],projectedSun[1]);
@@ -227,7 +287,7 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
     auto &atlas=sunMaps[k];const double time=h0+k*interval;
     atlas.opacity=&casterOpacity;
     rebuild[k]=(changed || std::abs(atlas.hour-time)>.000001 || atlas.x0!=left || atlas.y0!=top || atlas.span!=extent) &&
-       !(!changed && takeSunJob(k,time,left,top,extent,map));
+       !(!changed && ((recentred && adoptRecentre(k,time)) || takeSunJob(k,time,left,top,extent,map)));
   }
   auto build=[&](int k) {
     auto &atlas=sunMaps[k];const double time=h0+k*interval;
@@ -240,6 +300,11 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
       if(f.instance<instances.size() && instances[f.instance].sprite)continue; // (cast from its sprite)
       atlas.caster=uint32_t(f.instance+1);atlas.quad({f.world[0],f.world[1],f.world[2],f.world[3]});
     }
+    // (ours: and the shapes not chosen to be lit, over the budget: they cast too)
+    for(size_t i=0;i<instances.size();++i){const auto &o=instances[i];if(o.kept || o.sprite)continue;
+      for(const auto &f:o.model->faces){const Point out{f.outward.x*o.cosine-f.outward.y*o.sine,f.outward.x*o.sine+f.outward.y*o.cosine,f.outward.z};
+        if(-out.x*atlas.dx-out.y*atlas.dy+out.z*.5f<=0)continue;
+        atlas.caster=uint32_t(i+1);atlas.quad({toWorld(o,f.p[0]),toWorld(o,f.p[1]),toWorld(o,f.p[2]),toWorld(o,f.p[3])});}}
     atlas.seal();
   };
   if(rebuild[0] && rebuild[1]){auto second=std::async(std::launch::async,[&]{build(1);});build(0);second.get();}
@@ -274,7 +339,18 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
     counters.memoryBytes+=atlas.bytes();
   }
   // (the map after next, made ahead while the zoo plays)
+  // (ours: the map made ahead for the place since left set aside; the next
+  // one made for here; and, as the view's middle passes half the allowance,
+  // both maps made ahead for the place it's heading to)
+  if(recentred && sunJob.valid())retiredSunJobs.push_back(std::move(sunJob));
   if(!sunJob.valid())startSunJob(map,h0+2*interval,left,top,extent);
+  // (made again for where it's heading now when it turns well away from the
+  // place they were being made for)
+  if(recentring && !within(recentreLeft,recentreTop,allowance*.5f) && (wantLeft!=recentreLeft || wantTop!=recentreTop))retireRecentre();
+  if(!recentring && !changed && !within(left,top,allowance*.5f) && (wantLeft!=left || wantTop!=top)) {
+    recentreLeft=wantLeft;recentreTop=wantTop;recentreExtent=extent;recentring=true;
+    for(int j=0;j<3;++j)recentreJobs[j]=launchSunJob(map,h0+j*interval,wantLeft,wantTop,extent);
+  }
   gpuSunReady=gpu.uploadSun(frameRenderer,sunMaps,sunBlend,sky.shadow);
 }
 float DayNightLighting::sunShadow(Point p,Point normal,uint32_t receiver)const {

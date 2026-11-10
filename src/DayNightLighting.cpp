@@ -260,6 +260,7 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
   // (The choice is part of the scene's stamp: chosen each frame, every pan in
   // a big zoo remade all the lamps' rays, the faces' projection and the sun's
   // samples, and the game slowed with each building.)
+  casterHash=hash;
   {
     size_t total=0,candidates=1469598103934665603ULL;
     for(const auto &o:instances){total+=o.model->faces.size();candidates^=o.owner*1099511628211ULL+size_t(o.model);candidates*=1099511628211ULL;}
@@ -278,9 +279,9 @@ void DayNightLighting::prepare(World &world,ResourceManager *rm,const PlacedObje
         for(size_t k:order){const int faces=int(instances[k].model->faces.size());if(faces>budget)continue;budget-=faces;keptOwners.insert({instances[k].owner,instances[k].model});}
         keptCentre[0]=cx;keptCentre[1]=cy;keptCandidates=candidates;keptRotation=view.getRotation();keptZoom=zoom;
       }
-      std::vector<Instance> kept;kept.reserve(instances.size());
-      for(const auto &o:instances)if(keptOwners.count({o.owner,o.model})){kept.push_back(o);mix(size_t(o.owner));}
-      instances.swap(kept);
+      // (ours: marked, not taken out - the others keep their places, and
+      // still cast in the sun maps and block the lamps' light)
+      for(auto &o:instances){o.kept=keptOwners.count({o.owner,o.model})>0;if(o.kept)mix(size_t(o.owner));}
     } else {
       keptOwners.clear();
     }

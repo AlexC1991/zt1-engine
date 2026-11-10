@@ -108,7 +108,11 @@ private:
   struct Instance {const LightingAssets::Model *model;const LightingAssets::Definition *asset;LightingAssets::Point position;float cosine,sine,distance;uint64_t owner;Animation *artwork=nullptr;int frame=0;float opacity=1;bool sprite=false;bool shaded=true;
     // addition: lit by lamps and beams once the sun's shadows have gone (a
     // fence, a solid tank wall: by day their own shadow blackened their art)
-    bool nightReceiver=false;};
+    bool nightReceiver=false;
+    // ours: over the shapes' budget, one of the shapes chosen to be lit (the
+    // others stay in the list, so each keeps its place - the sun maps' and
+    // the lamps' name for it - and they still cast shadows and block lamps)
+    bool kept=true;};
   std::vector<Instance> instances,actors;
   struct ActorModel {LightingAssets::Model model;size_t used=0;};
   std::map<std::pair<std::string,int>,ActorModel> actorModels;
@@ -191,7 +195,8 @@ private:
   std::vector<ZT_Vertex> surfaceVertices,shadowVertices,fieldVertices;
   std::vector<int> surfaceIndices,shadowIndices,fieldIndices;
   float sunLeft=0,sunTop=0,sunExtent=0; // ours: where the sun maps are (updateSun)
-  uint64_t irradianceHash=0,irradianceSerial=0; // ours: the scene the lamps' light was made for (prepare), and a count of its makings
+  uint64_t irradianceHash=0,irradianceSerial=0;
+  uint64_t casterHash=0; // ours: every shape that casts (the scene's shapes before the budget's choice): the sun maps' scene // ours: the scene the lamps' light was made for (prepare), and a count of its makings
   LightingAssets::SunDepth sunMaps[2];float sunBlend=0;size_t sunHash=0;uint64_t projectedSunStamp[2]={},receiverSunStamp[2]={};
   struct Receiver {std::array<LightingAssets::Point,4> p;SDL_FPoint screen[4];LightingAssets::Point normal;int sample[4];};
   std::vector<Receiver> receivers;
@@ -239,6 +244,18 @@ private:
   std::future<std::shared_ptr<SunJob>> sunJob;
   void startSunJob(const WorldMap &,double time,float left,float top,float extent);
   bool takeSunJob(int k,double time,float left,float top,float extent,const WorldMap &);
+  // ours: a map made on a worker for a time and place (startSunJob's), and a
+  // made one taken as sun map k when it fits what's there now
+  std::future<std::shared_ptr<SunJob>> launchSunJob(const WorldMap &,double time,float left,float top,float extent);
+  bool adoptSunJob(int k,const std::shared_ptr<SunJob> &job,double time,float left,float top,float extent,const WorldMap &);
+  // ours: both maps made ahead for where the view is heading, before it
+  // leaves the ones it has (they were made again at once, the frame waiting);
+  // and the made-ahead ones for a place since left, kept until done (a
+  // future from std::async waits for its work when let go)
+  std::future<std::shared_ptr<SunJob>> recentreJobs[3]; // (this step's, the next's and the one after: the hour may move on meanwhile)
+ float recentreLeft=0,recentreTop=0,recentreExtent=0;bool recentring=false;
+  std::vector<std::future<std::shared_ptr<SunJob>>> retiredSunJobs;
+  void retireRecentre();
   bool spriteShadow(const Instance &,const WorldMap &,bool actor)const; // addition: cast from its sprite, not the sun's map
 
   size_t projectionHash=0;int projectionRotation=-1;float projectionUnit=0;
@@ -246,9 +263,14 @@ private:
   // turn) while the view's turn and height scale, the map and day or night
   // stay: chosen again in a big zoo, only the shapes new to the choice are
   // projected; dropped when unused for four projections
-  struct ProjectedShape {std::vector<ProjectedFace> faces;uint64_t used=0;};
+  // (and the faces' sun in each sun map as last asked, with the map's stamp:
+  // taken again when the shape is chosen again while that map stands)
+  struct ProjectedShape {std::vector<ProjectedFace> faces;uint64_t used=0;std::vector<std::array<float,4>> sun[2];uint64_t sunStamp[2]{};};
   std::unordered_map<uint64_t,ProjectedShape> projectedShapes;uint64_t projectedShapesKey=0,projectedShapesTick=0;
   std::vector<uint64_t> projectedKeys,projectedKeysSpare;std::vector<uint32_t> projectedShapeAt; // (projectModels' sort)
+  std::vector<ProjectedShape*> projectedFaceShape;std::vector<uint32_t> projectedFaceAt;std::vector<uint64_t> projectedTakenKeys;std::vector<ProjectedShape*> projectedTakenShapes; // (each projected face's shape, and its place among the shapes projected; their keys)
+  void keepProjectedSun();    // ours: each face's sun written back to its shape (before the faces are projected again)
+  void carryProjectedSun(int k); // ours: projectedSun[k] from the shapes kept with sun map k's stamp; the rest asked of the map
   // ours: sceneHash's shapes part only (and whether night's on), not its
   // lights - what projectModels' faces depend on
   size_t geometryHash=0;

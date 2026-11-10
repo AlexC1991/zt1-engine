@@ -33,6 +33,7 @@ void DayNightLighting::indexLocalLights() {
   lightOccluders.clear();lightSources.clear();
   for(size_t i=0;i<instances.size();++i) {
     const auto &o=instances[i];const auto &m=*o.model;
+    if(!o.kept)continue; // (ours: the lit shapes block the lamps, as when the others were left out of the list)
     float l=1e20f,t=l,r=-l,b=-l;
     for(int k=0;k<4;++k) {
       auto p=toWorld(o,{m.minimum.x+((k&1)?m.step.x*m.nx:0),m.minimum.y+((k&2)?m.step.y*m.ny:0),0});
@@ -66,7 +67,7 @@ bool DayNightLighting::verifyLocalLightIndex()const {
   for(const auto &l:lights)for(int y=-2;y<=2;++y)for(int x=-2;x<=2;++x) {
     Point from{l.x,l.y,l.z},to{l.x+x*l.radius*.5f,l.y+y*l.radius*.5f,0};bool full=false;
     for(const auto &o:instances) {
-      if(o.owner==l.owner)continue;
+      if(o.owner==l.owner || !o.kept)continue;
       auto local=[&](Point p){float x=p.x-o.position.x,y=p.y-o.position.y;return Point{x*o.cosine+y*o.sine,-x*o.sine+y*o.cosine,p.z-o.position.z};};
       if(o.model->ray(local(from),local(to))){full=true;break;}
     }
@@ -156,7 +157,7 @@ void DayNightLighting::buildIrradiance(const WorldMap &map) {
   struct Miss {size_t instance;uint64_t stamp;std::vector<SurfaceSamples> samples;std::vector<std::vector<BeamSamples>> beams;};
   std::vector<Miss> misses;
   for(size_t i=0;i<instances.size();++i) {
-    const auto &o=instances[i];if(int(o.model->faces.size())>budget)continue;
+    const auto &o=instances[i];if(!o.kept || int(o.model->faces.size())>budget)continue;
     budget-=int(o.model->faces.size());auto &cache=surfaceLight[i];
     uint64_t stamp=1469598103934665603ull;hashInstance(stamp,o);stamp^=o.owner;stamp*=1099511628211ull;
     const auto &m=*o.model;
@@ -208,6 +209,7 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
   // or going changes the lamps' light on faces, read at drawing, not where
   // the faces are; remade only when a shape moves, the view turns or zooms)
   if(projectionHash==geometryHash && projectionRotation==view.getRotation() && projectionUnit==view.getHeightUnitPixels())return;
+  keepProjectedSun();
   projectionHash=geometryHash;projectionRotation=view.getRotation();projectionUnit=view.getHeightUnitPixels();projectedFaces.clear();projectedSunStamp[0]=projectedSunStamp[1]=0;++projectionSerial;
   float ox,oy,od;view.worldToScreenF(0,0,0,ox,oy,od);
   int budget=std::min(maxModelFaces,GraphicsQuality::shapeFaceBudget());
@@ -215,7 +217,7 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
   // side on the processor's cores - ours, the same faces in the same order)
   std::vector<size_t> start(instances.size()+1,0),taken;
   for(size_t i=0;i<instances.size();++i){const int faces=int(instances[i].model->faces.size());start[i+1]=start[i];
-    if(faces>budget)continue;budget-=faces;start[i+1]+=size_t(faces);taken.push_back(i);}
+    if(!instances[i].kept || faces>budget)continue;budget-=faces;start[i+1]+=size_t(faces);taken.push_back(i);}
   // (ours: each shape's faces taken from projectedShapes, or projected now
   // and kept there - the same faces, given their place in the list and the
   // lamps' light below)
@@ -224,11 +226,11 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
   const uint64_t shapesKey=mixed({uint64_t(view.getRotation()),bits(view.getHeightUnitPixels()),uint64_t(frameMap?frameMap->getGeneration():0),uint64_t(sky.shadow<.02f)});
   if(shapesKey!=projectedShapesKey){projectedShapes.clear();projectedShapesKey=shapesKey;}
   ++projectedShapesTick;
-  std::vector<ProjectedShape*> shapeOf(taken.size());std::vector<size_t> toProject;
+  std::vector<ProjectedShape*> shapeOf(taken.size());std::vector<uint64_t> keyOf(taken.size());std::vector<size_t> toProject;
   for(size_t at=0;at<taken.size();++at) {
     const auto &o=instances[taken[at]];
     const uint64_t key=mixed({o.owner,uint64_t(reinterpret_cast<uintptr_t>(o.model)),bits(o.position.x),bits(o.position.y),bits(o.position.z),bits(o.cosine),bits(o.sine),uint64_t(o.shaded),uint64_t(o.nightReceiver)});
-    auto [it,added]=projectedShapes.try_emplace(key);it->second.used=projectedShapesTick;shapeOf[at]=&it->second;
+    auto [it,added]=projectedShapes.try_emplace(key);it->second.used=projectedShapesTick;shapeOf[at]=&it->second;keyOf[at]=key;
     if(added || it->second.faces.size()!=o.model->faces.size())toProject.push_back(at);
   }
   parallelFor(toProject.size(),[&](size_t first,size_t last){for(size_t n=first;n<last;++n) {
@@ -275,15 +277,47 @@ void DayNightLighting::projectModels(const WorldRenderer &view) {
     for(const uint64_t k:keys)spare[at[(k>>shift)&255]++]=k;
     keys.swap(spare);
   }
-  projectedFaces.resize(count);
+  projectedFaces.resize(count);projectedFaceShape.resize(count);projectedFaceAt.resize(count);projectedTakenKeys=keyOf;projectedTakenShapes=shapeOf;
   parallelFor(count,[&](size_t first,size_t last){for(size_t s=first;s<last;++s) {
     const uint32_t place=uint32_t(keys[s]);const size_t at=shapeAt[place],i=taken[at],j=place-start[i];
+    projectedFaceShape[s]=shapeOf[at];projectedFaceAt[s]=uint32_t(at);
     ProjectedFace &d=projectedFaces[s];d=shapeOf[at]->faces[j];d.instance=i;
     if(i<surfaceLight.size() && j<surfaceLight[i].size())d.local=surfaceLight[i][j];
   }},4096);
   for(auto it=projectedShapes.begin();it!=projectedShapes.end();)if(it->second.used+4<projectedShapesTick)it=projectedShapes.erase(it);else ++it;
   for(auto &sun:projectedSun)sun.assign(projectedFaces.size(),{0,0,0,0});
+  // (ours: by day, each face's sun taken from its shape while the map it was
+  // asked of stands - the shapes chosen again as the view moved: every face
+  // was asked again - only the shapes new to the choice asking the maps)
+  if(sky.sun>.001f && sunHash==casterHash)for(int k=0;k<2;++k)if(sunMaps[k].size && sunMaps[k].stamp)carryProjectedSun(k); // (maps of other casters: made again in updateSun)
   projectedOwners.resize(projectedFaces.size());for(size_t i=0;i<projectedFaces.size();++i)projectedOwners[i]=instances[projectedFaces[i].instance].owner;
+}
+
+void DayNightLighting::keepProjectedSun() {
+  if(projectedFaceShape.size()!=projectedFaces.size())return;
+  for(int k=0;k<2;++k) {
+    if(!projectedSunStamp[k] || projectedSun[k].size()!=projectedFaces.size())continue;
+    // (each shape's list made ready and stamped once, then every face's
+    // value written side by side on the cores - each to its own place)
+    for(ProjectedShape *shape:projectedTakenShapes)if(shape) {
+      auto &sun=shape->sun[k];if(sun.size()!=shape->faces.size())sun.assign(shape->faces.size(),{0,0,0,0});shape->sunStamp[k]=projectedSunStamp[k];
+    }
+    parallelFor(projectedFaces.size(),[&](size_t b,size_t e){for(size_t s=b;s<e;++s){ProjectedShape *shape=projectedFaceShape[s];
+      if(shape)shape->sun[k][projectedFaces[s].localIndex]=projectedSun[k][s];}},4096);
+  }
+}
+void DayNightLighting::carryProjectedSun(int k) {
+  if(projectedFaceShape.size()!=projectedFaces.size())return;
+  const auto &atlas=sunMaps[k];const uint64_t stamp=atlas.stamp;auto &out=projectedSun[k];out.resize(projectedFaces.size());
+  // (side by side on the cores: a face of a shape kept with this map takes
+  // its value, any other drawn face asks the map; one not drawn is 0)
+  parallelFor(projectedFaces.size(),[&](size_t b,size_t e){for(size_t s=b;s<e;++s) {
+    const ProjectedShape *shape=projectedFaceShape[s];const auto &f=projectedFaces[s];
+    if(shape && shape->sunStamp[k]==stamp && shape->sun[k].size()==shape->faces.size())out[s]=shape->sun[k][f.localIndex];
+    else if(f.visible){for(int n=0;n<4;++n)out[s][n]=atlas.shadow(f.world[n],f.normal,uint32_t(f.instance+1),true);}
+    else out[s]={0,0,0,0};
+  }},2048);
+  projectedSunStamp[k]=stamp;
 }
 
 void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer &view,float scale,float mapMiddle) {
@@ -303,7 +337,7 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
   // Native coverage and terrain visibility constrain every receiver. A
   // lighting hull is not visible artwork and must not draw its own outline.
   std::vector<ReceiverMask> masks;masks.reserve(instances.size()+actors.size());
-  for(const auto *group:{&instances,&actors})for(const auto &o:*group)masks.push_back(receiverMask(o,view));
+  for(const auto *group:{&instances,&actors})for(const auto &o:*group)masks.push_back(o.kept?receiverMask(o,view):ReceiverMask{nullptr}); // (one not chosen has no faces)
   timer.mark("surface masks");
   // (a building face's corners an actor's shadow may reach: asked in the
   // cells an actor reached only)
