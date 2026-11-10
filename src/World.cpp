@@ -314,6 +314,10 @@ bool World::loadFreeform(const std::string &path) {
   staff.setAnimals(&animals);
   guests.load(resourceManager);
   guests.clear();
+  // ours: and its entrance found again, on the new map's first update (as a
+  // saved zoo's is: SaveGame). Kept, the zoo before's stood: a second map
+  // started in a session had guests come in where the first map's gate was
+  guests.setEntrance(-1, -1);
   guests.setWorld(&worldMap, &fences, &animals, &index);
   guests.setObjects(&placedObjects, &items);
   staff.setGuests(&guests);
