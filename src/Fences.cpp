@@ -371,6 +371,7 @@ void Fences::clear() {
   sharedPortalCache.clear();
   keptTanks.reset();
   this->edges.clear();
+  this->wallBehind.clear();
   this->exhibitList.clear();
   this->filterList.clear();
   this->upkeepOwed = 0;
@@ -419,6 +420,9 @@ void Fences::load(const ZooReader &reader, WorldMap &map) {
       e.y = p.ownerY;
     }
     p.order = this->placed++;
+    if (const Piece *old = this->at(e))
+      if (this->typeList[old->type].zooWall || this->typeList[p.type].zooWall)
+        this->wallBehind[e] = *old;
     this->edges[e] = p;
   }
   // Ground the map already shuts off (pockets behind the zoo's walls) isn't
@@ -441,12 +445,22 @@ void Fences::load(const ZooReader &reader, WorldMap &map) {
       std::memcpy(&g.facing, obj.payload.data() + 16, 4);
     gates.push_back(g);
   }
+  this->entranceX = reader.getEntranceX();
+  this->entranceY = reader.getEntranceY();
   this->findInside(gates);
   SDL_Log("[Fences] %zu fence pieces from the map", this->edges.size());
 }
 
-// Inside the main zoo wall: everything the map's edge can't reach without
-// crossing a zoo wall (fences of subclass zoowall)
+// Inside the main zoo wall, as the original works it out when a zoo loads
+// (zoo.exe worldLoad 0x452e13 -> 0x594729): every tile starts inside (tile
+// flag 0x40, set by 0x4c6964), then from the entrance it steps out of the
+// gate the way the gate faces and floods from there (0x594848/0x5947c3),
+// marking tiles outside. The flood stops at the entrance's pieces (0x59486c:
+// isZooGate) and at fences of [Member] zoowall (0x5947b2: ZTFenceType+0x190,
+// set by loadConfig 0x4bb8ed). What it can't reach - across the water, past
+// the map's edge, under a glass dome - is inside. (Flooding in from the
+// map's edges instead left Jungle River, Lunar, the crater and the resort
+// with nowhere to build.)
 void Fences::findInside(const std::vector<GateSpot> &gates) {
   int insideCount = 0;
   this->inside.assign(static_cast<size_t>(mapW) * mapH, 1);
@@ -456,7 +470,9 @@ void Fences::findInside(const std::vector<GateSpot> &gates) {
   // some maps, side pieces either side of it (Tundra's fgate1 and fgate2:
   // left out, the inside leaked away through them and nothing could be built)
   std::vector<uint8_t> gate(static_cast<size_t>(mapW) * mapH, 0);
-  for (const GateSpot &g : gates) {
+  std::vector<std::vector<std::pair<int, int>>> foot(gates.size());
+  for (size_t i = 0; i < gates.size(); i++) {
+    const GateSpot &g = gates[i];
     const std::string &t = g.type;
     int fx = 6, fy = 2;
     if (IniReader *ai = this->rm ? this->rm->getIniReader("scenery/other/" + t + ".ai") : nullptr) {
@@ -472,20 +488,64 @@ void Fences::findInside(const std::vector<GateSpot> &gates) {
     float cx = g.x, cy = g.y;
     for (int y = static_cast<int>(std::floor(cy - fy / 2.0f)); y < cy + fy / 2.0f; y++)
       for (int x = static_cast<int>(std::floor(cx - fx / 2.0f)); x < cx + fx / 2.0f; x++)
-        if (x >= 0 && y >= 0 && x < mapW && y < mapH)
+        if (x >= 0 && y >= 0 && x < mapW && y < mapH) {
           gate[y * mapW + x] = 1;
+          foot[i].push_back({x, y});
+        }
   }
   this->building = gate;
+  // The entrance itself: the piece standing on the map's entrance tile
+  // (zoo.exe 0x594729: that tile's object; none there, no flood). With no
+  // entrance tile known (ours: a zoo made without one), the piece whose type
+  // ends in "gate" (fgate, aqgate; not the side pieces fgate1, aqtick1)
+  int main = -1, x = 0, y = 0;
+  if (this->entranceX >= 0 && this->entranceY >= 0) {
+    x = this->entranceX;
+    y = this->entranceY;
+    for (size_t i = 0; i < gates.size() && main < 0; i++)
+      for (auto [fx, fy] : foot[i])
+        if (fx == x && fy == y)
+          main = static_cast<int>(i);
+  } else {
+    for (size_t i = 0; i < gates.size(); i++) {
+      const std::string &t = gates[i].type;
+      if (main < 0 || (t.size() >= 4 && t.compare(t.size() - 4, 4, "gate") == 0))
+        main = static_cast<int>(i);
+    }
+    if (main >= 0) {
+      x = static_cast<int>(std::floor(gates[main].x));
+      y = static_cast<int>(std::floor(gates[main].y));
+    }
+  }
+  if (main >= 0)
+    SDL_Log("[Fences] entrance %d,%d: %s facing %d", x, y, gates[main].type.c_str(),
+            static_cast<int>(gates[main].facing & 6));
+  else
+    SDL_Log("[Fences] entrance %d,%d: no entrance piece on it, all of the map inside", x, y);
+  std::vector<uint8_t> mainFoot(static_cast<size_t>(mapW) * mapH, 0);
+  if (main >= 0)
+    for (auto [fx, fy] : foot[main])
+      mainFoot[fy * mapW + fx] = 1;
   std::queue<std::pair<int, int>> q;
-  for (int y = 0; y < mapH; y++)
-    for (int x = 0; x < mapW; x++)
-      if (x == 0 || y == 0 || x == mapW - 1 || y == mapH - 1) {
-        this->inside[y * mapW + x] = 0;
-        q.push({x, y});
-      }
+  // Out of the gate the way it faces (0 N, 2 E, 4 S, 6 W: -y, +x, +y, -x),
+  // to the first tile it doesn't stand on (zoo.exe 0x594729)
+  if (main >= 0) {
+    const int f = static_cast<int>(gates[main].facing) & 6;
+    const int sx = f == 2 ? 1 : f == 6 ? -1 : 0, sy = f == 0 ? -1 : f == 4 ? 1 : 0;
+    do {
+      x += sx;
+      y += sy;
+    } while (x >= 0 && y >= 0 && x < mapW && y < mapH && mainFoot[y * mapW + x]);
+    if (x >= 0 && y >= 0 && x < mapW && y < mapH) {
+      this->inside[y * mapW + x] = 0;
+      q.push({x, y});
+    }
+  }
   auto zooWall = [&](const Edge &e) {
     const Piece *p = this->at(e);
-    return p && this->typeList[p->type].zooWall;
+    auto behind = this->wallBehind.find(e);
+    return (p && this->typeList[p->type].zooWall) ||
+           (behind != this->wallBehind.end() && this->typeList[behind->second.type].zooWall);
   };
   while (!q.empty()) {
     auto [x, y] = q.front();

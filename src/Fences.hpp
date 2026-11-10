@@ -546,6 +546,12 @@ public:
 private:
   std::vector<FenceType> typeList;
   std::map<Edge, Piece> edges;
+  // Edges where the map stands a zoo wall and another fence back to back,
+  // one on each tile's side (Lunar's glass, the Crater's tank walls): the
+  // original keeps both (a fence per tile side, zoo.exe 0x5947c3 reads
+  // each); edges keeps the last, so the piece behind it is kept here (the
+  // inside of the zoo and saved zoos see it)
+  std::map<Edge, Piece> wallBehind;
   // ours: the shared wall's portal location depends on topology, not the
   // animation tick. Filling, water height and show classification stay live.
   mutable std::map<std::pair<int,int>, Edge> sharedPortalCache;
@@ -585,6 +591,9 @@ private:
   mutable std::map<std::string, bool> gateTypes; // (type -> of [Member] zoogate)
   std::vector<uint8_t> building; // per tile: under a building (the entrance)
   int mapW = 0, mapH = 0;
+  // The map's entrance tile, as its file stores it (zoo.exe habitatMgrLoad
+  // 0x4c7e6c: +0x10, +0x14); -1: none known
+  int entranceX = -1, entranceY = -1;
   const WorldMap *mapRef = nullptr;
   WorldMap *mapEdit = nullptr; // the map tanks sink into
 

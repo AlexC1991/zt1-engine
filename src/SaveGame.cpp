@@ -2436,7 +2436,12 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
     const auto &path=map.pathTypes[type];
     z.objects.push_back(make("paths","paths",originalAsset("paths/"+path+".ai")?path:"path",x+.5f,y+.5f,ground(x+.5f,y+.5f)));
   }
-  for(const auto &[edge,p]:world.fences.edges) {
+  // (with the pieces behind them: a zoo wall and another fence back to back
+  // on one edge, one on each tile's side, both kept as the map had them -
+  // Lunar's glass; without the wall the original finds no zoo, 0x5947c3)
+  std::vector<std::pair<Fences::Edge,Fences::Piece>> boundary(world.fences.edges.begin(),world.fences.edges.end());
+  for(const auto &[edge,p]:world.fences.wallBehind)boundary.push_back({edge,p});
+  for(const auto &[edge,p]:boundary) {
     if(p.type<0 || p.type>=int(world.fences.typeList.size()))continue;
     const FenceType *baseType=&world.fences.typeList[p.type];
     if(!originalAsset(baseType->file)) {
