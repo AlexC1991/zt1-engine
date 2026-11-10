@@ -216,6 +216,9 @@ public:
   // prefer a deep tank."); over the map, the tool's hint set here ("Click
   // to place a single fence piece, ...")
   void setWorldTip(const std::string &tip) { this->worldTip = tip; }
+  // ours: where the tooltip was drawn this frame (the layout's pixels; w 0:
+  // none) - the tool's mode box by the cursor keeps clear of it
+  SDL_Rect shownTip{0, 0, 0, 0};
   // The tooltip that would show now (for tests): its text
   std::string tooltipText() const;
   void setMouse(int x, int y, Uint32 since) {

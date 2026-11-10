@@ -100,8 +100,15 @@ UiAction UiButton::handleInputs(std::vector<Input> &inputs) {
     this->selected = true;
     this->selected_updated = true;
 
-    if (this->isDisabled())
+    // ours: switched off, it still takes a click on it. The layout gives a
+    // click to everything under it, the last (topmost) answer winning: a
+    // click on the zoom-in button at full zoom went on to the rotate button
+    // under it, and the view turned
+    if (this->isDisabled()) {
+      if (input.event == InputEvent::LEFT_CLICK)
+        action = UiAction::BLOCKED;
       continue;
+    }
 
     switch (input.event) {
     case InputEvent::LEFT_CLICK:

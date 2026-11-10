@@ -2471,6 +2471,7 @@ void UiGameScreen::drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   // It's added here as ms on top of the 600 - UNVERIFIED: the code that
   // waits on +0x20 is reached only through the manager's pointer and isn't
   // found yet, so its unit is a guess)
+  this->shownTip = SDL_Rect{0, 0, 0, 0};
   Uint32 now = SDL_GetTicks();
   Uint32 wait = 600 + static_cast<Uint32>(std::max(0, this->tooltipDelayMs - 1));
   if (now < this->mouseStill + wait || now > this->mouseStill + wait + this->tooltipDurationMs)
@@ -2526,6 +2527,7 @@ void UiGameScreen::drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   box.x = std::clamp(box.x, layout_rect->x, layout_rect->x + layout_rect->w - box.w);
   if (box.y + box.h > layout_rect->y + layout_rect->h)
     box.y = this->mouseY - 8 - box.h;
+  this->shownTip = box;
   SDL_SetRenderDrawColor(renderer, 255, 227, 85, 255);
   ZT_RenderFillRect(renderer, &box);
   SDL_Rect inner = {box.x + 1, box.y + 1, box.w - 2, box.h - 2};

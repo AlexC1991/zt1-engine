@@ -2234,6 +2234,20 @@ static void drawToolCost(SDL_Renderer *renderer, ResourceManager *rm) {
     int pad = static_cast<int>(5 * t.scale);
     SDL_Rect box = {g_mouseX + static_cast<int>(16 * t.scale), g_mouseY + static_cast<int>(12 * t.scale),
                     boxW + pad * 2, boxH + pad * 2};
+    // (clear of the tooltip shown - the tool's own hint over the map, a
+    // button's over the bars - which is under the cursor: above the cursor
+    // then, or to its left; drawn over it, the two boxes hid each other)
+    if (g_hud && g_hud->shownTip.w > 0) {
+      const UiTransform ht = hudTransform(renderer);
+      const SDL_Rect tip = {static_cast<int>(ht.offsetX + g_hud->shownTip.x * ht.scale),
+                            static_cast<int>(ht.offsetY + g_hud->shownTip.y * ht.scale),
+                            static_cast<int>(g_hud->shownTip.w * ht.scale), static_cast<int>(g_hud->shownTip.h * ht.scale)};
+      if (SDL_HasRectIntersection(&box, &tip)) {
+        box.y = g_mouseY - static_cast<int>(12 * t.scale) - box.h;
+        if (SDL_HasRectIntersection(&box, &tip))
+          box.x = g_mouseX - static_cast<int>(16 * t.scale) - box.w;
+      }
+    }
     SDL_BlendMode was;
     SDL_GetRenderDrawBlendMode(renderer, &was);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);

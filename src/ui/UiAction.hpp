@@ -46,6 +46,10 @@ enum class UiAction {
     GAME_SAVE = 1502,
     GAME_MAIN_MENU = 1503,
     GAME_EXIT = 1504,
+
+    // ours: a click taken by a switched-off button: nothing to do, but the
+    // click is its - nothing under it gets it (UiButton::handleInputs)
+    BLOCKED = 50900,
 };
 
 // Panels: the in-game screen's sub-layouts (ui/gamescrn.lyt), by layout id.
