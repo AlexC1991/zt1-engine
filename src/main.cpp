@@ -10204,16 +10204,12 @@ int main(int argc, char *argv[]) {
     }
 
     FrameProfile::phase("rendering");
-    // ours: the frame's spare time (it waits for the frame limit anyway)
-    // loads one of the zoo's species' animations ahead (Animals::warmOne);
-    // with no limit, one every fourth frame
-    if (g_world && g_currentState == LayoutState::GAME_LOOP) {
-      static unsigned warmTick = 0;
-      const float limit = Display::frameDelayMs();
-      const float slack = limit - static_cast<float>(SDL_GetTicks() - window.start_frame);
-      if ((limit > 0 && slack > 10) || (limit <= 0 && ++warmTick % 4 == 0))
-        g_world->getAnimals().warmOne();
-    }
+    // ours: the zoo's species' animations loaded ahead, one at a time on
+    // another thread (Animals::warmOne: the one done collected, the next
+    // started). They were read here in the frame's spare time - up to 150 ms
+    // of it - and never on a PC without that much to spare
+    if (g_world && g_currentState == LayoutState::GAME_LOOP)
+      g_world->getAnimals().warmOne();
     if(gameBenchmark.enabled())gameBenchmark.beforePresent(*g_world,window.renderer);
     window.present();FrameProfile::phase("present");
     if(gameBenchmark.enabled() && gameBenchmark.afterPresent(*g_world,g_speedClock.pending(),g_speedClock.discarded()))running=0;

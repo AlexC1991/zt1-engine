@@ -25,6 +25,7 @@ void PalletManager::clearOverrides() { g_overrides.clear(); }
 bool PalletManager::overriding() { return !g_overrides.empty(); }
 
 void PalletManager::addPallet(const std::string &name, const Pallet &pallet) {
+  std::lock_guard<std::mutex> lock(this->mutex);
   this->pallet_map[Utils::string_to_lower(name)] = pallet;
 }
 
@@ -37,6 +38,7 @@ Pallet *PalletManager::getPallet(std::string &file_name_raw) {
     if (o != g_overrides.end())
       file_name = o->second;
   }
+  std::lock_guard<std::mutex> lock(this->mutex);
   if (this->pallet_map.contains(file_name)) {
     return &this->pallet_map[file_name];
   }

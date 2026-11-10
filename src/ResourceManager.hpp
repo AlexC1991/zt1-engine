@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <string>
 #include <functional>
+#include <future>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -78,6 +80,14 @@ public:
   // A file of the game's as text (empty when there's none)
   std::string getGameText(const std::string &file_name);
   Animation *getAnimation(const std::string &file_name);
+  // ours: an animation read and its frames made on another thread, one at a
+  // time (the animals' art loaded ahead): asked for (false: one's still
+  // loading), then collected by its name once it's done (false: not that
+  // one, or not done - wait: until it is). Owned here as getAnimation's.
+  // Reading a large one (a dolphin's show) took 150 ms of a frame.
+  bool loadAnimationAhead(const std::string &file_name);
+  bool takeAnimationAhead(const std::string &file_name, Animation *&animation, bool wait);
+  bool loadingAhead(const std::string &file_name) const { return this->ahead.valid() && this->aheadName == file_name; }
   // ours: a UI picture drawn every frame, loaded once and kept here (the
   // caller doesn't delete it): getAnimation makes a new copy each call
   Animation *sharedAnimation(const std::string &file_name);
@@ -133,6 +143,11 @@ public:
 
 private:
   std::unordered_map<std::string, std::function<std::string(ResourceManager *)>> provided;
+  std::mutex providedMutex; // (read by the loading-ahead thread too)
+  std::future<Animation *> ahead; // (loadAnimationAhead's)
+  std::string aheadName;
+  Animation *loadAnimation(const std::string &file_name); // (getAnimation's, not yet owned)
+  Animation *own(Animation *a);
   std::unordered_map<std::string, std::string> resource_map;
   std::unordered_map<std::string, std::vector<std::string>> resourceSources;
   std::vector<std::pair<std::string, std::string>> loadedModRoots;

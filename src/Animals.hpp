@@ -599,10 +599,12 @@ private:
   std::map<int, int> counts; // per type: how many were ever adopted
   int nextId = 1;
   mutable std::map<std::string, Animation *> artCache;
-  // ours: a species' animations loaded ahead, one at a time in the frame's
-  // spare time (warmOne), once one of it is in the zoo - loaded when an animal
-  // first did something, each was a 3-40 ms hitch
+  // ours: a species' animations loaded ahead, one at a time on another
+  // thread (warmOne; ResourceManager::loadAnimationAhead), once one of it is
+  // in the zoo - loaded when an animal first did something, each was a 3-40
+  // ms hitch (a dolphin's show 150)
   std::deque<std::string> warmQueue;
+  std::string warming; // (the one loading on another thread now)
   std::set<std::string> warmQueued;
   std::vector<char> typeWarmed;
   mutable std::map<const Animation *, Animation *> underCache; // (an art's "under" layer, or none)

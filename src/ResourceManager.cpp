@@ -440,6 +440,9 @@ std::string ResourceManager::gameTextWithoutMods(const std::string &file) {
   const std::string text(static_cast<const char*>(data),size);std::free(data);return text;
 }
 void ResourceManager::clearAnimations() {
+  // (one still loading ahead: finished, owned, and freed with the rest)
+  if (this->ahead.valid())
+    own(this->ahead.get());
   // addition: the HD recolour cache also owns registered animations. Drop
   // those references before inventory cleanup can delete their art.
   HdArt::setResources(this);
@@ -856,6 +859,7 @@ Audio::Clip *ResourceManager::getMusic(const std::string &name_raw) {
 }
 
 void ResourceManager::provide(const std::string &name, std::function<std::string(ResourceManager *)> make) {
+  std::lock_guard<std::mutex> lock(this->providedMutex);
   this->provided[normalizePath(name)] = std::move(make);
 }
 
@@ -869,10 +873,16 @@ std::string ResourceManager::getGameText(const std::string &name) {
 
 IniReader *ResourceManager::getIniReader(const std::string &name_raw) {
   // ours: a file the engine supplies itself (provide())
-  if (!this->provided.empty()) {
-    auto p = this->provided.find(normalizePath(name_raw));
-    if (p != this->provided.end()) {
-      std::string text = p->second(this);
+  {
+    std::function<std::string(ResourceManager *)> make;
+    {
+      std::lock_guard<std::mutex> lock(this->providedMutex);
+      auto p = this->provided.empty() ? this->provided.end() : this->provided.find(normalizePath(name_raw));
+      if (p != this->provided.end())
+        make = p->second;
+    }
+    if (make) {
+      std::string text = make(this);
       return new IniReader(text.data(), text.size());
     }
   }
@@ -917,8 +927,6 @@ Pallet *ResourceManager::getPallet(const std::string &name_raw) {
 // can come from an HD pack in hd/<folder of the .ani>/
 Animation *ResourceManager::withArtOptions(Animation *a, const std::string &name,
                                  const std::string &ani_key) {
-  ownedAnimations.insert(a);
-  a->onRelease = [this, a] { ownedAnimations.erase(a); };
   std::string lower = name;
   std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
   size_t slash = ani_key.find_last_of('/');
@@ -946,7 +954,45 @@ Animation *ResourceManager::withArtOptions(Animation *a, const std::string &name
   return a;
 }
 
-Animation *ResourceManager::getAnimation(const std::string &name_raw) {
+// ours: an animation this manager frees (clearAnimations) unless its owner
+// deletes it first
+Animation *ResourceManager::own(Animation *a) {
+  if (a) {
+    ownedAnimations.insert(a);
+    a->onRelease = [this, a] { ownedAnimations.erase(a); };
+  }
+  return a;
+}
+
+Animation *ResourceManager::getAnimation(const std::string &name) { return own(loadAnimation(name)); }
+
+bool ResourceManager::loadAnimationAhead(const std::string &name) {
+  if (this->ahead.valid()) {
+    if (this->ahead.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+      return false;
+    own(this->ahead.get()); // (done and not collected: kept with the rest)
+  }
+  this->aheadName = name;
+  // (what it reads - the archives, the palettes, the names of the files -
+  // is locked or not changed while a zoo's open; reloading the files
+  // finishes it first: clearAnimations)
+  this->ahead = std::async(std::launch::async, [this, name] {
+    SDL_SetCurrentThreadPriority(SDL_THREAD_PRIORITY_LOW);
+    return this->loadAnimation(name);
+  });
+  return true;
+}
+
+bool ResourceManager::takeAnimationAhead(const std::string &name, Animation *&animation, bool wait) {
+  if (!this->ahead.valid() || this->aheadName != name)
+    return false;
+  if (!wait && this->ahead.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+    return false;
+  animation = own(this->ahead.get());
+  return true;
+}
+
+Animation *ResourceManager::loadAnimation(const std::string &name_raw) {
   std::string name = fixDoubleName(name_raw);
 
   // Most names are a folder holding <name>/<last>.ani (ui/sharedui/arowup

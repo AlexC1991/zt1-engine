@@ -913,6 +913,10 @@ Animation *Animals::art(const Member &m, const std::string &nameIn) const {
   auto c = this->artCache.find(path);
   if (c != this->artCache.end())
     return c->second;
+  // (the one loading ahead: waited for, not read a second time)
+  Animation *ahead = nullptr;
+  if (this->rm && this->rm->takeAnimationAhead(path, ahead, true))
+    return this->artCache[path] = ahead;
   Animation *a = this->rm && this->rm->hasResource(path + ".ani") ? this->rm->getAnimation(path) : nullptr;
   this->artCache[path] = a;
   return a;
@@ -2025,12 +2029,32 @@ void Animals::waterTick(Member &m, const WorldMap &map, const Fences &fences) {
 }
 
 bool Animals::warmOne() {
+  if (!this->rm)
+    return false;
+  // (the one loading: collected once it's done; the next one started)
+  if (!this->warming.empty()) {
+    Animation *done = nullptr;
+    if (!this->rm->takeAnimationAhead(this->warming, done, false)) {
+      if (this->rm->loadingAhead(this->warming))
+        return true; // (still loading)
+    } else if (!this->artCache.count(this->warming))
+      this->artCache[this->warming] = done;
+    this->warming.clear();
+  }
   while (!this->warmQueue.empty()) {
     const std::string path = this->warmQueue.front();
     this->warmQueue.pop_front();
     if (this->artCache.count(path))
       continue;
-    this->artCache[path] = this->rm && this->rm->hasResource(path + ".ani") ? this->rm->getAnimation(path) : nullptr;
+    if (!this->rm->hasResource(path + ".ani")) {
+      this->artCache[path] = nullptr;
+      continue;
+    }
+    if (!this->rm->loadAnimationAhead(path)) {
+      this->warmQueue.push_front(path); // (another's loading)
+      return true;
+    }
+    this->warming = path;
     return true;
   }
   return false;

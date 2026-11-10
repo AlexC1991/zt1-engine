@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <string>
 #include <atomic>
+#include <mutex>
 
 #include "Pallet.hpp"
 
@@ -26,13 +27,16 @@ public:
 
   void addPalletFileToMap(const std::string &pallet_file, std::string ztd_file);
   void loadPalletMap(std::atomic<float> * progress, float progress_goal);
-  void reset() { pallet_files_map.clear(); pallet_map.clear(); loaded = false; clearOverrides(); }
+  void reset() { std::lock_guard<std::mutex> lock(mutex); pallet_files_map.clear(); pallet_map.clear(); loaded = false; clearOverrides(); }
 
 private:
   std::unordered_map<std::string, std::string> pallet_files_map;
   std::unordered_map<std::string, Pallet> pallet_map;
 
   void loadPallet(const std::string &file_name);
+  // ours: art is also loaded on another thread (ResourceManager::
+  // loadAnimationAhead); its palettes are read and kept under this
+  std::mutex mutex;
 
   bool loaded = false;
 };

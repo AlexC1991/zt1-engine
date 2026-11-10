@@ -85,6 +85,29 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
     report<<(pass?"PASS ":"FAIL ")<<name<<"\n";
     SDL_Log("[ActivityPolish] %s %s",pass?"PASS":"FAIL",name.c_str());
   };
+  // ours: an animal's art loaded ahead on another thread (Animals::warmOne)
+  // is the same art as loaded at once: every direction's frames, pixel for
+  // pixel. A dolphin's show: the largest, 150 ms to read
+  {
+    const std::string path="animals/dolphin/m/belyflop/belyflop";
+    auto frames=[](Animation *a) {
+      std::vector<std::string> out;
+      if(a)a->forEachFrame([&](const std::string &d,int i,SDL_Surface *f) {
+        std::string key=d+"/"+std::to_string(i)+"/"+std::to_string(f->w)+"x"+std::to_string(f->h)+":";
+        for(int y=0;y<f->h;y++)key.append(static_cast<const char *>(f->pixels)+size_t(y)*f->pitch,size_t(f->w)*SDL_BYTESPERPIXEL(f->format));
+        out.push_back(std::move(key));
+      });
+      std::sort(out.begin(),out.end());
+      return out;
+    };
+    Animation *direct=rm->hasResource(path+".ani")?rm->getAnimation(path):nullptr,*ahead=nullptr;
+    const bool started=direct && rm->loadAnimationAhead(path);
+    const bool taken=started && rm->takeAnimationAhead(path,ahead,true);
+    const auto a=frames(direct),b=frames(ahead);
+    check("art loaded ahead on another thread matches art loaded at once ("+std::to_string(a.size())+" frames)",
+          taken && ahead && ahead!=direct && !a.empty() && a==b && ahead->frameTimeMs()==direct->frameTimeMs());
+    delete direct;delete ahead;
+  }
   auto fileRoundTrip=[&](const std::string &stage) {
     const auto na=world.getAnimals().members().size(),ns=world.getStaff().members().size(),ng=world.getGuests().guests().size();
     ZooSim books;books.start(1000000,50);UiGameScreen hud(rm,"","");
