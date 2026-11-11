@@ -53,6 +53,10 @@ public:
     std::string fullPal;
     std::vector<std::string> slots[4]; // shirt, pants or skirt, hair, skin palettes
     int gawkWeights[3] = {45, 10, 45}; // gawk, camera, stand
+    // Looking at scenery (guests.ai [<kind>\BehaviorSet\bGawkObj1..6]: its
+    // fPlaySetProb weights of bGawk1, bGawk2, bGawk3), by the object's
+    // EstheticBonus band: <0, 0-5, 6-10, 11-15, 16-25, 26-100
+    int gawkObjWeights[6][3] = {{45, 10, 45}, {45, 10, 45}, {45, 10, 45}, {45, 10, 45}, {40, 40, 20}, {30, 60, 10}};
     // Touching a live electric fence instead of watching (zoo.exe
     // 0x425af4): cTestFenceChance in 100, cZapHappinessHit when zapped
     int testFenceChance = 0, zapHit = 0;
@@ -95,6 +99,8 @@ public:
     // next check or when a gift's bought (zoo.exe +0x33c)
     bool wantsSouvenir = false;
     std::set<int> visited;    // attractions this round (object ids)
+    int gawkObject = -1;      // the scenery it's going to look at (object id)
+    std::set<std::string> gawkedKinds; // scenery kinds looked at this round (.ai files)
     float gawkSeconds = 0;    // how long it's been watching
     int lastThought = 0;      // lang string
     std::string thoughtArg;
@@ -286,6 +292,11 @@ private:
     float itemAdult = 0, itemChild = 0, itemHunger = 0, itemThirst = 0, itemBathroom = 0;
     bool itemTrash = false;
     int usedThought = 0, consumedThought = 0;
+    // scenery guests come to look at: cEstheticWeight (over 0: one of them),
+    // cGawkOnlyFromFront, and [EstheticBonus] by the guest kind's cNameID
+    int estheticWeight = 0;
+    bool gawkFront = false;
+    std::map<int, int> estheticBonus;
     std::string useSound;
     int useAtten = 0;
     int fx = 2, fy = 2;
@@ -297,6 +308,12 @@ private:
   };
   mutable std::map<std::string, BuildingInfo> buildingInfo;
   const BuildingInfo &infoOf(const std::string &file) const;
+  // Scenery to look at (zoo.exe guestPickAttraction 0x4282e1's third
+  // group): how much it weighs in the guest's choice, the one it picks and
+  // where it stands, and looking at it when there
+  int sceneryWeight(const Guest &g) const;
+  int pickScenery(Guest &g, int &tx, int &ty);
+  void gawkScenery(Guest &g);
   bool seekBuilding(Guest &g, const std::string &need, int radius);
   void useBuilding(Guest &g);
   bool positionShowSeat(Guest &g, const PlacedObjects::Object &stand, int seat) const;

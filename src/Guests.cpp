@@ -99,6 +99,26 @@ void Guests::load(ResourceManager *rm) {
     } else if (t.child) {
       t.gawkWeights[0] = 40, t.gawkWeights[1] = 40, t.gawkWeights[2] = 20;
     }
+    // Looking at scenery: [<kind>\BehaviorSet\bGawkObj1..6]
+    // f = fPlaySetProb(bGawk1,<w>,bGawk2,<w>,bGawk3,<w>)
+    for (int band = 0; band < 6; band++) {
+      std::string f = ai->get(key + "\\behaviorset\\bgawkobj" + std::to_string(band + 1), "f");
+      int w[3], n = 0;
+      size_t open = f.find('(');
+      std::string list = open == std::string::npos ? "" : f.substr(open + 1);
+      for (size_t at = 0, k = 0; at <= list.size() && n < 3; k++) {
+        size_t c = list.find(',', at);
+        std::string item = list.substr(at, c == std::string::npos ? std::string::npos : c - at);
+        if (k % 2 == 1)
+          w[n++] = std::atoi(item.c_str());
+        if (c == std::string::npos)
+          break;
+        at = c + 1;
+      }
+      if (n == 3)
+        for (int k = 0; k < 3; k++)
+          t.gawkObjWeights[band][k] = w[k];
+    }
     this->typeList.push_back(t);
   }
   // Their [Sounds]: name -> file and attenuation
@@ -537,6 +557,13 @@ const Guests::BuildingInfo &Guests::infoOf(const std::string &file) const {
       const auto positions=ai->getIntList(ai->get("slot","cHasDrawSlots","drawslots"),"p");
       for(size_t i=0;i+2<positions.size();i+=3)
         b.drawSlots.push_back({positions[i]/64.0f,positions[i+1]/64.0f,positions[i+2]/16.0f});
+      // (scenery guests look at: ZTSceneryType +0x120 cEstheticWeight, +0x135
+      // cGawkOnlyFromFront; [EstheticBonus] v = <guest kind's cNameID>, v = <bonus>)
+      b.estheticWeight = ai->getInt(ints, "cestheticweight", 0);
+      b.gawkFront = ai->getInt(ints, "cgawkonlyfromfront", 0) != 0;
+      std::vector<int> bonus = ai->getIntList("estheticbonus", "v");
+      for (size_t k = 0; k + 1 < bonus.size(); k += 2)
+        b.estheticBonus[bonus[k]] = bonus[k + 1];
       delete ai;
     }
   // The bare-word sections ([Satisfies], [Sells]), read from the file text
@@ -991,8 +1018,12 @@ void Guests::decide(Guest &g) {
     return;
   }
   g.state = State::Walking;
-  // An attraction ("fun" buildings) it hasn't been to, as often as an
-  // exhibit it hasn't seen (zoo.exe 0x4282e1)
+  g.gawkObject = -1;
+  // Where next (zoo.exe guestPickAttraction 0x4282e1): an exhibit it
+  // hasn't seen, an attraction ("fun" buildings) it hasn't been to, or
+  // scenery to look at - drawn by weight: the unseen exhibits' count, the
+  // attractions' count, and the scenery's (its cEstheticWeight / 100, at
+  // least 1: 0x428039)
   if (this->objects) {
     std::vector<int> fun;
     const auto &objs = this->objects->objects();
@@ -1003,14 +1034,26 @@ void Guests::decide(Guest &g) {
     int unseen = 0;
     for (const Fences::Exhibit &e : this->fences->exhibits())
       unseen += e.named && !e.tank && !g.seen.count(e.id) ? 1 : 0;
-    if (!fun.empty() &&
-        std::uniform_int_distribution<int>(0, unseen + static_cast<int>(fun.size()) - 1)(this->rng) >= unseen) {
+    const int scenery = sceneryWeight(g);
+    const int total = unseen + static_cast<int>(fun.size()) + scenery;
+    const int roll = total > 0 ? std::uniform_int_distribution<int>(0, total - 1)(this->rng) : 0;
+    if (total > 0 && roll >= unseen && roll < unseen + static_cast<int>(fun.size())) {
       const PlacedObjects::Object &o = objs[fun[std::uniform_int_distribution<size_t>(0, fun.size() - 1)(this->rng)]];
       ZT_STEP("0x4282e1", "Picks an attraction it hasn't been to", {"attraction", o.typeName},
               {"attractions left", static_cast<int>(fun.size())}, {"exhibits unseen", unseen});
       g.visited.insert(o.id);
       if (seekBuilding(g, "fun", 1000))
         return;
+    } else if (total > 0 && roll >= unseen + static_cast<int>(fun.size())) {
+      int sx = -1, sy = -1;
+      const int id = pickScenery(g, sx, sy);
+      ZT_STEP("0x42945f", "Picks scenery to look at", {"object", id}, {"scenery weight", scenery}, {"to x", sx},
+              {"to y", sy});
+      if (id >= 0 && walkTo(g, sx, sy, t.speed)) {
+        g.gawkObject = id;
+        g.target = -1;
+        return;
+      }
     }
   }
   int vx = -1, vy = -1;
@@ -1028,6 +1071,7 @@ void Guests::decide(Guest &g) {
   if (!g.seen.empty() && ex < 0) {
     g.seen.clear();
     g.visited.clear();
+    g.gawkedKinds.clear();
     if (std::uniform_int_distribution<int>(0, 99)(this->rng) < 60) { // cLeaveChanceDone
       ZT_STEP("", "Seen it all: leaves (cLeaveChanceDone 60%)");
       think(g, kSeenAll);
@@ -1130,6 +1174,135 @@ void Guests::gawk(Guest &g) {
     g.dHappy += static_cast<float>(this->guideBonusOf ? this->guideBonusOf(g.guide) : 30);
     g.tourHeard = true;
   }
+  if (anim == "camera" && this->sounds)
+    Sound::get().play("guests/cam1", 1000);
+}
+
+// ----------------------------------------------------------------------------
+// Scenery to look at (zoo.exe guestPickAttraction 0x4282e1, its third
+// group). The zoo's list of it (0x639098, filled by 0x451785 from
+// 0x4f40af): objects whose kind has a cEstheticWeight over 0, standing
+// inside the zoo; a guest looks at one kind only once (0x4285e2)
+// ----------------------------------------------------------------------------
+int Guests::sceneryWeight(const Guest &g) const {
+  if (!this->objects || !this->fences)
+    return 0;
+  int sum = 0;
+  for (const PlacedObjects::Object &o : this->objects->objects()) {
+    if (o.fence)
+      continue;
+    const std::string file = PlacedObjects::fileOf(o);
+    const BuildingInfo &b = infoOf(file);
+    if (b.estheticWeight <= 0 || g.gawkedKinds.count(file) ||
+        !this->fences->insideZoo(static_cast<int>(std::floor(o.x)), static_cast<int>(std::floor(o.y))))
+      continue;
+    sum += b.estheticWeight;
+  }
+  // (zoo.exe 0x428039: the sum / 100, at least 1 when there's any)
+  return sum > 0 ? std::max(1, sum / 100) : 0;
+}
+
+// The one it goes to (zoo.exe 0x42945f): within a squared distance of 1000
+// of the guest, the highest ((cEstheticWeight + 100) x 10 - d2) / 200 in
+// whole numbers; it stands on a tile round its footprint - a path tile if
+// there's one, at random (0x4297dc) - only in front of it when its kind is
+// cGawkOnlyFromFront
+int Guests::pickScenery(Guest &g, int &tx, int &ty) {
+  if (!this->objects || !this->fences)
+    return -1;
+  const int gx = static_cast<int>(std::floor(g.x)), gy = static_cast<int>(std::floor(g.y));
+  const PlacedObjects::Object *best = nullptr;
+  int bestScore = -1;
+  for (const PlacedObjects::Object &o : this->objects->objects()) {
+    if (o.fence)
+      continue;
+    const std::string file = PlacedObjects::fileOf(o);
+    const BuildingInfo &b = infoOf(file);
+    const int ox = static_cast<int>(std::floor(o.x)), oy = static_cast<int>(std::floor(o.y));
+    if (b.estheticWeight <= 0 || g.gawkedKinds.count(file) || !this->fences->insideZoo(ox, oy))
+      continue;
+    const int d2 = (ox - gx) * (ox - gx) + (oy - gy) * (oy - gy);
+    if (d2 >= 1000)
+      continue;
+    const int score = ((b.estheticWeight + 100) * 10 - d2) / 200;
+    if (score > bestScore) {
+      bestScore = score;
+      best = &o;
+    }
+  }
+  if (!best)
+    return -1;
+  const BuildingInfo &b = infoOf(PlacedObjects::fileOf(*best));
+  // Its footprint in tiles (cFootprint in half tiles), turned with it
+  int w = (b.fx + 1) / 2, h = (b.fy + 1) / 2;
+  const int facing = best->facing & 6;
+  if (facing == 2 || facing == 6)
+    std::swap(w, h);
+  const int x0 = static_cast<int>(std::floor(best->x - w / 2.0f)), y0 = static_cast<int>(std::floor(best->y - h / 2.0f));
+  const int x1 = x0 + w, y1 = y0 + h;
+  std::vector<std::pair<int, int>> paths, others;
+  for (int y = y0 - 1; y <= y1; y++)
+    for (int x = x0 - 1; x <= x1; x++) {
+      if (x != x0 - 1 && x != x1 && y != y0 - 1 && y != y1)
+        continue;
+      if (b.gawkFront && !(facing == 0 ? y == y0 - 1 : facing == 4 ? y == y1 : facing == 2 ? x == x1 : x == x0 - 1))
+        continue;
+      if (!walkable(x, y))
+        continue;
+      (this->map && this->map->isPath(x, y) ? paths : others).push_back({x, y});
+    }
+  const auto &from = paths.empty() ? others : paths;
+  if (from.empty())
+    return -1;
+  auto spot = from[std::uniform_int_distribution<size_t>(0, from.size() - 1)(this->rng)];
+  tx = spot.first;
+  ty = spot.second;
+  g.gawkedKinds.insert(PlacedObjects::fileOf(*best));
+  return best->id;
+}
+
+// There (Task81_GawkObject, zoo.exe 0x4a6d68): it faces the object and
+// plays bGawkObject1..6 by the object's EstheticBonus for its kind (<0,
+// 0-5, 6-10, 11-15, 16-25, 26-100; over 100 nothing - 0x4a6ebd), each a
+// draw of gawk, camera or stand, once; and it has the kind's cUsedThought
+void Guests::gawkScenery(Guest &g) {
+  const int id = g.gawkObject;
+  g.gawkObject = -1;
+  if (!this->objects)
+    return;
+  const PlacedObjects::Object *obj = nullptr;
+  for (const PlacedObjects::Object &o : this->objects->objects())
+    if (o.id == id)
+      obj = &o;
+  if (!obj)
+    return;
+  const Type &t = this->typeList[g.type];
+  const BuildingInfo &b = infoOf(PlacedObjects::fileOf(*obj));
+  auto it = b.estheticBonus.find(t.nameId);
+  const int bonus = it == b.estheticBonus.end() ? 0 : it->second;
+  const int band = bonus < 0 ? 0 : bonus <= 5 ? 1 : bonus <= 10 ? 2 : bonus <= 15 ? 3 : bonus <= 25 ? 4 : bonus <= 100 ? 5 : -1;
+  if (band < 0)
+    return;
+  const int *w = t.gawkObjWeights[band];
+  const int total = std::max(1, w[0] + w[1] + w[2]);
+  const int roll = std::uniform_int_distribution<int>(0, total - 1)(this->rng);
+  const std::string anim = roll < w[0] ? "gawk1" : roll < w[0] + w[1] ? "camera" : "stand";
+  const float d = std::hypot(obj->x - g.x, obj->y - g.y);
+  if (d > 0.01f) {
+    g.fx = (obj->x - g.x) / d;
+    g.fy = (obj->y - g.y) / d;
+  }
+  float secs = 2.0f;
+  if (Animation *a = this->art(g, anim))
+    if (a->frameTimeMs() > 0 && a->frameCount() > 0)
+      secs = a->frameCount() * a->frameTimeMs() / 1000.0f;
+  ZT_STEP("0x4a6d68", "Looks at scenery (bGawkObject by its EstheticBonus)", {"object", obj->typeName},
+          {"bonus", bonus}, {"band", band + 1}, {"doing", anim});
+  play(g, anim, secs);
+  g.state = State::Gawking;
+  g.target = -1;
+  if (b.usedThought)
+    think(g, b.usedThought);
   if (anim == "camera" && this->sounds)
     Sound::get().play("guests/cam1", 1000);
 }
@@ -1419,6 +1592,8 @@ void Guests::update(float seconds, int zooRating, double admission) {
             this->members++;
         } else if (g.building >= 0 && g.state == State::Walking) {
           useBuilding(g);
+        } else if (g.state == State::Walking && g.gawkObject >= 0) {
+          gawkScenery(g);
         } else if (g.state == State::Walking && g.target >= 0 && this->fences->exhibit(g.target)) {
           if (!testFence(g))
             gawk(g);

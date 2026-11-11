@@ -885,6 +885,38 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     check("removing guide releases its group",g.list[0].guide<0);
     type=originalType;
   }
+  // Scenery to look at (zoo.exe guestPickAttraction 0x4282e1's third group,
+  // 0x42945f, Task81_GawkObject): a guest with every exhibit seen and nothing
+  // else to do goes to a fountain (cEstheticWeight 33), looks at it and
+  // doesn't come back to its kind.
+  st.clear();g.clear();
+  {
+    const bool added=objects.add("scenery/building/fountain.ai",27.5f,27.5f,4);
+    const auto *fountain=added?objects.last():nullptr;
+    check("fountain definition with an esthetic weight",
+          fountain && g.infoOf(PlacedObjects::fileOf(*fountain)).estheticWeight>0);
+    if(fountain && g.infoOf(PlacedObjects::fileOf(*fountain)).estheticWeight>0) {
+      const int fountainId=fountain->id;
+      world.reindex();g.setEntrance(25,26);g.admit(0);
+      auto &guest=g.list.front();
+      guest.x=25.5f;guest.y=26.5f;guest.state=Guests::State::Walking;guest.leaving=false;
+      guest.hunger=guest.thirst=guest.tired=guest.bathroom=0;
+      for(const auto &e:f.exhibits())guest.seen.insert(e.id);
+      for(const auto &o:objects.objects())if(o.id!=fountainId)guest.visited.insert(o.id);
+      check("a guest with nothing else to see weighs the fountain",g.sceneryWeight(guest)>=1);
+      g.decide(guest);
+      check("it goes to look at the fountain, on a tile beside it",
+            guest.gawkObject==fountainId && !guest.path.empty() &&
+            std::abs(guest.path.back().first-27.5f)<=2.6f && std::abs(guest.path.back().second-27.5f)<=2.6f);
+      g.gawkScenery(guest);
+      check("there it looks (gawk, camera or stand), facing it",
+            guest.state==Guests::State::Gawking && guest.gawkObject<0 &&
+            (guest.anim=="gawk1" || guest.anim=="camera" || guest.anim=="stand"));
+      guest.state=Guests::State::Walking;g.decide(guest);
+      check("a kind looked at isn't gone back to",guest.gawkObject!=fountainId);
+    }
+    if(added)objects.remove(static_cast<int>(objects.objects().size())-1);
+  }
   // Native need-choice and use loop, including the path, price and benefit.
   st.clear();g.clear();
   const bool shopAdded=objects.add("scenery/building/bgrstnd.ai",24.5f,25.5f,4);
