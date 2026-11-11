@@ -1116,15 +1116,24 @@ bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences) {
       return x.since > y.since;
     });
   }
+  // Two looks (zoo.exe 0x49d7c7): first one no other keeper is in or on
+  // the way to; then one with at most one there or on the way, a keeper
+  // last there over 1000 ticks ago (zooTime +0xec against the habitat's
+  // +0xec; a tick a second here, as kRevisitSeconds)
+  for (int pass = 0; pass < 2; pass++)
   for (int ex : list) {
     if (!needsVisit(m, ex, fences))
       continue;
-    // Not one another keeper is on
-    bool taken = false;
+    int others = 0;
     for (const Member &o : this->list)
-      taken = taken || (o.id != m.id && o.job == Job::Visit && o.visit == ex);
-    if (taken)
+      others += o.id != m.id && o.job == Job::Visit && o.visit == ex ? 1 : 0;
+    if (pass == 0 ? others > 0 : others >= 2)
       continue;
+    if (pass == 1) {
+      auto last = this->lastVisit.find(ex);
+      if (last != this->lastVisit.end() && this->clock - last->second <= 1000.0)
+        continue;
+    }
     // Its gate: the tile outside it and the one in
     for (const auto &kv : fences.pieces()) {
       if (!kv.second.gate || fences.exhibitOf(kv.first) != ex)
