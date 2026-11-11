@@ -31123,6 +31123,11 @@
    "by": "Claude",
    "on": "2026-11-11",
    "what": "Note at 0x4282e1: Ported 2026-11-11 (src/Guests.cpp decide/sceneryWeight/pickScenery/gawkScenery): the three-way draw, scenery by cEstheticWeight, the ring spot (0x4297dc), Task81's bGawkObject bands and fPlaySetProb weights from guests.ai, cUsedThought. Not ported: the original's visited-tiles list by kind across rounds beyond our per-round reset."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Note at 0x638fa4: 2026-11-11, everything-ff03-units in the running game: a maintenance worker holds a fence entry (+8 = the worker); newly worn pieces' flagged entries go to the very front. Still unseen: bin (9) and litter (7) entries - they need guests, so a played zoo with an animal exhibit."
   }
  ],
  "notes": {
@@ -31280,6 +31285,11 @@
    "by": "batty251",
    "on": "2026-10-12",
    "text": "Global: the game manager (ZTGameMgr *, name a guess from zoo.ini [mgr]) - cash (float) +0xc, the date (SYSTEMTIME) +0x1194. Found live: Play original > Find a value (75000, then a watch on it)"
+  },
+  "0x638fa4": {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "text": "2026-11-11, everything-ff03-units in the running game: a maintenance worker holds a fence entry (+8 = the worker); newly worn pieces' flagged entries go to the very front. Still unseen: bin (9) and litter (7) entries - they need guests, so a played zoo with an animal exhibit."
   }
  },
  "questions": [
