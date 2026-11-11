@@ -807,9 +807,15 @@ int Guests::pickExhibit(Guest &g, int &vx, int &vy) {
     }
     if (view.empty())
       continue;
+    // (zoo.exe 0x428917: a random viewing tile's squared distance in whole
+    // tiles, at most 990 (0x3de); the habitat's attractiveness (+0xf8), 500
+    // more with its favourite species, less (1000 - d2) / 10 in whole
+    // numbers, plus 100 - so a nearer exhibit scores lower, and guests go
+    // out across the zoo; the highest taken)
     auto [tx, ty] = view[std::uniform_int_distribution<size_t>(0, view.size() - 1)(this->rng)];
-    float d2 = std::min((tx - g.x) * (tx - g.x) + (ty - g.y) * (ty - g.y), 990.0f);
-    float score = attract + (favourite ? 500.0f : 0.0f) + 100 - (1000 - d2) / 10;
+    const int gx = static_cast<int>(std::floor(g.x)), gy = static_cast<int>(std::floor(g.y));
+    const int d2 = std::min((tx - gx) * (tx - gx) + (ty - gy) * (ty - gy), 990);
+    float score = attract + (favourite ? 500.0f : 0.0f) - static_cast<float>((1000 - d2) / 10) + 100;
     if (score > bestScore) {
       bestScore = score;
       best = ex.id;

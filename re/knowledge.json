@@ -5592,6 +5592,14 @@
    "provisional": false,
    "summary": "A guest picks an attraction it hasn't been to / Confirmed: its own text \"Going to scenery / attraction / habitat\"; Task64_PickAttraction calls it"
   },
+  "0x428917": {
+   "by": "Claude",
+   "class": "ZTGuest",
+   "confidence": "likely",
+   "name": "guestPickHabitat",
+   "provisional": false,
+   "summary": "A guest's habitat (from guestPickAttraction's habitat branch): for each candidate, a random viewing tile of it (0x428741(0) then +0x40) - squared distance from the guest, at most 990 (0x3de); score = habitat +0xf8 (+500 with the guest's favourite species, +0x60 list) - (1000 - d2) / 10 + 100 (whole numbers): nearer scores lower; the highest taken"
+  },
   "0x4290f3": {
    "by": "batty251 (read its code, from the live steps)",
    "confidence": "likely",
@@ -31100,6 +31108,16 @@
    "by": "Claude",
    "on": "2026-11-11",
    "what": "Named 0x49f644 Task65_KeeperGoToHabitat::atTarget"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x428917 guestPickHabitat"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Note at 0x4282e1: Read 2026-11-11: three groups drawn by weight - habitats (0x427b08's list, its count), attractions (0x427d5c's list, its count), scenery (0x428039(1,1): max(1, sum of unvisited scenery's cEstheticWeight / 100)). Habitat -> 0x428917, task 0x65 'Going to habitat'; attraction -> the drawn one (or 0x60b086 by tile when 0x63b088 is set), task 0x66; scenery -> 0x42945f (within d2 < 1000 of the guest, the highest ((cEstheticWeight + 100) * 10 - d2) / 200), 0x4297dc for the spot, task 0x80 'Going to scenery' then 0x81 Task81_GawkObject: face it, bGawkObject1-6 by the object's EstheticBonus for the guest's kind (<0, 0-5, 6-10, 11-15, 16-25, 26-100), and its cUsedThought (type slot 0x54). The engine has no scenery visits yet."
   }
  ],
  "notes": {
@@ -31117,6 +31135,11 @@
    "by": "batty251",
    "on": "2026-10-12",
    "text": "Live order seen: ClimbUp (state 1) -> surface z 16 (state 2) -> ClimbDownB -> under z 0 (state 3) -> GoCleanTank -> CleanTank -> GoToPlatformExitTank -> ClimbUpB -> ClimbDown; each climb ~0.7 s (one play of climb, 125 ms frames)"
+  },
+  "0x4282e1": {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "text": "Read 2026-11-11: three groups drawn by weight - habitats (0x427b08's list, its count), attractions (0x427d5c's list, its count), scenery (0x428039(1,1): max(1, sum of unvisited scenery's cEstheticWeight / 100)). Habitat -> 0x428917, task 0x65 'Going to habitat'; attraction -> the drawn one (or 0x60b086 by tile when 0x63b088 is set), task 0x66; scenery -> 0x42945f (within d2 < 1000 of the guest, the highest ((cEstheticWeight + 100) * 10 - d2) / 200), 0x4297dc for the spot, task 0x80 'Going to scenery' then 0x81 Task81_GawkObject: face it, bGawkObject1-6 by the object's EstheticBonus for the guest's kind (<0, 0-5, 6-10, 11-15, 16-25, 26-100), and its cUsedThought (type slot 0x54). The engine has no scenery visits yet."
   },
   "0x4375d3": {
    "by": "batty251",
