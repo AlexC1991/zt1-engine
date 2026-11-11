@@ -2772,23 +2772,40 @@ function repoMine(method, route, body, raw, timeoutMs) {
 }
 const repoError = (r) => (r.json && (r.json.message || r.json.error)) || `The mod repository answered ${r.status}.`;
 // One mod as Your uploads shows it: its name, version, and where its checks are
+// (a mod in parts - the HD art packs - by every part: one part offered
+// isn't the whole mod; each part not offered yet is named, with why)
 function uploadRow(m) {
   const e = m.entry || {};
-  const p = (m.parts || [])[0] || {};
-  const c = p.check || {};
-  const live = !!p.live;
+  const parts = m.parts && m.parts.length ? m.parts : [{}];
+  const one = (p) => {
+    const c = p.check || {};
+    const live = !!p.live;
+    const status =
+      c.state === 'queued' || c.state === 'checking' || p.uploading
+        ? 'Being checked'
+        : c.state === 'rejected'
+        ? live ? 'Its new version was turned down (the old one is still offered)' : 'Turned down'
+        : c.state === 'error'
+        ? "The checks couldn't run: upload it again"
+        : live
+        ? 'In the mod repository'
+        : 'Not offered yet';
+    const reason = c.state === 'rejected' || c.state === 'error' ? (c.problems || []).join(' ') : '';
+    return { live, status, reason, ok: status === 'In the mod repository' };
+  };
+  const rows = parts.map(one);
+  const row = { id: m.mod, name: e.name || m.mod, version: e.version || '', hidden: !!m.hidden };
+  if (rows.length === 1) return { ...row, live: rows[0].live, status: rows[0].status, reason: rows[0].reason };
+  const offered = rows.filter((r) => r.live).length;
+  const behind = parts
+    .map((p, i) => ({ p, r: rows[i], i }))
+    .filter(({ r }) => !r.ok)
+    .map(({ p, r, i }) => `${p.name || p.id || 'part ' + (i + 1)}: ${r.status}${r.reason ? ' (' + r.reason + ')' : ''}`);
   const status =
-    c.state === 'queued' || c.state === 'checking' || p.uploading
-      ? 'Being checked'
-      : c.state === 'rejected'
-      ? live ? 'Its new version was turned down (the old one is still offered)' : 'Turned down'
-      : c.state === 'error'
-      ? "The checks couldn't run: upload it again"
-      : live
-      ? 'In the mod repository'
-      : 'Not offered yet';
-  const reason = c.state === 'rejected' || c.state === 'error' ? (c.problems || []).join(' ') : '';
-  return { id: m.mod, name: e.name || m.mod, version: e.version || '', live, status, reason, hidden: !!m.hidden };
+    offered === rows.length && !behind.length
+      ? `In the mod repository (all ${rows.length} parts)`
+      : `${offered} of ${rows.length} parts in the mod repository`;
+  return { ...row, live: offered === rows.length && !behind.length, status, reason: behind.join('; ') };
 }
 function modkitLog(line) {
   send('modkit:progress', { line });
