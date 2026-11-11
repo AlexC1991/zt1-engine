@@ -487,6 +487,31 @@ Object.assign(ACTIONS, {
       .filter((o) => !only || o.values[0] === only);
     return { count: +n, objects };
   },
+  // A linked list's entries at once: "<head> <offset>..." - head is the list's
+  // head node (std::list: next, prev, then a pointer to each entry - the
+  // maintenance work list's head is [0x638fa4]); each entry's address and the
+  // 4 bytes at each offset ("only <value>": just those whose first is it)
+  memChain: async (arg) => {
+    let text = String(arg).trim();
+    let only = '';
+    const m = text.match(/\s+only\s+(0x)?([0-9a-f]+)$/i);
+    if (m) {
+      only = '0x' + m[2].toLowerCase();
+      text = text.slice(0, m.index);
+    }
+    const parts = text.split(/\s+/).map((x) => x.replace(/^0x/, ''));
+    const r = await lab.origAsk('chain ' + parts.join(' '), 'each ');
+    if (r.error) return r;
+    const [, n, ...objs] = r.line.split(' ');
+    if (n === '-') return { error: 'Not a list there.' };
+    const objects = objs
+      .map((o) => {
+        const [at, vals] = o.split(':');
+        return { at: '0x' + at, values: (vals || '').split(',').filter(Boolean).map((v) => '0x' + v) };
+      })
+      .filter((o) => !only || o.values[0] === only);
+    return { count: +n, objects };
+  },
   // ("<address> <bytes>": each field in it pointing at text)
   memStrs: async (arg) => {
     const [at, n] = String(arg).trim().split(/\s+/);

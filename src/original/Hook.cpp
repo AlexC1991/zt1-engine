@@ -20,7 +20,8 @@
 // - The Lab's recorder: arm <file> / disarm - which of zoo.exe's functions
 //   run (a one-time breakpoint on each), reported as "hit" lines
 // - Its memory: scan/rescan (where it keeps a value), peek, each (a list of
-//   objects' fields at once), strs (the text an object points at - its
+//   objects' fields at once), chain (a linked list's entries' fields at
+//   once), strs (the text an object points at - its
 //   name), watch/unwatch (a
 //   hardware watchpoint: which instructions write it - "wrote" lines)
 // - The Lab's mouse: click/rclick/move <x> <y>, drag <x0> <y0> <x1> <y1> in
@@ -904,6 +905,27 @@ bool eachObject(DWORD list, const std::vector<DWORD> &offs, std::string &out) {
   return true;
 }
 
+// A linked list's entries at once: "chain <head> <offset>..." - head is a
+// list's head node (an MSVC std::list: each node next, prev, then its value -
+// a pointer to the entry, as the maintenance work list's at [0x638fa4]) -
+// each entry's address and the 4 bytes at each offset in it, answered as
+// "each" is (at most 2000 entries)
+bool chainRead(DWORD head, const std::vector<DWORD> &offs, std::vector<DWORD> &vals) {
+  __try {
+    DWORD node = *reinterpret_cast<DWORD *>(head);
+    for (int k = 0; node != head && k < 2000; k++) {
+      DWORD obj = *reinterpret_cast<DWORD *>(node + 8);
+      vals.push_back(obj);
+      for (DWORD off : offs)
+        vals.push_back(obj && !IsBadReadPtr(reinterpret_cast<void *>(obj + off), 4) ? *reinterpret_cast<DWORD *>(obj + off) : 0);
+      node = *reinterpret_cast<DWORD *>(node);
+    }
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+}
+
 // The text an object points at: "strs <address> <bytes>" - each 4-byte field
 // in it that's a pointer to readable text (3+ printable characters), and the
 // text: how an object's name is found ("+0x8 lion"). Answer "strs <off>=<text>
@@ -1274,6 +1296,36 @@ void command(const char *line) {
     std::string out = textsOf(at, n) + "\n";
     DWORD wrote;
     WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), out.data(), static_cast<DWORD>(out.size()), &wrote, nullptr);
+  } else if (!std::strncmp(line, "chain ", 6)) {
+    // (chain <head> <offset>...: hex)
+    char *rest = nullptr;
+    DWORD head = std::strtoul(line + 6, &rest, 16);
+    std::vector<DWORD> offs;
+    while (rest && *rest) {
+      char *next = nullptr;
+      DWORD o = std::strtoul(rest, &next, 16);
+      if (next == rest)
+        break;
+      offs.push_back(o);
+      rest = next;
+    }
+    std::vector<DWORD> vals;
+    std::string out;
+    if (chainRead(head, offs, vals)) {
+      const size_t per = offs.size() + 1;
+      out = "each " + std::to_string(vals.size() / per);
+      char b[16];
+      for (size_t i = 0; i < vals.size(); i++) {
+        size_t k = i % per;
+        std::snprintf(b, sizeof b, k == 0 ? " %lx:" : k == 1 ? "%lx" : ",%lx", vals[i]);
+        out += b;
+      }
+    } else {
+      out = "each -";
+    }
+    out += "\n";
+    DWORD n;
+    WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), out.data(), static_cast<DWORD>(out.size()), &n, nullptr);
   } else if (!std::strncmp(line, "each ", 5)) {
     // (each <list> <offset>...: hex)
     char *rest = nullptr;

@@ -17982,10 +17982,10 @@
    "summary": "The UI element under the mouse (uiSetHover)"
   },
   "0x638fa4": {
-   "by": "batty251 (read Task 0x78)",
+   "by": "Claude",
    "kind": "other",
    "name": "maintWorkList",
-   "summary": "The zoo's list of maintenance work waiting: each entry's first value is its job number (7 trash pile, 9 trash can, 0x10 fence...) - Task78_MaintFindWork picks from it"
+   "summary": "The maintenance work list (a std::list in the manager object at 0x638fa0, vtable 0x632240): each entry {+0 job number (7/0xb sweep, 9 a trash can, 0x10 a fence, 0x1a a filter), +4 its tile, +8 the worker on it (0 none), +0xc a flag byte}. Read in the running game 2026-11-11 (Lab memChain): a worn fence piece is listed for both its tiles, the piece's own tile flagged and at the front; nodes added by the list routine before 0x40149e, emptied on load (before 0x5b11c8)"
   },
   "0x638ff8": {
    "by": "Claude",
@@ -31060,6 +31060,16 @@
    "by": "Claude",
    "on": "2026-11-11",
    "what": "Note at 0x58b0a3: Read in the running game (2026-11-11, everything zoo): habitatMgr [0x63805c] = 0x67b760: +8/+0xc map size (75,75), +0x10/+0x14 entrance tile (11,42), +0x1c..+0x20 the habitats (28). The first (the zoo's main ground) has an empty +0x34 list and ~4080 entries at +0x40..+0x44 - so +0x40 holds tiles (the viewing tiles), and the object slot 0x328 returns is likely an exhibit whose +0x34 are its habitats (a land paddock and a tank joined): one entry for an ordinary exhibit. Not yet confirmed on a joined exhibit."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Global 0x638fa4 = maintWorkList"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Note at 0x439cd0: Task78_MaintFindWork::whileGoing (code at 0x4a1c8d..): over maintWorkList, the duty for each job (9->0 trash, 7/0xb->1 sweep, 0x10->2 fences, 0x1a->3 filters) must be on; tiles in the worker's +0x27c list skipped; the nearest (squared distance) kept; once the best is flagged (+0xc) the look stops at the first unflagged entry - so a worn fence's own side comes before all other work. An entry already taken (+8) is compared by the two workers' distances (which way round not yet read); the taker's old job dropped (slot 0x174), the entry's +8 set to it (0x4a97c0)."
   }
  ],
  "notes": {
@@ -31082,6 +31092,11 @@
    "by": "batty251",
    "on": "2026-10-12",
    "text": "Part of FUN_00437102 (ZTAnimal's table, slot 0x48): Ghidra made it a function once the class tables were applied (2026-10-12). That function picks a behaviour by name (bSleep, bHatch...) - a sleep ends a rampage here"
+  },
+  "0x439cd0": {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "text": "Task78_MaintFindWork::whileGoing (code at 0x4a1c8d..): over maintWorkList, the duty for each job (9->0 trash, 7/0xb->1 sweep, 0x10->2 fences, 0x1a->3 filters) must be on; tiles in the worker's +0x27c list skipped; the nearest (squared distance) kept; once the best is flagged (+0xc) the look stops at the first unflagged entry - so a worn fence's own side comes before all other work. An entry already taken (+8) is compared by the two workers' distances (which way round not yet read); the taker's old job dropped (slot 0x174), the entry's +8 set to it (0x4a97c0)."
   },
   "0x43af5b": {
    "by": "Claude",

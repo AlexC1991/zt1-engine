@@ -821,7 +821,14 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
   auto near = [&](int tx, int ty) {
     return std::hypot(tx + 0.5f - m.x, ty + 0.5f - m.y);
   };
-  // Fences: a tile beside the piece it can stand on
+  // Fences: a tile beside the piece it can stand on. The piece's own tile
+  // comes first, before any other work (zoo.exe Task78_MaintFindWork
+  // 0x439cd0 over the work list [0x638fa4]: a worn piece is listed for both
+  // its tiles, its own tile's entry flagged (+0xc) and at the list's front;
+  // once the best is a flagged one the look stops at the first that isn't -
+  // read in the running game 2026-11-11: pairs a tile apart, the owner's
+  // flagged). The other side is a job like any other, by distance
+  std::vector<Spot> ownSide;
   if (m.duties[2])
     for (const auto &kv : fences.pieces()) {
       if (!fences.worn(kv.first))
@@ -834,9 +841,25 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
       const Fences::Edge &e = kv.first;
       int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
       for (auto [tx, ty] : {std::make_pair(ax, ay), std::make_pair(e.x, e.y)})
-        if (walkable(tx, ty, map, fences))
-          spots.push_back({near(tx, ty), Job::Fence, e, -1, tx, ty});
+        if (walkable(tx, ty, map, fences)) {
+          const bool own = tx == kv.second.ownerX && ty == kv.second.ownerY;
+          (own ? ownSide : spots).push_back({near(tx, ty), Job::Fence, e, -1, tx, ty});
+        }
     }
+  std::sort(ownSide.begin(), ownSide.end(), [](const Spot &a, const Spot &b) { return a.dist < b.dist; });
+  for (const Spot &s : ownSide) {
+    float mx = s.edge.alongX ? s.edge.x + 0.5f : static_cast<float>(s.edge.x);
+    float my = s.edge.alongX ? static_cast<float>(s.edge.y) : s.edge.y + 0.5f;
+    float ex = s.tx + 0.5f + (mx - s.tx - 0.5f) * 0.5f, ey = s.ty + 0.5f + (my - s.ty - 0.5f) * 0.5f;
+    if (findPath(m, s.tx, s.ty, map, fences, ex, ey)) {
+      ZT_STEP("0x439cd0", "A worn fence's own side: before any other work", {"distance", s.dist});
+      m.job = Job::Fence;
+      m.jobEdge = s.edge;
+      m.jobFilter = -1;
+      m.dutyId = kGoingToFix;
+      return true;
+    }
+  }
   // Tank filters: a tile beside its footprint
   if (m.duties[3]) {
     for (size_t i = 0; i < fences.filters().size(); i++) {
