@@ -22,6 +22,8 @@ public:
   // width as it is drawn
   void setMessage(const std::string& newText);
   std::string getText() const { return text_string; }
+  // ours: where its letters were last drawn (empty: none) - not its box
+  SDL_Rect inkRect() const { return ink; }
 
   // UIEditableText (the zoo's name, its admission price): click to edit,
   // type, Enter (or a click elsewhere) keeps it, Esc puts it back.
@@ -55,6 +57,11 @@ private:
   SDL_Texture * shadow = nullptr;
   int font = 0;
   SDL_Rect dest_rect = {0, 0, 0, 0};
+  SDL_Rect ink = {0, 0, 0, 0};
+  void addInk(const SDL_Rect &r) {
+    if (ink.w <= 0) ink = r;
+    else SDL_GetRectUnion(&ink, &r, &ink);
+  }
   
   // Cache for scrollable lines
   std::vector<std::string> cached_lines;

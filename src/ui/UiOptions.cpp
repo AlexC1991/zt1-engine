@@ -2276,13 +2276,13 @@ void UiOptions::draw(SDL_Renderer *renderer, SDL_Rect *screen, float originX, fl
     SDL_SetRenderClipRect(renderer, wasClipped ? &wasClip : nullptr);
     this->contentBottom = bottom;
   }
-  // Its lock, beside the close button
+  // Its lock, at the title bar's left end
   this->lockRect = {0, 0, 0, 0};
   if (Features::dragWindows)
     if (UiElement *c = this->layout->getElementById(kClose)) {
       SDL_Rect cr = c->getLastRect();
       if (cr.w > 0) {
-        this->lockRect = WindowLock::beside(cr);
+        this->lockRect = WindowLock::place(this->layout, this->lastRect, cr);
         SDL_Point m = {this->mouseX, this->mouseY};
         bool over = SDL_PointInRect(&m, &this->lockRect);
         WindowLock::draw(renderer, this->rm, this->lockRect, this->locked, over, over && this->lockDown);

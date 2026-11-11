@@ -1,5 +1,6 @@
 #include "WindowLock.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -9,6 +10,10 @@
 
 #include "../Animation.hpp"
 #include "../ResourceManager.hpp"
+#include "UiElement.hpp"
+#include "UiText.hpp"
+
+#include <functional>
 
 namespace WindowLock {
 
@@ -91,8 +96,33 @@ SDL_Texture *make(SDL_Renderer *renderer, ResourceManager *rm, bool locked, char
 
 } // namespace
 
-SDL_Rect beside(const SDL_Rect &closeRect) {
-  return {closeRect.x - closeRect.w - 2, closeRect.y, closeRect.w, closeRect.h};
+SDL_Rect place(UiElement *root, const SDL_Rect &windowRect, const SDL_Rect &closeRect) {
+  const SDL_Rect beside = {closeRect.x - closeRect.w - 2, closeRect.y, closeRect.w, closeRect.h};
+  // (the title: the letters drawn across the close button's row, left of it)
+  SDL_Rect title = {0, 0, 0, 0};
+  std::function<void(UiElement *)> visit = [&](UiElement *el) {
+    if (!el || el->isHidden())
+      return;
+    if (auto *t = dynamic_cast<UiText *>(el)) {
+      SDL_Rect r = t->inkRect();
+      if (r.w > 0 && r.y < closeRect.y + closeRect.h && r.y + r.h > closeRect.y && r.x < closeRect.x &&
+          r.x >= windowRect.x) {
+        if (title.w <= 0) title = r;
+        else SDL_GetRectUnion(&title, &r, &title);
+      }
+    }
+    for (UiElement *c : el->getChildren())
+      visit(c);
+  };
+  visit(root);
+  if (title.w <= 0)
+    return beside;
+  const int gap = 4, inset = std::max(2, windowRect.x + windowRect.w - (closeRect.x + closeRect.w));
+  if (title.x - gap - closeRect.w >= windowRect.x + inset)
+    return {title.x - gap - closeRect.w, closeRect.y, closeRect.w, closeRect.h};
+  if (title.x + title.w + gap + closeRect.w <= closeRect.x - gap)
+    return {title.x + title.w + gap, closeRect.y, closeRect.w, closeRect.h};
+  return beside;
 }
 
 void draw(SDL_Renderer *renderer, ResourceManager *rm, const SDL_Rect &at, bool locked, bool lit, bool pressed) {

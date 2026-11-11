@@ -218,6 +218,7 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
 }
 
 void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
+  this->ink = {0, 0, 0, 0};
   if (this->cached_lines.empty()) return;
 
   // 1. Calculate Container
@@ -336,6 +337,7 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
           else if (justify == "right")
             x += dest_rect.w - w;
           SDL_Rect dst = {x, y, w, h};
+          this->addInk(dst);
           if (RenderSettings::drawsUiText())
             ZT_RenderCopy(renderer, t, NULL, &dst);
         }
@@ -400,6 +402,7 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
           }
           
           SDL_Rect dst = {draw_x, y_pos, w, h};
+          this->addInk(dst);
           if (RenderSettings::drawsUiText())
               ZT_RenderCopy(renderer, t, NULL, &dst);
       }

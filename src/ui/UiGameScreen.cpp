@@ -2354,13 +2354,13 @@ void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     SDL_Rect r = e.rect;
     e.layout->setAnchorRect(this->anchorRect(e, layout_rect));
     e.layout->draw(renderer, &r);
-    // (its lock, beside its close button)
+    // (its lock, at the title bar's left end)
     e.lockRect = {0, 0, 0, 0};
     if (this->lockable(e))
       if (UiElement *c = e.layout->getElementById(e.closeId)) {
         SDL_Rect cr = c->getLastRect();
         if (cr.w > 0 && !c->isHidden()) {
-          e.lockRect = WindowLock::beside(cr);
+          e.lockRect = WindowLock::place(e.layout, e.rect, cr);
           SDL_Point m = {this->mouseX, this->mouseY};
           bool over = SDL_PointInRect(&m, &e.lockRect);
           WindowLock::draw(renderer, this->resource_manager, e.lockRect, e.locked, over, over && this->lockDownId == e.id);
