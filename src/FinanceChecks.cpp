@@ -17,7 +17,10 @@
 #include "ItemCatalog.hpp"
 #include "ResourceManager.hpp"
 #include "ZooSim.hpp"
+#include "Goals.hpp"
 #include "OriginalConstants.hpp"
+#include <algorithm>
+#include <set>
 #include "ui/UiGameScreen.hpp"
 #include <cmath>
 #include <fstream>
@@ -458,6 +461,82 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     world.setPathTool("", 0);
   }
   world.cash = 1e300;
+
+  // The goal tree (zoo.exe makeGoal 0x58e066), on scripted measures: Marine
+  // Mania's shark award is goals in order (rtype 2: the rule, the award, its
+  // cash, its popup) whose first is all of four sharks (rtype 1)
+  {
+    Goals t;
+    std::set<std::string> met;
+    std::vector<int> awarded;
+    int cash = 0, monthsNow = 0, ended = 0;
+    // (each goal met by its type - 3..5, which are never met, not failed)
+    auto toMeet = [](const Goals::Goal &g) {
+      return g.type == 1 || g.type == 3 || g.type == 7 ? g.value - 1 : g.type == 5 ? g.value + 1 : g.value;
+    };
+    bool all = false;
+    Goals::Hooks h;
+    h.measure = [&](const Goals::Goal &g) -> int {
+      if (g.rulea == 99)
+        return g.arga; // (0x41d665: arga itself)
+      if (g.rulea == 7 && g.ruleb == 2)
+        return monthsNow;
+      if (all || met.count(g.name))
+        return toMeet(g);
+      return g.type == 1 || g.type == 7 ? g.value : g.value - 1;
+    };
+    h.award = [&](int a) { awarded.push_back(a); };
+    h.cash = [&](int amount, int) { cash += amount; };
+    h.months = [&]() { return monthsNow; };
+    h.ended = [&](int o) { ended = o; };
+    t.setHooks(h);
+    t.load(rm, "freeform/unlock02.scn");
+    const Goals::Node *shark = nullptr;
+    for (const Goals::Node &n : t.tree())
+      if (n.name == "shark_conservation")
+        shark = &n;
+    check("Marine Mania's shark award: in order (rtype 2) of 4, its first all of 4 sharks (rtype 1)",
+          shark && shark->kind == 2 && shark->optional && shark->children.size() == 4 &&
+              shark->children[0].kind == 1 && shark->children[0].children.size() == 4);
+    met = {"HHEAD", "GWHITE", "TIGERSH"};
+    t.evaluateAll();
+    const bool none = std::find(awarded.begin(), awarded.end(), 19) == awarded.end() && cash == 0;
+    met.insert("MAKO");
+    t.evaluateAll();
+    const bool given = std::find(awarded.begin(), awarded.end(), 19) != awarded.end() && cash == 10000;
+    t.evaluateAll();
+    check("three sharks of four: no award; all four: award 19 and $10,000 (the children after the rule wait for it)",
+          none && given);
+    check("and only once ($" + std::to_string(cash) + ")", cash == 10000);
+    check("a free-form file's goals never end it (outcome " + std::to_string(t.outcome) + ")", t.outcome == 0 && ended == 0);
+
+    // Scenario 3's time limit: 6 months (months from 0, the original's)
+    Goals s;
+    s.setHooks(h);
+    met.clear();
+    monthsNow = 0;
+    s.load(rm, "scenario/scn03/scn03.scn");
+    check("scenario 3: a 6-month limit, not met at the start (" + std::to_string(s.durationMonths) + ", state " +
+              std::to_string(s.durationState) + ")",
+          s.durationMonths == 6 && s.durationState == 0);
+    monthsNow = 6;
+    s.evaluateAll();
+    const bool running = s.outcome == 0 && ended == 0;
+    monthsNow = 7;
+    s.evaluateAll();
+    check("its goals not met: still on at 6 months played; lost after (outcome " + std::to_string(s.outcome) + ")",
+          running && s.outcome == 2 && ended == 2);
+    ended = 0;
+    all = true;
+    monthsNow = 3;
+    s.load(rm, "scenario/scn03/scn03.scn");
+    s.evaluateAll();
+    const bool early = s.outcome == 0;
+    monthsNow = 7;
+    s.evaluateAll();
+    check("every goal met: not over before the limit; won once it passes (outcome " + std::to_string(s.outcome) + ")",
+          early && s.outcome == 1 && ended == 1);
+  }
 
   report << "\n" << (checks - failures) << "/" << checks << " pass\n";
   SDL_Log("[Finance] %d/%d pass", checks - failures, checks);

@@ -490,6 +490,10 @@ static void drawLayoutCentered(SDL_Renderer *renderer, UiLayout *layout,
 
 static UiGameScreen *g_hud = nullptr;
 static ZooSim g_sim; // the game clock and the zoo's books
+// The months played as the unlock goals count them (rule 7/2, zoo.exe
+// 0x41d665: the game manager's month + year * 12, both from 0 - measured:
+// 0 all of the first January)
+static int monthsPlayed() { return g_sim.month() + (g_sim.year() - 1) * 12; }
 namespace FrameProfile {void start();void begin();void end();void phase(const char *name);}
 #ifdef _WIN32
 namespace D3D11Util {void installTextureMaker(SDL_Renderer *renderer);} // (D3D11Util.hpp)
@@ -673,7 +677,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
 
   // A new game starts on January of year 1 with the starting cash
   g_sim.start(startingCash, rating);
-  ItemCatalog::get().setMonth(unlockMonthFor(1));
+  ItemCatalog::get().setMonth(unlockMonthFor(0));
   g_hud->refreshCatalog();
   g_hud->setSim(&g_sim);
   g_hud->setFences(&world->getFences(), [world](float x, float y) {
@@ -2120,7 +2124,7 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
         if (std::string(f.name) == "fencemodes")
           g_world->cancelTool();
         if (std::string(f.name) == "allunlocked") {
-          ItemCatalog::get().setMonth(unlockMonthFor(std::max(1, static_cast<int>(g_sim.history().size()))));
+          ItemCatalog::get().setMonth(unlockMonthFor(monthsPlayed()));
           if (g_hud)
             g_hud->refreshCatalog();
         }
@@ -2770,10 +2774,13 @@ static void setupGoals(ResourceManager *rm) {
   h.measure = [](const Goals::Goal &g) -> int {
     if (!g_world)
       return 0;
-    int months = static_cast<int>(g_sim.history().size()); // (1 in the first month)
+    // (the game manager's month +0x15c and year +0x160, both from 0 -
+    // measured: February of year 1 reads 1 and 0 in the running original)
+    const int month = g_sim.month(), year = g_sim.year() - 1;
+    const int months = month + year * 12;
     Animals &an = g_world->getAnimals();
     if (g.rulea == 1) {
-      // (not before month arga)
+      // (not before month arga: 0x41d665)
       if (months < g.arga)
         return 0;
       switch (g.ruleb) {
@@ -2843,14 +2850,14 @@ static void setupGoals(ResourceManager *rm) {
       }
       return count >= std::max(1, g.arga) ? g.value : 0;
     }
-    if (g.rulea == 7 && g.ruleb == 2)
-      return months;
+    if (g.rulea == 7) // (the month, the year, or both as months)
+      return g.ruleb == 0 ? month : g.ruleb == 1 ? year : g.ruleb == 2 ? months : 0;
     return 0;
   };
   h.measures = [](const Goals::Goal &g) {
     if (g.rulea == 1)
       return (g.ruleb >= 0 && g.ruleb <= 7) || g.ruleb == 11;
-    return (g.rulea == 2 && g.ruleb == 2) || (g.rulea == 6 && g.ruleb == 0) || (g.rulea == 7 && g.ruleb == 2);
+    return (g.rulea == 2 && g.ruleb == 2) || (g.rulea == 6 && g.ruleb == 0) || (g.rulea == 7 && g.ruleb >= 0 && g.ruleb <= 2);
   };
   h.popup = [](const std::string &image, const std::string &text, bool pause) {
     if (!g_hud)
@@ -2888,6 +2895,11 @@ static void setupGoals(ResourceManager *rm) {
   h.award = [](int) {
     if (g_hud)
       g_hud->setAwards(g_goals.awards);
+  };
+  // (the game manager's month + year * 12, both from 0, as the rules')
+  h.months = []() { return g_sim.month() + (g_sim.year() - 1) * 12; };
+  h.ended = [](int outcome) {
+    SDL_Log("[Goals] the scenario is over: %s", outcome == 1 ? "won" : "lost");
   };
   g_goals.setHooks(h);
 }
@@ -3424,6 +3436,25 @@ int runEverythingZoo(World &,UiGameScreen &,ZooSim &,ResourceManager *,const std
 int runShowAllChecks(World &,UiGameScreen &,ZooSim &,ResourceManager *,const std::string &);
 int runFinanceChecks(World &,UiGameScreen &,ZooSim &,ResourceManager *,const std::string &);
 
+// A scenario started as from the menu (Play Tutorial and Scenario Game,
+// zoo.exe scenarioStart 0x4c998b): its map, its money (the .scn's [start]
+// setcash - not the freeform spinner's), its economy file and its goals,
+// whose [start] triggers= fire then
+static bool startScenario(ResourceManager *rm, const ScenarioInfo &info) {
+  const bool loaded = g_world->loadScenario(info.scenarioPath);
+  // (a save names it: "scenario:" and its .scn)
+  g_currentMapPath = "scenario:" + info.scenarioPath;
+  int scenarioCash = CASH_START;
+  if (IniReader *scn = rm->getIniReader(info.scenarioPath)) {
+    scenarioCash = scn->getInt("start", "setcash", CASH_START);
+    delete scn;
+  }
+  createHud(rm, g_world, scenarioCash);
+  applyScenarioEconomy(rm, info.scenarioPath);
+  startGoals(rm, info.scenarioPath);
+  return loaded;
+}
+
 // --panel-shots <outDir> [mapStem]: start a freeform game (default Death
 // Mountain), open every toolbar panel and buy tab in turn and save each
 // frame as <outDir>/<name>.bmp, then quit. For comparing with the original
@@ -3440,6 +3471,47 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   Research::get().load(rm);
   prepareHud(rm);
   world->edgeScroll = false;
+  // ZT_SCENARIO_CHECKS=1: every scenario started as from the menu, its
+  // goals checked 40 times (a minute of game time) with each popup they
+  // show read and closed - <out>/scenario-checks.txt
+  if (std::getenv("ZT_SCENARIO_CHECKS")) {
+    std::filesystem::create_directories(outDir);
+    std::ofstream rep(outDir + "/scenario-checks.txt");
+    int count = 0, bad = 0;
+    for (int i = 0; const ScenarioInfo *info = sm->getScenario(i); i++) {
+      const bool loaded = startScenario(rm, *info);
+      int popups = 0;
+      for (int k = 0; k < 40 && g_hud; k++) {
+        g_goals.update(1.5f);
+        // (read and dismissed, as a player would: Enter)
+        for (int tries = 0; g_hud->hasDialog() && tries < 20; tries++) {
+          popups += tries == 0 ? 1 : 0;
+          std::vector<Input> enterKey(1);
+          enterKey[0].type = InputType::BUTTON;
+          enterKey[0].event = InputEvent::KEY_DOWN;
+          enterKey[0].key = SDLK_RETURN;
+          g_hud->handleInputs(enterKey);
+        }
+      }
+      int composites = 0;
+      std::function<void(const std::vector<Goals::Node> &)> walk = [&](const std::vector<Goals::Node> &ns) {
+        for (const Goals::Node &n : ns) {
+          composites += n.kind != 0 ? 1 : 0;
+          walk(n.children);
+        }
+      };
+      walk(g_goals.tree());
+      const bool ok = loaded && g_hud && !g_goals.all().empty();
+      count++;
+      bad += ok ? 0 : 1;
+      rep << (ok ? "PASS " : "FAIL ") << info->scenarioPath << ": " << g_goals.all().size() << " goals, " << composites
+          << " composites, limit " << g_goals.durationMonths << " months (state " << g_goals.durationState << "), "
+          << popups << " popups, outcome " << g_goals.outcome << ", cash " << std::lround(g_sim.cash()) << "\n";
+      rep.flush();
+    }
+    rep << "\n" << (count - bad) << "/" << count << " pass\n";
+    return bad ? 1 : 0;
+  }
   Uint64 t0 = SDL_GetPerformanceCounter();
   auto ms = [&] {
     return (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
@@ -5915,21 +5987,25 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     }
 
     // Freeform: everything from the start (the Tank Filter first); the
-    // original's timed release: in June the Tank Filter is there, first,
-    // Black Bar and Glass fifth
+    // original's timed release (months played from 0: unlock02.scn's
+    // SECOND_UNLOCK, 6): in July the Tank Filter is there, first, Black Bar
+    // and Glass fifth
     {
-      ItemCatalog::get().setMonth(unlockMonthFor(1));
+      ItemCatalog::get().setMonth(unlockMonthFor(0));
       auto all = ItemCatalog::get().inCategory("fence");
       check("all unlocked: Tank Filter first in January",
             !Features::allUnlocked || (!all.empty() && all[0]->file == "scenery/other/filter1.ai"));
       ItemCatalog::get().setMonth(6);
       auto list = ItemCatalog::get().inCategory("fence");
-      check("June: Tank Filter first", !list.empty() && list[0]->file == "scenery/other/filter1.ai");
-      check("June: Black Bar and Glass fifth", list.size() > 4 && list[4]->file == "fences/tankwall.ai");
-      ItemCatalog::get().setMonth(1);
+      check("July: Tank Filter first", !list.empty() && list[0]->file == "scenery/other/filter1.ai");
+      check("July: Black Bar and Glass fifth", list.size() > 4 && list[4]->file == "fences/tankwall.ai");
+      ItemCatalog::get().setMonth(5);
+      auto june = ItemCatalog::get().inCategory("fence");
+      check("June: no Tank Filter yet", !june.empty() && june[0]->file != "scenery/other/filter1.ai");
+      ItemCatalog::get().setMonth(0);
       auto jan = ItemCatalog::get().inCategory("fence");
       check("January: no Tank Filter", !jan.empty() && jan[0]->file == "fences/tankwal2.ai");
-      ItemCatalog::get().setMonth(unlockMonthFor(1));
+      ItemCatalog::get().setMonth(unlockMonthFor(0));
     }
 
     // A single click puts down one piece
@@ -10395,18 +10471,7 @@ int main(int argc, char *argv[]) {
         const ScenarioInfo *info = g_scenarioManager->getScenario(idx);
         if (info && !info->isLocked) {
           SDL_Log("Starting Scenario: %s", info->name.c_str());
-          g_world->loadScenario(info->scenarioPath);
-          // (a save names it: "scenario:" and its .scn)
-          g_currentMapPath = "scenario:" + info->scenarioPath;
-          // (its own money: the .scn's [start] setcash - not the freeform
-          // spinner's)
-          int scenarioCash = CASH_START;
-          if (IniReader *scn = resource_manager.getIniReader(info->scenarioPath)) {
-            scenarioCash = scn->getInt("start", "setcash", CASH_START);
-            delete scn;
-          }
-          createHud(&resource_manager, g_world, scenarioCash);
-          applyScenarioEconomy(&resource_manager, info->scenarioPath);
+          startScenario(&resource_manager, *info);
 
           delete layout;
           layout = nullptr; // the in-game HUD replaces the menus
@@ -10632,7 +10697,7 @@ int main(int argc, char *argv[]) {
           if (g_hud)
             g_hud->monthNumber = months;
         }
-        int month = unlockMonthFor(static_cast<int>(g_sim.history().size()));
+        int month = unlockMonthFor(monthsPlayed());
         if (month != ItemCatalog::get().getMonth()) {
           ItemCatalog::get().setMonth(month);
           if (g_hud)

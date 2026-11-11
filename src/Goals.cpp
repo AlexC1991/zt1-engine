@@ -44,10 +44,26 @@ Goals::Goal readGoal(IniReader *ini, const std::string &file, const std::string 
   g.targb = num(ini, sec, "targb");
   return g;
 }
+// The files an extragoals= entry names (goalsLoad 0x58de8a): split at its
+// '.', every resource starting with the part before and ending with the
+// part after (0x4b41f2), so freeform/unlock.scn brings unlock01..unlock20
+std::vector<std::string> extraFiles(ResourceManager *rm, const std::string &entry) {
+  std::string extra = lower(trim(entry));
+  size_t dot = extra.rfind('.');
+  if (dot == std::string::npos)
+    return {};
+  std::vector<std::string> found = rm->listResources(extra.substr(0, dot), extra.substr(dot));
+  std::sort(found.begin(), found.end());
+  return found;
+}
 } // namespace
 
 void Goals::clear() {
   this->goals.clear();
+  this->roots.clear();
+  this->durationMonths = 0;
+  this->durationState = 1;
+  this->outcome = 0;
   this->scnPath.clear();
   this->awards.clear();
   this->clock = 0;
@@ -62,10 +78,15 @@ void Goals::load(ResourceManager *rm, const std::string &scnPath) {
   if (!scn)
     return;
   this->scnPath = scnPath;
-  // The map's own goals, then each extra file's
+  // The scenario's own goal first: its time limit (ScenarioGoal::ctor
+  // 0x58e218: [duration] nummonths; none, 0, is met at once)
+  this->durationMonths = num(scn, "duration", "nummonths");
+  this->durationState = this->durationMonths == 0 ? 1 : 0;
+  // The map's own goals, then each extragoals= entry's files
   this->readGoals(scnPath, true);
   for (const std::string &extra : scn->getList("start", "extragoals"))
-    this->readGoals(trim(extra), true);
+    for (const std::string &file : extraFiles(rm, extra))
+      this->readGoals(file, lower(file) == lower(trim(extra)));
   // [start] triggers=: each section's trigger fired once, at once (not kept)
   for (const std::string &t : scn->getList("start", "triggers")) {
     Goal g;
@@ -80,19 +101,104 @@ void Goals::load(ResourceManager *rm, const std::string &scnPath) {
   delete scn;
 }
 
-void Goals::readGoals(const std::string &file, bool fromList) {
+// named: a file the [start] list names outright (our older saves kept only
+// its goals)
+void Goals::readGoals(const std::string &file, bool named) {
   IniReader *ini = this->rm->getIniReader(file);
   if (!ini)
     return;
-  (void)fromList;
   for (const std::string &name : ini->getList("goals", "goal")) {
-    std::string sec = trim(name);
-    // (only the normal goal class, rtype 0)
-    if (num(ini, sec, "rtype") != 0)
-      continue;
-    this->goals.push_back(readGoal(ini, file, sec));
+    const size_t first = this->goals.size();
+    this->roots.push_back(this->makeNode(ini, file, trim(name), 0));
+    if (named && this->roots.back().kind == 0 && num(ini, trim(name), "rtype") == 0)
+      this->goals[first].legacy = true;
   }
   delete ini;
+}
+
+// makeGoal 0x58e066: rtype 1 a goal group of all its child= goals
+// (goalGroupCtor 0x59364c: "optional", each "child" made the same way),
+// rtype 2 the same in order (0x593793); anything else a normal goal
+Goals::Node Goals::makeNode(IniReader *ini, const std::string &file, const std::string &sec, int depth) {
+  Node n;
+  n.file = file;
+  n.name = sec;
+  n.optional = num(ini, sec, "optional") != 0;
+  const int rtype = num(ini, sec, "rtype");
+  if (rtype == 1 || rtype == 2) {
+    n.kind = rtype;
+    if (depth < 16)
+      for (const std::string &child : ini->getList(sec, "child"))
+        n.children.push_back(this->makeNode(ini, file, trim(child), depth + 1));
+    return n;
+  }
+  Goal g = readGoal(ini, file, sec);
+  g.depth = depth;
+  n.goal = static_cast<int>(this->goals.size());
+  this->goals.push_back(g);
+  return n;
+}
+
+// A node's update (its class's slot 4): a goal checked (goalCheck 0x4240f5);
+// all of (0x41de4d): each child updated, any failed (2) fails it, else any
+// not yet met (0) leaves it at 0, else met; in order (0x41ddf1): each child
+// updated until one isn't met, whose state it takes (the rest wait)
+void Goals::updateNode(Node &n) {
+  if (n.kind == 0) {
+    this->evaluate(this->goals[n.goal]);
+    return;
+  }
+  int r = 1;
+  for (Node &c : n.children) {
+    this->updateNode(c);
+    const int s = this->nodeState(c);
+    if (n.kind == 1) {
+      if (s == 2)
+        r = 2;
+      else if (s == 0 && r != 2)
+        r = 0;
+    } else {
+      r = s;
+      if (s != 1)
+        break;
+    }
+  }
+  n.state = r >= 0 && r < 4 ? r : 0; // (setState 0x41ddda: 0..3)
+}
+
+// A node's state (slot 8: 0x41d754, 0x41de3b): an optional one is always met
+int Goals::nodeState(const Node &n) const {
+  if (n.optional)
+    return 1;
+  return n.kind == 0 ? this->goals[n.goal].state : n.state;
+}
+
+// The time limit (ScenarioGoal::checkDeadline 0x42425d): once the months
+// played pass nummonths (not -1), 3 - and 2 if any other goal, updated then,
+// isn't met (1) or 3
+void Goals::checkDeadline() {
+  if (this->durationState != 0 || this->durationMonths < 0 || !this->hooks.months)
+    return;
+  if (this->durationMonths >= this->hooks.months())
+    return;
+  this->durationState = 3;
+  for (Node &n : this->roots) {
+    this->updateNode(n);
+    const int s = this->nodeState(n);
+    if (s != 3 && s != 1)
+      this->durationState = 2;
+  }
+}
+
+// The scenario's list: its time limit, then each goal= of its files
+void Goals::updateTop(int i) {
+  if (i == 0)
+    this->checkDeadline();
+  else
+    this->updateNode(this->roots[i - 1]);
+}
+int Goals::topState(int i) const {
+  return i == 0 ? this->durationState : this->nodeState(this->roots[i - 1]);
 }
 
 // Checked every 1500 ms of the world's ticks (zoo.exe 0x435a48; not while
@@ -105,9 +211,37 @@ void Goals::update(float seconds) {
   this->evaluateAll();
 }
 
+// goalsCheckTick 0x435a48 (not once it's over, +0x30): each of the list
+// updated in turn; a failed one (2) or the time up (3) stops the round.
+// Every one settled (none at 0) or stopped: scenarioComplete 0x48a408 asks
+// allGoalsMet 0x48a726, once - each updated again; won (1) if every one is
+// met (1) or 3, else lost (2)
 void Goals::evaluateAll() {
-  for (Goal &g : this->goals)
-    this->evaluate(g);
+  if (this->outcome != 0)
+    return;
+  const int tops = 1 + static_cast<int>(this->roots.size());
+  int result = 1;
+  for (int i = 0; i < tops; i++) {
+    this->updateTop(i);
+    const int s = this->topState(i);
+    if (s == 0) {
+      result = 0;
+    } else if (s == 2 || s == 3) {
+      result = s;
+      break;
+    }
+  }
+  if (result == 0)
+    return;
+  this->outcome = 1;
+  for (int i = 0; i < tops; i++) {
+    this->updateTop(i);
+    const int s = this->topState(i);
+    if (s != 3 && s != 1)
+      this->outcome = 2;
+  }
+  if (this->hooks.ended)
+    this->hooks.ended(this->outcome);
 }
 
 // zoo.exe 0x4240f5: types 0-2 met when v >= / < / == value; 3-5 failed when
@@ -147,11 +281,24 @@ void Goals::evaluate(Goal &g) {
   }
 }
 
+// (ours: a save made before composites and extragoals patterns were read
+// holds only the goals of the files named outright, outside composites)
 void Goals::restore(const std::vector<int> &states) {
-  for (size_t i = 0; i < states.size() && i < this->goals.size(); i++) {
-    this->goals[i].state = states[i];
+  std::vector<Goal *> order;
+  for (Goal &g : this->goals)
+    order.push_back(&g);
+  if (states.size() != order.size()) {
+    std::vector<Goal *> legacy;
+    for (Goal &g : this->goals)
+      if (g.legacy)
+        legacy.push_back(&g);
+    if (states.size() == legacy.size())
+      order = legacy;
+  }
+  for (size_t i = 0; i < states.size() && i < order.size(); i++) {
+    order[i]->state = states[i];
     if (states[i] != 0)
-      this->fire(this->goals[i], true);
+      this->fire(*order[i], true);
   }
 }
 
@@ -187,13 +334,7 @@ std::vector<Goals::Slot> Goals::originalOrder(ResourceManager *rm, const std::st
   };
   addFile(scn, scnPath);
   for (const std::string &entry : scn->getList("start", "extragoals")) {
-    std::string extra = lower(trim(entry));
-    size_t dot = extra.rfind('.');
-    if (dot == std::string::npos)
-      continue;
-    std::vector<std::string> found = rm->listResources(extra.substr(0, dot), extra.substr(dot));
-    std::sort(found.begin(), found.end());
-    for (const std::string &file : found) {
+    for (const std::string &file : extraFiles(rm, entry)) {
       IniReader *ini = rm->getIniReader(file);
       if (!ini)
         continue;
@@ -233,6 +374,25 @@ std::vector<int> Goals::originalStates(const std::vector<int> &base, uint32_t ve
   for (size_t i = 0; i < slots.size(); i++) {
     if (i < base.size())
       out[i] = base[i];
+    if (i == 0) {
+      out[i] = this->durationState; // (the time limit's)
+      continue;
+    }
+    if (slots[i].composite) {
+      // (a composite's own state, as our tree has it)
+      std::function<const Node *(const std::vector<Node> &)> find = [&](const std::vector<Node> &nodes) -> const Node * {
+        for (const Node &n : nodes) {
+          if (n.kind != 0 && lower(n.file) == lower(slots[i].file) && lower(n.name) == lower(slots[i].name))
+            return &n;
+          if (const Node *in = find(n.children))
+            return in;
+        }
+        return nullptr;
+      };
+      if (const Node *n = find(this->roots))
+        out[i] = n->state;
+      continue;
+    }
     if (!slots[i].goal)
       continue;
     auto own = std::find_if(this->goals.begin(), this->goals.end(),
@@ -249,6 +409,8 @@ void Goals::restoreOriginal(const std::vector<int> &states, uint32_t version) {
   std::vector<Slot> slots = originalOrder(this->rm, this->scnPath);
   slots.resize(heldStates(slots, version));
   for (size_t i = 0; i < slots.size() && i < states.size(); i++) {
+    if (i == 0) // (the time limit's: ScenarioGoal::setState 0x61c430)
+      this->durationState = states[0];
     if (!slots[i].goal)
       continue;
     for (Goal &g : this->goals) {

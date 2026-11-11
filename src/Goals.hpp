@@ -7,6 +7,7 @@
 #include <vector>
 
 class ResourceManager;
+class IniReader;
 
 // The scenario goal engine (zoo.exe 0x58de8a loads, 0x4240f5 checks,
 // 0x4fc783 fires): a map's .scn [goals] goal= and each extragoals= file's
@@ -24,6 +25,21 @@ public:
     int text = 0;
     int trulea = 0, truleb = 0, targa = 0, targb = 0;
     int state = 0;
+    int depth = 0; // (a composite's child: 1, its children 2...)
+    // (kept by our saves before composites and extragoals patterns were
+    // read: a goal of a file named outright, not a composite's)
+    bool legacy = false;
+  };
+  // The goal tree (zoo.exe makeGoal 0x58e066): a goal, or a composite of
+  // child= goals - rtype 1 (0x59364c, class 0x6352f8) all of them, rtype 2
+  // (0x593793, class 0x6352cc) them in order
+  struct Node {
+    int kind = 0;  // 0 a goal (goals[goal]), 1 all of, 2 in order
+    int goal = -1;
+    bool optional = false;
+    int state = 0;
+    std::string file, name;
+    std::vector<Node> children;
   };
   // What the engine asks of the game
   struct Hooks {
@@ -40,6 +56,10 @@ public:
     std::function<void(int amount, int mode)> cash;
     std::function<void(int stringId)> message;
     std::function<void(int award)> award;
+    // The months played (the game manager's month + year * 12, 0x42425d)
+    std::function<int()> months;
+    // The scenario over (allGoalsMet 0x48a726): 1 won, 2 lost
+    std::function<void(int outcome)> ended;
   };
 
   void setHooks(Hooks hooks) { this->hooks = std::move(hooks); }
@@ -85,10 +105,26 @@ public:
   // as restore)
   void restoreOriginal(const std::vector<int> &states, uint32_t version);
 
+  // The scenario's time limit ([duration] nummonths, ScenarioGoal::ctor
+  // 0x58e218): none (0) met at once; -1 never over
+  int durationMonths = 0;
+  int durationState = 1;
+  // The outcome, once every goal's settled (allGoalsMet 0x48a726, its
+  // +0x30): 0 playing, 1 won, 2 lost
+  int outcome = 0;
+  const std::vector<Node> &tree() const { return this->roots; }
+
 private:
   ResourceManager *rm = nullptr;
   std::string scnPath;
   std::vector<Goal> goals;
+  std::vector<Node> roots;
+  Node makeNode(IniReader *ini, const std::string &file, const std::string &sec, int depth);
+  void updateNode(Node &n);
+  int nodeState(const Node &n) const;
+  void checkDeadline();
+  int topState(int i) const;
+  void updateTop(int i);
   Hooks hooks;
   float clock = 0;
   void readGoals(const std::string &file, bool fromList);

@@ -4861,6 +4861,34 @@
    "provisional": false,
    "summary": "A scenario goal's rule measured: rulea picks the thing (+0xc: cash, guests, animals, buildings, ratings...) and ruleb which of it (+0x10); then compared with its value by the goal's type (src/Goals.cpp: 0 at least, 1 under, 2 exactly; 3-8 the same as win / lose)"
   },
+  "0x41d754": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "goalState",
+   "provisional": false,
+   "summary": "A normal goal's state (slot 8): 1 when optional (+0x2c), else +0x40"
+  },
+  "0x41ddf1": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "goalGroupOrderUpdate",
+   "provisional": false,
+   "summary": "rtype 2 goal group's update (class 0x6352cc slot 4): children updated in order until one isn't met (1); the group takes that child's state (1 if all met); later children wait"
+  },
+  "0x41de3b": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "goalGroupState",
+   "provisional": false,
+   "summary": "A goal group's state (slot 8): 1 when optional (+0x14), else +0x10"
+  },
+  "0x41de4d": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "goalGroupAllUpdate",
+   "provisional": false,
+   "summary": "rtype 1 goal group's update (class 0x6352f8 slot 4): every child updated; any child failed (2) -> 2, else any not met (0) -> 0, else 1; setState"
+  },
   "0x41e09e": {
    "by": "batty251 (the world's class table 0x630cac read from the running game; its functions read)",
    "confidence": "guess",
@@ -31155,6 +31183,31 @@
    "by": "Claude",
    "on": "2026-11-11",
    "what": "Note at 0x58ed1f: Base economy.cfg is loaded, then the .scn's [start] economy= file over it (only the keys it has); loadConfig ends with setAdmissionPrice, so scn34's cMin/cMaxAdultAdmissionPrice 0 make admission free. Ported: main.cpp applyScenarioEconomy."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Note at 0x42425d: Measured 2026-11-11 in the running original: a zoo in February of year 1 has gameMgr +0x15c = 1 and +0x160 = 0 - month and year both count from 0, so months played (month + year*12) is 0 in the first January. The deadline passes when nummonths < that (state 3, or 2 if any other goal isn't 1/3)."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x41de4d goalGroupAllUpdate"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x41ddf1 goalGroupOrderUpdate"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x41de3b goalGroupState"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x41d754 goalState"
   }
  ],
  "notes": {
@@ -31172,6 +31225,11 @@
    "by": "batty251",
    "on": "2026-10-12",
    "text": "Live order seen: ClimbUp (state 1) -> surface z 16 (state 2) -> ClimbDownB -> under z 0 (state 3) -> GoCleanTank -> CleanTank -> GoToPlatformExitTank -> ClimbUpB -> ClimbDown; each climb ~0.7 s (one play of climb, 125 ms frames)"
+  },
+  "0x42425d": {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "text": "Measured 2026-11-11 in the running original: a zoo in February of year 1 has gameMgr +0x15c = 1 and +0x160 = 0 - month and year both count from 0, so months played (month + year*12) is 0 in the first January. The deadline passes when nummonths < that (state 3, or 2 if any other goal isn't 1/3)."
   },
   "0x4282e1": {
    "by": "Claude",
