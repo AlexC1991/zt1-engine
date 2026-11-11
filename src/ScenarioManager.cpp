@@ -3,6 +3,7 @@
 #include "Utils.hpp"
 #include "Features.hpp"
 #include "IniReader.hpp"
+#include "Settings.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <fstream>
@@ -264,7 +265,7 @@ void ScenarioManager::loadFreeformMaps() {
       if (void *data = resource_manager->getFileContent(txt, &size)) {
         map.description = cp1252_to_utf8(std::string(static_cast<char *>(data), size));
         free(data);
-        map.description.erase(std::remove(map.description.begin(), map.description.end(), ''), map.description.end());
+        map.description.erase(std::remove(map.description.begin(), map.description.end(), '\r'), map.description.end());
       }
       SDL_Log("A map from a mod: %s (%s)", map.name.c_str(), file.c_str());
       freeform_maps.push_back(map);
@@ -650,13 +651,20 @@ void ScenarioManager::syncWithDatabase() {
       }
     }
 
-    // Set icon based on lock state
-    // iconf = locked (gold padlock), iconp = unlocked (playable)
-    if (scenario.isLocked) {
-      scenario.iconPath = "ui/scenario/iconf/iconf";
-    } else {
-      scenario.iconPath = "ui/scenario/iconp/iconp";
-    }
+    // Open or not, and done, as the original keeps them (zoo.exe 0x58eb28,
+    // 0x4cae6a: zoo.ini [scenario] - every locks= name at 1 or less opens it,
+    // its own unlocks= name at 1 or less is done; 3 when absent, 0x4cab6a:
+    // a win keeps 1, a loss 2). The list's icon (0x4cacf3): done iconc,
+    // open iconp, else iconf
+    auto done = [](const std::string &token) { return Settings::getInt("scenario", token, 3) <= 1; };
+    const bool open = std::all_of(scenario.locks.begin(), scenario.locks.end(), done);
+    scenario.isLocked = !open;
+    if (open)
+      scenario.stateMessage = "";
+    const bool completed = !scenario.unlocks.empty() && done(scenario.unlocks.front());
+    scenario.iconPath = completed ? "ui/scenario/iconc/iconc"
+                        : open    ? "ui/scenario/iconp/iconp"
+                                  : "ui/scenario/iconf/iconf";
   }
 
   SDL_Log("Synced %d scenarios with database", (int)scenarios.size());

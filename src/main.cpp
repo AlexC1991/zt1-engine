@@ -108,6 +108,11 @@ enum class LayoutState {
 };
 LayoutState g_currentState = LayoutState::MAIN_MENU;
 static int g_esthetic = 0; // the zoo rating's esthetics term (0-10)
+// A scenario's ending (zoo.exe scenarioComplete 0x48a408): its outcome as the
+// goals report it, and what its dialog chose - done between frames
+static int g_scenarioOutcome = 0;
+static std::vector<int> g_queuedActions; // (UiActions)
+static std::string g_nextScenario;
 
 UiListBox *g_scenarioListBox = nullptr;
 UiListBox *g_freeformListBox = nullptr;
@@ -2900,6 +2905,7 @@ static void setupGoals(ResourceManager *rm) {
   h.months = []() { return g_sim.month() + (g_sim.year() - 1) * 12; };
   h.ended = [](int outcome) {
     SDL_Log("[Goals] the scenario is over: %s", outcome == 1 ? "won" : "lost");
+    g_scenarioOutcome = outcome;
   };
   g_goals.setHooks(h);
 }
@@ -3455,6 +3461,86 @@ static bool startScenario(ResourceManager *rm, const ScenarioInfo &info) {
   return loaded;
 }
 
+// A scenario over (zoo.exe scenarioComplete 0x48a408, once allGoalsMet
+// 0x48a726 has the outcome: 1 won, 2 lost):
+// - the best result kept in zoo.ini [scenario] under its unlocks= name (1
+//   won, 2 lost, 3 none yet: kept only if better, 0x48a80a / 0x4cab6a) - a
+//   scenario whose locks= names are all 1 or less is open (0x58eb28);
+// - won: each of its [completion] unlock= kept for freeform (0x598cdc:
+//   [user] unlockCount, unlockEntity<n>);
+// - its message: tutorials 16104 won / 16105 lost "-Select YES to play the
+//   next tutorial" while there is one (1a, 1, 2, Dinosaur Digs' if it's
+//   there, Marine Mania's 1, 2, 3 - an expansion that isn't, skipped:
+//   0x4ab32c), the last 16102 / 16103; any other 16100 "Congratulations!
+//   You have won!" / 16101 "You have lost!"; in the popup (45200) with Yes
+//   and No (0x4ff63c). No: a tutorial to the main menu (screen 0x1a), any
+//   other to the scenario list (0x20); Yes: the next tutorial, or play on
+static void scenarioComplete(ResourceManager *rm, int outcome) {
+  if (!g_hud)
+    return;
+  const std::string scn = g_goals.script();
+  const ScenarioInfo *info = nullptr;
+  for (int i = 0; g_scenarioManager && g_scenarioManager->getScenario(i); i++)
+    if (SDL_strcasecmp(g_scenarioManager->getScenario(i)->scenarioPath.c_str(), scn.c_str()) == 0)
+      info = g_scenarioManager->getScenario(i);
+  if (info && !info->unlocks.empty()) {
+    const std::string token = info->unlocks.front();
+    if (outcome < Settings::getInt("scenario", token, 3))
+      Settings::setInt("scenario", token, outcome);
+  }
+  if (outcome == 1)
+    if (IniReader *ini = rm->getIniReader(scn)) {
+      for (const std::string &v : ini->getList("completion", "unlock")) {
+        const int id = std::atoi(v.c_str());
+        if (id <= 0)
+          continue;
+        bool kept = false;
+        const int count = Settings::getInt("user", "unlockCount", 0);
+        for (int n = 0; n < count; n++)
+          kept = kept || Settings::getInt("user", "unlockEntity" + std::to_string(n), 0) == id;
+        if (!kept) {
+          Settings::setInt("user", "unlockEntity" + std::to_string(count), id);
+          Settings::setInt("user", "unlockCount", count + 1);
+        }
+      }
+      delete ini;
+    }
+  auto is = [&](const char *path) { return SDL_strcasecmp(scn.c_str(), path) == 0; };
+  auto there = [&](const char *path) { return rm->hasResource(path); };
+  const char *dino = "scenario/scn19/scn19.scn", *marine = "scenario/scn27/scn27.scn";
+  bool tutorial = false;
+  std::string next;
+  if (is("scenario/scn01a/scn01a.scn"))
+    next = "scenario/scn01/scn01.scn";
+  else if (is("scenario/scn01/scn01.scn"))
+    next = "scenario/scn02/scn02.scn";
+  else if (is("scenario/scn02/scn02.scn"))
+    next = there(dino) ? dino : there(marine) ? marine : "";
+  else if (is(dino))
+    next = there(marine) ? marine : "";
+  else if (is(marine))
+    next = "scenario/scn28/scn28.scn";
+  else if (is("scenario/scn28/scn28.scn"))
+    next = "scenario/scn28b/scn28b.scn";
+  tutorial = !next.empty() || is("scenario/scn02/scn02.scn") || is(dino) || is("scenario/scn28b/scn28b.scn");
+  const int text = (outcome != 1 ? 1 : 0) + (!next.empty() ? 16104 : tutorial ? 16102 : 16100);
+  if (g_world && !g_world->isPaused())
+    setGamePaused(true);
+  g_hud->popupYesNo(
+      rm->getString(text),
+      [next] {
+        if (!next.empty())
+          g_nextScenario = next;
+        else if (g_world && g_world->isPaused())
+          setGamePaused(false); // (play on)
+      },
+      [tutorial] {
+        g_queuedActions.push_back(static_cast<int>(UiAction::GAME_MAIN_MENU));
+        if (!tutorial)
+          g_queuedActions.push_back(static_cast<int>(UiAction::STARTUP_PLAY_SCENARIO));
+      });
+}
+
 // --panel-shots <outDir> [mapStem]: start a freeform game (default Death
 // Mountain), open every toolbar panel and buy tab in turn and save each
 // frame as <outDir>/<name>.bmp, then quit. For comparing with the original
@@ -3508,6 +3594,68 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           << " composites, limit " << g_goals.durationMonths << " months (state " << g_goals.durationState << "), "
           << popups << " popups, outcome " << g_goals.outcome << ", cash " << std::lround(g_sim.cash()) << "\n";
       rep.flush();
+    }
+    // The ending (scenarioComplete 0x48a408), the player's own zoo.ini
+    // [scenario] and [user] unlocks put back afterwards
+    {
+      auto check = [&](const std::string &what, bool ok) {
+        count++;
+        bad += ok ? 0 : 1;
+        rep << (ok ? "PASS " : "FAIL ") << what << "\n";
+        rep.flush();
+      };
+      auto find = [&](const char *path) -> const ScenarioInfo * {
+        for (int i = 0; const ScenarioInfo *s = sm->getScenario(i); i++)
+          if (s->scenarioPath == path)
+            return s;
+        return nullptr;
+      };
+      const int keptBa = Settings::getInt("scenario", "ba", 3), keptAa = Settings::getInt("scenario", "aa", 3);
+      const int keptCount = Settings::getInt("user", "unlockCount", 0);
+      const ScenarioInfo *small = find("scenario/scn03/scn03.scn"), *tut1 = find("scenario/scn01a/scn01a.scn");
+      if (small && tut1) {
+        Settings::setInt("scenario", "ba", 3);
+        startScenario(rm, *small);
+        g_queuedActions.clear();
+        scenarioComplete(rm, 1);
+        check("Small Zoo won: \"" + g_hud->dialogMessage().substr(0, 32) + "...\" (16100), [scenario] ba = " +
+                  std::to_string(Settings::getInt("scenario", "ba", 3)),
+              g_hud->hasDialog() && g_hud->dialogMessage() == rm->getString(16100) && Settings::getInt("scenario", "ba", 3) == 1);
+        g_hud->answerDialog(false);
+        check("No: to the scenario list (by the main menu)",
+              g_queuedActions == std::vector<int>{static_cast<int>(UiAction::GAME_MAIN_MENU),
+                                                  static_cast<int>(UiAction::STARTUP_PLAY_SCENARIO)});
+        g_queuedActions.clear();
+        scenarioComplete(rm, 2);
+        check("lost after a win: 16101, the win kept (ba " + std::to_string(Settings::getInt("scenario", "ba", 3)) + ")",
+              g_hud->dialogMessage() == rm->getString(16101) && Settings::getInt("scenario", "ba", 3) == 1);
+        g_hud->answerDialog(true);
+        check("Yes: play on (nothing queued)", g_queuedActions.empty() && g_nextScenario.empty());
+        sm->syncWithDatabase();
+        const ScenarioInfo *s3 = find("scenario/scn03/scn03.scn"), *burk = find("scenario/scn07/scn07.scn");
+        check("the list: Small Zoo done (" + s3->iconPath + "), Burkitsville still locked (needs bb, bc too)",
+              s3->iconPath == "ui/scenario/iconc/iconc" && burk && burk->isLocked);
+        startScenario(rm, *tut1);
+        scenarioComplete(rm, 2);
+        check("tutorial 1 lost: 16105 (Yes plays the next)", g_hud->dialogMessage() == rm->getString(16105));
+        g_hud->answerDialog(true);
+        check("Yes: tutorial 2 next (" + g_nextScenario + ")", g_nextScenario == "scenario/scn01/scn01.scn");
+        g_nextScenario.clear();
+        check("a loss keeps 2 ([scenario] aa " + std::to_string(Settings::getInt("scenario", "aa", 3)) + ")",
+              Settings::getInt("scenario", "aa", 3) == 2);
+        startScenario(rm, *tut1);
+        scenarioComplete(rm, 2);
+        g_hud->answerDialog(false);
+        check("No after a tutorial: the main menu only",
+              g_queuedActions == std::vector<int>{static_cast<int>(UiAction::GAME_MAIN_MENU)});
+        g_queuedActions.clear();
+      } else {
+        check("Small Zoo and tutorial 1 in the list", false);
+      }
+      Settings::setInt("scenario", "ba", keptBa);
+      Settings::setInt("scenario", "aa", keptAa);
+      Settings::setInt("user", "unlockCount", keptCount);
+      sm->syncWithDatabase();
     }
     rep << "\n" << (count - bad) << "/" << count << " pass\n";
     return bad ? 1 : 0;
@@ -10310,6 +10458,21 @@ int main(int argc, char *argv[]) {
     // original (in a game, the HUD's panels handle their own)
     if (g_currentState != LayoutState::GAME_LOOP && isPanelClose(action))
       action = UiAction::SCENARIO_BACK_TO_MAIN_MENU;
+    // A scenario's ending chose (scenarioComplete): the next tutorial, or a
+    // menu screen, one step a frame
+    if (!g_nextScenario.empty() && g_currentState == LayoutState::GAME_LOOP) {
+      const std::string next = g_nextScenario;
+      g_nextScenario.clear();
+      for (int i = 0; const ScenarioInfo *info = g_scenarioManager ? g_scenarioManager->getScenario(i) : nullptr; i++)
+        if (SDL_strcasecmp(info->scenarioPath.c_str(), next.c_str()) == 0) {
+          destroyHud();
+          startScenario(&resource_manager, *info);
+          break;
+        }
+    } else if (!g_queuedActions.empty()) {
+      action = static_cast<UiAction>(g_queuedActions.front());
+      g_queuedActions.erase(g_queuedActions.begin());
+    }
 
     switch (action) {
     case UiAction::STARTUP_EXIT:
@@ -10379,6 +10542,8 @@ int main(int argc, char *argv[]) {
           getLayoutPath(&resource_manager, "scenario.lyt"));
       layout = new UiLayout(lyt_reader, &resource_manager);
       g_currentState = LayoutState::SCENARIO_SELECT;
+      // (what's open and done, as zoo.ini [scenario] has it now)
+      g_scenarioManager->syncWithDatabase();
       populateScenarioList(layout, g_scenarioManager);
       break;
 
@@ -10576,6 +10741,10 @@ int main(int argc, char *argv[]) {
           }
         }
         g_goals.update(simulationSeconds);
+        if (const int outcome = g_scenarioOutcome) {
+          g_scenarioOutcome = 0;
+          scenarioComplete(&resource_manager, outcome);
+        }
         // Research: programs finished, their effects, and the news
         // ("Research & Conservation: %r is now available.", 23020; "%s: All
         // selected programs have been completed.", 23021)

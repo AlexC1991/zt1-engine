@@ -9116,6 +9116,13 @@
    "provisional": false,
    "summary": "Whether every goal of the scenario is met (its list +0x34..+0x38), only once (+0x30 set)"
   },
+  "0x48a80a": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "scenarioRecordResult",
+   "provisional": false,
+   "summary": "zoo.ini [scenario] <token> = value (allGoalsMet writes the outcome when it's lower than what's kept: 1 won, 2 lost)"
+  },
   "0x48a99f": {
    "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
    "confidence": "sure",
@@ -11645,6 +11652,20 @@
    "name": "mapselec_MapList_pick",
    "provisional": false,
    "summary": "UI handler (registered with uiRegisterHandler): mapselec:Map List a list entry picked"
+  },
+  "0x4cab6a": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "scenarioTokenValue",
+   "provisional": false,
+   "summary": "zoo.ini [scenario] <token> read, 3 when absent (0x41b55d default 3)"
+  },
+  "0x4cae6a": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "scenarioIsDone",
+   "provisional": false,
+   "summary": "A scenario list entry done: its unlocks= token's value 1 or less"
   },
   "0x4caf09": {
    "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
@@ -15048,6 +15069,13 @@
    "provisional": false,
    "summary": "UI handler (registered with uiRegisterHandler): scenario:ScenarioList clicked"
   },
+  "0x58eb28": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "scenarioIsOpen",
+   "provisional": false,
+   "summary": "A scenario list entry open: each locks= token's value (0x4cab6a) 1 or less"
+  },
   "0x58eb71": {
    "by": "batty251 (the scenario manager's class table 0x630d7c read from the running game; its functions read)",
    "confidence": "likely",
@@ -15336,6 +15364,13 @@
    "name": "begin",
    "provisional": false,
    "summary": "Task 0x82 (Task82_SuitIdle: bSuitIdle (a diver's suit)): set up when the task starts; true if it can - class slot 4"
+  },
+  "0x598cdc": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "completionUnlock",
+   "provisional": false,
+   "summary": "A scenario reward kept for freeform: zoo.ini [user] unlockEntity<unlockCount> = the entity id, unlockCount + 1, and its type marked available"
   },
   "0x599ae7": {
    "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
@@ -31208,6 +31243,41 @@
    "by": "Claude",
    "on": "2026-11-11",
    "what": "Named 0x41d754 goalState"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Note at 0x48a408: Read 2026-11-11: message (outcome!=1)+base: scn01a/scn01/scn27/scn28 0x3ee8 (16104/5, next = scn01/scn02/scn28/scn28b); scn02 next scn19 if expansion 1 (0x4ab32c), else scn27 if 2, else 16102/3; scn19 next scn27 if 2 else 16102/3; scn28b 16102/3; others 0x3ee4 (16100/1). Popup 0xb090 (45200) with MB_YESNO (0x4ff63c(0xb090,4,1,0)); 7 (No): tutorial -> screen 0x1a, else 0x20; Yes with a next: scenarioOpen(next) + scenarioStart(-1). Won: [completion] unlock= each through 0x598cdc. Ported: main.cpp scenarioComplete."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x598cdc completionUnlock"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x48a80a scenarioRecordResult"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x4cab6a scenarioTokenValue"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x58eb28 scenarioIsOpen"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x4cae6a scenarioIsDone"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Note at 0x4cacf3: Each list icon: done (0x4cae6a) iconc, else open (0x58eb28) iconp, else iconf"
   }
  ],
  "notes": {
@@ -31261,6 +31331,11 @@
    "on": "2026-10-17",
    "text": "Section order of a saved zoo (checked against worldLoad and worldSave, matching RustyZoo's zoo.rs): habitats (habitatMgrLoad, with the map size and entrance), shows from 97 (showsLoad), entities (next id, tile grid, records: entitiesLoad), the game manager (settings/view, date, cash: gameMgrLoad), thoughts (thoughtMgr), clocks and events (clocksAndEventsLoad), research (researchMgr), awards (awardsLoad), marketing (marketingMgr), shows for 89-96, cheats from 104 (cheatsLoad), then the tail: the world's slot 0x40 and, from 0x3a, two ints (+0x208, +0x204), plus one more before 0x43. loadZoo before it: TZFB, version 38..106, language from 69 (0 reads as 0x409), expansions from 82"
   },
+  "0x48a408": {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "text": "Read 2026-11-11: message (outcome!=1)+base: scn01a/scn01/scn27/scn28 0x3ee8 (16104/5, next = scn01/scn02/scn28/scn28b); scn02 next scn19 if expansion 1 (0x4ab32c), else scn27 if 2, else 16102/3; scn19 next scn27 if 2 else 16102/3; scn28b 16102/3; others 0x3ee4 (16100/1). Popup 0xb090 (45200) with MB_YESNO (0x4ff63c(0xb090,4,1,0)); 7 (No): tutorial -> screen 0x1a, else 0x20; Yes with a next: scenarioOpen(next) + scenarioStart(-1). Won: [completion] unlock= each through 0x598cdc. Ported: main.cpp scenarioComplete."
+  },
   "0x48d21d": {
    "by": "batty251 (compared while naming)",
    "on": "2026-10-12",
@@ -31285,6 +31360,11 @@
    "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
    "on": "2026-10-14",
    "text": "The path shape loader stores each [Shapes] shape= code's LIST POSITION into the record's +0x14: the bytes at 0x4c25cf are 89 78 14, i.e. 'mov dword ptr [eax+0x14], edi' - checked against the pinned build (2002 Complete Collection zoo.exe, sha256 61fcc6d1..., 2,449,432 bytes), so the value kept is the index in the repeated-key list, not the code itself. Found by StevenGann, address verified here 2026-10-14."
+  },
+  "0x4cacf3": {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "text": "Each list icon: done (0x4cae6a) iconc, else open (0x58eb28) iconp, else iconf"
   },
   "0x58b0a3": {
    "by": "Claude",

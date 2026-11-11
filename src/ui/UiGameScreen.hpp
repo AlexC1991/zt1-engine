@@ -171,6 +171,9 @@ public:
   // A scenario popup (confirmm.lyt, 45200: its picture, the text, OK) - an
   // award's, a donation's
   void popup(const std::string &image, const std::string &message);
+  // The same popup with Yes and No (zoo.exe 0x4ff63c's 4: the scenario's
+  // ending, scenarioComplete 0x48a408)
+  void popupYesNo(const std::string &message, std::function<void()> yes, std::function<void()> no);
   bool dialogOpen() const { return this->dialog.layout != nullptr; }
   // The awards the zoo has received (Zoo Status: Zoo Awards, list 4124)
   void setAwards(const std::vector<int> &awards) { this->awards = awards; this->awardsListed = -1; }
@@ -178,6 +181,9 @@ public:
   // escaped.")
   void tell(const std::string &message);
   bool hasDialog() const { return this->dialog.layout != nullptr; }
+  // (checks) the open dialog's message, and it answered: Yes / OK, or No
+  std::string dialogMessage() const;
+  void answerDialog(bool yes);
   void drawDialog(SDL_Renderer *renderer, SDL_Rect *layout_rect);
   // The Options window (the optionswindow extra: the disk button and Esc
   // open it in place of the original's side panel)
@@ -451,6 +457,7 @@ private:
     std::string typed;
     std::function<void(const std::string &)> done;
     std::function<void()> yes;
+    std::function<void()> no; // (No pressed)
     bool submit = false, cancel = false;
   } dialog;
   std::vector<std::function<void()>> dialogQueue; // waiting their turn

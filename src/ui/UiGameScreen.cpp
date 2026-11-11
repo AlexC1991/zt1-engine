@@ -3099,6 +3099,54 @@ void UiGameScreen::popup(const std::string &image, const std::string &message) {
     ok->onClick = [this] { this->dialog.submit = true; };
 }
 
+std::string UiGameScreen::dialogMessage() const {
+  if (!this->dialog.layout)
+    return "";
+  for (int id : {45206, 45006})
+    if (UiText *m = dynamic_cast<UiText *>(this->dialog.layout->getElementById(id)))
+      return m->getText();
+  return "";
+}
+
+void UiGameScreen::answerDialog(bool yes) {
+  if (!this->dialog.layout)
+    return;
+  (yes ? this->dialog.submit : this->dialog.cancel) = true;
+  std::vector<Input> none;
+  this->handleDialog(none);
+}
+
+void UiGameScreen::popupYesNo(const std::string &message, std::function<void()> yes, std::function<void()> no) {
+  if (this->dialog.layout) {
+    this->dialogQueue.push_back([=] { this->popupYesNo(message, yes, no); });
+    return;
+  }
+  IniReader *ini = this->resource_manager->getIniReader("ui/confirmm.lyt");
+  if (!ini)
+    return;
+  // (Yes and No at their altx / alty, as askConfirm's)
+  for (const char *b : {"yes", "no"}) {
+    std::string ax = ini->get(b, "altx"), ay = ini->get(b, "alty");
+    if (!ax.empty())
+      ini->set(b, "x", ax);
+    if (!ay.empty())
+      ini->set(b, "y", ay);
+  }
+  this->dialog.layout = new UiLayout(ini, this->resource_manager);
+  this->dialog.yes = yes;
+  this->dialog.no = no;
+  UiLayout *d = this->dialog.layout;
+  if (UiText *m = dynamic_cast<UiText *>(d->getElementById(45206)))
+    m->setMessage(message);
+  for (int id : {45212, 45213}) // OK, Cancel
+    if (UiElement *e = d->getElementById(id))
+      e->setHidden(true);
+  if (UiButton *y = dynamic_cast<UiButton *>(d->getElementById(45210)))
+    y->onClick = [this] { this->dialog.submit = true; };
+  if (UiButton *n = dynamic_cast<UiButton *>(d->getElementById(45211)))
+    n->onClick = [this] { this->dialog.cancel = true; };
+}
+
 void UiGameScreen::askConfirm(const std::string &message, std::function<void()> yes) {
   if (this->dialog.layout) {
     this->dialogQueue.push_back([=] { this->askConfirm(message, yes); });
@@ -3136,7 +3184,10 @@ void UiGameScreen::handleDialog(std::vector<Input> &inputs) {
     if (in.event == InputEvent::KEY_DOWN && (in.key == SDLK_RETURN || in.key == SDLK_KP_ENTER))
       this->dialog.submit = true;
   if (this->dialog.cancel) {
+    auto no = this->dialog.no;
     this->closeDialog();
+    if (no)
+      no();
     return;
   }
   if (!this->dialog.submit)
