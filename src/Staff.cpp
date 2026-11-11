@@ -1495,13 +1495,19 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
 }
 
 // ----------------------------------------------------------------------------
-// Tour guides (zoo.exe 0x58ce7e): a trip to an exhibit - one of its
-// assigned ones at random, else any exhibit with animals at random - to
-// its nearest or a random viewing area (50/50); on the way, every
-// cCrowdCheck ticks, guests within cCrowdRadius may follow (cFollowChance,
-// +15 a man to a woman guide, +10 a woman to a man; cMaxGroupSize at most);
-// there with a group, two talks (speak, speak2: cInformGuestTime each), and
-// its followers' happiness up cTourGuideBonus
+// Tour guides. The trip (zoo.exe 0x58ce7e, the guide's task chooser: task
+// 0x76 via 0x58ae04 when the zoo has habitats; the target picked on the
+// task's first tick, 0x58cf31 -> 0x58b0a3): a habitat at random - one of
+// its assigned ones, else any (slot 0x328, 0x58af73) - none with animals,
+// the trip's given up (0x58ae2c: entries with +0x54 > 0) and another picked
+// next time; then one of its viewing areas at random (0x58cf31: rand %
+// count). On the way, every cCrowdCheck ticks (tick 0x58ceb9), guests within
+// cCrowdRadius may follow (0x58d349: cFollowChance, raised 15 by each man
+// near a woman guide and 10 by each woman near a man as the guests are
+// looked at - never put back within one look; cMaxGroupSize at most); there
+// with a group, the talk (task 0x77: speak, speak2, cInformGuestTime each)
+// and its followers' happiness up cTourGuideBonus; with none, the trip ends
+// (0x58ad88)
 // ----------------------------------------------------------------------------
 bool Staff::tourWork(Member &m, const WorldMap &map, Fences &fences) {
   if (!this->guests)
@@ -1512,26 +1518,21 @@ bool Staff::tourWork(Member &m, const WorldMap &map, Fences &fences) {
     choices = m.exhibits;
   } else {
     for (const Fences::Exhibit &ex : fences.exhibits())
-      if (ex.named && !ex.tank && ex.animals > 0)
+      if (ex.named && !ex.tank)
         choices.push_back(ex.id);
   }
   if (choices.empty())
     return false;
   int pick = choices[std::uniform_int_distribution<size_t>(0, choices.size() - 1)(this->rng)];
+  // (one without animals: no trip this time - zoo.exe 0x58ae2c, 0x58b0a3)
+  const Fences::Exhibit *picked = fences.exhibit(pick);
+  if (!picked || picked->animals <= 0)
+    return false;
   std::vector<std::pair<int, int>> view = this->guests->viewingTiles(pick);
   if (view.empty())
     return false;
+  // (a viewing area at random - zoo.exe 0x58cf31)
   std::pair<int, int> spot = view[std::uniform_int_distribution<size_t>(0, view.size() - 1)(this->rng)];
-  if (std::uniform_int_distribution<int>(0, 1)(this->rng) == 0) {
-    float best = 1e30f;
-    for (auto [tx, ty] : view) {
-      float d = (tx + 0.5f - m.x) * (tx + 0.5f - m.x) + (ty + 0.5f - m.y) * (ty + 0.5f - m.y);
-      if (d < best) {
-        best = d;
-        spot = {tx, ty};
-      }
-    }
-  }
   if (!findPath(m, spot.first, spot.second, map, fences, spot.first + 0.5f, spot.second + 0.5f))
     return false;
   // A new trip: the last group goes, a new one gathers
@@ -1560,6 +1561,9 @@ void Staff::gatherFollowers(Member &m) {
   }), m.followers.end());
   if (static_cast<int>(m.followers.size()) >= t.maxGroup) return;
   int gx = static_cast<int>(std::floor(m.x)), gy = static_cast<int>(std::floor(m.y));
+  // (zoo.exe 0x58d349: the chance is raised by each guest that matches and
+  // kept for the rest of the look - one chance for the whole scan)
+  int chance = t.followChance;
   for (const Guests::Guest &g : this->guests->guests()) {
     if (static_cast<int>(m.followers.size()) >= t.maxGroup)
       break;
@@ -1567,7 +1571,7 @@ void Staff::gatherFollowers(Member &m) {
     if (std::abs(x - gx) > t.crowdRadius || std::abs(y - gy) > t.crowdRadius)
       continue;
     bool woman = this->guests->types()[g.type].female;
-    int chance = t.followChance + (m.female && !woman ? 15 : 0) + (!m.female && woman ? 10 : 0);
+    chance += (m.female && !woman ? 15 : 0) + (!m.female && woman ? 10 : 0);
     if (std::uniform_int_distribution<int>(0, 99)(this->rng) >= chance)
       continue;
     if (this->guests->joinTour(g.id, m.id, m.visit, m.goalX, m.goalY))
