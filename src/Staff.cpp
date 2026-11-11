@@ -1066,7 +1066,7 @@ bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences) {
                                   [&](int ex) { return !fences.exhibit(ex); }),
                    m.exhibits.end());
   // Its own exhibits; unassigned, every exhibit it can look after (as the
-  // original: "Going to Exhibit 2" with no assignment), nearest first
+  // original: "Going to Exhibit 2" with no assignment)
   std::vector<int> list = m.exhibits;
   if (list.empty()) {
     const Type &t = this->typeList[m.type];
@@ -1079,14 +1079,42 @@ bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences) {
       if (fits)
         list.push_back(e.id);
     }
-    auto dist = [&](int id) {
-      const Fences::Exhibit *e = fences.exhibit(id);
-      float best = 1e9f;
-      for (auto [x, y] : e->tiles)
-        best = std::min(best, std::fabs(x + 0.5f - m.x) + std::fabs(y + 0.5f - m.y));
-      return best;
+  }
+  // Most in need first - no distance (zoo.exe 0x49d7c7, Task 0x65's target,
+  // sorted by the comparison at 0x49da35): the animals to heal (habitat
+  // +0xa0, likely), then the hungry ones with no food (0x49d9e2 counting
+  // 0x49d3e1: hunger at the type's threshold, no food), then the dung there
+  // (0x4a8940), then the longest since a keeper's visit (zooTime +0xec
+  // against the habitat's +0xec); assigned ones sorted the same way
+  {
+    struct Need {
+      int heal = 0, hungry = 0, dung = 0;
+      double since = 1e300;
     };
-    std::sort(list.begin(), list.end(), [&](int a, int b) { return dist(a) < dist(b); });
+    std::map<int, Need> need;
+    for (int id : list) {
+      Need n;
+      const float food = this->items ? this->items->foodIn(id) : 0.0f;
+      if (this->animals)
+        for (const Animals::Member &a : this->animals->members())
+          if (a.exhibit == id && !a.boxed) {
+            n.heal += this->animals->needsHealing(a) ? 1 : 0;
+            n.hungry += a.hunger >= this->animals->types()[a.type].hungerThreshold && food <= 0 ? 1 : 0;
+          }
+      if (this->items)
+        n.dung = static_cast<int>(this->items->ofKind(ZooItems::Kind::Dung, id).size());
+      auto last = this->lastVisit.find(id);
+      if (last != this->lastVisit.end())
+        n.since = this->clock - last->second;
+      need[id] = n;
+    }
+    std::stable_sort(list.begin(), list.end(), [&](int a, int b) {
+      const Need &x = need[a], &y = need[b];
+      if (x.heal != y.heal) return x.heal > y.heal;
+      if (x.hungry != y.hungry) return x.hungry > y.hungry;
+      if (x.dung != y.dung) return x.dung > y.dung;
+      return x.since > y.since;
+    });
   }
   for (int ex : list) {
     if (!needsVisit(m, ex, fences))

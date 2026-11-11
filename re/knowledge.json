@@ -10047,12 +10047,27 @@
    "provisional": true,
    "summary": "A keeper's next animal: one to heal, one hungry, dung, or not visited"
   },
+  "0x49d3e1": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "animalHungryNoFood",
+   "provisional": false,
+   "summary": "An animal counted as hungry for a keeper: hunger (+0x2b0) at or over its type's threshold (type +0x20c) and habitatKeeperFoodCheck false (no food for it)"
+  },
   "0x49d539": {
    "by": "batty251 (the original's own status text in each, and who calls it)",
    "confidence": "likely",
    "name": "keeperGoToHabitat",
    "provisional": false,
    "summary": "\"Trying to go to a habitat\": the keeper's chooseTask sending it to an exhibit"
+  },
+  "0x49d7c7": {
+   "by": "Claude",
+   "class": "ZTKeeper",
+   "confidence": "likely",
+   "name": "keeperPickHabitat",
+   "provisional": false,
+   "summary": "Task 0x65 (keeper to a habitat)'s target: candidates its assigned habitats (+0x260), else all; sorted by the comparison at 0x49da35 - habitat +0xa0 (likely animals to heal), then 0x49d9e2 (hungry animals with no food), then 0x4a8940 (its dung for this keeper), then time since a keeper's visit (zooTime +0xec - habitat +0xec), each most first, no distance; pass 1: the first with work (keeperPickAnimalTask), not the current one, 0x4a89cb false, nobody heading there (+0xf4 0); pass 2: the first with work where +0xf0 + +0xf4 < 2 and the last visit > 1000 ago"
   },
   "0x49e331": {
    "by": "batty251 (read unitMakeJob)",
@@ -10175,12 +10190,12 @@
    "summary": "Task 0x6e (Task6e_DutiesInHabitat: staff at work in a habitat (\"Starting duties In habitat\", \"Finished habitat\")): set up when the task starts; true if it can - class slot 4"
   },
   "0x49f644": {
-   "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
+   "by": "Claude",
    "class": "Task65_KeeperGoToHabitat",
    "confidence": "likely",
-   "name": "atTarget",
+   "name": "Task65_KeeperGoToHabitat::atTarget",
    "provisional": false,
-   "summary": "Task65_KeeperGoToHabitat: a keeper going to a habitat (\"Going to habitat\") - class slot 10"
+   "summary": "At the habitat: in a tank needing it, task 0x7e; else into duties (task 0x6e) - unless 0x4a89cb and more than one keeper is there (+0xf0 > 1): 'Aborted going to habitat'"
   },
   "0x49f6b7": {
    "by": "batty251 (read its code, from the live steps)",
@@ -31070,6 +31085,21 @@
    "by": "Claude",
    "on": "2026-11-11",
    "what": "Note at 0x439cd0: Task78_MaintFindWork::whileGoing (code at 0x4a1c8d..): over maintWorkList, the duty for each job (9->0 trash, 7/0xb->1 sweep, 0x10->2 fences, 0x1a->3 filters) must be on; tiles in the worker's +0x27c list skipped; the nearest (squared distance) kept; once the best is flagged (+0xc) the look stops at the first unflagged entry - so a worn fence's own side comes before all other work. An entry already taken (+8) is compared by the two workers' distances (which way round not yet read); the taker's old job dropped (slot 0x174), the entry's +8 set to it (0x4a97c0)."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x49d7c7 keeperPickHabitat"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x49d3e1 animalHungryNoFood"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x49f644 Task65_KeeperGoToHabitat::atTarget"
   }
  ],
  "notes": {
