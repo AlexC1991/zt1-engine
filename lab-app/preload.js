@@ -138,7 +138,7 @@ contextBridge.exposeInMainWorld('lab', {
   modkitToken: (token) => ipcRenderer.invoke('modkit:token', token),
   modkitMine: () => ipcRenderer.invoke('modkit:mine'),
   modkitTakedown: (id) => ipcRenderer.invoke('modkit:takedown', id),
-  modkitUpload: (folder) => ipcRenderer.invoke('modkit:upload', folder),
+  modkitUpload: (folder, stuck) => ipcRenderer.invoke('modkit:upload', folder, !!stuck),
   onModkit: (fn) => on('modkit:progress', (_e, s) => fn(s)),
   // (a dropped file's path: Electron's webUtils, as File.path is gone)
   pathForFile: (f) => require('electron').webUtils.getPathForFile(f),

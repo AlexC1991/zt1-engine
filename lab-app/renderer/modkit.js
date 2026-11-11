@@ -228,8 +228,10 @@ function mkPublishPage(m) {
       ${up ? `<div class="mkline"><span><b>${esc(up.name)}</b> <span class="dim">${esc(up.version)}</span></span><span class="${up.live ? 'green' : 'amber'}">${esc(up.status)}</span></div>${up.reason ? `<div class="red" style="font-size:12px">${esc(up.reason)}</div>` : ''}` : ''}
       <div class="muted" style="font-size:12px">Uploaded, it's checked there (the same rules, and a virus scan), then offered in every official game's Mod Menu. Uploading it again updates it.</div>
       <div style="display:flex;gap:8px"><div class="btn small primary${busy}${MK.signedIn ? '' : ' disabled'}" data-act="mkUpload">${up ? 'Upload this version' : 'Upload it'}</div>${
-        up ? `<div class="btn small ghost" data-act="mkTakedown" data-arg="${esc(up.id)}">Take it down</div>` : ''
-      }</div>
+        up && up.stuck
+          ? `<div class="btn small${busy}${MK.signedIn ? '' : ' disabled'}" data-act="mkUpload" data-arg="stuck" title="Only the parts the repository doesn't offer are sent again (that asks for their checks again); every part it offers is left alone">Send the ${up.stuck} stuck part${up.stuck > 1 ? 's' : ''} again</div>`
+          : ''
+      }${up ? `<div class="btn small ghost" data-act="mkTakedown" data-arg="${esc(up.id)}">Take it down</div>` : ''}</div>
       <div class="code" id="mk-log" style="font-size:12px;white-space:pre-wrap;${MK.log.length ? '' : 'display:none'}">${esc(MK.log.join('\n'))}</div></div>
     <div class="mksec"><div class="label">Your uploads</div>${mkUploads()}</div>`;
 }
@@ -480,14 +482,15 @@ Object.assign(ACTIONS, {
     MK.check = { folder: MK.sel, ...(await lab.modkitCheck(MK.sel)) };
     renderModKit();
   },
-  mkUpload: async () => {
+  // ("stuck": only the parts the repository doesn't offer)
+  mkUpload: async (how) => {
     if (MK.busy) return;
     if (MK.dirty) await ACTIONS.mkSave();
     MK.busy = true;
     stSetNode('publish');
-    MK.log = ['Uploading...'];
+    MK.log = [how === 'stuck' ? 'Sending the stuck parts again...' : 'Uploading...'];
     renderModKit();
-    const r = await lab.modkitUpload(MK.sel);
+    const r = await lab.modkitUpload(MK.sel, how === 'stuck');
     MK.busy = false;
     if (r.check) MK.check = { folder: MK.sel, ...r.check };
     MK.log.push(r.message || (r.ok ? 'Uploaded.' : 'Not uploaded.'));

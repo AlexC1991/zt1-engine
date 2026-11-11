@@ -2800,12 +2800,14 @@ function uploadRow(m) {
   const behind = parts
     .map((p, i) => ({ p, r: rows[i], i }))
     .filter(({ r }) => !r.ok)
-    .map(({ p, r, i }) => `${p.name || p.id || 'part ' + (i + 1)}: ${r.status}${r.reason ? ' (' + r.reason + ')' : ''}`);
+    .map(({ p, r, i }) => `${p.part || p.name || p.id || 'part ' + (i + 1)}: ${r.status}${r.reason ? ' (' + r.reason + ')' : ''}`);
   const status =
     offered === rows.length && !behind.length
       ? `In the mod repository (all ${rows.length} parts)`
       : `${offered} of ${rows.length} parts in the mod repository`;
-  return { ...row, live: offered === rows.length && !behind.length, status, reason: behind.join('; ') };
+  // (stuck: parts not offered and not being checked - sending them again is what asks for new checks)
+  const stuck = rows.filter((r) => !r.live && r.status !== 'Being checked').length;
+  return { ...row, live: offered === rows.length && !behind.length, status, reason: behind.join('; '), stuck };
 }
 function modkitLog(line) {
   send('modkit:progress', { line });
@@ -3395,7 +3397,34 @@ function sha256File(file) {
     fs.createReadStream(file).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
   });
 }
-ipcMain.handle('modkit:upload', async (_e, folder) => {
+// ours: what each part was when it was last sent (its files' names, sizes
+// and times, and the zip the repository got), so an unchanged part isn't
+// packed and sent again: Windows' tar puts each file's access and change
+// times in the zip, so the same files never pack to the same bytes twice
+const uploadRecordFile = () => path.join(app.getPath('userData'), 'mod-uploads.json');
+function uploadRecords() {
+  try {
+    return JSON.parse(fs.readFileSync(uploadRecordFile(), 'utf8')) || {};
+  } catch {
+    return {};
+  }
+}
+function partSignature(dir, files, previewFile) {
+  const h = require('crypto').createHash('sha256');
+  for (const f of [...files].sort()) {
+    try {
+      const s = fs.statSync(path.join(dir, f));
+      h.update(`${f}\0${s.size}\0${Math.round(s.mtimeMs)}\n`);
+    } catch {
+      h.update(`${f}\0missing\n`);
+    }
+  }
+  if (previewFile && fs.existsSync(previewFile)) h.update(fs.readFileSync(previewFile));
+  return h.digest('hex');
+}
+// stuck: send only the parts the repository doesn't offer (not there, or its
+// checks errored or turned it down) - every part it offers is left alone
+ipcMain.handle('modkit:upload', async (_e, folder, stuck) => {
   const dir = modPath(folder);
   if (!dir) return { ok: false, message: 'No such mod.' };
   const check = await checkMod(dir);
@@ -3461,7 +3490,10 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
     if (r.status === 409) throw new Error(`The id "${entry.id}" is someone else's mod: give yours another id.`);
     if (r.status !== 200 && r.status !== 201) throw new Error(repoError(r));
     const before = await repoMine('GET', '/mods/' + encodeURIComponent(entry.id));
-    const had = new Map(((before.status === 200 && before.json && before.json.parts) || []).map((p) => [p.id, p]));
+    // (the repository names each part by "part"; what it offers is in "live":
+    // its size and the zip's sha256 - not on the part itself)
+    const had = new Map(((before.status === 200 && before.json && before.json.parts) || []).map((p) => [p.part || p.id, p]));
+    const offeredZip = (p) => (p && p.live && typeof p.live === 'object' ? p.live : p || {});
     const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
     const waiting = []; // (parts the repository is still checking: left for now)
     for (let k = 0; k < parts.length; k++) {
@@ -3476,6 +3508,22 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
       // given with names too - the cover - and packs the list itself. Only
       // a list too long for a command line goes as -T, without the cover)
       const previewArgs = fs.existsSync(previewFile) ? ['-C', work, 'repository-preview.png'] : [];
+      const old0 = had.get(part.id);
+      const check0 = (old0 && old0.check && old0.check.state) || '';
+      const offered = old0 && old0.live && !old0.uploading && check0 !== 'error' && check0 !== 'rejected';
+      const signature = partSignature(dir, part.files, previewFile);
+      const record = uploadRecords()[`${entry.id}/${part.id}`];
+      // (one the repository offers, sent from these same files: left as it is)
+      const liveZip = offeredZip(old0);
+      if (offered && (stuck || (record && record.signature === signature && (!liveZip.sha256 || record.sha256 === liveZip.sha256)))) {
+        modkitLog(`${label}the repository has it already.`);
+        continue;
+      }
+      if (stuck && old0 && (old0.uploading || check0 === 'queued' || check0 === 'checking')) {
+        modkitLog(`${label}still being checked there: left for now.`);
+        waiting.push(part.name);
+        continue;
+      }
       const short = part.files.reduce((n, f) => n + f.length + 3, 0) < 24000;
       if (!short) fs.writeFileSync(list, part.files.join('\n') + '\n');
       const names = short ? ['-C', dir, ...part.files, ...previewArgs] : ['-C', dir, '-T', list];
@@ -3488,7 +3536,7 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
       // (the same file isn't sent again - unless its last check errored or
       // was turned down: sending it again is what asks for a new check)
       const oldCheck = (old && old.check && old.check.state) || '';
-      if (old && old.sha256 === sha256 && old.size === size && !old.uploading && oldCheck !== 'error' && oldCheck !== 'rejected') {
+      if (old && offeredZip(old).sha256 === sha256 && offeredZip(old).size === size && !old.uploading && oldCheck !== 'error' && oldCheck !== 'rejected') {
         modkitLog(`${label}the repository has it already.`);
         fs.rmSync(zip, { force: true });
         continue;
@@ -3539,6 +3587,10 @@ ipcMain.handle('modkit:upload', async (_e, folder) => {
       r = await repoMine('POST', `/mods/${entry.id}/parts/${part.id}/complete`, { upload }, false, 30 * 60 * 1000);
       if (r.status !== 202 && r.status !== 200) throw new Error(repoError(r));
       fs.rmSync(zip, { force: true });
+      // (what was sent, for the next upload's "has it already")
+      const records = uploadRecords();
+      records[`${entry.id}/${part.id}`] = { signature, sha256, size, at: new Date().toISOString() };
+      fs.writeFileSync(uploadRecordFile(), JSON.stringify(records, null, 1));
     }
     if (waiting.length)
       return { ok: true, message: `The rest is sent. Still being checked there, so not sent again: ${waiting.join(', ')}. Upload it again once Your uploads shows those checks have finished.`, check };
