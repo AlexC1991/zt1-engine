@@ -72,6 +72,9 @@ public:
   // 0x41f2ae: spendCash only when the amount's no more than the cash);
   // false: not paid
   bool payTick(Line line, int key, double amount);
+  // A private foundation's donation, tried each tick (zoo.exe 0x4351a9,
+  // 0x613e4a): 0 none; 15002 given (amount, on the books); 15003 no more
+  int foundationTick(int &amount);
 
   double cash() const { return this->money; }
   // The infinite money cheat (Features::infiniteMoney): costs are booked as
@@ -122,6 +125,7 @@ private:
   };
   std::vector<Monthly> monthly;
   double fundingClock = 0; // seconds to the next funding tick (every 3 s)
+  float foundationCount = 0; // the foundations asked so far (zoo.exe +0x120)
   bool dirty = true;
   void newMonth();
 };

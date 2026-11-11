@@ -518,6 +518,21 @@ static std::string formatMoney(int amount) {
   return (amount < 0 ? "-$" : "$") + digits;
 }
 
+// A scenario's own economy file over economy.cfg (zoo.exe applyStartSettings
+// 0x58ed1f), then the admission held to its limits, as loadConfig 0x591c0f
+// ends (setAdmissionPrice 0x4bbf10: Dinosaur Digs' free-admission scenario
+// has $0 to $0)
+static void applyScenarioEconomy(ResourceManager *rm, const std::string &scn) {
+  Original::loadEconomy(rm, scn);
+  if (!g_hud) return;
+  UiGameScreen::ZooInfo zi = g_hud->zooInfo();
+  const float held = Original::clampAdmission(static_cast<float>(zi.admission));
+  if (held != static_cast<float>(zi.admission)) {
+    zi.admission = held;
+    g_hud->setZooInfo(zi);
+  }
+}
+
 // The HUD's date ("Apr, Year 1": lang string 22012's MMM',' 'Year' y) and
 // money (green, red when below zero)
 static void updateHudDate(ResourceManager *rm) {
@@ -3117,6 +3132,8 @@ static bool gameLoad(ResourceManager *rm, const std::string &given = "") {
   startGoals(rm, goalsPath);
   g_sim = std::move(savedBooks);
   g_hud->setZooInfo(restoredInfo);
+  if (goalsPath.size() >= 4 && SDL_strcasecmp(goalsPath.c_str() + goalsPath.size() - 4, ".scn") == 0)
+    applyScenarioEconomy(rm, goalsPath);
   g_goals.restore(restoredStates);
   g_goals.awards = restoredAwards;
   g_hud->setAwards(restoredAwards);
@@ -10389,6 +10406,7 @@ int main(int argc, char *argv[]) {
             delete scn;
           }
           createHud(&resource_manager, g_world, scenarioCash);
+          applyScenarioEconomy(&resource_manager, info->scenarioPath);
 
           delete layout;
           layout = nullptr; // the in-game HUD replaces the menus
@@ -10478,6 +10496,20 @@ int main(int argc, char *argv[]) {
       g_sim.unlimited = Features::infiniteMoney; // (the Mod Menu's cheat)
       if (!g_world->isPaused() && simulationSeconds>0) {
         g_sim.update(simulationSeconds);
+        // A private foundation's donation, under $1,000 (zoo.exe
+        // zooPeriodicTick 0x4351a9, foundationDonation 0x613e4a): "A private
+        // foundation has donated %s to your zoo." (15002, kind 4: green) or
+        // "No foundations willing..." (15003, kind 5: red)
+        {
+          int given = 0;
+          if (int news = g_sim.foundationTick(given)) {
+            std::string m = resource_manager.getString(news);
+            if (size_t at = m.find("%s"); at != std::string::npos)
+              m.replace(at, 2, formatMoney(given));
+            g_hud->postMessage(m, news == 15002 ? 4 : 5);
+            updateHudClock(&resource_manager);
+          }
+        }
         g_goals.update(simulationSeconds);
         // Research: programs finished, their effects, and the news
         // ("Research & Conservation: %r is now available.", 23020; "%s: All

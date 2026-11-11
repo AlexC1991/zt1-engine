@@ -8,6 +8,8 @@
 // (economy.cfg: Original::Economy below), with the original's default for
 // when the file doesn't set it.
 
+#include <string>
+
 class ResourceManager;
 
 namespace Original {
@@ -47,13 +49,23 @@ struct Economy {
   float pctBathroom = 0.3f, pctSouvenir = 0.7f;           // cPctBathroom (+0x8c), cPctSouvenir (+0x94)
   float pctTired = 0.3f, pctTrash = 0.4f;                 // cPctTired (+0xa0), cPctTrash (+0xa8)
   float highGuestHappy = 80.0f, lowGuestHappy = -20.0f;   // cHigh/cLowAvgGuestHappyThreshold (+0xf4, +0xfc)
+  // The private foundation (foundationDonation 0x613e4a), read as whole
+  // numbers (0x409c14); only Tutorial 2's file gives it a chance
+  int donationsAvail = 3;     // cDonationsAvail (+0x124)
+  int donationLow = 10000;    // cDonationLow (+0x128)
+  int donationHigh = 20000;   // cDonationHigh (+0x12c)
+  int donationChance = 0;     // cDonationChance (+0x130), percent a tick
 };
+// The cash a foundation gives below: a fixed $1,000 (zoo.exe 0x635128, read
+// by zooPeriodicTick 0x435243 - not cLoanAvailable, which the file also has)
+inline constexpr float foundationBelowCash = 1000.0f;
 inline Economy &economy() {
   static Economy e;
   return e;
 }
-// Read economy.cfg into economy() (ZooSim.cpp): once, when a zoo starts
-void loadEconomy(ResourceManager *rm);
+// Read economy.cfg into economy() (ZooSim.cpp): once, when a zoo starts;
+// for a scenario (its .scn), its [start] economy file over it
+void loadEconomy(ResourceManager *rm, const std::string &scenario = "");
 
 // ZTGameMgr::setAdmissionPrice 0x4bbf10: no more than the most, and the
 // least if that leaves it at or below the least

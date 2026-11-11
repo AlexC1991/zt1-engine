@@ -17,6 +17,7 @@
 #include "ItemCatalog.hpp"
 #include "ResourceManager.hpp"
 #include "ZooSim.hpp"
+#include "OriginalConstants.hpp"
 #include "ui/UiGameScreen.hpp"
 #include <cmath>
 #include <fstream>
@@ -90,6 +91,50 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     check("infinite money: anything can be bought", books.canAfford(1e9));
     books.unlimited = false;
     check("cheat off: $1,000,000,000 can't be", !books.canAfford(1e9));
+  }
+
+  // A private foundation (zoo.exe 0x4351a9, 0x613e4a): only Tutorial 2's
+  // economy file has a chance (100); 3 donations, then "No foundations..."
+  {
+    Original::loadEconomy(rm);
+    ZooSim books;
+    books.start(500, 50);
+    int given = 0, news = 0;
+    for (int i = 0; i < 1000 && !news; i++)
+      news = books.foundationTick(given);
+    check("freeform's economy: no foundation ever gives (chance " + std::to_string(Original::economy().donationChance) + ")",
+          news == 0 && std::lround(books.cash()) == 500);
+    Original::loadEconomy(rm, "scenario/scn02/scn02.scn");
+    const Original::Economy &e = Original::economy();
+    check("Tutorial 2's economy over it: chance " + std::to_string(e.donationChance) + ", $" + std::to_string(e.donationLow) +
+              "-$" + std::to_string(e.donationHigh) + ", " + std::to_string(e.donationsAvail) + " of them",
+          e.donationChance == 100 && e.donationLow == 15000 && e.donationHigh == 20000 && e.donationsAvail == 3);
+    std::vector<int> got;
+    bool inRange = true, booked = true;
+    for (int i = 0; i < 6; i++) {
+      books.setCash(500);
+      given = 0;
+      int n = books.foundationTick(given);
+      got.push_back(n);
+      if (n == 15002) {
+        inRange = inRange && given >= 15000 && given < 20000;
+        booked = booked && std::lround(books.cash()) == 500 + given;
+      }
+    }
+    check("under $1,000: three donations, then 15003 once, then nothing",
+          got == std::vector<int>{15002, 15002, 15002, 15003, 0, 0});
+    check("each $15,000-$19,999, added to the cash", inRange && booked);
+    {
+      ZooSim rich;
+      rich.start(1000, 50);
+      check("$1,000 or more: none", rich.foundationTick(given) == 0);
+    }
+    if (rm->hasResource("scenario/scn34/scn34.scn")) {
+      Original::loadEconomy(rm, "scenario/scn34/scn34.scn");
+      check("a scenario with admission $0-$0: $22 held at $" + money(Original::clampAdmission(22.0f)),
+            Original::clampAdmission(22.0f) == 0.0f);
+    }
+    Original::loadEconomy(rm);
   }
 
   // Research: the research branch at its most

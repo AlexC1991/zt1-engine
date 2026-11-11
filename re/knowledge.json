@@ -5981,6 +5981,13 @@
    "provisional": true,
    "summary": "Done watching an exhibit: viewing time, then a donation"
   },
+  "0x42ebbe": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "booksAddDonation",
+   "provisional": false,
+   "summary": "Money onto the books' Donations row (this month's and the year's slots, the running totals +0x10f4/+0x110c); guests' exhibit donations (0x42ec49), foundation donations (0x613e4a), scenario grants (0x5a13c5) and the cash cheat use it"
+  },
   "0x42ec8b": {
    "by": "batty251",
    "confidence": "likely",
@@ -31128,6 +31135,26 @@
    "by": "Claude",
    "on": "2026-11-11",
    "what": "Note at 0x638fa4: 2026-11-11, everything-ff03-units in the running game: a maintenance worker holds a fence entry (+8 = the worker); newly worn pieces' flagged entries go to the very front. Still unseen: bin (9) and litter (7) entries - they need guests, so a played zoo with an animal exhibit."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x42ebbe booksAddDonation"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Note at 0x4351a9: The foundation check: cash (gameMgr +0xc) under the constant 1000.0 at 0x635128 (read only - not cLoanAvailable, which loadConfig stores at +0xc0 and nothing here reads), then chancePercent(this+0x130 cDonationChance), then foundationDonation(this). Runs every update."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Note at 0x613e4a: Count +0x120 is a float (+1.0 each, 0x635490); cDonationsAvail +0x124 is an int (default 3, setDefaults 0x4c2683; low 10000, high 20000, chance 0). count <= avail: donate; == avail+1: 15003 (kind 5, red); beyond: nothing. Money via booksAddDonation 0x42ebbe + cash 0x40f018; 15002 kind 4 (green). Ported: src/ZooSim.cpp foundationTick."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Note at 0x58ed1f: Base economy.cfg is loaded, then the .scn's [start] economy= file over it (only the keys it has); loadConfig ends with setAdmissionPrice, so scn34's cMin/cMaxAdultAdmissionPrice 0 make admission free. Ported: main.cpp applyScenarioEconomy."
   }
  ],
  "notes": {
@@ -31150,6 +31177,11 @@
    "by": "Claude",
    "on": "2026-11-11",
    "text": "Ported 2026-11-11 (src/Guests.cpp decide/sceneryWeight/pickScenery/gawkScenery): the three-way draw, scenery by cEstheticWeight, the ring spot (0x4297dc), Task81's bGawkObject bands and fPlaySetProb weights from guests.ai, cUsedThought. Not ported: the original's visited-tiles list by kind across rounds beyond our per-round reset."
+  },
+  "0x4351a9": {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "text": "The foundation check: cash (gameMgr +0xc) under the constant 1000.0 at 0x635128 (read only - not cLoanAvailable, which loadConfig stores at +0xc0 and nothing here reads), then chancePercent(this+0x130 cDonationChance), then foundationDonation(this). Runs every update."
   },
   "0x4375d3": {
    "by": "batty251",
@@ -31206,6 +31238,11 @@
    "on": "2026-11-11",
    "text": "Correction (Claude, 2026-11-11): not where the exhibit is picked. It is the guide's task chooser: with +0x24c clear or task 0x75, either the base chooseTask, or (habitats exist, FUN_0058adef) task 0x76 via 0x58ae04 - else wander (task 1). The trip is picked inside task 0x76 (0x58cf31 -> 0x58b0a3). src/Staff.cpp's tour code cites 0x58ce7e for rules it doesn't hold."
   },
+  "0x58ed1f": {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "text": "Base economy.cfg is loaded, then the .scn's [start] economy= file over it (only the keys it has); loadConfig ends with setAdmissionPrice, so scn34's cMin/cMaxAdultAdmissionPrice 0 make admission free. Ported: main.cpp applyScenarioEconomy."
+  },
   "0x595022": {
    "by": "Claude",
    "on": "2026-11-01",
@@ -31235,6 +31272,11 @@
    "by": "batty251 (read the code: the fidelity money audit)",
    "on": "2026-10-12",
    "text": "Its cap [gameMgr global 0x638048]+0x1178 is ZTGameMgr+0x1168 (the ZTGameMgr object sits at the global's +0x10): cBuildingUseCostMax, $30 in economy.cfg"
+  },
+  "0x613e4a": {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "text": "Count +0x120 is a float (+1.0 each, 0x635490); cDonationsAvail +0x124 is an int (default 3, setDefaults 0x4c2683; low 10000, high 20000, chance 0). count <= avail: donate; == avail+1: 15003 (kind 5, red); beyond: nothing. Money via booksAddDonation 0x42ebbe + cash 0x40f018; 15002 kind 4 (green). Ported: src/ZooSim.cpp foundationTick."
   },
   "0x62d6ec": {
    "by": "batty251",

@@ -9,15 +9,33 @@
 
 // economy.cfg's [characteristics] into Original::economy() (zoo.exe
 // ZTGameMgr::loadConfig 0x591c0f): a key it leaves out keeps the original's
-// default (ZTGameMgr::setDefaults 0x4c2683)
-void Original::loadEconomy(ResourceManager *rm) {
+// default (ZTGameMgr::setDefaults 0x4c2683). A scenario's [start] economy
+// file is read over it (applyStartSettings 0x58ed1f: economy.cfg, then
+// that file, on a start and a resume)
+void Original::loadEconomy(ResourceManager *rm, const std::string &scenario) {
   Economy e;
-  if (IniReader *ini = rm ? rm->getIniReader("economy.cfg") : nullptr) {
+  std::string files[2] = {"economy.cfg", ""};
+  if (!scenario.empty() && rm)
+    if (IniReader *scn = rm->getIniReader(scenario)) {
+      files[1] = scn->get("start", "economy");
+      delete scn;
+    }
+  for (const std::string &file : files)
+  if (IniReader *ini = rm && !file.empty() ? rm->getIniReader(file) : nullptr) {
     auto num = [&](const char *key, float &into) {
       std::string v = ini->get("characteristics", key);
       if (!v.empty())
         into = static_cast<float>(std::atof(v.c_str()));
     };
+    auto whole = [&](const char *key, int &into) {
+      std::string v = ini->get("characteristics", key);
+      if (!v.empty())
+        into = std::atoi(v.c_str());
+    };
+    whole("cDonationsAvail", e.donationsAvail);
+    whole("cDonationLow", e.donationLow);
+    whole("cDonationHigh", e.donationHigh);
+    whole("cDonationChance", e.donationChance);
     num("cMinAdultAdmissionPrice", e.minAdmission);
     num("cMaxAdultAdmissionPrice", e.maxAdmission);
     num("cPricingFactor", e.pricingFactor);
@@ -74,7 +92,33 @@ void ZooSim::start(double cash, double rating) {
   this->dayCount = 0;
   this->monthly.clear();
   this->fundingClock = 0;
+  this->foundationCount = 0;
   this->dirty = true;
+}
+
+// A private foundation's donation (zoo.exe zooPeriodicTick 0x4351a9): each
+// tick the cash is under $1,000 (0x635128), a cDonationChance roll
+// (chancePercent 0x4244ab: 0 never); then foundationDonation 0x613e4a counts
+// it (+0x120, a float, 1 more each): up to cDonationsAvail, cDonationLow plus
+// rand % (cDonationHigh - cDonationLow) to the cash and the books' Donations
+// (0x42ebbe), news 15002; the one after, 15003; after that, nothing. The
+// count is 0 on each zoo started or loaded (setDefaults 0x4c2683, from
+// 0x58f39c)
+int ZooSim::foundationTick(int &amount) {
+  const Original::Economy &e = Original::economy();
+  if (!(this->money < Original::foundationBelowCash) || e.donationChance <= 0 ||
+      std::rand() % 100 >= e.donationChance)
+    return 0;
+  this->foundationCount += 1.0f;
+  if (this->foundationCount == static_cast<float>(e.donationsAvail + 1))
+    return 15003;
+  if (this->foundationCount > static_cast<float>(e.donationsAvail))
+    return 0;
+  amount = e.donationLow;
+  if (e.donationHigh - e.donationLow > 0)
+    amount += std::rand() % (e.donationHigh - e.donationLow);
+  this->earn(Donations, amount);
+  return 15002;
 }
 
 void ZooSim::spend(Line line, double amount) {
