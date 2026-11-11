@@ -43,21 +43,22 @@ address,engine,comment
 0x42400a,src/Staff.cpp:1241,"A tank (marine specialists): over the wall at its gate onto the water, under it for the work, up and out again - as the original was seen doing it: Task 0x7e Job20_ClimbUp (0x49ae22), Task 0x6e's duties (0x42400a: Job29_ClimbDownB first when at the surface, 0x49f141), the tank's sweep (Job24_GoClean"
 0x4240f5,src/Goals.cpp:113,"zoo.exe 0x4240f5: types 0-2 met when v >= / < / == value; 3-5 failed when so; 6-8 failed when v < / >= / != value, else met. A change to a new state fires the trigger; back to 0 resets quietly. Sticky: once only."
 0x4240f5,src/Goals.hpp:11,"The scenario goal engine (zoo.exe 0x58de8a loads, 0x4240f5 checks, 0x4fc783 fires): a map's .scn [goals] goal= and each extragoals= file's (freeform: donation.scn, awards.scn, unlock.scn). Every 1.5 s of game time each goal measures its rule (rulea, ruleb, arga, argb) against value by type; when its"
-0x424375,src/Guests.cpp:1359,(none come until an exhibit has animals: zoo.exe 0x424375)
+0x424375,src/Guests.cpp:1365,(none come until an exhibit has animals: zoo.exe 0x424375)
 0x424375,src/ui/UiGameScreen.hpp:559,The marketing level's benefit (mktgnorm.cfg: 0 / 5 / 15 / 30): zoo.exe 0x424375 adds it to the zoo rating when choosing the arrival chance (the rating shown doesn't change)
-0x425af4,src/Guests.cpp:1038,"Testing an electric fence instead of watching (zoo.exe 0x425af4, 0x425e30): come to an exhibit, a cTestFenceChance in 100 (guests.ai: 20) to touch a live electric fence on a side of its tile - those with the fencezap animation (the man) - and zapped: bTestFence (fencezap, the zap sound), cZapHappine"
+0x425af4,src/Guests.cpp:1044,"Testing an electric fence instead of watching (zoo.exe 0x425af4, 0x425e30): come to an exhibit, a cTestFenceChance in 100 (guests.ai: 20) to touch a live electric fence on a side of its tile - those with the fencezap animation (the man) - and zapped: bTestFence (fencezap, the zap sound), cZapHappine"
 0x425af4,src/Guests.hpp:346,Come to an exhibit: maybe it touches the live electric fence there instead of watching (zoo.exe 0x425af4); true when it did
 0x425af4,src/Guests.hpp:57,"Touching a live electric fence instead of watching (zoo.exe 0x425af4): cTestFenceChance in 100, cZapHappinessHit when zapped"
 0x425b6d,src/SaveGame.cpp:774,"The recent-species list holds cNameIDs (0x42e527/0x425b6d), while the separate visit list holds grid coordinates (0x42281c)."
-0x425e30,src/Guests.cpp:1038,"Testing an electric fence instead of watching (zoo.exe 0x425af4, 0x425e30): come to an exhibit, a cTestFenceChance in 100 (guests.ai: 20) to touch a live electric fence on a side of its tile - those with the fencezap animation (the man) - and zapped: bTestFence (fencezap, the zap sound), cZapHappine"
+0x425e30,src/Guests.cpp:1044,"Testing an electric fence instead of watching (zoo.exe 0x425af4, 0x425e30): come to an exhibit, a cTestFenceChance in 100 (guests.ai: 20) to touch a live electric fence on a side of its tile - those with the fencezap animation (the man) - and zapped: bTestFence (fencezap, the zap sound), cZapHappine"
 0x4273ec,src/Animals.cpp:1894,"(a swimmer wanders where it is: the water in the water, else land - zoo.exe 0x4273ec)"
-0x4282e1,src/Guests.cpp:989,"An attraction (""fun"" buildings) it hasn't been to, as often as an exhibit it hasn't seen (zoo.exe 0x4282e1)"
+0x4282e1,src/Guests.cpp:995,"An attraction (""fun"" buildings) it hasn't been to, as often as an exhibit it hasn't seen (zoo.exe 0x4282e1)"
+0x428917,src/Guests.cpp:810,"(zoo.exe 0x428917: a random viewing tile's squared distance in whole tiles, at most 990 (0x3de); the habitat's attractiveness (+0xf8), 500 more with its favourite species, less (1000 - d2) / 10 in whole numbers, plus 100 - so a nearer exhibit scores lower, and guests go out across the zoo; the highe"
 0x42d181,src/PlacedObjects.hpp:94,"Trash cans: the rubbish in it (a guest's piece +1, taken while 24 or less: 25 at most, cCapacity isn't used - zoo.exe 0x42d181), shown half full over 12 (its ""full"" art never shows in the original: 0x412513); emptied by maintenance workers"
-0x42d1e2,src/Guests.cpp:1513,"The price (zoo.exe 0x42d1e2, 0x42d858): twice its default or more, too dear: unhappier and nothing bought (still charged); half or less, a bargain: happier"
-0x42d54e,src/Guests.cpp:1540,(holdItem 0x42d54e clears +0x33c)
-0x42d858,src/Guests.cpp:1513,"The price (zoo.exe 0x42d1e2, 0x42d858): twice its default or more, too dear: unhappier and nothing bought (still charged); half or less, a bargain: happier"
+0x42d1e2,src/Guests.cpp:1519,"The price (zoo.exe 0x42d1e2, 0x42d858): twice its default or more, too dear: unhappier and nothing bought (still charged); half or less, a bargain: happier"
+0x42d54e,src/Guests.cpp:1546,(holdItem 0x42d54e clears +0x33c)
+0x42d858,src/Guests.cpp:1519,"The price (zoo.exe 0x42d1e2, 0x42d858): twice its default or more, too dear: unhappier and nothing bought (still charged); half or less, a bargain: happier"
 0x42e527,src/SaveGame.cpp:774,"The recent-species list holds cNameIDs (0x42e527/0x425b6d), while the separate visit list holds grid coordinates (0x42281c)."
-0x42ea14,src/Guests.cpp:1429,"Done watching an exhibit (zoo.exe 0x42ea14): the time goes on its viewing time (its popularity), then a donation: its animals healthy, not crowded: cAdmissionMultiple x the time (game time, 100 ns units) x its suitability x 0.01, $10 at most (in practice $10 a view of a suitable exhibit: the code mu"
+0x42ea14,src/Guests.cpp:1435,"Done watching an exhibit (zoo.exe 0x42ea14): the time goes on its viewing time (its popularity), then a donation: its animals healthy, not crowded: cAdmissionMultiple x the time (game time, 100 ns units) x its suitability x 0.01, $10 at most (in practice $10 a view of a suitable exhibit: the code mu"
 0x42ec8b,src/Animals.cpp:3356,"Testing a live electric fence (zoo.exe 0x438ebc, every cZapCheck): while it has some of its cTestFenceChance left, a cTestFenceChance in 100 to look cTestFenceOffset tiles north, east, south and west - still in its exhibit - for a live electric fence on that tile's far side (0x4a3383, 0x42ec8b); fou"
 0x42fa2c,src/Animals.cpp:1663,"0x42fa2c faces the current target unit, not an arbitrary direction."
 0x42fad3,src/Animals.cpp:607,"Both stand off (zoo.exe 0x42fad3): the hunter's kind and the other's have cPreattack, and the other isn't an egg"
@@ -71,7 +72,7 @@ address,engine,comment
 0x433b34,src/main.cpp:1350,"(a tank wall's top, or dragging it: the up/down arrows - zoo.exe 0x433b34 cursor slot 4)"
 0x434b1d,src/SaveGame.cpp:2509,The original's decay timer is in milliseconds (0x434b1d).
 0x4351a9,src/OriginalConstants.hpp:42,[checks] message: the advice messages' timer (zoo.exe 0x4351a9)
-0x4354e3,src/Guests.cpp:1606,"The crowd bed (zoo.exe 0x4354e3), by the guests in the zoo: quiet under 15 (and to start); the small crowd over 20; medium over 85, back to small under 75; large over 160, back to medium under 150"
+0x4354e3,src/Guests.cpp:1612,"The crowd bed (zoo.exe 0x4354e3), by the guests in the zoo: quiet under 15 (and to start); the small crowd over 20; medium over 85, back to small under 75; large over 160, back to medium under 150"
 0x435a48,src/Goals.cpp:98,Checked every 1500 ms of the world's ticks (zoo.exe 0x435a48; not while paused)
 0x4369b9,src/Animals.cpp:667,"The nearest adult in its exhibit that hunts it within the radius (zoo.exe 0x4369b9: 7, cPredatorRadius - whatever it's doing), or one chasing it at play"
 0x4369b9,src/Animals.hpp:255,"In its exhibit (zoo.exe 0x43954c, 0x4369b9, 0x4a6043): the animal it's chasing (a prey it lists, or one of its own kind at play - tag), since when; the one it's running from; caught (frozen under the dust ball, by whom); the one it's caught and the dust ball's time left"
@@ -120,9 +121,9 @@ address,engine,comment
 0x43971c,src/Animals.cpp:599,"(an egg: only by one that eats eggs, of another kind - zoo.exe 0x43971c, cEatsEggs)"
 0x43971c,src/Guests.hpp:143,"Loose predators (zoo.exe 0x43971c, 0x4a6043): only men (cPrey 9503 is the man guest) not already attacked; caught, it's mauled (its bCaughtBy<animal><m|f>: the animation and roar), gets up and thinks ""Ouch! I've just been attacked by %s."" - it lives"
 0x439cd0,src/Staff.cpp:826,"Fences: a tile beside the piece it can stand on. The piece's own tile comes first, before any other work (zoo.exe Task78_MaintFindWork 0x439cd0 over the work list [0x638fa4]: a worn piece is listed for both its tiles, its own tile's entry flagged (+0xc) and at the list's front; once the best is a fl"
-0x43aedc,src/Guests.cpp:1313,"The trash check (zoo.exe 0x43aedc), every cTrashCheck (30) while it isn't busy (+0x33e: off to or in a building): cAngryTrashChange (-5) unless it's on its way to a trash can (+0x24e, its goal, isn't ""trash"") - every guest, holding litter or not: unlike its needs, no measure first. Seen live (Play o"
-0x43af5b,src/Guests.cpp:1302,"(wanting one: anew each check - zoo.exe 0x43af5b clears +0x33c, then sets it when the roll says so)"
-0x43afde,src/Guests.cpp:1137,"(zoo.exe 0x43afde, every cViewingAreaCheck while gawking: the bands below are cHappyAnimalChange1/2 and cAngryAnimalChange1/2/3, as there)"
+0x43aedc,src/Guests.cpp:1319,"The trash check (zoo.exe 0x43aedc), every cTrashCheck (30) while it isn't busy (+0x33e: off to or in a building): cAngryTrashChange (-5) unless it's on its way to a trash can (+0x24e, its goal, isn't ""trash"") - every guest, holding litter or not: unlike its needs, no measure first. Seen live (Play o"
+0x43af5b,src/Guests.cpp:1308,"(wanting one: anew each check - zoo.exe 0x43af5b clears +0x33c, then sets it when the roll says so)"
+0x43afde,src/Guests.cpp:1143,"(zoo.exe 0x43afde, every cViewingAreaCheck while gawking: the bands below are cHappyAnimalChange1/2 and cAngryAnimalChange1/2/3, as there)"
 0x43ca83,src/Animals.cpp:1390,"(a swimmer in the water: its [AmbientAnimsWater], by where it stands - zoo.exe 0x43ca83)"
 0x43dc11,src/Animals.cpp:1065,"The height a move in a tank ends at, over its floor (zoo.exe 0x43dc11, ZTUnit::tankTargetHeight - class slot 0x1f8): whole height units, from cDepth (type +0x68) up to the water level (tank +0x188), by the move's target; a cSurface type (slot 0xc0) keeps to the surface"
 0x43dc11,src/Animals.cpp:1622,(in a tank: a height as any move's there - 0x43dc11)
@@ -130,7 +131,7 @@ address,engine,comment
 0x43dc11,src/Animals.hpp:479,The height a move in a tank ends at (zoo.exe 0x43dc11)
 0x43dc11,src/Animals.hpp:77,"Marine (Marine Mania): cUnderwater (it can live in a tank), cDepth (the water it needs, height units: zoo.exe 0x5af392, against the tank's level; type +0x68 - the lowest it swims over the floor, 0x43dc11); cSurface (type +0x17d, 0x402112): swims at the surface only"
 0x43e363,src/Animals.cpp:539,"Getting out of its exhibit (zoo.exe 0x446088, 0x43e363): a fence on its boundary it can climb, jump or break through; it walks to it and over, a basher (or a jumper with any strength) breaking it as it goes"
-0x43f513,src/Guests.cpp:1634,"(crowdsnd.cfg, zoo.exe 0x43f513: no voices under 10 guests; from 10, a 1 in 100 chance a second - its medium and big groups list the same sounds, so the game's cache gives them small's chance)"
+0x43f513,src/Guests.cpp:1640,"(crowdsnd.cfg, zoo.exe 0x43f513: no voices under 10 guests; from 10, a 1 in 100 chance a second - its medium and big groups list the same sounds, so the game's cache gives them small's chance)"
 0x43f81c,src/Animals.cpp:2482,"Its shadow on the tank's floor under it, on its frame (zoo.exe setupShadow 0x43f81c: ""shadow%s"", at the ground under the unit, the shadow palette at 0.25)"
 0x43f81c,src/Animals.hpp:472,"An animation's shadow (""shadow"" + its art's name - zoo.exe setupShadow 0x43f81c, ""shadow%s""), drawn on the ground under it; or none"
 0x440f0c,src/Shows.cpp:731,"Original 0x440f0c ranks stands by Manhattan distance plus a 0..14 tie-break, applies maxDistToGoToShow, and excludes a show the guest already attended."
@@ -399,7 +400,7 @@ address,engine,comment
 0x58cf31,src/Staff.cpp:1585,(a viewing area at random - zoo.exe 0x58cf31)
 0x58d349,src/Staff.cpp:1556,"---------------------------------------------------------------------------- Tour guides. The trip (zoo.exe 0x58ce7e, the guide's task chooser: task 0x76 via 0x58ae04 when the zoo has habitats; the target picked on the task's first tick, 0x58cf31 -> 0x58b0a3): a habitat at random - one of its assign"
 0x58d349,src/Staff.cpp:1615,(zoo.exe 0x58d349: the chance is raised by each guest that matches and kept for the rest of the look - one chance for the whole scan)
-0x58d79e,src/Guests.cpp:861,"(zoo.exe 0x58d79e: not while busy or on another tour, nor over any need's threshold; 1 in 10 to the guide's own tile, else a viewing tile near it)"
+0x58d79e,src/Guests.cpp:867,"(zoo.exe 0x58d79e: not while busy or on another tour, nor over any need's threshold; 1 in 10 to the guide's own tile, else a viewing tile near it)"
 0x58de8a,src/Goals.hpp:11,"The scenario goal engine (zoo.exe 0x58de8a loads, 0x4240f5 checks, 0x4fc783 fires): a map's .scn [goals] goal= and each extragoals= file's (freeform: donation.scn, awards.scn, unlock.scn). Every 1.5 s of game time each goal measures its rule (rulea, ruleb, arga, argb) against value by type; when its"
 0x58de8a,src/Goals.hpp:62,"One saved goal state of the original's list (goalsLoad 0x58de8a): the scenario's own goal (ctor 0x58e218) first; then each [goals] goal= of the script, then of every file each [start] extragoals= entry finds (split at its '.': every resource starting with the part before and ending with the part aft"
 0x58e066,src/Goals.cpp:166,"makeGoal 0x58e066: rtype 1 (0x59364c) and 2 (0x593793) hold child= goals, each made the same way"
