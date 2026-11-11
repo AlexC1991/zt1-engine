@@ -3643,6 +3643,11 @@
    "kind": "message base",
    "meaning": "Zoo award names: 29000 + the award"
   },
+  "6524948": {
+   "by": "batty251",
+   "kind": "global",
+   "meaning": "sSubtypeFemale: \"f\": a female staff subtype's name (read from the running game 2026-11-11); 0x639020 is \"m\". The tour guide's crowd check 0x58d349 compares the guide's subtype with them"
+  },
   "6526240": {
    "by": "batty251",
    "kind": "other",
@@ -14752,12 +14757,20 @@
    "summary": "Task 0x77 (Task77_GuideSpeak: the tour guide at a viewing area (\"Starting to do VA duties\"; bSpeak)): set up when the task starts; true if it can - class slot 4"
   },
   "0x58ad88": {
-   "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
+   "by": "Claude",
    "class": "Task76_GuideToViewingArea",
    "confidence": "likely",
-   "name": "atTarget",
+   "name": "Task76_GuideToViewingArea::atTarget",
    "provisional": false,
-   "summary": "Task76_GuideToViewingArea: the tour guide going to a habitat's viewing area - class slot 10"
+   "summary": "At the viewing area: with followers (guide +0x294 list non-empty) starts task 0x77 (Task77_GuideSpeak); with none, slot 0x174 (0x61b9a8: clear goal, free the follower list) and FUN_005e9d6f"
+  },
+  "0x58b0a3": {
+   "by": "Claude",
+   "class": "ZTTourGuide",
+   "confidence": "likely",
+   "name": "tourGuidePickHabitat",
+   "provisional": false,
+   "summary": "Task76 (guide to a viewing area) on its first tick: if guide +0x298 is 0, the guide's slot 0x328 (0x58af73) picks a habitat H (random of its assigned list +0x260, else of all habitats; none: 'Couldn't find a habitat to go to'); then on H (ecx = H): 50/50 FUN_00428741(1) (a random entry of H's +0x34 list with +0x54 > 0 and a non-empty +4 list) or FUN_0058b46e(guide tile, 1) (the entry whose one random +0x40 viewing area is nearest the guide, squared distance)"
   },
   "0x58b5f2": {
    "by": "batty251 (the UI element numbers it asks uiFind for, from the game's layout files)",
@@ -14834,12 +14847,12 @@
    "summary": "Task76_GuideToViewingArea: the tour guide going to a habitat's viewing area - class slot 9"
   },
   "0x58cf31": {
-   "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
+   "by": "Claude",
    "class": "Task76_GuideToViewingArea",
    "confidence": "likely",
-   "name": "whileGoing",
+   "name": "Task76_GuideToViewingArea::whileGoing",
    "provisional": false,
-   "summary": "Task76_GuideToViewingArea: the tour guide going to a habitat's viewing area - class slot 8"
+   "summary": "First tick with no goal: FUN_0058b0a3 picks the target; then a random entry of its +0x40 list (a viewing area: rand % count), checked by 0x422238 and 0x422127, set as the guide's goal ('Going to viewing area of habitat ...')"
   },
   "0x58d068": {
    "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
@@ -14888,6 +14901,14 @@
    "name": "freeIfAsked",
    "provisional": false,
    "summary": "Task76_GuestFollowGuide: frees the task when its destructor is asked to (flag 1)"
+  },
+  "0x58d349": {
+   "by": "Claude",
+   "class": "ZTTourGuide",
+   "confidence": "likely",
+   "name": "tourGuideGatherFollowers",
+   "provisional": false,
+   "summary": "Tour guide's crowd check (from its tick 0x58ceb9 every cCrowdCheck ticks while on task 0x76/0x77): fewer than cMaxGroupSize (type+0x208) followers - every guest on tiles within cCrowdRadius (type+0x200) of the guide: chance starts at cFollowChance (type+0x204) and is RAISED (never reset within the scan) by 15 when the guide's subtype is the string at 0x639014 and the guest's +0x320 is 0, or by 10 when it is the string at 0x639020 and +0x320 is 1; joins (guestJoinTour 0x58d79e) on rand%100 < chance, or always when guest +0x337 is 0 and guest +0x2e4 equals the guide's id (+0x124)"
   },
   "0x58d79e": {
    "by": "zt1-engine (batty251, earlier sessions)",
@@ -17989,6 +18010,12 @@
    "kind": "other",
    "name": "researchMgr",
    "summary": "ZTResearchMgr (made by 0x51e103 with that name): worldLoad's research section (its slot 0xc), worldSave's (slot 8)"
+  },
+  "0x639020": {
+   "by": "Claude",
+   "kind": "other",
+   "name": "sSubtypeMale",
+   "summary": "\"m\": a male staff subtype's name (read from the running game 2026-11-11); 0x639014 is \"f\". The tour guide's crowd check 0x58d349 compares the guide's subtype with them"
   },
   "0x639024": {
    "by": "Lab loader mapper",
@@ -30993,6 +31020,46 @@
    "by": "batty251",
    "on": "2026-11-06",
    "what": "Named 0x5092f4 bulldozeRect"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x58d349 tourGuideGatherFollowers"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x58b0a3 tourGuidePickHabitat"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x58cf31 Task76_GuideToViewingArea::whileGoing"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x58ad88 Task76_GuideToViewingArea::atTarget"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Note at 0x58ce7e: Correction (Claude, 2026-11-11): not where the exhibit is picked. It is the guide's task chooser: with +0x24c clear or task 0x75, either the base chooseTask, or (habitats exist, FUN_0058adef) task 0x76 via 0x58ae04 - else wander (task 1). The trip is picked inside task 0x76 (0x58cf31 -> 0x58b0a3). src/Staff.cpp's tour code cites 0x58ce7e for rules it doesn't hold."
+  },
+  {
+   "by": "batty251",
+   "on": "2026-11-11",
+   "what": "Number 0x639014 = sSubtypeFemale: \"f\": a female staff subtype's name (read from the running game 2026-11-11); 0x639020 is \"m\". The tour guide's crowd check 0x58d349 compares the guide's subtype with them"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Global 0x639020 = sSubtypeMale"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Note at 0x58b0a3: Read in the running game (2026-11-11, everything zoo): habitatMgr [0x63805c] = 0x67b760: +8/+0xc map size (75,75), +0x10/+0x14 entrance tile (11,42), +0x1c..+0x20 the habitats (28). The first (the zoo's main ground) has an empty +0x34 list and ~4080 entries at +0x40..+0x44 - so +0x40 holds tiles (the viewing tiles), and the object slot 0x328 returns is likely an exhibit whose +0x34 are its habitats (a land paddock and a tank joined): one entry for an ordinary exhibit. Not yet confirmed on a joined exhibit."
   }
  ],
  "notes": {
@@ -31050,6 +31117,16 @@
    "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
    "on": "2026-10-14",
    "text": "The path shape loader stores each [Shapes] shape= code's LIST POSITION into the record's +0x14: the bytes at 0x4c25cf are 89 78 14, i.e. 'mov dword ptr [eax+0x14], edi' - checked against the pinned build (2002 Complete Collection zoo.exe, sha256 61fcc6d1..., 2,449,432 bytes), so the value kept is the index in the repeated-key list, not the code itself. Found by StevenGann, address verified here 2026-10-14."
+  },
+  "0x58b0a3": {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "text": "Read in the running game (2026-11-11, everything zoo): habitatMgr [0x63805c] = 0x67b760: +8/+0xc map size (75,75), +0x10/+0x14 entrance tile (11,42), +0x1c..+0x20 the habitats (28). The first (the zoo's main ground) has an empty +0x34 list and ~4080 entries at +0x40..+0x44 - so +0x40 holds tiles (the viewing tiles), and the object slot 0x328 returns is likely an exhibit whose +0x34 are its habitats (a land paddock and a tank joined): one entry for an ordinary exhibit. Not yet confirmed on a joined exhibit."
+  },
+  "0x58ce7e": {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "text": "Correction (Claude, 2026-11-11): not where the exhibit is picked. It is the guide's task chooser: with +0x24c clear or task 0x75, either the base chooseTask, or (habitats exist, FUN_0058adef) task 0x76 via 0x58ae04 - else wander (task 1). The trip is picked inside task 0x76 (0x58cf31 -> 0x58b0a3). src/Staff.cpp's tour code cites 0x58ce7e for rules it doesn't hold."
   },
   "0x595022": {
    "by": "Claude",
