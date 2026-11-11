@@ -2944,7 +2944,11 @@ std::string UiGameScreen::staffToolFile() const {
 void UiGameScreen::dropPicks() {
   this->animalPick.clear();
   this->setGateMode(false);
-  static const char *placed[] = {"animals", "shelters", "toys", "showtoys", "structures", "scenery", "foliage", "rocks"};
+  // (fences and paths too - measured: the original's right click over the
+  // map lets the fence or path picked go, its panel left open; Lab's Play
+  // original, 2026-11-11)
+  static const char *placed[] = {"animals", "shelters", "toys", "showtoys", "structures", "scenery", "foliage", "rocks",
+                                 "fence", "paths"};
   for (BuyPanel &p : this->buyPanels) {
     bool drop = false;
     for (const char *c : placed)

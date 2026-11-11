@@ -2925,12 +2925,24 @@ bool World::cancelLine() {
   return true;
 }
 
-void World::cancelTool() {
+// measured: in the original (the Lab's Play original, 2026-11-11) a right
+// click while a fence or path is being dragged takes the drag back - its
+// preview gone, nothing laid when the button's let go - and keeps the tool
+bool World::cancelTool() {
   if (this->cancelLine())
-    return;
+    return true;
+  const bool drag = this->dragging || this->pathDragging;
   this->assigning = -1;
   this->dragging = false;
   this->fences.preview.clear();
+  if (this->pathDragging) {
+    this->pathDragging = false;
+    this->smartPlan = false;
+    this->pathPreview.clear();
+    this->pathLast = {-1, -1};
+    this->hoverPrice = -1;
+  }
+  return drag;
 }
 
 void World::cycleFenceMode(int step) {

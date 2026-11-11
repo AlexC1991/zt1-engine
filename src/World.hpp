@@ -155,7 +155,8 @@ public:
     int lastMouseX = -1, lastMouseY = -1;
     ToolResult mouseDown(int x, int y);
     ToolResult mouseUp(int x, int y);
-    void cancelTool();
+    // A right click: a drag taken back (true), or else what's assigned
+    bool cancelTool();
     // The cursor left the map (over the HUD): no piece or price shown
     void hoverOff();
     // Placing a tank filter (picked in the fence list)

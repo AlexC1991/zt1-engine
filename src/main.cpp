@@ -1390,8 +1390,9 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
       g_world->cash = g_sim.unlimited ? 1e300 : g_sim.cash();
       handleToolResult(g_world->mouseUp(in.x, in.y), rm);
     } else if (in.event == InputEvent::RIGHT_CLICK) {
-      g_world->cancelTool();
-      g_hud->dropPicks();
+      // (mid-drag: only the drag taken back, the tool kept, as the original)
+      if (!g_world->cancelTool())
+        g_hud->dropPicks();
       // (and the bulldozer put away: "hotkeys")
       if (Features::hotkeys)
         g_hud->bulldozerOff();
@@ -6442,6 +6443,26 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       check(("path follows the drag: an L of " + std::to_string(laid) + " tiles").c_str(), laid == 11);
       check(("path cost $" + std::to_string(std::lround(cash - g_sim.cash()))).c_str(),
             std::lround(cash - g_sim.cash()) == 110);
+      // A right click mid-drag takes the drag back and keeps the tool; one
+      // with no drag lets the tool go (measured in the original, 2026-11-11)
+      {
+        const double before = g_sim.cash();
+        at(x0, y0 + 2, px, py);
+        world->mouseMove(px, py);
+        handleToolResult(world->mouseDown(px, py), rm);
+        for (int i = 1; i <= 3; i++) {
+          at(x0 + i, y0 + 2, px, py);
+          world->mouseMove(px, py);
+        }
+        const bool took = world->cancelTool();
+        handleToolResult(world->mouseUp(px, py), rm);
+        int stray = 0;
+        for (int i = 0; i <= 3; i++)
+          stray += map.isPath(x0 + i, y0 + 2) ? 1 : 0;
+        check("a right click mid path drag takes it back: nothing laid, nothing spent",
+              took && stray == 0 && std::lround(before - g_sim.cash()) == 0);
+        check("a right click with no drag lets the tool go", !world->cancelTool());
+      }
       world->setPathTool("", 0);
       world->mouseMove(0, 0);
       capture("path_laid");
