@@ -1140,3 +1140,12 @@ label.check { align-items: center; color: var(--text2); }
 .picbox canvas { max-width: 100%; max-height: 250px; height: 100%; image-rendering: pixelated; }
 .picrow { display: flex; align-items: center; gap: 8px; }
 .edtop.pic ~ .edtl, .edtop.pic ~ .edbody .edcard.every { display: none; }
+
+/* A mod's upload under way (Mods > Publish): what it's doing, this part's bar and the whole upload's */
+.mkprog { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
+.mkprog-what { font-size: 13px; }
+.mkprog-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.mkprog-row > .dim:first-child { width: 64px; }
+.mkprog .progress { flex: 1; width: auto; }
+.mkprog-busy div { width: 30%; animation: mkprog-slide 1.2s ease-in-out infinite; }
+@keyframes mkprog-slide { from { margin-left: -30%; } to { margin-left: 100%; } }

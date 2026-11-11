@@ -225,14 +225,20 @@ function mkPublishPage(m) {
           : ''
       }</div>
     <div class="mksec"><div class="label">The mod repository</div>
-      ${up ? `<div class="mkline"><span><b>${esc(up.name)}</b> <span class="dim">${esc(up.version)}</span></span><span class="${up.live ? 'green' : 'amber'}">${esc(up.status)}</span></div>${up.reason ? `<div class="red" style="font-size:12px">${esc(up.reason)}</div>` : ''}` : ''}
+      ${
+        MK.busy
+          ? `<div id="mk-progress">${mkProgress()}</div>`
+          : up
+          ? `<div class="mkline"><span><b>${esc(up.name)}</b> <span class="dim">${esc(up.version)}</span></span><span class="${up.live ? 'green' : 'amber'}">${esc(up.status)}</span></div>${up.reason ? `<div class="red" style="font-size:12px">${esc(up.reason)}</div>` : ''}`
+          : ''
+      }
       <div class="muted" style="font-size:12px">Uploaded, it's checked there (the same rules, and a virus scan), then offered in every official game's Mod Menu. Uploading it again updates it.</div>
       <div style="display:flex;gap:8px"><div class="btn small primary${busy}${MK.signedIn ? '' : ' disabled'}" data-act="mkUpload">${up ? 'Upload this version' : 'Upload it'}</div>${
         up && up.stuck
           ? `<div class="btn small${busy}${MK.signedIn ? '' : ' disabled'}" data-act="mkUpload" data-arg="stuck" title="Only the parts the repository doesn't offer are sent again (that asks for their checks again); every part it offers is left alone">Send the ${up.stuck} stuck part${up.stuck > 1 ? 's' : ''} again</div>`
           : ''
       }${up ? `<div class="btn small ghost" data-act="mkTakedown" data-arg="${esc(up.id)}">Take it down</div>` : ''}</div>
-      <div class="code" id="mk-log" style="font-size:12px;white-space:pre-wrap;${MK.log.length ? '' : 'display:none'}">${esc(MK.log.join('\n'))}</div></div>
+      <div class="code" id="mk-log" style="font-size:12px;white-space:pre-wrap;max-height:180px;overflow:auto;${MK.log.length ? '' : 'display:none'}">${esc(MK.log.join('\n'))}</div></div>
     <div class="mksec"><div class="label">Your uploads</div>${mkUploads()}</div>`;
 }
 
@@ -487,11 +493,13 @@ Object.assign(ACTIONS, {
     if (MK.busy) return;
     if (MK.dirty) await ACTIONS.mkSave();
     MK.busy = true;
+    MK.progress = null;
     stSetNode('publish');
     MK.log = [how === 'stuck' ? 'Sending the stuck parts again...' : 'Uploading...'];
     renderModKit();
     const r = await lab.modkitUpload(MK.sel, how === 'stuck');
     MK.busy = false;
+    MK.progress = null;
     if (r.check) MK.check = { folder: MK.sel, ...r.check };
     MK.log.push(r.message || (r.ok ? 'Uploaded.' : 'Not uploaded.'));
     MK.mine = null;
@@ -525,11 +533,61 @@ Object.assign(ACTIONS, {
   },
 });
 
+// An upload's progress, from its log lines: which part, what it's doing,
+// how far through its pieces ("Part 5 of 10 (Animals (O-P)): sending 3 of 40...")
+function mkTrack(line) {
+  const p = MK.progress || (MK.progress = { part: 0, parts: 0, name: '', stage: 'start', piece: 0, pieces: 0, sent: 0, skipped: 0 });
+  const m = /^Part (\d+) of (\d+) \((.*)\): (.*)$/.exec(line);
+  if (m) {
+    const [, k, n, name, what] = m;
+    if (+k !== p.part) p.piece = p.pieces = 0;
+    Object.assign(p, { part: +k, parts: +n, name });
+    const s = /^sending (\d+) of (\d+)/.exec(what);
+    if (s) Object.assign(p, { stage: 'sending', piece: +s[1], pieces: +s[2] });
+    else if (/^packing/.test(what)) p.stage = 'packing';
+    else if (/has it already/.test(what)) Object.assign(p, { stage: 'skipped', skipped: p.skipped + 1 });
+    else if (/still being checked/.test(what)) p.stage = 'waiting';
+    if (s && +s[1] === +s[2]) p.sent++;
+  } else if (/^Checking it over there/.test(line)) p.stage = 'checking';
+  else if (/^Telling the repository/.test(line)) p.stage = 'telling';
+  else if (/^Packing it/.test(line)) p.stage = 'start';
+}
+// The progress block shown while uploading: a line saying what it's doing,
+// the whole upload's bar (parts done) and this part's (pieces sent)
+function mkProgress() {
+  const p = MK.progress;
+  if (!p) return '<div class="mkprog"><div class="mkprog-what">Getting it ready...</div><div class="progress mkprog-busy"><div></div></div></div>';
+  const busyBar = '<div class="progress mkprog-busy"><div></div></div>';
+  const bar = (f) => `<div class="progress"><div style="width:${Math.round(Math.max(0, Math.min(1, f)) * 100)}%"></div></div>`;
+  const of = p.parts ? `Part ${p.part} of ${p.parts}` : '';
+  const what =
+    p.stage === 'start' ? 'Looking over its files...'
+    : p.stage === 'telling' ? 'Asking the repository what it has...'
+    : p.stage === 'packing' ? `${of} (${esc(p.name)}): packing it...`
+    : p.stage === 'sending' ? `${of} (${esc(p.name)}): sending piece ${p.piece} of ${p.pieces}`
+    : p.stage === 'skipped' ? `${of} (${esc(p.name)}): already in the repository, skipped`
+    : p.stage === 'waiting' ? `${of} (${esc(p.name)}): still being checked there, left for now`
+    : p.stage === 'checking' ? 'Sent. The repository is checking it (its rules and a virus scan)...'
+    : 'Working...';
+  const doneParts = p.parts ? (p.part - 1 + (p.stage === 'sending' && p.pieces ? p.piece / p.pieces : p.stage === 'packing' ? 0 : 1)) / p.parts : 0;
+  const partBar = p.stage === 'sending' ? bar(p.pieces ? p.piece / p.pieces : 0) : p.stage === 'skipped' || p.stage === 'waiting' ? bar(1) : busyBar;
+  return `<div class="mkprog"><div class="mkprog-what">${what}</div>${
+    p.parts && p.stage !== 'checking' ? `<div class="mkprog-row"><span class="dim">This part</span>${partBar}</div><div class="mkprog-row"><span class="dim">All of it</span>${bar(doneParts)}<span class="dim">${p.sent} sent, ${p.skipped} already there</span></div>` : busyBar
+  }</div>`;
+}
 lab.onModkit((s) => {
-  MK.log.push(s.line);
+  mkTrack(s.line);
+  // (a part's pieces on one line, not a line each)
+  const last = MK.log[MK.log.length - 1] || '';
+  const same = /^(Part \d+ of \d+ \(.*\)): sending /.exec(s.line);
+  if (same && last.startsWith(same[1] + ': sending ')) MK.log[MK.log.length - 1] = s.line;
+  else MK.log.push(s.line);
   const el = $('mk-log');
   if (el) {
     el.style.display = '';
     el.textContent = MK.log.join('\n');
+    el.scrollTop = el.scrollHeight;
   }
+  const prog = $('mk-progress');
+  if (prog) prog.innerHTML = mkProgress();
 });
