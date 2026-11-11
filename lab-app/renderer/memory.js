@@ -550,6 +550,11 @@ Object.assign(ACTIONS, {
   // "click 952 462; wait 1500; click 644 470" (the original's hook, or our
   // engine: the same click lines)
   playSteps: async (arg) => {
+    // (a Lab dialog over Play - Where used, a question - takes the game's
+    // clicks: said, not sent into nothing)
+    const modal = document.getElementById('modal');
+    if (modal && !modal.classList.contains('hidden'))
+      return { error: 'A Lab dialog is open over Play: close it first, or these clicks go to the dialog, not the game.' };
     for (const step of String(arg).split(';').map((s) => s.trim()).filter(Boolean)) {
       const wait = step.match(/^wait\s+(\d+)/);
       if (wait) await new Promise((r) => setTimeout(r, +wait[1]));
