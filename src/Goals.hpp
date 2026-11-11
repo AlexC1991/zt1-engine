@@ -56,6 +56,13 @@ public:
     std::function<void(int amount, int mode)> cash;
     std::function<void(int stringId)> message;
     std::function<void(int award)> award;
+    // What can be bought (goalFire 4, 7): kind 0 the types of those name
+    // ids, 1 every animal, 2 every type; true when it changed anything
+    std::function<bool(int kind, const std::vector<int> &ids, bool available)> available;
+    // A scenario's reward kept for freeform (4/10: 0x598cdc)
+    std::function<void(int nameId)> reward;
+    // A message naming a type (4/2, 4/3: string stringId with its name)
+    std::function<void(int stringId, int nameId)> messageAbout;
     // The months played (the game manager's month + year * 12, 0x42425d)
     std::function<int()> months;
     // The scenario over (allGoalsMet 0x48a726): 1 won, 2 lost

@@ -7488,6 +7488,13 @@
    "provisional": false,
    "summary": "The C runtime's fclose: flushed (crt_flush), its buffer freed, the file closed"
   },
+  "0x4533bc": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "rewardsApply",
+   "provisional": false,
+   "summary": "Each [user] unlockEntity0..unlockCount-1 type made available; scenarioStart calls it right after applyStartSettings (whose [start] triggers - every freeform map's hideall 4/9 - come first)"
+  },
   "0x4534e6": {
    "by": "batty251 (the world's class table 0x630cac read from the running game; its functions read)",
    "confidence": "likely",
@@ -15671,12 +15678,33 @@
    "provisional": false,
    "summary": "Thinks 10098 \"%s looks overjoyed.\" about an animal"
   },
+  "0x5a0fc2": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "goalTriggerAvailable",
+   "provisional": false,
+   "summary": "goalFire 4: truleb even available, odd not; 0-5 the type named targa, 6-7 every animal, 8-9 every type, 10 completionUnlock(targa). Changed and not quiet: 4-5 popup targb (0x4fc812), 2-3 message string targb naming targa"
+  },
+  "0x5a1139": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "goalTriggerAvailableList",
+   "provisional": false,
+   "summary": "goalFire 7: section [targa]'s id= list made available (truleb 0,2,4) or not; changed: 4-5 popup targb, 2-3 message bar targb"
+  },
   "0x5a13ed": {
    "by": "batty251",
    "confidence": "likely",
    "name": "sortedIntSetAdd",
    "provisional": false,
    "summary": "Adds an int to a sorted list of ints (+0xc..+0x10) unless it's there already (awardsLoad) (checked in its code; the layout after RustyZoo's zoo.rs)"
+  },
+  "0x5a17a8": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "goalTriggerGiveAnimal",
+   "provisional": false,
+   "summary": "goalFire 5 (truleb 0-2 the gender name): an animal of species targa placed on a free tile searched outward from the entrance, then popup targb (not when quiet)"
   },
   "0x5a1b15": {
    "by": "Lab loader mapper",
@@ -31278,6 +31306,26 @@
    "by": "Claude",
    "on": "2026-11-11",
    "what": "Note at 0x4cacf3: Each list icon: done (0x4cae6a) iconc, else open (0x58eb28) iconp, else iconf"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x5a0fc2 goalTriggerAvailable"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x5a1139 goalTriggerAvailableList"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x5a17a8 goalTriggerGiveAnimal"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-11",
+   "what": "Named 0x4533bc rewardsApply"
   }
  ],
  "notes": {

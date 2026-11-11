@@ -83,10 +83,25 @@ public:
                                               bool availableOnly = true) const;
 
   const CatalogItem *find(const std::string &file) const;
-  // The game's month (January of year 1 = 1): freeform unlocks of "value
-  // 6" are there from the 6th month (measured: the Tank Filter in June)
+  // The months played, from 0 (rule 7/2, zoo.exe 0x41d665: the game
+  // manager's month + year * 12, measured 1 in February of year 1): an
+  // unlock goal of "value 6" (rule >= 6) is met from July - the Tank Filter
   void setMonth(int month) { this->month = month; }
   int getMonth() const { return this->month; }
+  // What a goal's trigger made available or not (an entity type's flag,
+  // set by goalFire 0x4fc783's 4 (0x5a0fc2) and 7 (0x5a1139)): over the
+  // month rule; cleared when a game starts. true when it changed anything
+  bool setAvailable(const CatalogItem &item, bool available);
+  void clearAvailable() { this->forced.clear(); }
+  bool isAvailable(const CatalogItem &item) const;
+  // The game's kind: a scenario (a type's own flag starts on - only its
+  // triggers hide one), or freeform; unlockAll: freeform with every item
+  // from the start (addition: Features::allUnlocked - the map's hideall
+  // and timed unlock goals don't take any away)
+  void setMode(bool scenario, bool unlockAll) {
+    this->scenario = scenario;
+    this->unlockAll = unlockAll;
+  }
   // Every item read (available or not)
   const std::vector<CatalogItem> &all() const { return this->items; }
   // By cNameID (what research programs and unlock lists name items by)
@@ -94,8 +109,10 @@ public:
 
 private:
   std::vector<CatalogItem> items;
-  int month = 1;
+  int month = 0;
   bool loaded = false;
+  std::map<std::string, bool> forced; // (by file)
+  bool scenario = false, unlockAll = false;
 };
 
 #endif // ITEM_CATALOG_HPP

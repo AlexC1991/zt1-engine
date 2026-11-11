@@ -307,6 +307,23 @@ void ItemCatalog::load(ResourceManager *rm, bool force) {
   }
 }
 
+bool ItemCatalog::isAvailable(const CatalogItem &item) const {
+  if (this->unlockAll && !this->scenario && item.unlockMonth >= 0)
+    return true;
+  auto it = this->forced.find(item.file);
+  if (it != this->forced.end())
+    return it->second;
+  if (this->scenario)
+    return true;
+  return item.unlockMonth >= 0 && item.unlockMonth <= this->month;
+}
+
+bool ItemCatalog::setAvailable(const CatalogItem &item, bool available) {
+  const bool was = this->isAvailable(item);
+  this->forced[item.file] = available;
+  return was != available;
+}
+
 const CatalogItem *ItemCatalog::findName(int nameId) const {
   for (const CatalogItem &item : this->items)
     if (item.nameId == nameId)
@@ -319,8 +336,7 @@ ItemCatalog::inCategory(const std::string &category, bool availableOnly) const {
   std::string c = Utils::string_to_lower(category);
   std::vector<const CatalogItem *> list;
   for (const CatalogItem &item : this->items)
-    if (item.members.count(c) &&
-        (!availableOnly || (item.unlockMonth >= 0 && item.unlockMonth <= this->month)))
+    if (item.members.count(c) && (!availableOnly || this->isAvailable(item)))
       list.push_back(&item);
 
   // Registry order, then the category's own order

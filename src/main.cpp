@@ -333,7 +333,12 @@ static bool g_widescreen = true;      // in-game screen fills the window
 static bool g_timedUnlocks = false;
 // The month the catalogue lists items for: every freeform unlock goal's
 // month has passed when they're all unlocked
-static int unlockMonthFor(int month) { return Features::allUnlocked ? 1000 : month; }
+// (ours: a scenario has no freeform unlock goals - what it can buy is what
+// its own triggers leave, so the month rule passes everything there)
+static std::string g_currentMapPath; // the map the game was started on (saves name it)
+static int unlockMonthFor(int month) {
+  return Features::allUnlocked || g_currentMapPath.rfind("scenario:", 0) == 0 ? 1000 : month;
+}
 static const int UI_LAYOUT_W = 800;
 static const int UI_LAYOUT_H = 600;
 
@@ -2129,6 +2134,7 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
         if (std::string(f.name) == "fencemodes")
           g_world->cancelTool();
         if (std::string(f.name) == "allunlocked") {
+          ItemCatalog::get().setMode(g_currentMapPath.rfind("scenario:", 0) == 0, Features::allUnlocked);
           ItemCatalog::get().setMonth(unlockMonthFor(monthsPlayed()));
           if (g_hud)
             g_hud->refreshCatalog();
@@ -2667,7 +2673,6 @@ static void populateFreeformList(UiLayout *layout,
 static int g_renderCheckTileWidth = 0;
 // Optional comma-separated map stems to render (empty = all)
 static std::string g_renderCheckOnly;
-static std::string g_currentMapPath; // the map the game was started on (saves name it)
 static bool g_labModContext = false;
 static Goals g_goals;                 // its scenario goals (freeform: awards, donations)
 
@@ -2774,6 +2779,23 @@ static std::vector<std::pair<int, int>> zooAdvice(const Guests::Census &gc, int 
 
 // The goal engine's view of the zoo (zoo.exe 0x41d665) and what its
 // triggers do
+// A scenario's reward kept for freeform (zoo.exe 0x598cdc): a type not yet
+// kept goes into zoo.ini [user] unlockEntity<unlockCount> (unlockCount one
+// more), and is made available now
+static void keepReward(int nameId) {
+  if (nameId <= 0)
+    return;
+  const int count = Settings::getInt("user", "unlockCount", 0);
+  for (int n = 0; n < count; n++)
+    if (Settings::getInt("user", "unlockEntity" + std::to_string(n), 0) == nameId)
+      return;
+  Settings::setInt("user", "unlockEntity" + std::to_string(count), nameId);
+  Settings::setInt("user", "unlockCount", count + 1);
+  if (const CatalogItem *item = ItemCatalog::get().findName(nameId))
+    if (ItemCatalog::get().setAvailable(*item, true) && g_hud)
+      g_hud->refreshCatalog();
+}
+
 static void setupGoals(ResourceManager *rm) {
   Goals::Hooks h;
   h.measure = [](const Goals::Goal &g) -> int {
@@ -2857,12 +2879,17 @@ static void setupGoals(ResourceManager *rm) {
     }
     if (g.rulea == 7) // (the month, the year, or both as months)
       return g.ruleb == 0 ? month : g.ruleb == 1 ? year : g.ruleb == 2 ? months : 0;
+    if (g.rulea == 3 && g.ruleb == 0) // (the exhibits: habitatMgr's list)
+      return static_cast<int>(g_world->getFences().exhibits().size());
+    if (g.rulea == 99) // (arga itself)
+      return g.arga;
     return 0;
   };
   h.measures = [](const Goals::Goal &g) {
     if (g.rulea == 1)
       return (g.ruleb >= 0 && g.ruleb <= 7) || g.ruleb == 11;
-    return (g.rulea == 2 && g.ruleb == 2) || (g.rulea == 6 && g.ruleb == 0) || (g.rulea == 7 && g.ruleb >= 0 && g.ruleb <= 2);
+    return (g.rulea == 2 && g.ruleb == 2) || (g.rulea == 6 && g.ruleb == 0) || (g.rulea == 7 && g.ruleb >= 0 && g.ruleb <= 2) ||
+           (g.rulea == 3 && g.ruleb == 0) || g.rulea == 99;
   };
   h.popup = [](const std::string &image, const std::string &text, bool pause) {
     if (!g_hud)
@@ -2903,6 +2930,28 @@ static void setupGoals(ResourceManager *rm) {
   };
   // (the game manager's month + year * 12, both from 0, as the rules')
   h.months = []() { return g_sim.month() + (g_sim.year() - 1) * 12; };
+  h.available = [](int kind, const std::vector<int> &ids, bool on) {
+    bool changed = false;
+    for (const CatalogItem &item : ItemCatalog::get().all()) {
+      const bool hit = kind == 2 || (kind == 1 && item.members.count("animals")) ||
+                       (kind == 0 && std::find(ids.begin(), ids.end(), item.nameId) != ids.end());
+      if (hit)
+        changed = ItemCatalog::get().setAvailable(item, on) || changed;
+    }
+    if (changed && g_hud)
+      g_hud->refreshCatalog();
+    return changed;
+  };
+  h.reward = [](int nameId) { keepReward(nameId); };
+  h.messageAbout = [rm](int id, int nameId) {
+    if (!g_hud)
+      return;
+    std::string m = rm->getString(id);
+    const CatalogItem *item = ItemCatalog::get().findName(nameId);
+    if (size_t at = m.find("%s"); at != std::string::npos)
+      m.replace(at, 2, item ? item->name : std::string());
+    g_hud->postMessage(m);
+  };
   h.ended = [](int outcome) {
     SDL_Log("[Goals] the scenario is over: %s", outcome == 1 ? "won" : "lost");
     g_scenarioOutcome = outcome;
@@ -3042,7 +3091,20 @@ static void startGoals(ResourceManager *rm, const std::string &mapPath) {
     long cents = static_cast<long>(price * 100);
     return static_cast<long>(cents * static_cast<double>(it->second) / 10000.0) * 0.01;
   };
+  // (what the triggers made available starts afresh; the [start] triggers
+  // fire as the goals load)
+  ItemCatalog::get().clearAvailable();
+  const bool scenario = mapPath.rfind("scenario/", 0) == 0;
+  ItemCatalog::get().setMode(scenario, Features::allUnlocked);
   g_goals.load(rm, mapPath);
+  // (then the scenarios' rewards kept, each made available - after the
+  // [start] triggers (applyStartSettings), as scenarioStart 0x4c998b calls
+  // 0x4533bc: zoo.ini [user] unlockEntity0..unlockCount-1)
+  for (int n = 0, count = Settings::getInt("user", "unlockCount", 0); n < count; n++)
+    if (const CatalogItem *item = ItemCatalog::get().findName(Settings::getInt("user", "unlockEntity" + std::to_string(n), 0)))
+      ItemCatalog::get().setAvailable(*item, true);
+  if (g_hud)
+    g_hud->refreshCatalog();
   if (g_hud)
     g_hud->setAwards(g_goals.awards);
 }
@@ -3490,19 +3552,8 @@ static void scenarioComplete(ResourceManager *rm, int outcome) {
   }
   if (outcome == 1)
     if (IniReader *ini = rm->getIniReader(scn)) {
-      for (const std::string &v : ini->getList("completion", "unlock")) {
-        const int id = std::atoi(v.c_str());
-        if (id <= 0)
-          continue;
-        bool kept = false;
-        const int count = Settings::getInt("user", "unlockCount", 0);
-        for (int n = 0; n < count; n++)
-          kept = kept || Settings::getInt("user", "unlockEntity" + std::to_string(n), 0) == id;
-        if (!kept) {
-          Settings::setInt("user", "unlockEntity" + std::to_string(count), id);
-          Settings::setInt("user", "unlockCount", count + 1);
-        }
-      }
+      for (const std::string &v : ini->getList("completion", "unlock"))
+        keepReward(std::atoi(v.c_str()));
       delete ini;
     }
   auto is = [&](const char *path) { return SDL_strcasecmp(scn.c_str(), path) == 0; };
@@ -3616,6 +3667,26 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       if (small && tut1) {
         Settings::setInt("scenario", "ba", 3);
         startScenario(rm, *small);
+        // What it can buy (goalFire 4: 0x5a0fc2): [start] hideall (4/7)
+        // leaves no animals; goal c (4/0, the giraffe 5033) gives one
+        const size_t animalsAtStart = ItemCatalog::get().inCategory("animals").size();
+        const size_t treesAtStart = ItemCatalog::get().inCategory("foliage").size();
+        for (Goals::Goal &goal : g_goals.mutableAll())
+          if (goal.name == "c" && goal.file == small->scenarioPath) {
+            goal.rulea = 99; // (met: arga 1 against value 1)
+            goal.arga = 1;
+          }
+        g_goals.evaluateAll();
+        const auto animalsNow = ItemCatalog::get().inCategory("animals");
+        std::set<int> names;
+        for (const CatalogItem *a : animalsNow)
+          names.insert(a->nameId);
+        check("Small Zoo: no animals at the start (" + std::to_string(animalsAtStart) + "), foliage still (" +
+                  std::to_string(treesAtStart) + "); the first check (its map has an exhibit: goals c, d, e) "
+                  "makes the giraffe, moose and camel available (" + std::to_string(animalsNow.size()) + ")",
+              animalsAtStart == 0 && treesAtStart > 0 && names == std::set<int>{5033, 5029, 5034});
+        while (g_hud->hasDialog())
+          g_hud->answerDialog(true);
         g_queuedActions.clear();
         scenarioComplete(rm, 1);
         check("Small Zoo won: \"" + g_hud->dialogMessage().substr(0, 32) + "...\" (16100), [scenario] ba = " +
@@ -3649,6 +3720,54 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         check("No after a tutorial: the main menu only",
               g_queuedActions == std::vector<int>{static_cast<int>(UiAction::GAME_MAIN_MENU)});
         g_queuedActions.clear();
+        // A reward (Dinosaur Digs' scenario 26: [completion] unlock=5332)
+        // kept and buyable in a freeform zoo started after
+        if (const ScenarioInfo *s26 = find("scenario/scn26/scn26.scn")) {
+          const std::string token = s26->unlocks.empty() ? std::string() : s26->unlocks.front();
+          const int keptToken = token.empty() ? 3 : Settings::getInt("scenario", token, 3);
+          startScenario(rm, *s26);
+          scenarioComplete(rm, 1);
+          g_hud->answerDialog(true);
+          const CatalogItem *item = ItemCatalog::get().findName(5332);
+          const std::string keepMap = g_currentMapPath;
+          g_currentMapPath = "freeform/deathmtn.scn";
+          startGoals(rm, g_currentMapPath);
+          check(std::string("scenario 26's reward 5332 (") + (item ? item->name : "?") + ") kept and buyable in freeform after",
+                item && ItemCatalog::get().isAvailable(*item));
+          g_currentMapPath = keepMap;
+          if (!token.empty())
+            Settings::setInt("scenario", token, keptToken);
+        }
+        // Freeform: every map starts with hideall (4/9); with every item
+        // from the start (the switch) the catalogue's whole, with timed
+        // unlocks (the original) empty until the first check's month-0
+        // goal (unlock02's DEFAULT_ITEMS and the like)
+        {
+          const bool keepAll = Features::allUnlocked;
+          const std::string keepMap = g_currentMapPath;
+          g_currentMapPath = "freeform/deathmtn.scn";
+          Features::allUnlocked = true;
+          ItemCatalog::get().setMonth(unlockMonthFor(0));
+          startGoals(rm, g_currentMapPath);
+          const size_t all = ItemCatalog::get().inCategory("animals").size();
+          Features::allUnlocked = false;
+          ItemCatalog::get().setMonth(unlockMonthFor(0));
+          startGoals(rm, g_currentMapPath);
+          // (but the rewards kept: scenario 26's Deinosuchus, just above)
+          size_t before = 0;
+          for (const CatalogItem *a : ItemCatalog::get().inCategory("animals"))
+            before += a->unlockMonth >= 0 ? 1 : 0;
+          g_goals.evaluateAll();
+          while (g_hud->hasDialog())
+            g_hud->answerDialog(true);
+          const size_t after = ItemCatalog::get().inCategory("animals").size();
+          check("freeform (hideall at the start): every item on, " + std::to_string(all) + " animals; timed, " +
+                    std::to_string(before) + " then " + std::to_string(after) + " after the first check",
+                all > 50 && before == 0 && after > 0 && after < all);
+          Features::allUnlocked = keepAll;
+          g_currentMapPath = keepMap;
+          ItemCatalog::get().setMonth(unlockMonthFor(0));
+        }
       } else {
         check("Small Zoo and tutorial 1 in the list", false);
       }

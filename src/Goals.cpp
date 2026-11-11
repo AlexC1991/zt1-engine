@@ -539,6 +539,48 @@ void Goals::fire(const Goal &g, bool quiet) {
         this->hooks.message(g.targb);
     }
     break;
+  case 4: {
+    // One type made available or not (0x5a0fc2): truleb even yes, odd no;
+    // 0-5 the type named targa, 6-7 every animal, 8-9 every type; 10 a
+    // scenario's reward kept for freeform (0x598cdc). When it changed
+    // anything (not quietly): 4-5 the popup targb, 2-3 the message targb
+    // with the type's name
+    if (g.truleb == 10) {
+      if (this->hooks.reward)
+        this->hooks.reward(g.targa);
+      break;
+    }
+    const int kind = g.truleb >= 8 ? 2 : g.truleb >= 6 ? 1 : 0;
+    const bool changed = this->hooks.available && this->hooks.available(kind, {g.targa}, g.truleb % 2 == 0);
+    if (changed && !quiet) {
+      if (g.truleb == 4 || g.truleb == 5)
+        this->showPopup(g.file, g.targb);
+      else if ((g.truleb == 2 || g.truleb == 3) && this->hooks.messageAbout)
+        this->hooks.messageAbout(g.targb, g.targa);
+    }
+    break;
+  }
+  case 7: {
+    // A list's types made available or not (0x5a1139): section [targa]'s
+    // id= each; truleb 0, 2, 4 yes, else no; when it changed anything (not
+    // quietly): 4-5 the popup targb, 2-3 the message targb
+    IniReader *ini = this->rm ? this->rm->getIniReader(g.file) : nullptr;
+    if (!ini)
+      break;
+    std::vector<int> ids;
+    for (const std::string &v : ini->getList(std::to_string(g.targa), "id"))
+      ids.push_back(std::atoi(trim(v).c_str()));
+    delete ini;
+    const bool on = g.truleb == 0 || g.truleb == 2 || g.truleb == 4;
+    const bool changed = !ids.empty() && this->hooks.available && this->hooks.available(0, ids, on);
+    if (changed && !quiet) {
+      if (g.truleb == 4 || g.truleb == 5)
+        this->showPopup(g.file, g.targb);
+      else if ((g.truleb == 2 || g.truleb == 3) && this->hooks.message)
+        this->hooks.message(g.targb);
+    }
+    break;
+  }
   case 6:
     if (std::find(this->awards.begin(), this->awards.end(), g.targa) == this->awards.end()) {
       this->awards.push_back(g.targa);
@@ -546,7 +588,6 @@ void Goals::fire(const Goal &g, bool quiet) {
         this->hooks.award(g.targa);
     }
     break;
-  // (4, 7: what can be bought - the catalogue's timed unlocks, ItemCatalog)
   default:
     break;
   }
