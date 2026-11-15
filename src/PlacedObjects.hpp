@@ -58,6 +58,12 @@ public:
     double income = 0, upkeep = 0;
     std::map<std::string, int> sold;
     int openedMonth = 0;
+    // When it opened, in days since January 1 of year 1 (2001), fractional:
+    // the original's opening time (ZTBuilding +0x180, a FILETIME set when
+    // it's placed; before 2001 negative); kUnknownDay not known (a save
+    // from before it was kept)
+    static constexpr double kUnknownDay = -1e300;
+    double openedDay = kUnknownDay;
     // Visitors (guests who went in): this month, last month, all told
     int visitorsNow = 0, visitorsLast = 0, visitorsTotal = 0;
     // Its colours (cIsColorReplaced buildings): the palette picked for
@@ -165,6 +171,9 @@ public:
   // A bought object put down (its catalogue file: scenery/<subclass>/<type>.ai)
   // at a point, facing 0 N, 2 E, 4 S, 6 W; false when it has no art
   bool add(const std::string &file, float x, float y, int facing);
+  // The zoo's date now, in days since January 1 of year 1 (ZooSim::today),
+  // kept up by the game loop: what a new object's openedDay is set to
+  double today = 0;
   // The last one put down (to name it and so on)
   Object *last() { return this->list.empty() ? nullptr : &this->list.back(); }
   Object *byId(int id) {

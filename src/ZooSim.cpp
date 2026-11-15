@@ -109,6 +109,15 @@ int ZooSim::daysInMonth(int month, int year) {
   return month == 1 && leap ? 29 : days[month % 12];
 }
 
+// ours: the days before a month (months since January of year 1), for a
+// building saved before its opening day was kept (only its month known)
+double ZooSim::monthStart(int monthIndex) {
+  double days = 0;
+  for (int m = 0; m < monthIndex; m++)
+    days += daysInMonth(m % 12, m / 12 + 1);
+  return days;
+}
+
 int ZooSim::weekday() const {
   // January 1 2001 was a Monday
   return static_cast<int>((1 + this->dayCount) % 7);

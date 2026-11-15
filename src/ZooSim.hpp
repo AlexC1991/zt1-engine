@@ -95,6 +95,20 @@ public:
   // 0 = Sunday .. 6 = Saturday
   int weekday() const;
   static int daysInMonth(int month, int year);
+  // The date now as days since January 1 of year 1, with the time of day
+  // as a fraction (the original's zoo FILETIME, 0x40e7e0, counted in days)
+  double today() const { return static_cast<double>(this->dayCount) + (this->day - static_cast<long>(this->day)); }
+  // The day the given month began (months since January of year 1)
+  static double monthStart(int monthIndex);
+  // A building's opening day: its own, or for one saved before that was
+  // kept, the first day of the month it opened (its openedMonth on the
+  // game's month count, monthCount now)
+  double openedDayOf(double openedDay, int openedMonth, int monthCount) const {
+    if (openedDay > -1e299) // (PlacedObjects::Object::kUnknownDay: not known)
+      return openedDay;
+    const int now = this->month() + (this->year() - 1) * 12;
+    return monthStart(now - (monthCount - openedMonth) < 0 ? 0 : now - (monthCount - openedMonth));
+  }
   // The months so far, oldest first (the last is this month)
   const std::vector<Month> &history() const { return this->months; }
   // Something changed that the HUD and panels should show

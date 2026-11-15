@@ -46,6 +46,9 @@ public:
   const std::vector<Area> &areas() const { return this->list; }
   // An exhibit's areas, in the order they were made (the habitat's +0x34)
   std::vector<int> of(int exhibit) const;
+  // The area in a tile's slot for a way (0..7: N, NE, E, SE, S, SW, W, NW -
+  // zoo.exe 0x43b8a2 reads the grid [0x63805c]+0x28 so), -1 none
+  int slotArea(int x, int y, int way) const;
   // Made again from nothing next refresh
   void clear();
 

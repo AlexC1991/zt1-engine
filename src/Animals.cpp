@@ -41,6 +41,10 @@ constexpr int kMatePickDelay = 3;
 // (animals.ai cDefenseRadius 3, zoo.exe 0x641560: how near two that both
 // cPreattack get before their stand-off)
 constexpr float kDefenseRadius = 3.0f;
+// The breath check (animals.ai cBreathCheck 30, zoo.exe 0x639450) and the
+// breath it's kept within: type +0x208 and +0x204, which no file sets
+// (setDefaults 0x4b659e: 0 and 100)
+constexpr int kBreathCheck = 30, kBreathMin = 0, kBreathMax = 100;
 // ours: how soon an animal whose behaviour line couldn't run picks again
 // (the original's does at its next update, every frame)
 constexpr float kLineRetry = 0.1f;
@@ -196,9 +200,15 @@ void Animals::loadTypes(ResourceManager *rm) {
     const std::string defInts = (defSub.empty() ? std::string("m") : defSub) + "/characteristics/integers";
     auto sectionOf = [&](const char *key) { return ai->get(ints, key, "").empty() ? defInts : ints; };
     auto num = [&](const char *key, int fallback) { return ai->getInt(sectionOf(key), key, fallback); };
-    t.slow = num("cslowrate", 30) / 60.0f;
-    t.medium = num("cmediumrate", 45) / 60.0f;
-    t.fast = num("cfastrate", 66) / 60.0f;
+    // (its rates as tiles a second: zoo.exe 0x4365e0 keeps the .ai rate as
+    // the unit's speed, +0x1f8, and moveAccumulate 0x435c42 moves it as it
+    // does staff - Original::unitTilesPerSecond. measured: in the running
+    // original 2026-11-16, an African buffalo at rate 20 went 1 step an
+    // update, 0.227-0.231 tiles/s; an allosaur at 120, 8 steps, 1.77-1.88;
+    // a humpback swimming at 66, 4 steps, 0.920)
+    t.slow = Original::unitTilesPerSecond(num("cslowrate", 30));
+    t.medium = Original::unitTilesPerSecond(num("cmediumrate", 45));
+    t.fast = Original::unitTilesPerSecond(num("cfastrate", 66));
     t.initialHappiness = num("cinitialhappiness", 50);
     t.showAnimal = !ai->getList("m/tricks", "trick").empty() || !ai->getList(defSub + "/tricks", "trick").empty();
     t.skipTrickHappiness = num("cskiptrickhappiness", 50);
@@ -241,6 +251,8 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.swims = num("cswims", 0) != 0;
     t.underwater = num("cunderwater", 0) != 0;
     t.needDepth = num("cdepth", 0);
+    t.breathThreshold = num("cbreaththreshold", 100); // (0x4b6c51: +0x1fc; setDefaults 0x4b659e: 100)
+    t.breathIncrement = num("cbreathincrement", 0);   // (+0x200; 0)
     t.surfaceOnly = num("csurface", 0) == 1; // (0x4b5932: "== 1", into +0x17d)
     t.onlyUnderwater = num("conlyunderwater", 0) == 1; // (0x4b939f: "== 1", +0x17f)
     t.depthMin = num("cdepthmin", 0);                   // (0x4b7edd: +0x35c)
@@ -332,9 +344,11 @@ void Animals::loadTypes(ResourceManager *rm) {
       // (the young's section over the grown one's values)
       const std::string yInts = "y/characteristics/integers";
       auto young = [&](const char *key, int grown) { return ai->getInt(yInts, key, grown); };
-      t.young.slow = ai->get(yInts, "cslowrate", "").empty() ? t.slow : young("cslowrate", 30) / 60.0f;
-      t.young.medium = ai->get(yInts, "cmediumrate", "").empty() ? t.medium : young("cmediumrate", 45) / 60.0f;
-      t.young.fast = ai->get(yInts, "cfastrate", "").empty() ? t.fast : young("cfastrate", 66) / 60.0f;
+      using Original::unitTilesPerSecond;
+      t.young.slow = ai->get(yInts, "cslowrate", "").empty() ? t.slow : unitTilesPerSecond(young("cslowrate", 30));
+      t.young.medium =
+          ai->get(yInts, "cmediumrate", "").empty() ? t.medium : unitTilesPerSecond(young("cmediumrate", 45));
+      t.young.fast = ai->get(yInts, "cfastrate", "").empty() ? t.fast : unitTilesPerSecond(young("cfastrate", 66));
       t.young.attractiveness = young("cattractiveness", t.attractiveness);
       t.young.chaseAnimalChance = young("cchaseanimalchance", t.chaseAnimalChance);
       t.young.bash = young("cbashstrength", t.bash);
@@ -683,7 +697,7 @@ void Animals::moveOf(const Member &m, const std::string &setName, std::string &a
         if (!a.empty())
           anim = lower(trim(a));
         if (std::atoi(s.args[3].c_str()) > 0)
-          speed = std::atoi(s.args[3].c_str()) / 60.0f;
+          speed = Original::unitTilesPerSecond(std::atoi(s.args[3].c_str()));
         return;
       } else if (s.fn == "frun") {
         return;
@@ -695,6 +709,29 @@ void Animals::moveOf(const Member &m, const std::string &setName, std::string &a
 bool Animals::busy(const Member &m) const {
   return m.boxed || m.tranquilised || m.dying || m.id == this->carried || m.caughtBy >= 0 || m.victim >= 0 ||
          m.building >= 0 || m.inside || m.claimedBy >= 0 || m.escaped || m.exhibit < 0 || m.showTank >= 0;
+}
+
+// The original's water state 4 (unit +0x258, set by 0x410857 from where it
+// is in its tank; read by the breath check 0x4389f7, the surfacing test
+// 0x43750c and the underwater mood list 0x43ca83). ours: under the water as
+// the mood sets take it - in a tank, below its surface band
+bool Animals::underwaterNow(const Member &m) const {
+  const int tank = this->tankAt ? this->tankAt(m.x, m.y) : -1;
+  return tank >= 0 && this->tankDepth && m.swimZ < this->tankDepth(tank) - 0.35f;
+}
+
+// zoo.exe 0x440a37 (animalStartBehaviour's, animalCheckTiredness's and
+// animalCheckHealth's test before bSleep or bSick): one that lives only
+// underwater (cOnlyUnderwater, type +0x17f through class slot 0x170) may
+// anywhere; any other not while it's in water mode or tank mode (+0x380, 1
+// or 2 - ours: waterMode), on a water tile (tile +0x83 & 3) or in a tank
+// (its water state, slot 0x2c8); and none while it's an egg (+0x395) or on a
+// show (slot 0x22c - ours: showTank)
+bool Animals::mayRest(const Member &m) const {
+  const Type &t = this->typeList[m.type];
+  if (!t.onlyUnderwater && (m.waterMode || onWater(m) || (this->tankAt && this->tankAt(m.x, m.y) >= 0)))
+    return false;
+  return !m.egg && m.showTank < 0;
 }
 
 // The nearest adult in its exhibit that hunts it within the radius (zoo.exe
@@ -1187,6 +1224,7 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   m.hungerCheck = start(kHungerCheck);
   m.zapCheck = start(kZapCheck);
   m.murkyCheck = start(kMurkyWaterCheck);
+  m.breathCheck = start(kBreathCheck); // (zoo.exe 0x454037: rand % cBreathCheck)
   m.healthCheck = start(30);
   m.energyCheck = start(30);
   m.reproductionCheck = start(20);
@@ -1400,17 +1438,14 @@ void Animals::chooseBehaviour(Member &m) {
             {"cHungerThreshold", t.hungerThreshold});
     return;
   }
-  // Tired (cEnergyThreshold): to sleep; rested after (zoo.exe 0x4384ba)
-  if ((m.sleeping || m.energy >= t.energyThreshold) && !m.escaped && this->set(m, "bsleep")) {
-    m.sleeping = true;
-    float wasEnergy = m.energy;
-    m.energy = 0;
-    m.lastSlept = this->now;
-    m.rampaging = false; // (a sleep ends a rampage: zoo.exe 0x4375d3, as bSleep - or bHatch - starts)
-    m.rampageTicks = 0;
-    pushSet(m, "bsleep");
-    ZT_STEP("0x4384ba", "Chooses: tired, to sleep", {"behaviour", "bsleep"}, {"energy", wasEnergy, 0.0},
-            {"cEnergyThreshold", t.energyThreshold});
+  // Out of air: up for it (zoo.exe chooseTask 0x436f5c, after its food and
+  // drink: 0x43750c - under the water, water state 4, with its breath at
+  // cBreathThreshold - Task 0x7c, Task7c_SurfaceForAir)
+  if (underwaterNow(m) && m.breath >= t.breathThreshold && this->set(m, "bbreathe")) {
+    m.surfacing = 1;
+    pushSet(m, "bbreathe");
+    ZT_STEP("0x43750c", "Chooses: out of air, up to breathe", {"behaviour", "bbreathe"}, {"breath", m.breath},
+            {"cBreathThreshold", t.breathThreshold});
     return;
   }
   // Sick: lies about (bSick) - and, as with a sleep, not rampaging while it
@@ -1425,7 +1460,9 @@ void Animals::chooseBehaviour(Member &m) {
     return;
   }
   // Rampaging: its bHabitatRampage, or bEscapedRampage when it's out
-  // (zoo.exe 0x438514 sets it; which set, by the names it ends there)
+  // (zoo.exe 0x438514 sets it; which set, by the names it ends there) -
+  // before a sleep (zoo.exe 0x437102: the rampage set is set first, and
+  // only with no set yet does it look at its tiredness)
   if (m.rampaging) {
     const char *rs = m.escaped ? "bescapedrampage" : "bhabitatrampage";
     if (this->set(m, rs)) {
@@ -1433,6 +1470,18 @@ void Animals::chooseBehaviour(Member &m) {
       ZT_STEP("0x438514", "Chooses: rampaging", {"behaviour", rs}, {"happiness", m.happiness});
       return;
     }
+  }
+  // Tired (cEnergyThreshold): to sleep, where it may (zoo.exe 0x437102 ->
+  // 0x440a37: not in the water or a tank, unless it lives only underwater);
+  // rested when it wakes (0x4384ba)
+  if ((m.sleeping || m.energy >= t.energyThreshold) && !m.escaped && mayRest(m) && this->set(m, "bsleep")) {
+    m.sleeping = true;
+    m.rampaging = false; // (a sleep ends a rampage: zoo.exe 0x4375d3, as bSleep - or bHatch - starts)
+    m.rampageTicks = 0;
+    pushSet(m, "bsleep");
+    ZT_STEP("0x437102", "Chooses: tired, to sleep", {"behaviour", "bsleep"}, {"energy", m.energy},
+            {"cEnergyThreshold", t.energyThreshold});
+    return;
   }
   int h =static_cast<int>(std::lround(m.happiness));
   // (in a tank: its surface or underwater list, by where it swims)
@@ -1557,9 +1606,38 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       // Primates' bEat uses mouth/arm animations, not an animation named
       // "eat". Completing the feeding behaviour must still consume food.
       if(m.stack.back().first=="beat" && !m.mealTaken)consumeFood(m);
-      if(m.stack.back().first=="bsleep")m.sleeping=false;
+      // (bSleep over: "Refreshed after sleeping" - its energy back to its
+      // least, type +0x24c, 0 - and when it last slept, now: zoo.exe
+      // 0x4384ba)
+      if(m.stack.back().first=="bsleep" && m.sleeping) {
+        m.sleeping=false;
+        m.energy=0;
+        m.lastSlept=this->now;
+        ZT_STEP("0x4384ba", "Refreshed after sleeping", {"energy", 0.0});
+      }
       m.stack.pop_back();
       continue;
+    }
+    // Up for air (Task 0x7c): first up to the surface, somewhere in its
+    // tank (its whileGoing 0x498cf5 till it's there), then its bBreathe -
+    // and, that started, its breath back to its least (atTarget 0x4e8ac4:
+    // type +0x208)
+    if (m.surfacing && (m.stack.back().first != "bbreathe" || m.stack.back().second != 0))
+      m.surfacing = 0;
+    if (m.surfacing == 1) {
+      m.surfacing = 2;
+      m.swimTo = this->tankTargetHeight(m, "surface");
+      m.moveAnim = "walk";
+      m.speed = this->typeList[m.type].forAge(m.baby).slow;
+      if (walkSomewhere(m, map, fences)) {
+        ZT_STEP("0x498cf5", "Going to surface for air", {"breath", m.breath});
+        return;
+      }
+    }
+    if (m.surfacing == 2) {
+      m.surfacing = 0;
+      m.breath = kBreathMin;
+      ZT_STEP("0x4e8ac4", "At the surface: bBreathe", {"breath", m.breath});
     }
     Step s = (*steps)[m.stack.back().second++];
     const Command command = behaviorCommand(s.fn);
@@ -1606,9 +1684,11 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       m.playQueueAt = {m.stack.size(), m.stack.back().second};
     } else if (command == Command::PlayWithSound || command == Command::PlayStopAtEnd) {
       // (fPlayStopAtEnd 0x5a55a9 plays through fPlay 0x440b92: an animation
-      // it hasn't, the set fails)
-      if (command == Command::PlayStopAtEnd && !art(m, arg(0), false)) {
-        failLine("0x5a55a9");
+      // it hasn't, the set fails. So does fPlayWithSound: 0x438399 ->
+      // 0x4383bb looks the animation up by name, 0x410ffe, and with none
+      // returns false - its sound, looked up after, isn't heard)
+      if (!art(m, arg(0), false)) {
+        failLine(command == Command::PlayStopAtEnd ? "0x5a55a9" : "0x4383bb");
         return;
       }
       play(m, arg(0), Member::Mode::Once);
@@ -1760,7 +1840,9 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       }
       // fMove(where, n, animation, speed); fMoveWithSound the same and a
       // sound (a dolphin's jumps, a shark's frenzy); fMoveReverse (not yet
-      // played backwards); fTrot at its medium rate, trotting
+      // played backwards); fTrot at its medium rate, trotting. (fMove's
+      // speed is a rate as cSlowRate is: zoo.exe 0x425533 passes it to
+      // 0x43646e, which sets it as the unit's speed, class slot 0x1c0)
       bool asMove = command == Command::Move || command == Command::MoveWithSound || command == Command::MoveReverse;
       bool hasTrot = t.anims[sub(m)].count("trot") || t.anims[0].count("trot");
       m.moveAnim = command == Command::Run ? "run"
@@ -1769,7 +1851,7 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
                                                : "walk";
       m.speed = command == Command::Run ? t.forAge(m.baby).fast
                 : command == Command::Trot ? t.forAge(m.baby).medium
-                : asMove && !arg(3).empty() ? std::atoi(arg(3).c_str()) / 60.0f
+                : asMove && !arg(3).empty() ? Original::unitTilesPerSecond(std::atoi(arg(3).c_str()))
                                             : t.forAge(m.baby).slow;
       if (command == Command::MoveWithSound && !arg(4).empty())
         playSound(m, arg(4));
@@ -3756,6 +3838,27 @@ void Animals::murkyWaterTick(Member &m, const WorldMap &map, const Fences &fence
 // - hunger (every 30): cHungerIncrement hungrier; hungry with no food,
 //   cNoFoodChange.
 // ----------------------------------------------------------------------------
+// Air (zoo.exe 0x4389f7, each status tick): its countdown down one; got to
+// 0 under the water (water state 4), cBreathIncrement more breath, kept
+// 0..100, and the countdown again. At 0 anywhere else, the original's
+// countdown runs on below 0 and never comes round again - its breath stays
+// as it is from then on (0x438a1d tests for 0 only; copied as it is).
+// measured: in the running original 2026-11-16 every dolphin, orca, beluga
+// and porpoise of a loaded zoo had its countdown (+0x364) below 0, -6 to
+// -200 and one less each second, its breath stuck at 0-30, and none went
+// up for air in 75 s; land animals' countdowns were below 0 too
+void Animals::breathTick(Member &m) {
+  const Type &t = this->typeList[m.type];
+  if (m.breathCheck-- != 0 || !underwaterNow(m))
+    return;
+  m.breathCheck = kBreathCheck - 1;
+  int was = m.breath;
+  m.breath = std::clamp(m.breath + t.breathIncrement, kBreathMin, kBreathMax);
+  if (m.breath != was)
+    ZT_STEP("0x4389f7", "Breath held longer", {"breath", was, m.breath}, {"cBreathIncrement", t.breathIncrement},
+            {"cBreathThreshold", t.breathThreshold});
+}
+
 void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   // (an egg only waits to hatch)
   if (m.egg) {
@@ -3892,6 +3995,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
     }
   }
   murkyWaterTick(m, map, fences);
+  breathTick(m);
   // Health (0x4389aa): at 20% (cPctHits) or less, unhappy (cSickChange);
   // others sick, unhappier and maybe caught it; now and then ill anyway
   if (--m.healthCheck < 0) {
@@ -3939,12 +4043,27 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       ZT_STEP("0x4389aa", "Fell ill (1 in 1000)", {"sick", 0, 1}, {"health", 0.0});
     }
   }
-  // Tiredness (0x4384ba)
-  if (--m.energyCheck < 0) {
+  // Tiredness (0x4384ba, every cEnergyCheck 30): not while it sleeps; else
+  // cEnergyIncrement x animal +0x2d8 more (measured: +0x2d8 is 1 on every
+  // animal sampled in the running original, 2026-11-16), no more than
+  // cMaxEnergy (animalUpdateHappiness
+  // 0x4378df adds it, capped at type +0x248) - over cEnergyThreshold too,
+  // where it can't sleep
+  // (asleep, its countdown waits and each tick it asks whether it's still
+  // in its bSleep - cut short, it's refreshed as if it had woken)
+  if (m.sleeping) {
+    m.energyCheck = 29;
+    if (!m.stack.empty() &&
+        std::none_of(m.stack.begin(), m.stack.end(), [](const auto &f) { return f.first == "bsleep"; })) {
+      m.sleeping = false;
+      m.energy = 0;
+      m.lastSlept = this->now;
+      ZT_STEP("0x4384ba", "Refreshed after sleeping (its bSleep cut short)", {"energy", 0.0});
+    }
+  } else if (--m.energyCheck < 0) {
     m.energyCheck = 29;
     float was = m.energy;
-    if (m.energy < t.energyThreshold)
-      m.energy += t.energyIncrement;
+    m.energy = std::min(m.energy + t.energyIncrement, static_cast<float>(t.maxEnergy));
     ZT_STEP("0x4384ba", "Tiredness (every 30)", {"energy", was, m.energy}, {"cEnergyIncrement", t.energyIncrement},
             {"cEnergyThreshold", t.energyThreshold});
   }

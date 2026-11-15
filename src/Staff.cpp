@@ -82,6 +82,7 @@ void Staff::loadTypes(ResourceManager *rm) {
                                                     : "m/characteristics/integers";
       t.nameId = ai->getInt(ints, "cnameid", 0);
       t.salary = ai->getInt(ints, "cpurchasecost", ai->getInt(ints, "cmonthlycost", 0));
+      t.wage = ai->getInt(ints, "cmonthlycost", ai->getInt(ints, "cpurchasecost", 0));
       t.dutiesText = ai->getInt(ints, "cdutiestextid", 0);
       t.slowRate = ai->getInt(ints, "cslowrate", 33);
       t.fastRate = ai->getInt(ints, "cfastrate", 66);
@@ -139,6 +140,9 @@ void Staff::loadTypes(ResourceManager *rm) {
             semi == std::string::npos ? 0 : std::atoi(v.substr(semi + 1).c_str())};
       }
       t.skin = ai->getList("cr_skin", "pal");
+      // cWeaponRange (keeper.ai, scient.ai, trainer.ai, helicopt.ai: 5) -
+      // the keeper type's +0x1ec, zoo.exe 0x50cffd
+      t.weaponRange = ai->getInt(ints, "cweaponrange", static_cast<int>(t.weaponRange));
       if (t.kind == Kind::Helicopter) {
         t.flightHeight = ai->getInt(ints, "cminheight", 128) / 16.0f;
         t.flightSpeed = ai->getInt(ints, "cfastrate", 150) / 60.0f;
@@ -210,7 +214,7 @@ const Staff::Member *Staff::member(int id) const {
 int Staff::monthlyWages() const {
   int total = 0;
   for (const Member &m : this->list)
-    total += this->typeList[m.type].salary;
+    total += this->typeList[m.type].wage;
   return total;
 }
 
@@ -1235,6 +1239,10 @@ bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences) {
       m.job = Job::Visit;
       m.visit = ex;
       m.phase = 0;
+      // (its duties there begin: the +0x270 and +0x27c lists emptied,
+      // zoo.exe 0x49f3ca)
+      m.invalid.clear();
+      m.unreachable.clear();
       ZT_STEP("", "Off to visit the exhibit, by its gate", {"exhibit", fences.exhibit(ex)->name}, {"gate x", ox}, {"gate y", oy});
       return true;
     }
@@ -1297,6 +1305,9 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     m.idleLeft = 0.5f;
     m.dutyId = kMonitoring;
     m.dutyArg.clear();
+    // (its duties in the habitat over: both lists emptied, zoo.exe 0x49ebe7)
+    m.invalid.clear();
+    m.unreachable.clear();
   };
   if (!ex || !this->items) {
     done();
@@ -1505,13 +1516,22 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     return;
   case 1: // just inside: food, if it's low - to a free tile within 3 of
     // it, at random (zoo.exe 0x4e7a7d: nothing on it, not the gate's own
-    // tile, reachable), else the nearest free one
+    // tile, not one on its list of tiles it found no way to, +0x27c), else
+    // the nearest free one. Job1_GoDropFood (0x4993b9) takes that one spot:
+    // no way to it, and the tile goes on the list ("Couldn't reach place to
+    // put food") and the food job ends; once the list holds 20 tiles it's
+    // emptied, the animal goes on its +0x270 list and the keeper says it
+    // can't get there (11004, priority 2); both lists are emptied as its
+    // duties in a habitat begin and end. Job1's atTarget (0x508396) then
+    // starts Job2_PutDownFood (0x508448) at the spot.
     if (hungry) {
       int kx = static_cast<int>(std::floor(m.x)), ky = static_cast<int>(std::floor(m.y));
       int gx = static_cast<int>(std::floor(m.inX)), gy = static_cast<int>(std::floor(m.inY));
       std::vector<std::pair<int, int>> near, all;
       for (auto [x, y] : ex->tiles) {
         if ((x == gx && y == gy) || !walkable(x, y, map, fences, m.visit))
+          continue;
+        if (std::find(m.invalid.begin(), m.invalid.end(), std::make_pair(x, y)) != m.invalid.end())
           continue;
         bool taken = false;
         for (int id : this->items->ofKind(ZooItems::Kind::Food, m.visit))
@@ -1532,15 +1552,31 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
                (b.first - kx) * (b.first - kx) + (b.second - ky) * (b.second - ky);
       });
       near.insert(near.end(), all.begin(), all.end());
-      for (auto [x, y] : near) {
-        if (!findPath(m, x, y, map, fences, x + 0.5f, y + 0.5f))
-          continue;
-        m.dropX = x + 0.5f;
-        m.dropY = y + 0.5f;
-        m.phase = 9;
-        m.dutyId = kPlacingFood;
-        m.dutyArg.clear();
-        return;
+      if (!near.empty()) {
+        auto [x, y] = near.front();
+        if (findPath(m, x, y, map, fences, x + 0.5f, y + 0.5f)) {
+          m.dropX = x + 0.5f;
+          m.dropY = y + 0.5f;
+          m.phase = 9;
+          m.dutyId = kPlacingFood;
+          m.dutyArg.clear();
+          return;
+        }
+        ZT_STEP("0x4993b9", "Couldn't reach place to put food: the tile on its list", {"x", x}, {"y", y},
+                {"tiles on the list", static_cast<int>(m.invalid.size()) + 1});
+        m.invalid.push_back({x, y});
+        if (m.invalid.size() >= 20) {
+          m.invalid.clear();
+          // (ours: the animal named is the first one there that isn't
+          // crated - the original names the job's own target animal)
+          if (this->animals)
+            for (const Animals::Member &a : this->animals->members())
+              if (a.exhibit == m.visit && !a.boxed) {
+                m.unreachable.push_back(a.id);
+                pathTrouble(m, a.name, false);
+                break;
+              }
+        }
       }
     }
     m.phase = 3;
@@ -1585,20 +1621,40 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     play(m, tank ? "subheal" : "heal", 1);
     return;
   case 3: { // one to heal first, then dung to rake: the nearest pile
+    // Job3_GoHealAnimal (0x508b3c): the animal is 0x4705b9's - of the
+    // habitat's animals needing it (0x423f00), the nearest by squared tile
+    // distance from the keeper, the first on a tie, leaving out those on its
+    // +0x270 list. No way to it: onto that list ("Couldn't reach animal to
+    // heal"), the job ends and the keeper says so (11004, priority 2, the
+    // keeper's name and the animal's). The list is emptied as its duties in
+    // a habitat begin (0x49f3ca) and end (0x49ebe7). Job3's atTarget
+    // (0x470010) starts Job4_HealAnimal (0x470121)
     if (this->animals) {
-      const Animals::Member *sickest = nullptr;
-      for (const Animals::Member &a : this->animals->members())
-        if (a.exhibit == m.visit && !a.boxed && this->animals->needsHealing(a) &&
-            (!sickest || a.health < sickest->health))
-          sickest = &a;
-      if (sickest) {
-        m.jobAnimal = sickest->id;
+      const Animals::Member *nearest = nullptr;
+      long long best = 0;
+      const int kx = static_cast<int>(std::floor(m.x)), ky = static_cast<int>(std::floor(m.y));
+      for (const Animals::Member &a : this->animals->members()) {
+        if (a.exhibit != m.visit || a.boxed || !this->animals->needsHealing(a) ||
+            std::find(m.unreachable.begin(), m.unreachable.end(), a.id) != m.unreachable.end())
+          continue;
+        const long long dx = static_cast<int>(std::floor(a.x)) - kx, dy = static_cast<int>(std::floor(a.y)) - ky;
+        if (!nearest || dx * dx + dy * dy < best) {
+          nearest = &a;
+          best = dx * dx + dy * dy;
+        }
+      }
+      if (nearest) {
+        m.jobAnimal = nearest->id;
         m.phase = 8;
         m.dutyId = 10301;
-        if (findPath(m, static_cast<int>(std::floor(sickest->x)), static_cast<int>(std::floor(sickest->y)), map,
-                     fences, sickest->x + 0.3f, sickest->y + 0.3f))
+        if (findPath(m, static_cast<int>(std::floor(nearest->x)), static_cast<int>(std::floor(nearest->y)), map,
+                     fences, nearest->x + 0.3f, nearest->y + 0.3f))
           return;
-        m.phase = 7; // (beside it already)
+        ZT_STEP("0x508b3c", "Couldn't reach animal to heal: on its list, and it says so", {"animal", nearest->name});
+        m.unreachable.push_back(nearest->id);
+        m.jobAnimal = -1;
+        pathTrouble(m, nearest->name, false);
+        m.phase = 3;
         visitStep(m, map, fences);
         return;
       }
@@ -1607,12 +1663,22 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     float best = 1e9f;
     for (int id : this->items->ofKind(ZooItems::Kind::Dung, m.visit)) {
       const ZooItems::Item *it = this->items->item(id);
+      // (not one on a tile it found no way to: 0x4a2ab8 reads +0x27c)
+      if (std::find(m.invalid.begin(), m.invalid.end(),
+                    std::make_pair(static_cast<int>(std::floor(it->x)), static_cast<int>(std::floor(it->y)))) !=
+          m.invalid.end())
+        continue;
       float d = std::hypot(it->x - m.x, it->y - m.y);
       if (d < best) {
         best = d;
         m.jobItem = id;
       }
     }
+    // Job5_GoCleanDirt (0x412629): no way to the pile, and its tile goes on
+    // the keeper's list of tiles it found no way to (+0x27c: "Couldn't reach
+    // dirt to clean"), the job ends and the keeper says so (11004, priority
+    // 2, its name and the habitat's); the pile stays. Job5's atTarget
+    // (0x426adb) starts Job6_CleanDirt (0x42f860)
     if (m.jobItem >= 0) {
       const ZooItems::Item *it = this->items->item(m.jobItem);
       m.phase = 4;
@@ -1620,7 +1686,10 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
       if (findPath(m, static_cast<int>(std::floor(it->x)), static_cast<int>(std::floor(it->y)), map,
                    fences, it->x + 0.2f, it->y + 0.2f))
         return;
-      this->items->remove(m.jobItem); // (can't reach it: leave it be)
+      ZT_STEP("0x412629", "Couldn't reach dirt to clean: the tile on its list, the pile stays", {"pile", m.jobItem});
+      m.invalid.push_back({static_cast<int>(std::floor(it->x)), static_cast<int>(std::floor(it->y))});
+      m.jobItem = -1;
+      pathTrouble(m, ex->name, false);
       m.phase = 3;
       visitStep(m, map, fences);
       return;
@@ -1953,17 +2022,27 @@ void Staff::catchStep(Member &m, float seconds, const WorldMap &map, const Fence
     m.dutyId = kMonitoring;
     return;
   }
-  float d2 = (a->x - m.x) * (a->x - m.x) + (a->y - m.y) * (a->y - m.y);
-  if (m.phase == 0 && d2 <= 25.0f) {
+  // In range (zoo.exe 0x50cf5b): the squared distance between their tiles
+  // at most the range squared - Job13_Tranquilize's checkArrived (0x50cffd)
+  // with the keeper type's cWeaponRange (+0x1ec), Job15_BoxAnimal's
+  // (0x50d2d8) with 1, back to Job13 if it's woken (+0x393)
+  const long long tdx = static_cast<int>(std::floor(a->x)) - static_cast<int>(std::floor(m.x)),
+                  tdy = static_cast<int>(std::floor(a->y)) - static_cast<int>(std::floor(m.y));
+  const long long d2 = tdx * tdx + tdy * tdy;
+  const long long range = static_cast<long long>(this->typeList[m.type].weaponRange);
+  if (m.phase == 1 && !a->tranquilised)
+    m.phase = 0;
+  if (m.phase == 0 && d2 <= range * range) {
     // In range: stop, face it, fire
-    ZT_STEP("0x50da26", "In range (cWeaponRange 5): fires a dart", {"animal", a->name}, {"distance", std::sqrt(d2)});
+    ZT_STEP("0x50cffd", "In range (cWeaponRange): fires a dart", {"animal", a->name},
+            {"tile distance", std::sqrt(static_cast<float>(d2))}, {"cWeaponRange", static_cast<int>(range)});
     face(m, a->x, a->y);
     m.dutyId = 10308;
     play(m, "fire", 1);
     Sound::get().play("staff/gun", 1000);
     return;
   }
-  if (m.phase == 1 && d2 <= 1.0f) {
+  if (m.phase == 1 && d2 <= 1) {
     ZT_STEP("0x50d345", "Crates it where it lies", {"animal", a->name});
     this->animals->box(a->id);
     m.job = Job::None;
@@ -2266,8 +2345,20 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
             continue;
           }
           ZT_STEP("", "The work's done", {"job", kJobNames[std::clamp(static_cast<int>(m.job), 0, 8)]});
-          if (m.job == Job::Fence)
+          if (m.job == Job::Fence) {
+            // zoo.exe 0x59a51d (Job17_FixFence's atTarget 0x59a596): the
+            // piece mended; with the type's cFixFenceModifier over 0 (the
+            // maintenance training), the pieces either side of it along the
+            // fence too (the tiles two directions round, 0x432236)
             fences.repair(m.jobEdge);
+            if (t.fixFenceModifier > 0) {
+              const Fences::Edge &e = m.jobEdge;
+              for (int d : {-1, 1})
+                fences.repair(e.alongX ? Fences::Edge{true, e.x + d, e.y} : Fences::Edge{false, e.x, e.y + d});
+              ZT_STEP("0x59a51d", "Trained (cFixFenceModifier): the pieces either side mended too",
+                      {"cFixFenceModifier", t.fixFenceModifier});
+            }
+          }
           else if (m.job == Job::Filter)
             fences.serviceFilter(m.jobFilter);
           else if (m.job == Job::Litter && this->items) {
@@ -2341,7 +2432,22 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
       if (m.job != Job::Catch || m.playsLeft > 0)
         continue;
     }
-    // Walking a path
+    // Walking a path. Litter gone before it gets there (another worker swept
+    // it): "Done with trash piles", the job ends (Job7_GoToTrashPile's
+    // checkArrived, zoo.exe 0x52cef4, each tick: no trash left at its
+    // target - 0x4a2408 "objectsothertrash")
+    if (m.pathAt < m.path.size() && m.job == Job::Litter && this->items && !this->items->item(m.jobItem)) {
+      ZT_STEP("0x52cef4", "Done with trash piles: the litter's gone before it got there");
+      m.path.clear();
+      m.pathAt = 0;
+      m.job = Job::None;
+      m.jobItem = -1;
+      m.anim = "idle";
+      m.idleLeft = 0.5f;
+      m.dutyId = kMaintMonitoring;
+      m.workCheck = 0;
+      continue;
+    }
     if (m.pathAt < m.path.size()) {
       auto [tx, ty] = m.path[m.pathAt];
       float dx = tx - m.x, dy = ty - m.y, dist = std::hypot(dx, dy);

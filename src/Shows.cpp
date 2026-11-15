@@ -723,7 +723,9 @@ void Shows::audiences(Show &s,float seconds) {
     if(g.showTank>=0 || g.leaving || g.guide>=0 || g.hidden || g.building>=0 ||
        g.hunger>50 || g.thirst>50 || g.bathroom>50 || g.tired>80 || g.happiness<0 ||
        (g.state!=Guests::State::Walking && g.state!=Guests::State::Gawking))continue;
-    if(g.state==Guests::State::Gawking && g.animTime<g.playFor)continue;
+    // (still watching an exhibit - its viewing task's time not up - or a play
+    // not done)
+    if(g.state==Guests::State::Gawking && (g.animTime<g.playFor || g.viewEnd>0))continue;
     if(guestShowRetry[g.id]>now)continue;
     guestShowRetry[g.id]=now+5+(g.id%5);
     if(std::any_of(stands.begin(),stands.end(),[&](int id){return g.visited.count(id)!=0;}))continue;

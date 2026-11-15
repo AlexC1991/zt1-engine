@@ -168,6 +168,9 @@ public:
   void showBuilding(int id);
   void refreshBuilding();
   int monthNumber = 0; // months played (for "Months in operation")
+  // The building shown's cLowCost and cHighCost (its .ai; 1 when not set,
+  // ZTBuildingType::setDefaults 0x4c042c)
+  float shownLowCost = 1, shownHighCost = 1;
   void refreshGuest();
 
   // Modal dialogs: ui/newname.lyt (a name to type, OK) and ui/confirm.lyt
@@ -570,7 +573,9 @@ private:
   void chargeFunding(); // research, conservation, marketing a day
   struct MarketingLevel {
     std::string name; // "%s none"
-    int cost = 0;     // a month
+    // (zoo.exe marketingLoadConfig 0x5916ff: each funding= section's name
+    // and benefit as whole numbers, its cost through the float reader 0x4b37c3)
+    float cost = 0;   // a month
     int benefit = 0;  // added to the rating that picks how often guests come
   };
   std::vector<MarketingLevel> marketing;

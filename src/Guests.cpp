@@ -84,8 +84,17 @@ void Guests::load(ResourceManager *rm) {
     t.child = key == "boy" || key == "girl";
     std::string ints = key + "/characteristics/integers";
     t.nameId = ai->getInt(ints, "cnameid", ai->getInt("man/characteristics/integers", "cnameid", 0));
-    t.speed = ai->getInt(ints, "cslowrate", t.child ? 26 : 30) / 60.0f;
-    t.runSpeed = (t.child ? 44 : 56) / 60.0f; // fMove(..,56) adults, 44 children
+    // Walking at its cSlowRate (man 33, woman and boy 26, girl 22), by the
+    // units' movement rule (zoo.exe 0x435c42, Original::unitTilesPerSecond:
+    // whole 64ths of a tile an update), so a man takes 2 steps an update and
+    // the others 1 - half his speed. Running from a predator, its
+    // bRunFromPredator's fMove(0,0,run_terror,<rate>) (56 adults, 44
+    // children: fMove 0x425533 hands the rate to the move, 0x43646e) by the
+    // same rule
+    t.slowRate = ai->getInt(ints, "cslowrate", ai->getInt("man/characteristics/integers", "cslowrate", 33));
+    // (the rested walking speed; walkSpeed gives it by tiredness)
+    t.speed = Original::unitTilesPerSecond(Original::guestWalkRate(0));
+    t.runSpeed = Original::unitTilesPerSecond(t.child ? 44 : 56);
     // Animations: "walk = walk" (guests/<key>/walk/walk) or a whole path
     std::map<std::string, std::string> names = ai->getSection(key + "/animations");
     if (names.empty())
@@ -145,6 +154,7 @@ void Guests::load(ResourceManager *rm) {
     read("cstinkthreshold", t.stinkThreshold), read("csickchange", t.sickChange);
     read("csawanimalreset", t.sawReset);
     read("csickchance", t.sickChance);
+    read("cmimicchance", t.mimicChance);
     read("csickanimalchange", t.sickAnimalChange), read("chappyanimalchange1", t.happyAnimal1);
     read("chappyanimalchange2", t.happyAnimal2), read("cangryanimalchange1", t.angryAnimal1);
     read("cangryanimalchange2", t.angryAnimal2), read("cangryanimalchange3", t.angryAnimal3);
@@ -547,6 +557,12 @@ void Guests::labLeave(int id) {
     }
 }
 
+// A guest's walking speed by its tiredness (zoo.exe 0x42250a, its class slot
+// 0x1c0: Original::guestWalkRate), by the units' movement rule (0x435c42)
+float Guests::walkSpeed(const Guest &g) const {
+  return Original::unitTilesPerSecond(Original::guestWalkRate(static_cast<int>(g.tired)));
+}
+
 bool Guests::walkTo(Guest &g, int tx, int ty, float speed, bool emergency) {
   int sx = static_cast<int>(std::floor(g.x)), sy = static_cast<int>(std::floor(g.y));
   // Running from a predator (zoo.exe chooseTask's task 0x75 sets +0x230 to
@@ -570,10 +586,12 @@ bool Guests::walkTo(Guest &g, int tx, int ty, float speed, bool emergency) {
   Pathfinder::smooth(points, pass, step);
   g.path.assign(points.begin() + 1, points.end());
   g.pathAt = 0;
-  g.speed = speed;
+  // (walking: its rate set by its tiredness as the move starts - 0x42250a)
+  const bool walking = speed == this->typeList[g.type].speed;
+  g.speed = walking ? walkSpeed(g) : speed;
   if (g.path.empty())
     return false;
-  g.anim = speed > this->typeList[g.type].speed * 1.2f ? "run_terror" : "walk";
+  g.anim = !walking && speed > this->typeList[g.type].speed * 1.2f ? "run_terror" : "walk";
   g.animTime = 0;
   return true;
 }
@@ -784,8 +802,8 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
   if (!this->objects)
     return false;
   const auto &objs = this->objects->objects();
-  int best = -1, bx = -1, by = -1;
-  float bestD = 1e9f;
+  int best = -1, bx = -1, by = -1, fullAt = -1;
+  float bestD = 1e9f, fullD = 1e9f;
   bool full = false;
   for (size_t i = 0; i < objs.size(); i++) {
     const PlacedObjects::Object &o = objs[i];
@@ -815,6 +833,8 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
       users += o2.building == static_cast<int>(i) ? 1 : 0;
     if (users >= b.capacity) {
       full = true;
+      if (d < fullD)
+        fullD = d, fullAt = static_cast<int>(i);
       continue;
     }
     // A cUserTracker ride (the dolphin shack) counts its riders out on the
@@ -867,10 +887,21 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
           {"found", best >= 0 ? "yes" : full ? "all full" : "none in reach"}, {"distance", best >= 0 ? bestD : 0.0f});
   if (best < 0) {
     // (all full: "%s is too crowded." alone, not also "none found" - zoo.exe
-    // 0x4fba3a, 0x58c86a)
+    // 0x4fba3a, 0x58c86a; Task66's atTarget 0x4a830c: the %s is the full
+    // building - thoughtAdd(0x2803, building). ours: its own name, else its
+    // kind's cNameID text)
     this->seekFull = full;
-    if (full)
-      think(g, 10243); // "%s is too crowded."
+    if (full) {
+      std::string name;
+      if (fullAt >= 0) {
+        const PlacedObjects::Object &o = objs[static_cast<size_t>(fullAt)];
+        name = o.name;
+        const int id = infoOf(PlacedObjects::fileOf(o)).nameId;
+        if (name.empty() && id > 0 && this->rm)
+          name = this->rm->getString(id);
+      }
+      think(g, 10243, name); // "%s is too crowded."
+    }
     return false;
   }
   if (!walkTo(g, bx, by, this->typeList[g.type].speed))
@@ -1052,7 +1083,8 @@ bool Guests::waterTo(Guest &g, int tx, int ty, const Move &m) {
   g.path.assign(points.begin() + 1, points.end());
   g.pathAt = 0;
   const Type &t = this->typeList[g.type];
-  g.speed = m.speed > 0 ? m.speed / 60.0f : t.speed;
+  // (its rate by the units' movement rule - zoo.exe 0x435c42)
+  g.speed = m.speed > 0 ? Original::unitTilesPerSecond(m.speed) : t.speed;
   // (a kind without the ride's art - a child in a boat - swims: its "swim",
   // what a unit walking on water plays, 0x41338a)
   g.anim = t.anims.count(m.anim) ? m.anim : "swim";
@@ -1746,50 +1778,101 @@ int Guests::findPredator(const Guest &g) const {
   return best ? best->id : -1;
 }
 
-// How crowded the viewing area it stands in is (zoo.exe 0x425f6a, its area
-// by 0x4232f4): the guests on the area's viewing tiles over how many tiles
-// it has, times 10, cut to a whole number; no area, 0. ours: the area of the
-// exhibit it's at whose viewing tiles hold its tile; the counts brought up
-// to date once a second of game time (World's viewAreas)
-int Guests::areaCrowd(const Guest &g) const {
-  if (!this->viewAreas || g.target < 0)
-    return 0;
+// Its viewing area (zoo.exe 0x4232f4: 0x43b8a2 with the way kept in +0x328 -
+// its tile's slot for that way, an area that sees something). ours, given
+// no slots (no World): the area of the exhibit it's at whose viewing tiles
+// hold its tile
+bool Guests::viewArea(const Guest &g, ViewArea &out) const {
   const int gx = static_cast<int>(std::floor(g.x)), gy = static_cast<int>(std::floor(g.y));
-  for (const ViewArea &a : this->viewAreas(g.target))
-    if (!a.viewing.empty() && std::find(a.viewing.begin(), a.viewing.end(), std::make_pair(gx, gy)) != a.viewing.end())
-      return static_cast<int>(static_cast<float>(a.guests) / static_cast<float>(a.viewing.size()) * 10.0f);
-  return 0;
+  if (this->areaInSlot) {
+    if (g.viewWay < 0 || !this->areaInSlot(gx, gy, g.viewWay, out))
+      return false;
+    return !out.seen.empty(); // (0x43aac6: an area that sees nothing isn't one)
+  }
+  if (!this->viewAreas || g.target < 0)
+    return false;
+  for (ViewArea &a : this->viewAreas(g.target))
+    if (std::find(a.viewing.begin(), a.viewing.end(), std::make_pair(gx, gy)) != a.viewing.end()) {
+      out = std::move(a);
+      out.exhibit = g.target;
+      return !out.seen.empty();
+    }
+  return false;
 }
 
-// zoo.exe 0x4232f4 (the guest's area: 0x43b92e, from its tile's slots, a
-// random way first - ours: its exhibit's area with its tile among the
-// viewing tiles, one at most) and the area's counts (0x447a00: every
-// animal standing on one of the area's seen tiles, each once - +0x10
-// how many (0x42330b), +0xc how many kinds (0x426013), +0x18 how many sick,
+// zoo.exe 0x43b92e: from a random way (rand & 7) on round all 8, the first
+// whose slot of its tile holds an area that sees something (0x43b8a2,
+// 0x43aac6) - kept (+0x328); none, -1
+bool Guests::findViewArea(Guest &g) {
+  g.viewWay = -1;
+  if (!this->areaInSlot) {
+    g.viewWay = 0;
+    ViewArea a;
+    if (viewArea(g, a))
+      return true;
+    g.viewWay = -1;
+    return false;
+  }
+  const int from = std::uniform_int_distribution<int>(0, 7)(this->rng);
+  for (int k = 0; k < 8; k++) {
+    g.viewWay = (from + k) & 7;
+    ViewArea a;
+    if (viewArea(g, a))
+      return true;
+  }
+  g.viewWay = -1;
+  return false;
+}
+
+// zoo.exe 0x447a00: the area's seen tiles in order, every animal on each
+// counted once; a kind (its type's cNameID, type slot 0x20) listed the first
+// time it's met (+0x24)
+std::vector<int> Guests::areaKinds(const ViewArea &a) const {
+  std::vector<int> kinds;
+  if (!this->animals)
+    return kinds;
+  for (const auto &tile : a.seen)
+    for (const Animals::Member &m : this->animals->members()) {
+      if (static_cast<int>(std::floor(m.x)) != tile.first || static_cast<int>(std::floor(m.y)) != tile.second)
+        continue;
+      const int id = this->animals->types()[m.type].nameId;
+      if (std::find(kinds.begin(), kinds.end(), id) == kinds.end())
+        kinds.push_back(id);
+    }
+  return kinds;
+}
+
+// How crowded the viewing area it stands in is (zoo.exe 0x425f6a, its area
+// by 0x4232f4): the guests on the area's viewing tiles over how many tiles
+// it has, times 10, cut to a whole number; no area, 0. ours: the counts
+// brought up to date once a second of game time (World's viewAreas)
+int Guests::areaCrowd(const Guest &g) const {
+  ViewArea a;
+  if (!viewArea(g, a) || a.viewing.empty())
+    return 0;
+  return static_cast<int>(static_cast<float>(a.guests) / static_cast<float>(a.viewing.size()) * 10.0f);
+}
+
+// zoo.exe 0x4232f4 (the guest's area) and the area's counts (0x447a00: every
+// animal standing on one of the area's seen tiles, each once - +0x10 how
+// many (0x42330b), +0xc how many kinds (0x426013), +0x18 how many sick,
 // animal +0x3a7 (0x425f2e, 0x589693))
 bool Guests::areaSight(const Guest &g, Sight &out) const {
   out = Sight();
-  if (!this->viewAreas || g.target < 0 || !this->animals)
+  ViewArea a;
+  if (!this->animals || !viewArea(g, a))
     return false;
-  const int gx = static_cast<int>(std::floor(g.x)), gy = static_cast<int>(std::floor(g.y));
-  for (const ViewArea &a : this->viewAreas(g.target)) {
-    if (std::find(a.viewing.begin(), a.viewing.end(), std::make_pair(gx, gy)) == a.viewing.end())
+  const std::set<std::pair<int, int>> seen(a.seen.begin(), a.seen.end());
+  std::set<int> kinds;
+  for (const Animals::Member &m : this->animals->members()) {
+    if (!seen.count({static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y))}))
       continue;
-    if (a.seen.empty())
-      return false; // (0x43aac6: an area that sees nothing isn't one)
-    const std::set<std::pair<int, int>> seen(a.seen.begin(), a.seen.end());
-    std::set<int> kinds;
-    for (const Animals::Member &m : this->animals->members()) {
-      if (!seen.count({static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y))}))
-        continue;
-      out.animals++;
-      kinds.insert(m.type);
-      out.sick += m.sick ? 1 : 0;
-    }
-    out.species = static_cast<int>(kinds.size());
-    return true;
+    out.animals++;
+    kinds.insert(m.type);
+    out.sick += m.sick ? 1 : 0;
   }
-  return false;
+  out.species = static_cast<int>(kinds.size());
+  return true;
 }
 
 // zoo.exe 0x426049: a random start in the exhibit's animal list (rand %
@@ -1932,11 +2015,18 @@ void Guests::wander(Guest &g) {
 void Guests::decide(Guest &g) {
   ZT_FN("", "Decides where to go next");
   const Type &t = this->typeList[g.type];
+  // Leaving (Task71: begin 0x4a67eb, whileGoing 0x4233ea -> guestLeaveZoo
+  // 0x4a6889): to the gate; afraid (+0x33a), "I'm leaving the zoo.  Animals
+  // are running free!" (10247) and running there (bRunFromPredator, the
+  // emergency off-path cost - "Leaving Zoo - Saw Escaped Animal")
   if (g.leaving) {
     g.guide = -1; g.tourHeard = false;
-    ZT_STEP("", "Leaving: off to the gate", {"happiness", g.happiness});
+    ZT_STEP("0x4a6889", "Leaving: off to the gate", {"happiness", g.happiness}, {"afraid", g.sawEscape ? "yes" : "no"});
     g.state = State::Leaving;
-    if (!walkTo(g, this->entranceX, this->entranceY, t.speed))
+    if (g.sawEscape)
+      think(g, 10247);
+    const bool run = g.sawEscape;
+    if (!walkTo(g, this->entranceX, this->entranceY, run ? t.runSpeed : t.speed, run))
       g.x = -1000; // (nowhere to walk: gone)
     return;
   }
@@ -2041,12 +2131,14 @@ void Guests::decide(Guest &g) {
   wander(g);
 }
 
-// Testing an electric fence instead of watching (zoo.exe 0x425af4, 0x425e30):
-// come to an exhibit, a cTestFenceChance in 100 (guests.ai: 20) to touch a
+// Testing an electric fence while watching (zoo.exe 0x425af4, 0x425e30): after
+// a play of its bGawk, a cTestFenceChance in 100 (guests.ai: 20) to touch a
 // live electric fence on a side of its tile - those with the fencezap
 // animation (the man) - and zapped: bTestFence (fencezap, the zap sound),
-// cZapHappinessHit (-35) and "Yow! I just got electrocuted by %s, this
-// place is dangerous." (10249)
+// cZapHappinessHit (-35), "Yow! I just got electrocuted by %s, this place is
+// dangerous." (10249) of its viewing area's exhibit, and the viewing task
+// done (class slot 0x48: atTarget, so 0x42ea14 - its time watched, the
+// donation)
 bool Guests::testFence(Guest &g) {
   const Type &t = this->typeList[g.type];
   if (t.testFenceChance <= 0 || !t.anims.count("fencezap"))
@@ -2068,33 +2160,33 @@ bool Guests::testFence(Guest &g) {
     if (Animation *a = this->art(g, "fencezap"))
       if (a->frameTimeMs() > 0 && a->frameCount() > 0)
         secs = a->frameCount() * a->frameTimeMs() / 1000.0f;
-    play(g, "fencezap", secs);
-    g.seen.insert(g.target);
-    g.target = -1;
     float was = g.dHappy;
     g.dHappy += static_cast<float>(t.zapHit);
     if (this->sounds && this->soundFile.count("zap"))
       Sound::get().play(this->soundFile["zap"], this->soundAtten["zap"] + 600);
-    const Fences::Piece *p = this->fences->at(e);
-    std::string fence = p ? this->fences->types()[p->type].name : "";
-    think(g, 10249, fence);
+    ViewArea area;
+    const Fences::Exhibit *ex = viewArea(g, area) ? this->fences->exhibit(area.exhibit >= 0 ? area.exhibit : g.target) : nullptr;
+    const std::string name = ex ? ex->name : std::string();
+    if (ex)
+      think(g, 10249, name);
     ZT_STEP("0x425af4", "Zapped testing the fence", {"roll", roll}, {"cTestFenceChance", t.testFenceChance},
-            {"cZapHappinessHit", t.zapHit}, {"happiness to come", was, g.dHappy}, {"fence", fence});
+            {"cZapHappinessHit", t.zapHit}, {"happiness to come", was, g.dHappy}, {"exhibit", name});
+    viewDone(g);
+    play(g, "fencezap", secs);
+    g.state = State::Walking;
     return true;
   }
   return false;
 }
 
-// Gawking at an exhibit (zoo.exe Task70_ViewAnimals::begin 0x42e527): for
-// as long as 0x42e793 says (gawkSeconds), playing its bGawk set
-void Guests::gawk(Guest &g) {
+// One play of its bGawk (guests.ai [<kind>\BehaviorSet\bGawk]:
+// fPlaySetProb(bGawk1, <w>, bGawk2, <w>, bGawk3, <w>) - gawk, camera or
+// stand, each an fPlay: its animation once through), facing the exhibit
+void Guests::playGawk(Guest &g) {
   const Type &t = this->typeList[g.type];
-  const float secs = static_cast<float>(gawkSeconds(g));
-  const int h = this->animals->exhibitSuitability(g.target);
-  int total = t.gawkWeights[0] + t.gawkWeights[1] + t.gawkWeights[2];
+  int total = std::max(1, t.gawkWeights[0] + t.gawkWeights[1] + t.gawkWeights[2]);
   int roll = std::uniform_int_distribution<int>(0, total - 1)(this->rng);
   std::string anim = roll < t.gawkWeights[0] ? "gawk1" : roll < t.gawkWeights[0] + t.gawkWeights[1] ? "camera" : "stand";
-  // Facing the exhibit
   if (const Fences::Exhibit *ex = this->fences->exhibit(g.target)) {
     float cx = 0, cy = 0;
     for (auto [x, y] : ex->tiles) {
@@ -2109,18 +2201,157 @@ void Guests::gawk(Guest &g) {
       g.fy = (cy - g.y) / d;
     }
   }
-  ZT_STEP("0x42e793", "Watches the exhibit (longer, the more suitable and attractive)", {"exhibit", g.target},
-          {"suitability", h}, {"seconds", secs}, {"doing", anim});
+  float secs = 2.0f;
+  if (Animation *a = this->art(g, anim))
+    if (a->frameTimeMs() > 0 && a->frameCount() > 0)
+      secs = a->frameCount() * a->frameTimeMs() / 1000.0f;
   play(g, anim, secs);
   g.state = State::Gawking;
+  if (anim == "camera" && this->sounds)
+    Sound::get().play("guests/cam1", 1000);
+}
+
+// Task70_ViewAnimals::begin (zoo.exe 0x42e527), at the viewing tile:
+// - its viewing area found (0x43b92e) - none, the task fails and it picks
+//   again;
+// - an exhibit it has already been to (its visit list, 0x42281c): the list
+//   cleared and the task fails;
+// - else its bGawk, the gawk time (0x42e793) as the task's time, the start
+//   (+0x298, 0x42e8ce), "Viewing animals", and the kinds its area sees
+//   (0x42e909: area +0x24) onto its recent-species list (+0x278) - as many
+//   oldest dropped as make room for 5, then as many of the new as fit
+bool Guests::viewBegin(Guest &g) {
+  g.viewEnd = 0;
+  if (!findViewArea(g)) {
+    ZT_STEP("0x42e527", "Can't watch: no viewing area at its tile", {"exhibit", g.target});
+    g.target = -1;
+    return false;
+  }
+  if (g.seen.count(g.target)) {
+    ZT_STEP("0x42e527", "Been to this exhibit: its visit list cleared", {"exhibit", g.target});
+    g.seen.clear();
+    g.visited.clear();
+    g.target = -1;
+    return false;
+  }
+  ViewArea area;
+  viewArea(g, area);
+  const std::vector<int> kinds = areaKinds(area);
+  std::vector<int> &recent = g.recentSpecies;
+  const int k = static_cast<int>(kinds.size());
+  int n = static_cast<int>(recent.size());
+  int add = k;
+  if (n + k > 5) {
+    const int drop = n + k - 5;
+    recent.erase(recent.begin(), recent.begin() + std::min(drop, n));
+    n = static_cast<int>(recent.size());
+    if (n + add > 5)
+      add = 5 - n;
+  }
+  recent.insert(recent.end(), kinds.begin(), kinds.begin() + std::max(0, add));
+  const int secs = gawkSeconds(g);
+  g.viewStart = this->clock;
+  g.viewEnd = this->clock + secs;
   g.seen.insert(g.target);
+  ZT_STEP("0x42e527", "Viewing animals (its area, the gawk time, the kinds it sees)", {"exhibit", g.target},
+          {"way", g.viewWay}, {"seconds", secs}, {"kinds seen", k}, {"recent kinds", static_cast<int>(recent.size())});
+  playGawk(g);
   // A follower there while its guide talks: cheered by the guide's bonus
   if (g.guide >= 0 && !g.tourHeard && this->guideSpeaking && this->guideSpeaking(g.guide)) {
     g.dHappy += static_cast<float>(this->guideBonusOf ? this->guideBonusOf(g.guide) : 30);
     g.tourHeard = true;
   }
-  if (anim == "camera" && this->sounds)
-    Sound::get().play("guests/cam1", 1000);
+  return true;
+}
+
+// zoo.exe 0x425a15: from the newest of its recent kinds back, the first that
+// has a mimic (0x425b6d: chimpanzee, gorilla - bMimic; the dinosaurs that
+// roar - bMimic2); none, nothing; else cMimicChance in 100 to play it
+bool Guests::mimic(Guest &g) {
+  const Type &t = this->typeList[g.type];
+  for (int i = static_cast<int>(g.recentSpecies.size()) - 1; i >= 0; i--) {
+    const int id = g.recentSpecies[static_cast<size_t>(i)];
+    const int which = Original::mimicOf(id);
+    if (which == 0)
+      continue;
+    const int roll = std::uniform_int_distribution<int>(0, 99)(this->rng);
+    ZT_STEP("0x425a15", "Mimics an animal it saw? (cMimicChance)", {"kind", id}, {"roll", roll},
+            {"cMimicChance", t.mimicChance});
+    if (roll >= t.mimicChance)
+      return false;
+    const std::string anim = which == 1 ? "mimic" : "mimic2";
+    float secs = 2.0f;
+    if (Animation *a = this->art(g, anim))
+      if (a->frameTimeMs() > 0 && a->frameCount() > 0)
+        secs = a->frameCount() * a->frameTimeMs() / 1000.0f;
+    play(g, anim, secs);
+    g.state = State::Gawking;
+    return true;
+  }
+  return false;
+}
+
+// Task70_ViewAnimals::whileGoing (zoo.exe 0x42325d -> 0x425932), its play
+// done and its time not up: mimic an animal (0x425a15), else test the fence
+// (0x425af4, which ends the task), else tap a tank's glass (0x425a85:
+// not ported - issue #163), else its bGawk again
+void Guests::viewNext(Guest &g) {
+  if (mimic(g))
+    return;
+  if (testFence(g))
+    return;
+  playGawk(g);
+}
+
+// Done watching (Task70's atTarget 0x42e9f9 -> guestDoneViewingExhibit
+// 0x42ea14): the game time since it began (+0x298) onto the exhibit's
+// viewing time (+0x128), then a donation: its viewing area sees an animal,
+// none of them sick, not crowded (0x425f6a under 50): cAdmissionMultiple x
+// the time (100 ns units) x (its area's habitat's suitability + its area's
+// tour guide bonus, +0x58: 0x426236) x 0.01, $10 at most; its area let go
+// (+0x328 -1); its needs looked at next tick (+0x33e)
+void Guests::viewDone(Guest &g) {
+  const double watched = std::max(0.0, this->clock - g.viewStart);
+  this->exhibitBooks[g.target].viewed += watched;
+  int n = 0;
+  bool sick = false;
+  int suit = this->animals->exhibitSuitability(g.target), guide = 0;
+  ViewArea area;
+  if (this->viewAreas || this->areaInSlot) {
+    Sight sight;
+    if (areaSight(g, sight)) {
+      n = sight.animals;
+      sick = sight.sick > 0;
+    }
+    if (viewArea(g, area)) {
+      if (area.exhibit >= 0)
+        suit = this->animals->exhibitSuitability(area.exhibit);
+      guide = this->areaInSlot ? area.guideBonus : this->tourBonusAt ? this->tourBonusAt(g.target) : 0;
+    }
+  } else {
+    for (const Animals::Member &m : this->animals->members())
+      if (m.exhibit == g.target) {
+        sick = sick || m.sick;
+        n++;
+      }
+  }
+  const int crowd = areaCrowd(g);
+  if (n > 0 && !sick && crowd < Original::donationCrowdLimit) {
+    // (game time in 100 ns units: a 12 s game day is 864e9)
+    double ticks = watched * (864e9 / 12.0);
+    double d = Original::economy().admissionMultiple * ticks * (suit + guide) * 0.01;
+    if (d > 0) {
+      d = std::min(d, 10.0);
+      this->donations += d;
+      this->exhibitBooks[g.target].donated += d;
+    }
+    ZT_STEP("0x42ea14", "Done watching: a donation (healthy, not crowded)", {"seconds watched", watched},
+            {"suitability", suit}, {"tour bonus", guide}, {"donation ($10 at most)", d > 0 ? d : 0.0});
+  }
+  g.viewWay = -1;
+  g.viewEnd = 0;
+  g.target = -1;
+  g.recheck = true;
 }
 
 // ----------------------------------------------------------------------------
@@ -2256,8 +2487,10 @@ void Guests::gawkScenery(Guest &g) {
 // The status tick
 // ----------------------------------------------------------------------------
 // zoo.exe guestViewingTick 0x43afde: every cViewingAreaCheck while
-// watching, what it thinks of what it sees - from the viewing area it
-// stands in (0x43b92e; none: nothing), only when the area sees an animal:
+// watching, what it thinks of what it sees - from its viewing area, found
+// again each time (+0x328 cleared, 0x43b92e: a random way first; none:
+// nothing), only when the area sees an animal; the exhibit judged is the
+// area's (0x423354: its habitat's +0xe8):
 // - sick ones seen: cSickAnimalChange; more than one, "There seems to be a
 //   lot of sick animals in this exhibit." (10096); and "%s seems to be
 //   sick." (10545) of one of the exhibit's animals at random
@@ -2278,15 +2511,18 @@ void Guests::viewing(Guest &g) {
     return;
   ZT_FN("0x43afde", "What it thinks of what it's watching");
   Sight sight;
-  if (!areaSight(g, sight) || sight.animals <= 0)
+  if (!findViewArea(g) || !areaSight(g, sight) || sight.animals <= 0)
     return;
+  ViewArea area;
+  viewArea(g, area);
+  const int exhibit = area.exhibit >= 0 ? area.exhibit : g.target;
   const Type &t = this->typeList[g.type];
   auto about = [&](int sid, int lo, int hi) {
-    const int id = pickAnimal(g.target, lo, hi);
+    const int id = pickAnimal(exhibit, lo, hi);
     if (id < 0)
       return;
     const Animals::Member *m = this->animals->member(id);
-    think(g, sid, m ? m->name : std::string(), id, g.target);
+    think(g, sid, m ? m->name : std::string(), id, exhibit);
   };
   if (sight.sick > 0) {
     g.dHappy += static_cast<float>(t.sickAnimalChange);
@@ -2294,7 +2530,7 @@ void Guests::viewing(Guest &g) {
       think(g, 10096);
     about(10545, -100, 100);
   }
-  const int h = this->animals->exhibitSuitability(g.target);
+  const int h = this->animals->exhibitSuitability(exhibit);
   if (h >= 81) {
     g.dHappy += static_cast<float>(t.happyAnimal1);
     about(kOverjoyed, 81, 100);
@@ -2754,15 +2990,28 @@ void Guests::update(float seconds, int zooRating, double admission) {
           g.recheck = true;
           gawkScenery(g);
         } else if (g.state == State::Walking && g.target >= 0 && this->fences->exhibit(g.target)) {
-          // (at the exhibit: Task70_ViewAnimals::atTarget 0x42e9f9 sets +0x33e)
-          g.recheck = true;
-          if (!testFence(g))
-            gawk(g);
+          // (at its viewing tile: Task70_ViewAnimals begins - it can't, and
+          // it picks again)
+          if (!viewBegin(g))
+            play(g, "stand", 0.0f);
         } else {
           if (g.state == State::Fleeing)
             g.state = State::Walking;
           play(g, "stand", 1.0f);
         }
+      }
+      continue;
+    }
+    // Watching an exhibit (Task70_ViewAnimals): its time up (checkArrived
+    // 0x42321a: class slot 0x44, then atTarget), done - even mid-play; else
+    // a play done, the next (whileGoing 0x42325d)
+    if (g.state == State::Gawking && g.target >= 0 && g.viewEnd > 0) {
+      if (this->clock >= g.viewEnd) {
+        viewDone(g);
+        g.state = State::Walking;
+        decide(g);
+      } else if (g.animTime >= g.playFor) {
+        viewNext(g);
       }
       continue;
     }
@@ -2773,50 +3022,6 @@ void Guests::update(float seconds, int zooRating, double admission) {
     if (g.state == State::Water) {
       waterNext(g);
       continue;
-    }
-    // Done watching an exhibit (zoo.exe 0x42ea14): the time goes on its
-    // viewing time (its popularity), then a donation: its animals healthy,
-    // not crowded: cAdmissionMultiple x the time (game time, 100 ns units)
-    // x its suitability x 0.01, $10 at most (in practice $10 a view of a
-    // suitable exhibit: the code multiplies by cAdmissionMultiple, not
-    // cDonationFactor)
-    if (g.state == State::Gawking && g.target >= 0) {
-      this->exhibitBooks[g.target].viewed += g.playFor;
-      // (what its viewing area sees: an animal, none of them sick -
-      // 0x42330b, 0x425f2e; ours, given no areas: the exhibit's animals)
-      int n = 0;
-      bool sick = false;
-      Sight sight;
-      if (this->viewAreas) {
-        if (areaSight(g, sight)) {
-          n = sight.animals;
-          sick = sight.sick > 0;
-        }
-      } else {
-        for (const Animals::Member &m : this->animals->members())
-          if (m.exhibit == g.target) {
-            sick = sick || m.sick;
-            n++;
-          }
-      }
-      // (not crowded: its viewing area's crowd (0x425f6a) under 50 -
-      // zoo.exe 0x42ead9)
-      const int crowd = areaCrowd(g);
-      if (n > 0 && !sick && crowd < Original::donationCrowdLimit) {
-        // (game time in 100 ns units: a 12 s game day is 864e9)
-        double ticks = g.playFor * (864e9 / 12.0);
-        int guide = this->tourBonusAt ? this->tourBonusAt(g.target) : 0;
-        double d = Original::economy().admissionMultiple * ticks * (this->animals->exhibitSuitability(g.target) + guide) * 0.01;
-        if (d > 0) {
-          d = std::min(d, 10.0);
-          this->donations += d;
-          this->exhibitBooks[g.target].donated += d;
-        }
-        ZT_STEP("0x42ea14", "Done watching: a donation (healthy, not crowded)", {"seconds watched", g.playFor},
-                {"suitability", this->animals->exhibitSuitability(g.target)}, {"tour bonus", guide},
-                {"donation ($10 at most)", d > 0 ? d : 0.0});
-      }
-      g.target = -1;
     }
     if (g.state == State::Caught) {
       // Mauled: up again (getupall), then on its way

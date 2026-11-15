@@ -47,7 +47,9 @@ public:
     Kind kind = Kind::Man;
     std::string key; // man, woman, boy, girl
     int nameId = 0;
-    float speed = 0.55f, runSpeed = 0.9f;
+    // Tiles a second walking (its cSlowRate) and running (Guests::load)
+    int slowRate = 33;
+    float speed = 0.466f, runSpeed = 0.7f;
     bool female = false, child = false;
     std::map<std::string, std::string> anims; // name -> art path (no .ani)
     std::string fullPal;
@@ -89,6 +91,9 @@ public:
     // cSickPalName's skin while it stands in the stink (class slot 0x50)
     int sickChance = 20;
     std::string sickPal;
+    // Mimicking an animal it has seen while watching (zoo.exe 0x425a15:
+    // cMimicChance, ZTGuestType +0x2bc)
+    int mimicChance = 15;
   };
   // (Water: out on the water - a ride from a return building, swimming out,
   // drowning; Guest::waterTask says which)
@@ -152,6 +157,14 @@ public:
     int gawkObject = -1;      // the scenery it's going to look at (object id)
     std::set<std::string> gawkedKinds; // scenery kinds looked at this round (.ai files)
     float gawkSeconds = 0;    // how long it's been watching
+    // Watching an exhibit (Task70_ViewAnimals): the way of its tile's slot
+    // that holds its viewing area (zoo.exe +0x328, -1 none: 0x43b8a2); when
+    // it began (+0x298, 0x42e8ce) and when its gawk time is up (game
+    // seconds); the kinds of animal its areas have shown it lately, their
+    // cNameIDs, oldest first, 5 at most (+0x278, 0x42e527)
+    int viewWay = -1;
+    double viewStart = 0, viewEnd = 0;
+    std::vector<int> recentSpecies;
     int lastThought = 0;      // lang string
     std::string thoughtArg;
     std::vector<std::string> thoughts; // newest first (Guest Information)
@@ -230,8 +243,12 @@ public:
   struct ViewArea {
     std::vector<std::pair<int, int>> viewing, seen;
     int guests = 0;
+    int exhibit = -1, guideBonus = 0; // (areaInSlot: its exhibit, a guide's cTourGuideBonus there: +0x58)
   };
   std::function<std::vector<ViewArea>(int exhibit)> viewAreas;
+  // The viewing area in a tile's slot for one of the 8 ways (zoo.exe
+  // 0x43b8a2: the habitat manager's grid [0x63805c]+0x28), false none
+  std::function<bool(int x, int y, int way, ViewArea &out)> areaInSlot;
   // The HUD's Hide Guests toggle: not drawn, not picked
   bool hideAll = false;
   // What guests did at each exhibit since last asked: time spent viewing
@@ -410,7 +427,7 @@ private:
   };
   // A move on the water from a behaviour set's line (guests.ai
   // fMoveWithSound(0,0,<anim>,<speed>,<sound>), fPlayTime(<anim>, <s>),
-  // fPlay / fPlayWithSound): its animation, speed (/60 a tile a second),
+  // fPlay / fPlayWithSound): its animation, speed (a rate, as cSlowRate),
   // sound, seconds
   struct Move {
     std::string anim, sound;
@@ -511,6 +528,22 @@ private:
     int animals = 0, species = 0, sick = 0;
   };
   bool areaSight(const Guest &g, Sight &out) const;
+  // Its viewing area (zoo.exe 0x4232f4: its tile's slot for the way kept in
+  // +0x328); finding one from a random way (0x43b92e); false none
+  bool viewArea(const Guest &g, ViewArea &out) const;
+  bool findViewArea(Guest &g);
+  // The kinds of animal an area sees, each once, in the order its seen
+  // tiles show them (0x447a00: +0x24), their cNameIDs
+  std::vector<int> areaKinds(const ViewArea &a) const;
+  // Task70_ViewAnimals: begun at the viewing tile (0x42e527: false, it
+  // can't - no area there); its next play while its gawk time lasts
+  // (whileGoing 0x42325d: mimic, test the fence, else bGawk again); done
+  // (atTarget 0x42e9f9 -> 0x42ea14)
+  bool viewBegin(Guest &g);
+  void viewNext(Guest &g);
+  void viewDone(Guest &g);
+  void playGawk(Guest &g);
+  bool mimic(Guest &g);
   // One of an exhibit's animals whose happiness is lo..hi, at random
   // (zoo.exe 0x426049; -1 none)
   int pickAnimal(int exhibit, int lo, int hi);
@@ -529,9 +562,9 @@ private:
   bool walkable(int x, int y) const;
   bool canStep(int x, int y, int nx, int ny) const;
   bool walkTo(Guest &g, int tx, int ty, float speed, bool emergency = false);
+  float walkSpeed(const Guest &g) const;
   void decide(Guest &g);
   void tick(Guest &g);
-  void gawk(Guest &g);
   void think(Guest &g, int stringId, const std::string &arg = "", int animal = -1, int exhibit = -1);
   int pickExhibit(Guest &g, int &vx, int &vy);
   void viewing(Guest &g);

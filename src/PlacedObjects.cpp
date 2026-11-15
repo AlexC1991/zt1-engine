@@ -254,6 +254,7 @@ bool PlacedObjects::add(const std::string &file, float x, float y, int facing) {
   if (!o.art)
     return false;
   o.id = this->nextId++;
+  o.openedDay = this->today;
   this->loadLayers(o);
   // Its cNameID, which a show trick names as the object it needs (zoo.exe
   // loads the tricks' "building" and matches the object placed in the tank
@@ -265,7 +266,10 @@ bool PlacedObjects::add(const std::string &file, float x, float y, int facing) {
       int nameId = ai->getInt(ints, "cnameid", 0);
       o.nameId = nameId;
       // Buildings are numbered by type ("Snack Machine 1"; cUseNumbersInName 0
-      // and scenery go without)
+      // and scenery go without) - zoo.exe ZTBuilding::defaultName 0x4e530d:
+      // its type's name text, " " and the type's count so far plus one
+      // (0x4f6cc5, by the type's short name); its price its cDefaultCost
+      // (ZTBuilding::setup 0x450f17: type +0x178 into +0x1ac)
       if (o.subClass == "building") {
         bool numbers = ai->getInt(ints, "cusenumbersinname", 1) != 0;
         std::string cost = ai->get("characteristics/floats", "cdefaultcost");

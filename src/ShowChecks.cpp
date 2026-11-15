@@ -261,7 +261,9 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
     if(!selected || key.empty() || first<0 || second<0)continue;
     shows.add(tank,key);int before=s->completed;
     bool started=shows.start(tank,why);check(std::string(file)+" show starts",started);
-    if(started)for(int i=0;i<160;i++){run(1);if(s->completed>before && s->phase==Shows::Phase::Waiting)break;}
+    // (up to 400 s: swimming at the original's pace - rate 25, a jellyfish's,
+    // is 0.233 tiles/s - a show there and back takes longer than 160)
+    if(started)for(int i=0;i<400;i++){run(1);if(s->completed>before && s->phase==Shows::Phase::Waiting)break;}
     check(std::string(file)+" completes and returns home",s->completed==before+1 && s->phase==Shows::Phase::Waiting && a.member(first) && a.member(second) && a.member(first)->exhibit==home && a.member(second)->exhibit==home && !a.member(first)->boxed && !a.member(second)->boxed);
   }
   // Make the specialist idle between isolated cancellation cases.

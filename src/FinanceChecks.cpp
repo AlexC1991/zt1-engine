@@ -13,6 +13,9 @@
 //   With the money, the same click buys it.
 // <out>/finance-checks.txt is the report.
 #include "World.hpp"
+#include "SaveGame.hpp"
+#include "ZooReader.hpp"
+#include "MemoryManager.hpp"
 #include "Research.hpp"
 #include "ItemCatalog.hpp"
 #include "ResourceManager.hpp"
@@ -23,6 +26,8 @@
 #include <set>
 #include "ui/UiGameScreen.hpp"
 #include <cmath>
+#include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -191,9 +196,11 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
           asked.push_back(amount);
         return true;
       });
-      check("a paid tick asks a 120th of the month's cost ($" + std::to_string(asked.empty() ? 0.0 : asked[0]) + ")",
+      check("a paid tick asks a 120th of the month's cost ($" + std::to_string(asked.empty() ? 0.0 : asked[0]) + " of $" +
+                std::to_string(f.cost) + ", " + std::to_string(asked.size()) + " asked)",
             asked.size() == 1 && std::abs(asked[0] - f.cost / 120.0) < 1e-6);
-      check("and the program gains a 120th of the month's work", std::abs(p->progress - before - f.work / 120.0f) < 1e-4f);
+      check("and the program gains a 120th of the month's work (" + std::to_string(p->progress - before) + " of " + std::to_string(f.work) + ")",
+            std::abs(p->progress - before - f.work / 120.0f) < 1e-4f);
       const float paidTo = p->progress;
       rs.advance(3.0f, [](int, double) { return false; });
       check("a tick the zoo can't pay for: no progress", p->progress == paidTo);
@@ -629,6 +636,104 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     s.evaluateAll();
     check("every goal met: not over before the limit; won once it passes (outcome " + std::to_string(s.outcome) + ")",
           early && s.outcome == 1 && ended == 1);
+  }
+
+  // Staff wages (zoo.exe ZTStaff::wage 0x5ad1e8: the type's cMonthlyCost,
+  // its default the cPurchaseCost - ZTStaffType::setDefaults 0x4c3081): a
+  // keeper is paid its cPurchaseCost a month, the DRT helicopter its
+  // cMonthlyCost ($2,000)
+  {
+    const auto &types = world.getStaff().types();
+    int keeper = -1, heli = -1;
+    for (size_t i = 0; i < types.size(); i++) {
+      if (types[i].key == "keeper") keeper = static_cast<int>(i);
+      if (types[i].key == "helicopt") heli = static_cast<int>(i);
+    }
+    check("a keeper's wage is its cPurchaseCost ($" + std::to_string(keeper >= 0 ? types[keeper].wage : -1) + ")",
+          keeper >= 0 && types[keeper].wage == types[keeper].salary && types[keeper].wage > 0);
+    check("the helicopter's is its cMonthlyCost ($" + std::to_string(heli >= 0 ? types[heli].wage : -1) + ")",
+          heli < 0 || types[heli].wage == 2000);
+  }
+
+  // A building's months open (#122; zoo.exe buildingInfoNumbers 0x488446,
+  // the building list 0x5317c5): whole days since it opened, + 29.9 cut,
+  // / 30, at least 1 - days 0-30 one month, 31-60 two. The opening day is
+  // kept in our save and in the original's part (ZTBuilding +0x180, a
+  // FILETIME after +0x198: ZTBuilding::save 0x477147)
+  {
+    using Original::monthsOpen;
+    check("months open: day 0 and day 30 are 1, day 31 is 2, day 60 is 2, day 61 is 3 (" +
+              std::to_string(monthsOpen(0, 0)) + " " + std::to_string(monthsOpen(0, 30)) + " " +
+              std::to_string(monthsOpen(0, 31)) + " " + std::to_string(monthsOpen(0, 60)) + " " +
+              std::to_string(monthsOpen(0, 61)) + ")",
+          monthsOpen(0, 0) == 1 && monthsOpen(0, 30) == 1 && monthsOpen(0, 30.99) == 1 &&
+              monthsOpen(0, 31) == 2 && monthsOpen(0, 60) == 2 && monthsOpen(0, 61) == 3);
+    check("whole days only: opened at 10.5, on 41.4 is 30 days, 1 month (" + std::to_string(monthsOpen(10.5, 41.4)) + ")",
+          monthsOpen(10.5, 41.4) == 1 && monthsOpen(10.5, 41.6) == 2);
+    PlacedObjects &po = world.objectsMutable();
+    const double before = po.today;
+    po.today = 45.25;
+    const bool added = po.add("scenery/building/bgrstnd.ai", 30.5f, 30.5f, 4);
+    po.today = before;
+    PlacedObjects::Object *b = added ? po.last() : nullptr;
+    const int id = b ? b->id : -1;
+    check("a building put down on day 45.25 opens that day", b && b->openedDay == 45.25);
+    if (b) {
+      b->visitorsNow = 7;
+      b->visitorsLast = 3;
+    }
+    world.reindex();
+    const std::string file = out + "/opened-day.zoo";
+    const bool written = b && SaveGame::save(file, world, sim, hud, "freeform/ff03.scn");
+    double inOriginal = -1;
+    uint32_t lastInOriginal = 0, nowInOriginal = 0;
+    if (written) {
+      std::ifstream in(file, std::ios::binary);
+      std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      AssetBuffer buffer;
+      buffer.data = bytes.data();
+      buffer.size = bytes.size();
+      ZooReader z;
+      if (z.load(buffer))
+        for (const ZooReader::ZooObject &o : z.getObjects())
+          if (o.className == "building" && o.typeName == "bgrstnd" && o.commonEnd &&
+              o.commonEnd + 20 <= o.payload.size()) {
+            uint32_t users = 0;
+            std::memcpy(&users, o.payload.data() + o.commonEnd + 16, 4);
+            const size_t at = o.commonEnd + 20 + size_t(users) * 8 + 20;
+            uint64_t ft = 0;
+            if (at + 8 <= o.payload.size())
+              std::memcpy(&ft, o.payload.data() + at, 8);
+            inOriginal = (double(ft) - double(Original::fileTime2001)) / double(Original::fileTimeDay);
+            if (at + 8 <= o.payload.size()) {
+              std::memcpy(&lastInOriginal, o.payload.data() + at - 8, 4);
+              std::memcpy(&nowInOriginal, o.payload.data() + at - 4, 4);
+            }
+          }
+      buffer.data = nullptr;
+    }
+    check("saved, the original's part holds it as a FILETIME (day " + std::to_string(inOriginal) + ")",
+          written && std::abs(inOriginal - 45.25) < 1e-6);
+    // (its visitors: +0x194 last month, +0x198 this month - a guest going in
+    // adds to +0x198, 0x42ce0a; rollMonthlyCounters 0x4842b7 moves it on)
+    check("and its visitors, last month's (+0x194) then this month's (+0x198): " + std::to_string(lastInOriginal) + ", " +
+              std::to_string(nowInOriginal),
+          written && lastInOriginal == 3 && nowInOriginal == 7);
+    if (!written)
+      report << "SAVE ERROR " << SaveGame::lastError() << "\n";
+    if (b)
+      b->openedDay = 0;
+    const bool loaded = written && SaveGame::load(file, world, sim, hud);
+    const PlacedObjects::Object *again = loaded ? world.objectsMutable().byId(id) : nullptr;
+    check("loaded, 7 visitors this month and 3 last (" + std::to_string(again ? again->visitorsNow : -1) + ", " +
+              std::to_string(again ? again->visitorsLast : -1) + ")",
+          again && again->visitorsNow == 7 && again->visitorsLast == 3);
+    check("loaded, it opened on day 45.25 still (" + std::to_string(again ? again->openedDay : -1.0) + ")",
+          again && again->openedDay == 45.25);
+    if (written && !loaded)
+      report << "LOAD ERROR " << SaveGame::lastError() << "\n";
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
   }
 
   report << "\n" << (checks - failures) << "/" << checks << " pass\n";

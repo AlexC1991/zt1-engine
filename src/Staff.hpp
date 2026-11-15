@@ -48,6 +48,10 @@ public:
     std::string file, key;
     Kind kind = Kind::Keeper;
     int nameId = 0, salary = 0, dutiesText = 0;
+    // Paid each month (zoo.exe ZTStaff::wage 0x5ad1e8: the type's +0x1bc,
+    // cMonthlyCost - its default the type's cPurchaseCost, +0x12c, at
+    // ZTStaffType::setDefaults 0x4c3081)
+    int wage = 0;
     float speed = 0.466f; // tiles a second (cSlowRate's: Original::unitTilesPerSecond)
     bool sexes[2] = {true, false};
     // Animation name -> art path (no .ani), per sex (0 m, 1 f)
@@ -81,6 +85,54 @@ public:
     // 0x4c3bb3; the shipped maint.ai doesn't set it)
     int clearInvalidMs = 10000;
   };
+  // What a staff member is doing. The original gives each unit a job object
+  // made by its number (unitMakeJob, zoo.exe 0x413a23), each its own class:
+  // a constructor (the unit kept if its type fits the job), a destructor, its
+  // number (the status line), and the slots run by every job's tick - begin,
+  // whileGoing (picks the target, routes; no way there ends the job),
+  // checkArrived (Job::arrived 0x43842f, Job::isCurrent 0x438436,
+  // Job::pathDone 0x49933b - ours: the path's end), atTarget (the work, then
+  // the next job). Ours keeps one Job and a phase instead; the classes read
+  // (2026-11-16) and where each is:
+  //   Visit (Staff::visitStep): 1 Job1_GoDropFood 0x5082e5 0x508350 0x4993b9
+  //     0x508396; 2 Job2_PutDownFood 0x508448 0x499623 0x435d3f 0x5084b3
+  //     0x49959d 0x48f624; 3 Job3_GoHealAnimal 0x47045a 0x47018c 0x492d7a
+  //     0x508b3c 0x470010; 4 Job4_HealAnimal 0x470121 0x508b86 0x47000a
+  //     0x47002e 0x46ff99 0x470261; 5 Job5_GoCleanDirt 0x4a2963 0x426a95
+  //     0x412623 0x412629 0x426adb; 6 Job6_CleanDirt 0x42f860 0x426a4f
+  //     0x4269d8 0x4269de 0x4a2dc5; in a tank: 0x16 Job22_GoToTank 0x49ad06
+  //     0x49addc 0x49aae4 0x49acd8 0x49aaea 0x49aacf 0x49abfe; 0x14
+  //     Job20_ClimbUp 0x49ad94 0x49b001 0x49a04d 0x49a053 0x499fe6 0x49b119;
+  //     0x15 Job21_ClimbDown 0x49a8ca 0x49a46c 0x49a20a 0x49a210 0x49a1a3
+  //     0x49a57a; 0x17 Job23_GoToPlatformExitTank 0x49a640 0x49a37c 0x49957b
+  //     0x49a6ab 0x499581 0x49954b 0x49a3f3; 0x18 Job24_GoCleanTank 0x47f828
+  //     0x48abc2 0x5965c6 0x5965cc 0x59658a 0x58a82d; 0x19 Job25_CleanTank
+  //     0x58a7ab 0x47f6ab 0x5961de 0x5961e4 0x59619e; 0x1c Job28_ClimbUpB
+  //     0x49b575 0x49b31a 0x49b2fc 0x49b3f7 0x49b302 0x49b2a9 0x49b3b7; 0x1d
+  //     Job29_ClimbDownB 0x49b88c 0x49b64f 0x49b62f 0x49b700 0x49b635
+  //     0x49b5e0 0x49b6ec
+  //   Litter: 7 Job7_GoToTrashPile 0x52d30c 0x52d05a 0x52cf85 0x52cef4
+  //     0x52d5f5; 8 Job8_Sweep 0x52d6f1 0x52cfd2 0x52d054 0x52d609 0x52d018
+  //     0x52d8e8
+  //   Trash: 9 Job9_GoToTrashCan 0x52d0a0 0x52d1c3 0x427177 0x4271a1
+  //     0x42717d 0x52d209; 10 Job10_EmptyTrashCan 0x48b4d1 0x52d230 0x52d2b2
+  //     0x48b3f2 0x52d276 0x59be1c
+  //   Dung: 0xb Job11_GoToZoodoo 0x4a27eb 0x4a982b 0x4a2746 0x4a274c
+  //     0x50e17f; 0xc Job12_BagZoodoo 0x50e193 0x50e4a2 0x50d9b1 0x50d958
+  //     0x50e3ef (ours plays bBag for all dung: we have no dinopoo, whose
+  //     bBagDino is cleanup/vac - issue in "Base game playable")
+  //   Catch (Staff::catchStep): 0xd Job13_Tranquilize 0x50d6f4 0x50d360
+  //     0x50d059 0x50d05f 0x50cffd 0x50db25; 0xe Job14_RetrieveAnimal
+  //     0x50da68 0x50dad3 0x50da62 0x50da26 0x50dd6e; 0xf Job15_BoxAnimal
+  //     0x50dc0d 0x4a13a6 0x50d33f 0x50d345 0x50d2d8
+  //   Fence: 0x10 Job16_GoToFence 0x49e331 0x49e39c 0x4a7a14 0x4a7a1a
+  //     0x4a79f0 0x59a2b6; 0x11 Job17_FixFence 0x59a3d5 0x59a440 0x4a23ac
+  //     0x59a2ca 0x59a596
+  //   Filter: 0x1a Job26_GoToFilter 0x5958b4 0x59591f 0x5ae362 0x5ae320
+  //     0x5ae33e 0x596000; 0x1b Job27_FixFilter 0x595f06 0x595dbb 0x4a23c0
+  //     0x595e11 0x595d17
+  // Not modelled: 0x12 Job18_Defend (bDefense, bPreattack), 0x13 Job19 (a
+  // tank job, tankEntryPoint), the class at table 0x63244c.
   enum class Job { None, Fence, Filter, Litter, Visit, Catch, Tour, Trash, Dung };
   enum class HeliStage { Parked, SpinUp, Ascend, Chase, Fire, Return, Descend, SpinDown };
   struct Member {
@@ -112,8 +164,13 @@ public:
     std::vector<int> exhibits; // keepers: assigned exhibits
     // Maintenance: the work tiles it found no way to (zoo.exe unit +0x27c),
     // left out of its looks until cleared (+0x29c counting down)
+    // (keepers too: the tiles they found no way to in a habitat, emptied as
+    // their duties there begin and end - zoo.exe 0x49f3ca, 0x49ebe7)
     std::vector<std::pair<int, int>> invalid;
     float invalidClear = 0;
+    // Keepers: the animals they found no way to (zoo.exe unit +0x270: Job1
+    // 0x4993b9, Job3 0x508b3c), left out until their duties end
+    std::vector<int> unreachable;
     Job job = Job::None;
     Fences::Edge jobEdge = {false, -1, -1};
     int jobFilter = -1;

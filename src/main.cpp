@@ -1079,6 +1079,9 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
       info.exhibitCount = exhibits;
       g_hud->setZooInfo(info);
     }
+    // (the main bar's meters, zoo.exe ZTGameMgr::update 0x435055: once a
+    // second guest happiness, animal happiness and the rating, each -100
+    // to 100 shown 0 to 100 - the rating's through mainBarRating 0x41d22f)
     if (auto *bar = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1013)))
       bar->setValue(guests ? gs.averageHappiness() : 0);
   }
@@ -1109,6 +1112,8 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
       int sick = 0;
       long animalValue = 0;
       for (const Animals::Member &m : an.members()) {
+        // (the kinds: every animal in a habitat, its species once each -
+        // ratingKindsCount 0x41f0a6, the species +0x1ec put in a set)
         if (m.exhibit >= 0)
           kinds.insert(m.type);
         sumH += static_cast<long>(m.happiness);
@@ -11449,6 +11454,8 @@ int main(int argc, char *argv[]) {
       bool controlsSent=false;
       const bool *frameKeys=g_console.isOpen() || UiText::isEditing() || dialogUp?noKeys:state;
       auto advanceGame=[&](float simulationSeconds,float inputSeconds) {
+      // (the date a building put down now opens on: ZTBuilding +0x180)
+      g_world->objectsMutable().today = g_sim.today();
       g_world->update(controlsSent?noKeys:frameKeys,simulationSeconds,inputSeconds);
       controlsSent=true;
       // The clock runs while the game isn't paused
@@ -11569,7 +11576,9 @@ int main(int argc, char *argv[]) {
             for (PlacedObjects::Object &o : g_world->objectsMutable().all()) {
               if (o.label.empty())
                 continue;
-              // (this month's visitors become last month's)
+              // (this month's visitors become last month's: zoo.exe
+              // rollMonthlyCounters 0x4842b7, +0x198 into +0x194, for each
+              // building - rollAllMonthly 0x4842a2)
               o.visitorsLast = o.visitorsNow;
               o.visitorsNow = 0;
               static std::map<std::string, float> upkeepOf;

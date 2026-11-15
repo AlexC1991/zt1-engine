@@ -370,6 +370,22 @@ bool World::loadFreeform(const std::string &path) {
     }
     return out;
   };
+  // ...and the area in a guest's tile's slot for a way (0x43b8a2), with a
+  // tour guide's cTourGuideBonus on its viewing tiles (+0x58, 0x447957)
+  guests.areaInSlot = [this, at = -1.0](int x, int y, int way, Guests::ViewArea &out) mutable {
+    ViewingAreas &va = this->staff.viewingAreas();
+    if (this->guests.clock < at || this->guests.clock - at >= 1.0) {
+      at = this->guests.clock;
+      va.refresh(this->worldMap, this->fences);
+      va.countGuests(this->guests);
+    }
+    const int i = va.slotArea(x, y, way);
+    if (i < 0)
+      return false;
+    const ViewingAreas::Area &a = va.areas()[static_cast<size_t>(i)];
+    out = {a.viewing, a.seen, a.guests, a.exhibit, this->staff.guideBonusAt(a.viewing)};
+    return true;
+  };
   // zoo.exe 0x459e09 (by 0x4599a0 and 0x459f52): what's on a tank's tiles
   // that can't be under water - not a passing water effect (cIsTransient,
   // type +0x6d) - by its kind's name: a unit (animal, staff, guest) whose

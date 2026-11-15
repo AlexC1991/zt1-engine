@@ -39,6 +39,17 @@
 // turned on here, pointed at a page of the engine's additions
 // (ui/zt1extras.lyt, made below), each switched on or off. Off, each does
 // what the original does (Features.hpp)
+// A building's months open, as Building Information and Zoo Status' building
+// list show it (zoo.exe buildingInfoNumbers 0x488446, 0x5317c5: whole days
+// since it opened, + 29.9 cut, / 30, at least 1 - Original::monthsOpen)
+static int buildingMonthsOpen(const ZooSim *sim, const Fences *fences, int monthNumber,
+                              const PlacedObjects::Object &o) {
+  if (!sim)
+    return std::max(1, monthNumber - o.openedMonth + 1);
+  const int monthCount = fences ? fences->month() : monthNumber;
+  return Original::monthsOpen(sim->openedDayOf(o.openedDay, o.openedMonth, monthCount), sim->today());
+}
+
 static const int kExtrasPage = 904, kExtrasTab = 1509, kExtrasFirst = 9050;
 // ours: the switches a page of the tab shows (more than fit the panel go on
 // further pages, turned with the game's up and down arrows under them), and
@@ -1087,7 +1098,9 @@ void UiGameScreen::setupResearch() {
   // The content filter starts on "All", as in the buy panels
   if (UiButton *b = dynamic_cast<UiButton *>(r.panel->getElementById(4021)))
     b->setLabel(this->resource_manager->getString(22900));
-  // Funding - and + (hidden in the layout until the page shows them)
+  // Funding - and + (hidden in the layout until the page shows them): a
+  // step through the branch's levels, kept to them (zoo.exe
+  // researchFundingStep 0x46c2e0: past the last, the last)
   auto funding = [this](int step) {
     ResearchBranch *b = Research::get().branch(this->research.shownBranch);
     if (!b || b->funding.empty())
@@ -1235,7 +1248,9 @@ void UiGameScreen::setupZooStatus() {
     return;
   UiLayout *z = this->zooPanel;
 
-  // Marketing levels: mktg.cfg names the level file (mktgnorm.cfg)
+  // Marketing levels: mktg.cfg names the level file (mktgnorm.cfg) - zoo.exe
+  // marketingLoad 0x5915e3 reads its [marketing], marketingLoadConfig
+  // 0x5916ff each level
   if (IniReader *m = this->resource_manager->getIniReader("mktg.cfg")) {
     std::string file = m->get("marketing", "marketing");
     delete m;
@@ -1245,7 +1260,7 @@ void UiGameScreen::setupZooStatus() {
         int nameId = levels->getInt(key, "name", 0);
         this->marketing.push_back(
             {nameId ? this->resource_manager->getString(nameId) : key,
-             levels->getInt(key, "cost", 0), levels->getInt(key, "benefit", 0)});
+             static_cast<float>(std::atof(levels->get(key, "cost", "0").c_str())), levels->getInt(key, "benefit", 0)});
       }
       delete levels;
     }
@@ -1263,7 +1278,8 @@ void UiGameScreen::setupZooStatus() {
         this->marketingLevel++;
       this->chargeFunding();
     };
-  // Admission: $0.25 a click (zoo.exe zooinfo1_UpSpinner 0x616e56,
+  // Admission: $0.25 a click (the price ZTGameMgr::admissionPrice 0x4f6db4
+  // gives, +0x1150; zoo.exe zooinfo1_UpSpinner 0x616e56,
   // DownSpinner 0x616e85), kept to economy.cfg's limits (setAdmissionPrice
   // 0x4bbf10: $0 to $100 in the shipped game)
   if (UiButton *up = button(4195))
@@ -1359,7 +1375,7 @@ void UiGameScreen::refreshZooStatus() {
     std::string s = m.name;
     size_t at = s.find("%s");
     if (at != std::string::npos) // (zoo.exe 0x52f586: the level's cost, cut, not grouped)
-      s.replace(at, 2, formatCost(m.cost));
+      s.replace(at, 2, formatCost(static_cast<int>(m.cost)));
     text(4054, s);
     if (UiElement *less = z->getElementById(4052))
       less->setDisabled(this->marketingLevel <= 0);
@@ -1509,7 +1525,7 @@ void UiGameScreen::refreshZooStatus() {
       for (const PlacedObjects::Object &o : this->objects->objects()) {
         if (o.label.empty() || o.price < 0)
           continue;
-        int months = std::max(1, this->monthNumber - o.openedMonth + 1);
+        int months = buildingMonthsOpen(this->sim, this->fences, this->monthNumber, o);
         double profit = o.income - o.upkeep;
         rows.push_back({o.id, o.label, o.typeName, months, o.visitorsTotal, profit, profit / months});
       }
@@ -4284,6 +4300,8 @@ void UiGameScreen::showBuilding(int id) {
       hi = h.empty() ? 1.0f : static_cast<float>(std::atof(h.c_str()));
       delete ai;
     }
+    this->shownLowCost = lo;
+    this->shownHighCost = hi;
     if (UiButton *up = dynamic_cast<UiButton *>(z->getElementById(4557)))
       up->onClick = [this, hi] {
         if (PlacedObjects::Object *b = this->objects->byId(this->shownBuilding))
@@ -4322,7 +4340,9 @@ void UiGameScreen::showBuilding(int id) {
           this->shownBuilding = -1;
         }
       };
-      // (zoo.exe sellSelected 0x48d052 -> removeObject 0x50a0b0: a building
+      // (zoo.exe sellSelected 0x48d052 -> removeSelected 0x48d065: the
+      // view's selected thing, no longer the hovered one, sellObject 0x50a432
+      // -> removeObject 0x50a0b0: a building
       // - cNeedsConfirm - asked first, "Are you sure you want to sell %s?
       // Refund: $N", its 80%)
       const PlacedObjects::Object *b = this->objects ? this->objects->byId(id) : nullptr;
@@ -4467,12 +4487,25 @@ void UiGameScreen::refreshBuilding() {
     }
   }
   this->refreshColours(z, o, open21);
-  int months = std::max(1, this->monthNumber - o->openedMonth + 1);
+  int months = buildingMonthsOpen(this->sim, this->fences, this->monthNumber, *o);
   if (open21) {
     text(4502, o->label);
     char p[32];
     std::snprintf(p, sizeof p, "$%.2f", o->price);
     text(4555, p);
+    // The arrows greyed out at the ends (zoo.exe onPriceUp 0x6175e6 /
+    // onPriceDown 0x5a5bfd: the up arrow's off when canRaisePrice 0x488adc -
+    // its cHighCost, if not 0, no more than the price, or economy.cfg's
+    // cBuildingUseCostMax under it - the down arrow's when canLowerPrice
+    // 0x488b2d - its cLowCost, if not 0, no less than the price, or the
+    // price $0 or under). A show's stand goes by its show's limits.
+    if (!this->shows || !this->shows->isStand(o->id)) {
+      const float hi = this->shownHighCost, lo = this->shownLowCost;
+      if (UiButton *up = dynamic_cast<UiButton *>(z->getElementById(4557)))
+        up->setDisabled((hi != 0.0f && hi <= o->price) || Original::economy().buildingUseCostMax < o->price);
+      if (UiButton *dn = dynamic_cast<UiButton *>(z->getElementById(4556)))
+        dn->setDisabled((lo != 0.0f && lo >= o->price) || o->price <= 0.0f);
+    }
     // (zoo.exe buildingInfoNumbers 0x488446: income and upkeep each cut to
     // whole dollars, the profit the one less the other, a month's each of
     // them divided as whole numbers, all through moneyToText 0x40eca1 with

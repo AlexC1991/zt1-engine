@@ -15,6 +15,7 @@
 #include <vector>
 #include <zlib.h>
 
+#include "OriginalConstants.hpp"
 #include "Research.hpp"
 #include "World.hpp"
 #include "ZooSim.hpp"
@@ -33,7 +34,7 @@
 namespace {
 constexpr uint32_t kMagic = 0x5A543153; // "S1TZ"
 constexpr uint32_t kMapMagic = 0x504D3153; // "S1MP": a map design (saveMap)
-constexpr uint32_t kVersion = 15; // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
+constexpr uint32_t kVersion = 16; // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
 
 // A little binary writer and reader: numbers as they are, strings with
 // their length, vectors with their count
@@ -493,8 +494,15 @@ bool SaveGame::loadOriginalWorld(World &world) {
       if(tail+28>record.payload.size()-record.commonEnd)break;
       object.visitorsTotal=int(word(4));object.income=word(8);
       std::memcpy(&object.price,p+12,4);object.fill=int(word(tail));
-      object.visitorsNow=int(word(tail+12));object.visitorsLast=int(word(tail+16));
+      // (visitors: +0x198 this month - a guest going in adds one to it and
+      // to +0x190, 0x42ce0a - and +0x194 last month, rollMonthlyCounters
+      // 0x4842b7 moving the one into the other; saved +0x194 then +0x198)
+      object.visitorsLast=int(word(tail+12));object.visitorsNow=int(word(tail+16));
       if(z.getVersion()>=68)object.upkeep=word(tail+28);
+      // (its opening time, ZTBuilding +0x180: a FILETIME, saved by
+      // ZTBuilding::save 0x477147 after +0x198)
+      uint64_t opened=0;std::memcpy(&opened,p+tail+20,8);
+      object.openedDay=(double(opened)-double(Original::fileTime2001))/double(Original::fileTimeDay);
       break;
     }
   if (!z.isExact()) return false;
@@ -1569,6 +1577,7 @@ void SaveGame::putWorld(void *out, World &world) {
       o.str(k);
       o.raw(n);
     }
+    o.raw(x.openedDay);
   }
   o.raw(po.nextId);
   o.raw(static_cast<uint32_t>(po.counts.size()));
@@ -1762,6 +1771,8 @@ bool SaveGame::getWorld(void *in, World &world, uint32_t version) {
       std::string k = i.str();
       x.sold[k] = i.raw<int>();
     }
+    if (version >= 16)
+      i.get(x.openedDay);
     // (its art: the map's own objects as loaded, bought ones by their file)
     for (const PlacedObjects::Object &m : old)
       if (m.className == x.className && m.subClass == x.subClass && m.typeName == x.typeName) {
@@ -2416,11 +2427,22 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
       const uint32_t previousIncome=word(8);
       const auto income=uint32_t(std::max(0.0,object.income));
       put(0,uint32_t(0));put(4,uint32_t(object.visitorsTotal));put(8,income);
-      if(object.price>=0)put(12,float(object.price));
+      // (a building without a price of its own - no cDefaultCost - has
+      // economy.cfg's cBuildingUseCostDefault: ZTBuildingType::setDefaults
+      // 0x4c042c, then ZTBuilding::setup 0x450f17 copies it to +0x1ac)
+      put(12,float(object.price>=0?object.price:Original::economy().buildingUseCostDefault));
       put(16,uint32_t(0));put(20,uint32_t(std::max(0,object.fill)));
       put(24,uint32_t(int64_t(word(24))+int64_t(income)-previousIncome));
-      put(32,uint32_t(object.visitorsNow));put(36,uint32_t(object.visitorsLast));
+      // (+0x194 last month's visitors, +0x198 this month's: 0x4842b7)
+      put(32,uint32_t(object.visitorsLast));put(36,uint32_t(object.visitorsNow));
       if(z.version>=68)put(48,uint32_t(std::max(0.0,object.upkeep)));
+      // (its opening time, ZTBuilding +0x180 - ZTBuilding::save 0x477147:
+      // a FILETIME after +0x198; the months open count from it, 0x488446)
+      {
+        const double day=sim.openedDayOf(object.openedDay,object.openedMonth,world.fences.month());
+        const double ft=double(Original::fileTime2001)+day*double(Original::fileTimeDay);
+        put(40,uint64_t(std::max(0.0,ft)));
+      }
     }
     z.objects.push_back(std::move(o));
   }

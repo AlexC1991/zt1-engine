@@ -1,6 +1,7 @@
 #include "Research.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include <mutex>
 #include <random>
@@ -60,8 +61,8 @@ void Research::load(ResourceManager *rm, bool force) {
       ResearchFunding f;
       f.key = key;
       f.name = text(b, key, "name");
-      f.cost = b->getInt(key, "cost", 0);
-      f.work = b->getInt(key, "work", 0);
+      f.cost = static_cast<float>(std::atof(b->get(key, "cost", "0").c_str()));
+      f.work = static_cast<float>(std::atof(b->get(key, "work", "0").c_str()));
       branch.funding.push_back(f);
     }
     for (const std::string &categoryFile : b->getList("branch", "category")) {
@@ -85,7 +86,7 @@ void Research::load(ResourceManager *rm, bool force) {
         program.icon = p->get("research", "icon");
         program.entityIcon = p->get("research", "entityicon");
         program.helpId = p->getInt("research", "helpid", 0);
-        program.cost = p->getInt("research", "cost", 0);
+        program.cost = static_cast<float>(std::atof(p->get("research", "cost", "0").c_str()));
         program.order = p->getInt("research", "order", 0);
         program.target = p->getInt("research", "target", 0);
         program.effect = p->getInt("research", "effect", 0);
@@ -160,7 +161,7 @@ Research::Tick Research::advance(float seconds, const std::function<bool(int bra
       p->progress += f.work / 120.0f;
       if (p->progress < p->cost)
         continue;
-      p->progress = static_cast<float>(p->cost);
+      p->progress = p->cost;
       p->done = true;
       t.completed.push_back(p);
       this->pick(b);

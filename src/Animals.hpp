@@ -66,8 +66,9 @@ public:
     // Its name: cNameID's text, or an APE download's own cName (CatalogItem::name)
     std::string displayName;
     bool dinosaur = false; // [Member] dinosaur: scientists look after it, not keepers
-    // Speeds (cSlowRate, cMediumRate, cFastRate): staff walk at their
-    // cSlowRate / 60 tiles a second (a keeper's 33: the 0.55 measured)
+    // Speeds (cSlowRate, cMediumRate, cFastRate) in tiles a second, by the
+    // rule every unit moves by (Original::unitTilesPerSecond: 30 is 2 steps
+    // of 1/64 tile an update, 0.466 tiles a second)
     float slow = 0.5f, medium = 0.8f, fast = 1.1f;
     int initialHappiness = 50;
     int hungerThreshold = 50, hungerIncrement = 10, neededFood = 100, foodEaten = 20;
@@ -88,6 +89,10 @@ public:
     // cDepthMin, cDepthMax (+0x35c, +0x360): the water depth it likes
     bool onlyUnderwater = false;
     int depthMin = 0, depthMax = 0;
+    // Air (zoo.exe 0x4389f7, 0x43750c): cBreathThreshold (type +0x1fc, 100
+    // unless set) and cBreathIncrement (+0x200, 0) - a whale, seal or
+    // penguin goes up for air when its breath gets to the threshold
+    int breathThreshold = 100, breathIncrement = 0;
     // The tank water's effects (zoo.exe 0x438a37; defaults setDefaults
     // 0x4b659e): cDepthChange (+0x364) out of cDepthMin..Max; the wrong
     // water, cSalinityChange / cSalinityHealthChange (+0x368, +0x36c);
@@ -265,6 +270,10 @@ public:
     bool waterMode = false;
     int waterCheck = -1, boredCheck = -1;
     int murkyCheck = 0; // (zoo.exe animal +0x2fc: the tank water check's countdown)
+    // Its breath held (zoo.exe animal +0x360) and the breath check's
+    // countdown (+0x364); going up for air (Task 0x7c: 1 on its way up, 2 up
+    // there, its bBreathe next)
+    int breath = 0, breathCheck = 0, surfacing = 0;
     // The guests watching it (zoo.exe animal +0x368) and the side they're on
     // (+0x36c, +0x370); the way away from them its next walk takes (+0x37c,
     // 0-7, -1: none) - countGuestCrowd, tick, walkSomewhere
@@ -708,6 +717,12 @@ private:
   void runFrom(Member &m, const Member &threat, const WorldMap &map, const Fences &fences);
   void chase(Member &m, const WorldMap &map, const Fences &fences);
   bool busy(const Member &m) const;
+  // Whether it may lie down - sleep, or be sick - where it is (zoo.exe
+  // 0x440a37)
+  bool mayRest(const Member &m) const;
+  // Under the water in a tank (the original's water state 4, unit +0x258)
+  bool underwaterNow(const Member &m) const;
+  void breathTick(Member &m);
   bool walkSomewhere(Member &m, const WorldMap &map, const Fences &fences);
   int nearestFood(const Member &m) const;
   void faceToward(Member &m, float x, float y);

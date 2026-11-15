@@ -29,6 +29,26 @@ inline constexpr float sellHalf = 0.5f;
 // and 0x5a5c28 for ZTBuilding::raisePrice 0x611b43, lowerPrice 0x5a5bbc)
 inline constexpr float priceStep = 0.25f;
 
+// A building's months open (Building Information, buildingInfoNumbers
+// 0x488446; Zoo Status' building list, 0x5317c5): the whole days since it
+// opened (the zoo's FILETIME, 0x40e7e0, less the building's +0x180, over
+// 864,000,000,000 - a day in 100 ns - by the 64-bit division 0x40674d),
+// plus 29.9 (0x6351a8) cut toward zero (fistp in the chop mode), over 30
+// as whole numbers; at least 1. Days 0-30 show 1 month, 31-60 show 2.
+inline constexpr float monthsOpenRound = 29.9f;
+inline constexpr long long monthsOpenDays = 30;
+inline int monthsOpen(double openedDay, double today) {
+  const long long days = static_cast<long long>(today - openedDay);
+  const long long months = static_cast<long long>(static_cast<double>(days) + monthsOpenRound) / monthsOpenDays;
+  return months < 1 ? 1 : static_cast<int>(months);
+}
+// A FILETIME (100 ns since 1601) for January 1 2001, the zoo calendar's
+// day 0 (400 years, 146097 days, after 1601), and a day in FILETIME units
+// (0x40674d's divisor above): ours: how a day count becomes the original's
+// opening time and back
+inline constexpr unsigned long long fileTime2001 = 126227808000000000ULL;
+inline constexpr unsigned long long fileTimeDay = 864000000000ULL;
+
 // Research and Conservation's funding line shows a level's cost (a month)
 // times this, a day's (0x635040, researchFundingText 0x470d0f)
 inline constexpr float fundingShownPerDay = 1.0f / 30.0f;
@@ -161,6 +181,37 @@ inline float unitTilesPerSecond(int rate) {
   if (steps < 1)
     steps = 1;
   return static_cast<float>(steps) * 1000.0f / updateMs / unitStepsPerTile;
+}
+
+// zoo.exe 0x42250a (ZTGuest's class slot 0x1c0, which sets the rate +0x1f8
+// a move uses): with the zoo manager's +0x11c set, the rate given plus the
+// guest's own byte (+0x204) less 5; at tiredness (+0x2c0) 75 or more times
+// 1.1 (0x635828), at 19 or less times 0.9 (0x630d68), cut to a whole
+// number. measured (Play original, 2026-11-16, everything-ff03-units: 30
+// guests of all four kinds, tiredness 9-12, +0x204 0 in every one, +0x11c
+// 1): every rate 25, so the rate given is 33 for every kind - not the
+// kind's own cSlowRate - and they walked a median 0.233 tiles a second
+inline constexpr int guestRateGiven = 33, guestRateLess = 5;
+inline constexpr double guestTiredFactor = 1.1, guestRestedFactor = 0.9;
+inline int guestWalkRate(int tiredness) {
+  const int rate = guestRateGiven - guestRateLess;
+  if (tiredness >= 75)
+    return static_cast<int>(rate * guestTiredFactor);
+  if (tiredness <= 19)
+    return static_cast<int>(rate * guestRestedFactor);
+  return rate;
+}
+
+// zoo.exe 0x425b6d: the kinds of animal a watching guest mimics, by their
+// cNameID - the chimpanzee (5003) and the mountain gorilla (5021) with its
+// bMimic (1), the roaring dinosaurs (5085, 5097-5099, 5326, 5327) with its
+// bMimic2 (2); any other, none (0)
+inline int mimicOf(int nameId) {
+  if (nameId == 5003 || nameId == 5021)
+    return 1;
+  if (nameId == 5085 || (nameId >= 5097 && nameId <= 5099) || nameId == 5326 || nameId == 5327)
+    return 2;
+  return 0;
 }
 
 } // namespace Original

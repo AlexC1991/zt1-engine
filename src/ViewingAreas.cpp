@@ -95,6 +95,13 @@ bool ViewingAreas::fenceOnSide(const Fences &fences, int x, int y, int dir) {
   return it != fences.pieces().end() && habitatFence(fences, it->second.type);
 }
 
+int ViewingAreas::slotArea(int x, int y, int way) const {
+  auto it = this->slots.find({x, y});
+  if (it == this->slots.end() || way < 0 || way > 7)
+    return -1;
+  return it->second[static_cast<size_t>(way)];
+}
+
 bool ViewingAreas::hasArea(int x, int y, int exhibit) const {
   auto it = this->slots.find({x, y});
   if (it == this->slots.end())

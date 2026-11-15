@@ -38,7 +38,9 @@ struct ResearchProgram {
   std::string icon;
   std::string entityIcon; // (an animal house's program: its button's picture)
   int helpId = 0;
-  int cost = 0;
+  // (zoo.exe ZTResearchItem::loadConfig 0x590e00: cost through the float
+  // reader 0x4b37c3, the rest whole numbers)
+  float cost = 0;
   int order = 0;
   int target = 0;
   int effect = 0;
@@ -59,8 +61,11 @@ struct ResearchCategory {
 struct ResearchFunding {
   std::string key; // none, min, normal, max
   std::string name; // "%s normal"
-  int cost = 0;     // a day
-  int work = 0;     // progress a day
+  // A month's cost and work, read as floats (zoo.exe researchBranchLoad
+  // 0x590832: each funding= section's name as a number, cost and work
+  // through the float reader 0x4b37c3)
+  float cost = 0;
+  float work = 0;
 };
 
 struct ResearchBranch {

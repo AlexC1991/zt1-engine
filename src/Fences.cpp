@@ -591,7 +591,9 @@ void Fences::findInside(const std::vector<GateSpot> &gates) {
 // A building of [Member] zoogate (scenery/other/<type>.ai): the entrance's
 // gate, and on some maps the side pieces either side of it - Tundra's
 // fgate1 and fgate2 (left out, the inside leaked away through them and
-// nothing could be built)
+// nothing could be built) - zoo.exe isZooGate 0x4a4389: the type's [Member]
+// list (its slot 0x30) holds 'zoogate'. ours: a type whose file can't be
+// read counts by its name ending in 'gate'
 bool Fences::isZooGate(const std::string &t) const {
   auto it = this->gateTypes.find(t);
   if (it != this->gateTypes.end())
