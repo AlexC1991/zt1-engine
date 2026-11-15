@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 #include <fstream>
 #include <string>
+#include <vector>
 
 class World;
 class ResourceManager;
@@ -20,7 +21,21 @@ public:
   void beforePresent(World &, SDL_Renderer *);
   bool afterPresent(World &, double pending, double discarded);
   int rate() const { return speed; }
+  // ours: ZT_GAME_BENCH_ZOO=<file> - a player's saved zoo (already loaded by
+  // main) timed as the player sees it: maximised, its own view, day and
+  // night lighting at noon and at midnight, held still and panned, with
+  // frames captured mid-pan and held still at the same place
+  bool startZoo(World &, SDL_Renderer *);
 private:
+  bool zoo=false;
+  int zooPhase=-1, zooFrame=0, panDir=1;
+  float panCarry=0;
+  Uint64 zooPhaseStart=0;
+  std::vector<double> phaseMs;
+  std::vector<std::pair<int,int>> shotPos;
+  void zooFrameStep(World &);
+  void zooPresent(World &, SDL_Renderer *);
+  bool zooAfter(World &);
   std::string out, name;
   std::ofstream frames, status, checks;
   Uint64 epoch=0, simulationStart=0, recordStart=0, lastPresent=0;

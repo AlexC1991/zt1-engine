@@ -3,6 +3,8 @@
 #include "GpuTankLayer.hpp"
 #include "Embed.hpp"
 #include "GpuFsr.hpp"
+#include "GpuFsrD3D11.hpp"
+#include "Features.hpp"
 #include "ShaderMods.hpp"
 #include "Settings.hpp"
 #include "Window.hpp"
@@ -14,6 +16,71 @@ bool g_showDiagnostics = false;
 #include <SDL3_ttf/SDL_ttf.h>
 
 #include "Audio.hpp"
+
+// addition (Features::hdrOutput): with an HDR10 swap chain the frame is drawn
+// as ever - ordinary sRGB, blended as always - into a texture (the window's
+// stand-in: choosing the window chooses it, so the engine's own Direct3D 11
+// passes, FSR and the screen effects, draw into it too); at present one pass
+// (GpuFsr::D3D11::hdr10Pass) puts it on the window as HDR10, its white at
+// Windows' SDR content brightness (the window's SDR white level, in 80-nit
+// steps), as games present HDR
+namespace {
+SDL_Texture *g_hdrFrame = nullptr;
+SDL_Window *g_hdrWindow = nullptr;
+bool hdrFrameFits(SDL_Renderer *r) {
+  int w = 0, h = 0;
+  SDL_GetRenderOutputSize(r, &w, &h);
+  if (w <= 0 || h <= 0)
+    return false;
+  float tw = 0, th = 0;
+  if (g_hdrFrame)
+    SDL_GetTextureSize(g_hdrFrame, &tw, &th);
+  if (!g_hdrFrame || int(tw) != w || int(th) != h) {
+    if (g_hdrFrame)
+      SDL_DestroyTexture(g_hdrFrame);
+    g_hdrFrame = SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
+    if (!g_hdrFrame)
+      return false;
+    SDL_SetTextureScaleMode(g_hdrFrame, SDL_SCALEMODE_NEAREST);
+    SDL_SetTextureBlendMode(g_hdrFrame, SDL_BLENDMODE_NONE);
+  }
+  return true;
+}
+bool hdrPresent(SDL_Renderer *r) {
+  ZT_StandIn &s = ZT_WindowStandIn();
+  s.texture = nullptr; // (the window itself, for this)
+  const float level = SDL_GetFloatProperty(SDL_GetWindowProperties(g_hdrWindow), SDL_PROP_WINDOW_SDR_WHITE_LEVEL_FLOAT, 1.0f);
+  if (!GpuFsr::D3D11::hdr10Pass(r, g_hdrFrame, 80.0f * (std::max)(1.0f, level))) {
+    // (no shaders: the frame as it is - too dim and grey, but there)
+    SDL_SetRenderTarget(r, nullptr);
+    const ZT_View2 v = ZT_SaveView2(r);
+    ZT_PixelView2(r);
+    if (g_hdrFrame)
+      SDL_RenderTexture(r, g_hdrFrame, nullptr, nullptr);
+    ZT_RestoreView2(r, v);
+  }
+  s.present = nullptr; // (SDL's own present, then this again)
+  const bool ok = SDL_RenderPresent(r);
+  s.present = hdrPresent;
+  if (hdrFrameFits(r))
+    s.texture = g_hdrFrame;
+  SDL_SetRenderTarget(r, nullptr); // (the next frame: into the texture)
+  return ok;
+}
+void armHdrOutput(SDL_Renderer *r, SDL_Window *w) {
+  const Sint64 space = SDL_GetNumberProperty(SDL_GetRendererProperties(r), SDL_PROP_RENDERER_OUTPUT_COLORSPACE_NUMBER, SDL_COLORSPACE_SRGB);
+  ZT_StandIn &s = ZT_WindowStandIn();
+  if (space != SDL_COLORSPACE_HDR10 || s.renderer || !hdrFrameFits(r))
+    return;
+  g_hdrWindow = w;
+  s.renderer = r;
+  s.present = hdrPresent;
+  s.texture = g_hdrFrame;
+  SDL_SetRenderTarget(r, nullptr);
+  SDL_Log("[HDR] HDR10 output on %s, SDR white %.0f nits", SDL_GetRendererName(r),
+          80.0f * SDL_GetFloatProperty(SDL_GetWindowProperties(w), SDL_PROP_WINDOW_SDR_WHITE_LEVEL_FLOAT, 1.0f));
+}
+} // namespace
 
 Window::Window(const std::string &title, int width, int height, float fps_target) {
     // Sharp on any monitor: aware of each monitor's DPI, so a 125-200%
@@ -83,7 +150,23 @@ Window::Window(const std::string &title, int width, int height, float fps_target
     }
 
     // (the renderer SDL_HINT_RENDER_DRIVER names: Display::startupRenderer)
-    this->renderer = SDL_CreateRenderer(this->window, nullptr);
+    // addition (Features::hdrOutput): on a monitor with Windows' HDR on, an
+    // HDR10 swap chain (SDL's HDR10 output: Direct3D 11) - elsewhere, or if
+    // it can't be made, the ordinary one
+    this->renderer = nullptr;
+    Features::hdrOutput = Settings::getInt("user", "hdroutput", 0) != 0;
+    if (Features::hdrOutput &&
+        SDL_GetBooleanProperty(SDL_GetDisplayProperties(SDL_GetDisplayForWindow(this->window)), SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false)) {
+      SDL_PropertiesID props = SDL_CreateProperties();
+      SDL_SetPointerProperty(props, SDL_PROP_RENDERER_CREATE_WINDOW_POINTER, this->window);
+      SDL_SetNumberProperty(props, SDL_PROP_RENDERER_CREATE_OUTPUT_COLORSPACE_NUMBER, SDL_COLORSPACE_HDR10);
+      this->renderer = SDL_CreateRendererWithProperties(props);
+      SDL_DestroyProperties(props);
+      if (!this->renderer)
+        SDL_Log("[HDR] no HDR10 output here (%s): an ordinary picture", SDL_GetError());
+    }
+    if (!this->renderer)
+      this->renderer = SDL_CreateRenderer(this->window, nullptr);
     if (this->renderer == nullptr) {
         SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "couldn't create renderer: %s", SDL_GetError());
         exit(5);
@@ -94,6 +177,7 @@ Window::Window(const std::string &title, int width, int height, float fps_target
     SDL_SetDefaultTextureScaleMode(this->renderer, SDL_SCALEMODE_NEAREST);
 
     SDL_SetRenderDrawBlendMode(this->renderer, SDL_BLENDMODE_BLEND);
+    armHdrOutput(this->renderer, this->window);
 
     this->start_frame = SDL_GetTicks();
     this->frame_delay = 1000.0 / fps_target;

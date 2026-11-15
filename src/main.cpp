@@ -4377,6 +4377,15 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     std::ofstream(outDir + "/activity-checks.txt") << result;
     if(timings)std::fclose(timings);return result.find("FAIL ") == std::string::npos ? 0 : 1;
   }
+  // ZT_PARITY_CHECKS=1 (with ZT_FLAT_LAB=1): the Lab's "paritycheck"
+  // fixture (src/ActivityPolishChecks.cpp runParityChecks), its report in
+  // <out>/parity-checks.txt
+  if (std::getenv("ZT_PARITY_CHECKS")) {
+    extern std::string runParityChecks(World &, ResourceManager *);
+    const std::string result = runParityChecks(*world, rm);
+    std::ofstream(outDir + "/parity-checks.txt") << result;
+    if(timings)std::fclose(timings);return result.find("FAIL ") == std::string::npos && result.find("PASS ") != std::string::npos ? 0 : 1;
+  }
   // ZT_MODMENU_CHECK=1: the Mod Menu as the player's mods folder fills it -
   // its rows, a picture, and the first mod switched on through it (then put
   // back as it was)
@@ -4826,6 +4835,108 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       SDL_Log("[ViewSave] animal %s at %.1f,%.1f exhibit %d escaped %d", m.name.c_str(), m.x, m.y, m.exhibit,
               static_cast<int>(m.escaped));
     capture("save_view");
+    // ours: a check. ZT_VIEW_EXHIBIT=<id>[,<zoom>]: the view centred on that
+    // exhibit (or tank) in each of the four turns, each drawn with the day
+    // and night lighting off, at noon and at midnight (exhibit<id>_r<turn>_
+    // off/day/night) - to tell a drawing-order fault from a lighting one
+    if (const char *ex = std::getenv("ZT_VIEW_EXHIBIT")) {
+      const int id = std::atoi(ex);
+      const char *comma = std::strchr(ex, ',');
+      float sx = 0, sy = 0;
+      size_t count = 0;
+      for (const Fences::Exhibit &e : world->getFences().exhibits())
+        if (e.id == id)
+          for (const auto &tile : e.tiles)
+            sx += tile.first + 0.5f, sy += tile.second + 0.5f, count++;
+      if (count) {
+        // (the ground's corners round it, '*' on the exhibit's own tiles)
+        int x0 = INT_MAX, y0 = INT_MAX, x1 = INT_MIN, y1 = INT_MIN;
+        for (const Fences::Exhibit &e : world->getFences().exhibits())
+          if (e.id == id)
+            for (const auto &tile : e.tiles)
+              x0 = std::min(x0, tile.first), y0 = std::min(y0, tile.second), x1 = std::max(x1, tile.first), y1 = std::max(y1, tile.second);
+        for (int y = y0 - 4; y <= y1 + 4; y++) {
+          std::string row;
+          for (int x = x0 - 4; x <= x1 + 4; x++) {
+            const MapTile *t = world->getMap().getTile(x, y);
+            char cell[48];
+            bool mine = false;
+            for (const Fences::Exhibit &e : world->getFences().exhibits())
+              mine = mine || (e.id == id && e.tiles.count({x, y}));
+            std::snprintf(cell, sizeof cell, " %c%d/%d/%d/%d", mine ? '*' : ' ', t ? t->cornerHeight[0] : 0, t ? t->cornerHeight[1] : 0,
+                          t ? t->cornerHeight[2] : 0, t ? t->cornerHeight[3] : 0);
+            row += cell;
+          }
+          SDL_Log("[ViewSave] y %d (x from %d):%s", y, x0 - 4, row.c_str());
+        }
+        for (const PlacedObjects::Object &o : world->getObjects().objects())
+          if (std::fabs(o.x - sx / count) + std::fabs(o.y - sy / count) < 16)
+            SDL_Log("[ViewSave] near: %s/%s at %.2f,%.2f z %.1f facing %d", o.className.c_str(), o.typeName.c_str(), o.x, o.y, o.z, o.facing);
+        // (every tile round it standing above the exhibit's ground, and where
+        // its top corners land in the window: which tile is which in a picture)
+        for (int y = y0 - 8; y <= y1 + 8; y++)
+          for (int x = x0 - 8; x <= x1 + 8; x++)
+            if (const MapTile *t = world->getMap().getTile(x, y)) {
+              const int hi = std::max({t->cornerHeight[0], t->cornerHeight[1], t->cornerHeight[2], t->cornerHeight[3]});
+              int ground = INT_MAX;
+              for (const Fences::Exhibit &e : world->getFences().exhibits())
+                if (e.id == id)
+                  ground = e.tank ? e.groundHeight : INT_MAX;
+              if (hi > ground)
+                SDL_Log("[ViewSave] high tile %d,%d corners %d/%d/%d/%d substrate %d", x, y, t->cornerHeight[0], t->cornerHeight[1],
+                        t->cornerHeight[2], t->cornerHeight[3], t->substrate);
+            }
+        for (const Staff::Member &m : world->getStaff().members()) {
+          const Staff::Type &t = world->getStaff().types()[m.type];
+          if (t.kind == Staff::Kind::Helicopter)
+            SDL_Log("[ViewSave] near: DRT base at %.2f,%.2f footprint %d x %d tiles", m.x, m.y, t.footX, t.footY);
+        }
+        if (comma) {
+          g_ZoomLevel = static_cast<float>(std::atof(comma + 1));
+          world->getRenderer().getCamera().zoom = g_ZoomLevel;
+        }
+        g_hud->showPanel(0, "");
+        const bool lightingWas = Features::dayNightLighting;
+        for (int r = 0; r < 4; r++) {
+          world->centreOn(sx / count, sy / count);
+          // (ZT_VIEW_EXHIBIT_POINTS=x,y,h;x,y,h...: where those map points land in the window)
+          if (const char *pts = std::getenv("ZT_VIEW_EXHIBIT_POINTS")) {
+            world->setView(gameViewRect(renderer), getUiTransform(renderer).scale);
+            world->draw(renderer);
+            for (std::string rest = pts; !rest.empty();) {
+              const std::string one = rest.substr(0, rest.find(';'));
+              rest = rest.find(';') == std::string::npos ? "" : rest.substr(rest.find(';') + 1);
+              float px = 0, py = 0, ph = 0;
+              if (std::sscanf(one.c_str(), "%f,%f,%f", &px, &py, &ph) == 3) {
+                int qx = 0, qy = 0;
+                world->pointToWindow(px, py, ph, qx, qy);
+                float rx = 0, ry = 0, rd = 0, wx = 0, wy = 0;
+                world->getRenderer().worldToScreenF(px, py, ph, rx, ry, rd);
+                // (and the map point the renderer finds under that spot of the window)
+                const bool hit = world->getRenderer().screenToWorld(rx, ry, world->getMap(), wx, wy);
+                SDL_Log("[ViewSave] turn %d: point %.1f,%.1f height %.1f at %d,%d (render %.0f,%.0f): ground there %s %.2f,%.2f", r,
+                        px, py, ph, qx, qy, rx, ry, hit ? "at" : "none", wx, wy);
+              }
+            }
+          }
+          for (int mode = 0; mode < 3; mode++) {
+            Features::dayNightLighting = mode > 0;
+            world->getLighting().previewHour = mode == 2 ? 0 : 12;
+            for (int i = 0; i < 30; i++) { // (the sun's maps made ahead settle)
+              world->setView(gameViewRect(renderer), getUiTransform(renderer).scale);
+              world->draw(renderer);
+              SDL_RenderPresent(renderer);
+            }
+            static const char *const kModes[] = {"off", "day", "night"};
+            capture(("exhibit" + std::to_string(id) + "_r" + std::to_string(r) + "_" + kModes[mode]).c_str());
+          }
+          world->rotateView(1);
+        }
+        Features::dayNightLighting = lightingWas;
+        world->getLighting().previewHour = -1;
+      }
+      SDL_Log("[ViewSave] exhibit %d centred at %.1f,%.1f (%zu tiles)", id, count ? sx / count : 0.0f, count ? sy / count : 0.0f, count);
+    }
     for (int pass = 0; pass < (std::getenv("ZT_VIEW_TWICE") ? 2 : 1); pass++) {
       if (pass == 1) {
         gameLoad(rm, view);
@@ -5485,6 +5596,115 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         }
       }
       SDL_Log("[TankLab] spot %d,%d: %s, %s", lx, ly, ka.c_str(), kb.c_str());
+      // ours: a check. ZT_TANK_LAB_COLUMN=<units>: a tile diagonally in front
+      // of the tanks' nearest corner raised that many units (a rock column
+      // by a tank sunk into a pit, as on the Excavation map), the map drawn
+      // before the tanks are laid and after: every pixel of the column the
+      // same - the tank's corner post, rail and glass behind it hidden by it
+      // (measured: the original draws such a column over them)
+      std::vector<std::array<int, 3>> columnBefore; // (x, y, colour)
+      std::vector<std::array<int, 3>> columnRaised; // (x, y, units up)
+      int columnX = -1, columnY = -1;
+      float columnH = 0;
+      auto drawMapOnly = [&](std::vector<uint32_t> &px, int &pw, int &ph) {
+        world->setView(gameViewRect(renderer), getUiTransform(renderer).scale);
+        world->getRenderer().centreOnWorld(lx + 4.0f, ly + 2.0f, columnH);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderClear(renderer);
+        world->draw(renderer);
+        SDL_GetCurrentRenderOutputSize(renderer, &pw, &ph);
+        px.assign(size_t(pw) * ph, 0);
+        ZT_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, px.data(), pw * 4);
+        SDL_RenderPresent(renderer);
+      };
+      // (a raised tile's outline in the window, two pixels in from its edges,
+      // from its foot to its top)
+      auto columnHull = [&](int tx, int ty, float top) {
+        std::vector<SDL_FPoint> pts;
+        for (int k = 0; k < 8; k++) {
+          int qx = 0, qy = 0;
+          world->pointToWindow(tx + float((k & 3) == 1 || (k & 3) == 2), ty + float((k & 3) >= 2),
+                               k < 4 ? columnH + top : columnH, qx, qy);
+          pts.push_back({float(qx), float(qy)});
+        }
+        // (convex: inside every edge of the hull, by its winding)
+        std::sort(pts.begin(), pts.end(), [](SDL_FPoint a, SDL_FPoint b) { return a.x < b.x || (a.x == b.x && a.y < b.y); });
+        std::vector<SDL_FPoint> hull;
+        auto cross = [](SDL_FPoint o, SDL_FPoint a, SDL_FPoint b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); };
+        for (int pass = 0; pass < 2; pass++) {
+          const size_t start = hull.size();
+          for (size_t i = 0; i < pts.size(); i++) {
+            const SDL_FPoint p = pass ? pts[pts.size() - 1 - i] : pts[i];
+            while (hull.size() >= start + 2 && cross(hull[hull.size() - 2], hull.back(), p) <= 0)
+              hull.pop_back();
+            hull.push_back(p);
+          }
+          hull.pop_back();
+        }
+        return hull;
+      };
+      auto inColumn = [](const std::vector<SDL_FPoint> &hull, float px, float py) {
+        for (size_t i = 0; i < hull.size(); i++) {
+          const SDL_FPoint a = hull[i], b = hull[(i + 1) % hull.size()];
+          const float len = std::hypot(b.x - a.x, b.y - a.y);
+          if (len > 0.01f && ((b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x)) / len < 2.0f)
+            return false;
+        }
+        return hull.size() >= 3;
+      };
+      // ZT_TANK_LAB_COLUMN=<units>,<tiles out>,<step units>: the column that
+      // many tiles out along the corner's diagonal (2 unless set: a tile of
+      // ground between it and the corner - on the corner itself the walls
+      // were laid round it), and a lower step of that height a tile further
+      // out in front of it, its pixels the same too (the ground drawn again
+      // over a tank painted the rock over the ground standing in front of it:
+      // a path by an Excavation pit cut off by a block of rock)
+      if (const char *col = std::getenv("ZT_TANK_LAB_COLUMN"); col && lx >= 0) {
+        int units = 0, out = 2, stepUnits = 0;
+        std::sscanf(col, "%d,%d,%d", &units, &out, &stepUnits);
+        out = std::max(2, out);
+        WorldMap &map = world->getMap();
+        columnH = static_cast<float>(map.getTile(lx, ly)->cornerHeight[0]);
+        float best = -1e30f;
+        int dirX = 0, dirY = 0;
+        // (each corner vertex, the tile just outside it, the way out)
+        for (auto [cx2, cy2, ox, oy, dx, dy] : {std::array<int, 6>{lx, ly, -1, -1, -1, -1}, {lx + 8, ly, 0, -1, 1, -1},
+                                                {lx + 8, ly + 4, 0, 0, 1, 1}, {lx, ly + 4, -1, 0, -1, 1}}) {
+          float sx, sy, d;
+          world->getRenderer().worldToScreenF(float(cx2), float(cy2), columnH, sx, sy, d);
+          if (d > best)
+            best = d, columnX = cx2 + ox + dx * (out - 1), columnY = cy2 + oy + dy * (out - 1), dirX = dx, dirY = dy;
+        }
+        std::vector<std::array<int, 3>> &raised = columnRaised;
+        raised.push_back({columnX, columnY, units});
+        if (stepUnits > 0)
+          raised.push_back({columnX + dirX, columnY + dirY, stepUnits});
+        auto raise = [&](bool up) {
+          for (const auto &[tx, ty, by] : raised)
+            if (MapTile *t = map.getTileMutable(tx, ty))
+              for (int c = 0; c < 4; c++)
+                t->cornerHeight[c] = static_cast<int>(columnH) + (up ? by : 0);
+          map.touch();
+        };
+        raise(true);
+        std::vector<uint32_t> px;
+        int pw = 0, ph = 0;
+        drawMapOnly(px, pw, ph);
+        std::vector<std::vector<SDL_FPoint>> hulls;
+        for (const auto &[tx, ty, up] : raised)
+          hulls.push_back(columnHull(tx, ty, static_cast<float>(up)));
+        for (int y = 0; y < ph; y++)
+          for (int x = 0; x < pw; x++)
+            for (const auto &hull : hulls)
+              if (inColumn(hull, float(x), float(y))) {
+                columnBefore.push_back({x, y, int(px[size_t(y) * pw + x])});
+                break;
+              }
+        SDL_Log("[TankLab] column %d,%d raised %d (step %d): %zu pixels", columnX, columnY, units, stepUnits, columnBefore.size());
+        // (level again while the tanks are laid: they're laid by the mouse,
+        // and a column in the way took the clicks - raised again after)
+        raise(false);
+      }
       if (lx >= 0) {
         lay(ka.c_str(), {{lx, ly}, {lx + 4, ly}, {lx + 4, ly + 4}, {lx, ly + 4}, {lx, ly}});
         enter();
@@ -5511,6 +5731,25 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             if (x.tank)
               SDL_Log("[TankLab] raised: tank %d wallSub %d floor %d ground %d top %.2f level %.2f", x.id, x.wallSub,
                       x.floorHeight, x.groundHeight, x.wallTop(), fences.waterLevel(x));
+        }
+        if (!columnBefore.empty()) {
+          for (const auto &[tx, ty, by] : columnRaised)
+            if (MapTile *t = world->getMap().getTileMutable(tx, ty))
+              for (int c = 0; c < 4; c++)
+                t->cornerHeight[c] = static_cast<int>(columnH) + by;
+          world->getMap().touch();
+          std::vector<uint32_t> px;
+          int pw = 0, ph = 0;
+          drawMapOnly(px, pw, ph);
+          size_t changed = 0;
+          for (const auto &[x, y, c] : columnBefore)
+            if (px[size_t(y) * pw + x] != uint32_t(c) && ++changed <= 12)
+              SDL_Log("[TankLab] column pixel %d,%d was %08x, now %08x", x, y, unsigned(c), unsigned(px[size_t(y) * pw + x]));
+          SDL_Log("[TankLab] column after the tanks: %zu of %zu pixels changed", changed, columnBefore.size());
+          capture("tanklab_column");
+          check(("a rock column in front of a sunk tank's corner hides its wall (" + std::to_string(changed) + " of " +
+                 std::to_string(columnBefore.size()) + " pixels changed)").c_str(),
+                changed == 0);
         }
         world->centreOn(lx + 2.0f, ly + 2.0f);
         for (int r = 0; r < 4; r++) {
@@ -7508,7 +7747,13 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         an.markDirty();
         int suit = an.suitability(ids[0], map, fn);
         check(("bare grass exhibit, two zebras: suitability " + std::to_string(suit)).c_str(), !clear || suit == 48);
+        // (the original's: Full exhibit advice off)
+        const bool fullAdvice = Features::suitabilityAdvice;
+        Features::suitabilityAdvice = false;
         std::vector<std::pair<std::string, bool>> advice = an.advice(ids[0], map, fn);
+        Features::suitabilityAdvice = true;
+        const std::vector<std::pair<std::string, bool>> fuller = an.advice(ids[0], map, fn);
+        Features::suitabilityAdvice = fullAdvice;
         std::vector<std::pair<std::string, bool>> want = {
             {"There is too much grass terrain in the exhibit for Plains Zebra 1.", true},
             {"There is not enough savannah grass terrain in the exhibit for Plains Zebra 1.", true},
@@ -7527,6 +7772,10 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           got += std::string(red ? "[red] " : "") + text + " | ";
         SDL_Log("[Animals] advice: %s", got.c_str());
         check("and the original's recommendations", !clear || advice == want);
+        // (Full exhibit advice: at 48 of the 50 a zebra wants, the same with
+        // the native objects it lacks first)
+        want.insert(want.begin(), {"There are not enough native objects in the exhibit to make Plains Zebra 1 happy.", true});
+        check("and with Full exhibit advice, the missing native objects first", !clear || fuller == want);
         // (the ground put back as it was: no cliffs left round the pen)
         for (auto &[pos, t] : unflattened)
           *map.getTileMutable(pos.first, pos.second) = t;
@@ -7999,6 +8248,34 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     for (const Animals::Member &m : an.members())
       if (m.exhibit >= 0)
         pen = m.exhibit;
+    // (a keeper not visiting the exhibit, standing in its gate: the gate
+    // stays shut - it opened for anyone within a tile of it, so for keepers
+    // and tour guides walking past on the path)
+    {
+      Fences::Edge gate{false, -1, -1};
+      for (const auto &kv : fn.pieces())
+        if (kv.second.gate && fn.exhibitOf(kv.first) == pen)
+          gate = kv.first;
+      float passOpen = -1;
+      for (Staff::Member &k : const_cast<std::vector<Staff::Member> &>(st.members()))
+        if (gate.x >= 0 && passOpen < 0 && st.types()[k.type].kind == Staff::Kind::Keeper) {
+          k.job = Staff::Job::None;
+          const_cast<Fences::Piece *>(fn.at(gate))->open = 0;
+          k.x = gate.alongX ? gate.x + 0.5f : static_cast<float>(gate.x);
+          k.y = gate.alongX ? static_cast<float>(gate.y) : gate.y + 0.5f;
+          k.path.clear();
+          k.pathAt = 0;
+          k.visit = -1;
+          k.workCheck = 1e6f;
+          passOpen = 0;
+          for (int i = 0; i < 5; i++) {
+            world->update(SDL_GetKeyboardState(nullptr), 0.1f);
+            passOpen = std::max(passOpen, fn.at(gate)->open);
+          }
+        }
+      check(("a gate stays shut for a keeper walking past it, not visiting (frame " + std::to_string(static_cast<int>(passOpen)) + ")").c_str(),
+            passOpen == 0.0f);
+    }
     int keeper = -1;
     for (Staff::Member &k : const_cast<std::vector<Staff::Member> &>(st.members()))
       if (st.types()[k.type].kind == Staff::Kind::Keeper) {
@@ -10368,7 +10645,13 @@ int main(int argc, char *argv[]) {
 
   // ours: opt-in long benchmarks use this same Play loop and presentation.
   GameBenchmark gameBenchmark;
-  if (std::getenv("ZT_GAME_BENCH_OUT")) {
+  // (ZT_GAME_BENCH_ZOO: a player's saved zoo timed instead - their graphics
+  // settings, its own view; GameBenchmark::startZoo)
+  if (const char *benchZoo = std::getenv("ZT_GAME_BENCH_ZOO")) {
+    if (!std::getenv("ZT_GAME_BENCH_OUT") || !gameLoad(&resource_manager, benchZoo) ||
+        !gameBenchmark.startZoo(*g_world, window.renderer)) return 1;
+    g_currentState = LayoutState::GAME_LOOP;
+  } else if (std::getenv("ZT_GAME_BENCH_OUT")) {
     GraphicsQuality::forThisRun(GraphicsQuality::High); // (or ZT_GRAPHICS_PRESET's)
     ItemCatalog::get().load(&resource_manager);Research::get().load(&resource_manager);
     if (!gameBenchmark.start(*g_world,&resource_manager,window.renderer)) return 1;

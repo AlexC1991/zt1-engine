@@ -27,6 +27,10 @@ bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pa
                 bool smooth);
 // GpuFsr::finishFrame's colour pass: a 3x3 matrix (rows) then a gamma
 void colourPass(SDL_Renderer *renderer, const float matrix[3][3], float gamma);
+// addition (Features::hdrOutput): frame - the finished picture, ordinary
+// sRGB - onto the window's HDR10 swap chain (PQ, BT.2020), its white at
+// paperWhiteNits; false when it can't (no shaders)
+bool hdr10Pass(SDL_Renderer *renderer, SDL_Texture *frame, float paperWhiteNits);
 // GpuFsr::endLayer's: the layer (SDL's render target texture low, the
 // current target, lowW x lowH) upscaled by EASU into a window-sized buffer
 // (layer 0 or 1's own), then RCAS - or Stylized at strength - onto the

@@ -112,8 +112,12 @@ private:
     // ours: over the shapes' budget, one of the shapes chosen to be lit (the
     // others stay in the list, so each keeps its place - the sun maps' and
     // the lamps' name for it - and they still cast shadows and block lamps)
-    bool kept=true;};
+    bool kept=true;
+    // ours: an animal's, guest's or keeper's side as drawn - one of eight
+    // (their facing) - its art's outline read from it; -1: screenSide of its turn
+    int side=-1;};
   std::vector<Instance> instances,actors;
+  CompassDirection artSide(const Instance &,const WorldRenderer &)const;
   struct ActorModel {LightingAssets::Model model;size_t used=0;};
   std::map<std::pair<std::string,int>,ActorModel> actorModels;
   // ours: a pose's shape being made on a worker thread (LightingAssets::
@@ -122,7 +126,7 @@ private:
   struct PendingActorModel {std::shared_ptr<const LightingAssets::BuildJob> job;std::future<LightingAssets::Model> result;};
   std::map<std::pair<std::string,int>,PendingActorModel> pendingActorModels;
   size_t actorTick=0;
-  void addActor(Animation *,int,LightingAssets::Point,float fx,float fy,float halfX,float halfY,uint64_t id);
+  void addActor(Animation *,int,LightingAssets::Point,float fx,float fy,float halfX,float halfY,uint64_t id,CompassDirection side);
 
   std::map<std::tuple<Animation*,int,std::string>,LightingAssets::Model> models;
   // (the same for the scenery's shapes: a big building's took up to a tenth
@@ -191,6 +195,13 @@ private:
   ReceiverMask receiverMask(const Instance &,WorldRenderer &);
   SDL_Texture *whiteMask();
   float terrainClearance(LightingAssets::Point,const WorldRenderer &)const;
+  // ours: the highest ground the camera's line from each tile can reach
+  // (prepareRayMax: made again for a new map, a changed ground or a turn),
+  // and clearBound, a point's clearance at least - above 0, the point is in
+  // view, as terrainClearance would find it, without asking the map
+  std::vector<float> rayMax;uint32_t rayMaxGeneration=0;int rayMaxRotation=-1,rayMaxW=0,rayMaxH=0;float rayMaxSlope=0,rayMaxFloor=0;const WorldMap *rayMaxMap=nullptr;
+  void prepareRayMax(const WorldMap &,const WorldRenderer &);
+  float clearBound(LightingAssets::Point)const;
   // addition: persistent submission storage; panning reuses allocated capacity.
   std::vector<ZT_Vertex> surfaceVertices,shadowVertices,fieldVertices;
   std::vector<int> surfaceIndices,shadowIndices,fieldIndices;
@@ -205,6 +216,18 @@ private:
   std::vector<ReceiverPoint> receiverPrevious; // ours: the points before they were made again (prepareReceivers)
   std::vector<int> receiverMatch,receiverLattice,receiverChain;std::vector<uint32_t> receiverMissed;
   void sampleMissed(int k); // ours: sun map k asked at receiverMissed's points
+  std::unordered_set<uint64_t> swimmers; // ours: the actors swimming in a tank this frame (collectActors)
+  // ours: the ground's points and quads made ahead on a worker as the view
+  // nears the edge of the block made (a pan made them again while the frame
+  // waited: 40-70 ms on a hilly map) - from the map, read only, and a copy
+  // of the view's turn and scale (screen places are relative to the map's
+  // origin: the camera doesn't change them)
+  struct GroundView{int rotation=0;float slope=0,ax=0,ay=0,bx=0,by=0,cx=0,cy=0;};
+  struct ReceiverJob;std::future<std::shared_ptr<ReceiverJob>> receiverJob;
+  GroundView groundView(const WorldRenderer &)const;
+  static void buildGround(const WorldMap &,const GroundView &,const std::vector<float> &rayMax,int rayW,int rayH,float rayFloor,
+                          int l,int t,int r,int b,std::vector<Receiver> &,std::vector<ReceiverPoint> &);
+  static float clearanceAt(const WorldMap &,int rotation,float slope,LightingAssets::Point);
   // ours: which ground points and face corners an actor's shadow may reach,
   // asked only in the sun maps' cells an actor reached; and what the map's
   // and each tank's ground pass share in a frame (each worked it all out)

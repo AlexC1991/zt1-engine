@@ -24,6 +24,7 @@ struct SunDepth {
   float soften=0; // addition: map texels the shadow's edge spreads over (more in soft, low light)
   bool actorNear(Point p)const;
   int actorCell(Point p)const; // (actorNear's 64 x 64 cell; -1 off the map)
+  bool cellChanged(int cell)const; // (ours: whether an actor won a texel actorNear could look at for a point in that cell)
   size_t bytes()const{return (fixed.capacity()+depth.capacity())*sizeof(float)+(fixedOwner.capacity()+owner.capacity())*sizeof(uint32_t)+actorChanged.capacity();}
 };
 // ours: points sorted by a sun map's actor cells (SunDepth::actorCell), made
@@ -31,6 +32,10 @@ struct SunDepth {
 // in cells an actor reached - actorNear is false in all the others
 struct ActorCells {
   uint64_t stamp=0,points=0;size_t total=size_t(-1);std::vector<uint32_t> start,order;
+  // (ours: for each point in order's place, what actorNear works out from it
+  // and the map alone - its height, and the actor blocks its texels are in -
+  // made once with the sort, not for every point every frame)
+  struct Look {float z;uint32_t block[4];};std::vector<Look> look;
   void sort(const SunDepth &map,uint64_t pointsKey,size_t count,const std::function<Point(size_t)> &at);
   void mark(const SunDepth &map,const std::function<Point(size_t)> &at,std::vector<uint8_t> &near)const;
 };

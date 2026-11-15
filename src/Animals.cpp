@@ -4110,6 +4110,40 @@ std::vector<std::pair<std::string, bool>> Animals::advice(int id, const WorldMap
   flag(59, r->noToy == 0 && r->unusedToys >= 2, r->unusedToys > 2);
   flag(60, r->noToy > 0, false);
   flag(61, r->poo > 0.05f, r->poo > 0.10f);
+  // addition (Features::suitabilityAdvice): the habitat check (zoo.exe
+  // 0x438c47) makes an animal unhappier whenever its exhibit's suitability
+  // is under its cHabitatPreference, but the original's flags (0x447164)
+  // name trees, rocks and hills only when well off what it likes, and never
+  // the objects - no code found in zoo.exe sets 9915's bit, "There are not
+  // enough native objects..." (its mask searched for; the flags read live)
+  // - so an animal losing happiness to its exhibit can be told "This
+  // exhibit is well suited" (measured: a player's Herrerasaurus at 79 of
+  // the 90 they want, in the original and here). Under its preference,
+  // each part of the rating that costs it a point or more of suitability
+  // is named with the original's own line (red from 5 points), and the
+  // costliest one at least
+  if (Features::suitabilityAdvice && !r->tank && this->suitability(m->id, map, fences) < t.habitatPreference) {
+    std::vector<std::pair<int, float>> parts; // message, suitability lost
+    if (r->objects >= 0) // (under nothing: what it dislikes, listed already)
+      parts.push_back({14, 0.2f * (100 - r->objects)});
+    parts.push_back({r->foliage < t.treePref ? 12 : 13, 0.1f * (100 - r->trees)});
+    parts.push_back({r->rockShare < t.rockPref ? 19 : 20, 0.1f * (100 - r->rocks)});
+    parts.push_back({r->hills < t.elevationPref ? 17 : 18, 0.1f * (100 - r->elevation)});
+    for (int k = 0; k < 17; k++)
+      if (t.compatTerrain[k] > 0 && r->pct[k] < t.compatTerrain[k])
+        parts.push_back({21 + 2 * k, 0.3f * (t.compatTerrain[k] - r->pct[k])});
+    std::stable_sort(parts.begin(), parts.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+    for (size_t i = 0; i < parts.size(); i++) {
+      if (parts[i].second <= 0 || (i > 0 && parts[i].second < 1))
+        continue;
+      const bool red = parts[i].second >= 5;
+      auto had = std::find_if(bits.begin(), bits.end(), [&](const auto &b) { return b.first == parts[i].first; });
+      if (had == bits.end())
+        bits.push_back({parts[i].first, red});
+      else
+        had->second = had->second || red;
+    }
+  }
   std::sort(bits.begin(), bits.end());
   auto dislikes = [&](bool red) {
     for (auto [nameId, v] : r->dislikes)

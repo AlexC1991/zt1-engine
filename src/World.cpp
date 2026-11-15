@@ -555,9 +555,34 @@ void World::update(const bool *state, float deltaTime, float inputSeconds) {
              std::hypot(m.x-mx,m.y-my)<2.5f)return true;
         return false;
       }
-      for (const Staff::Member &m : this->staff.members())
-        if (std::hypot(m.x - mx, m.y - my) < 1.1f)
+      // ours: only for the keeper visiting this gate's exhibit (the only
+      // worker who goes in, Staff::visitStep), near it, whose route now ends
+      // at the gate or goes through it - not for anyone walking past it
+      // (it opened for every worker within a tile, so for keepers and tour
+      // guides passing on the path). The original's own trigger isn't
+      // found in zoo.exe yet.
+      const int exhibit = this->fences.exhibitOf(e);
+      auto crosses = [&](float ax, float ay, float bx, float by) {
+        const float a = e.alongX ? ay - e.y : ax - e.x, b = e.alongX ? by - e.y : bx - e.x;
+        if ((a < 0) == (b < 0) || std::fabs(b - a) < 1e-4f)
+          return false;
+        const float t = a / (a - b), along = e.alongX ? ax + (bx - ax) * t : ay + (by - ay) * t;
+        const float start = e.alongX ? static_cast<float>(e.x) : static_cast<float>(e.y);
+        return along > start - 0.1f && along < start + 1.1f;
+      };
+      for (const Staff::Member &m : this->staff.members()) {
+        if (exhibit < 0 || m.visit != exhibit || std::hypot(m.x - mx, m.y - my) >= 1.1f)
+          continue;
+        float px = m.x, py = m.y;
+        for (size_t i = m.pathAt; i < m.path.size(); i++) {
+          if (crosses(px, py, m.path[i].first, m.path[i].second))
+            return true;
+          px = m.path[i].first, py = m.path[i].second;
+        }
+        // (on the way to the tile beside it, to go in or just come out)
+        if (std::hypot(px - mx, py - my) < 0.75f)
           return true;
+      }
       return false;
     });
     {FrameProfile::Scope profile("animals update");animals.update(deltaTime, clock, worldMap, fences);}
@@ -594,17 +619,28 @@ void World::update(const bool *state, float deltaTime, float inputSeconds) {
 void World::handleCameraInput(const bool *state, float deltaTime) {
   Camera &cam = worldRenderer.getCamera();
 
-  // Camera movement (scaled by zoom)
-  int scrollSpeed = static_cast<int>(300.0f * deltaTime * (1.0f / cam.zoom));
-
+  // Camera movement (scaled by zoom): 300 px a second at zoom 1. ours: the
+  // part of a pixel left over each frame is kept for the next - cut off,
+  // a frame under 7 ms at zoom 2 moved nothing, so the faster the game ran
+  // the slower and jerkier keyboard panning was
+  const float scrollSpeed = 300.0f * deltaTime * (1.0f / cam.zoom);
+  float dx = 0, dy = 0;
   if (state[SDL_SCANCODE_LEFT] || state[SDL_SCANCODE_A])
-    cam.x += scrollSpeed;
+    dx += scrollSpeed;
   if (state[SDL_SCANCODE_RIGHT] || state[SDL_SCANCODE_D])
-    cam.x -= scrollSpeed;
+    dx -= scrollSpeed;
   if (state[SDL_SCANCODE_UP] || state[SDL_SCANCODE_W])
-    cam.y += scrollSpeed;
+    dy += scrollSpeed;
   if (state[SDL_SCANCODE_DOWN] || state[SDL_SCANCODE_S])
-    cam.y -= scrollSpeed;
+    dy -= scrollSpeed;
+  // (none held that way: nothing carried, so a tap moves as before)
+  this->keyScrollX = dx != 0 ? this->keyScrollX + dx : 0;
+  this->keyScrollY = dy != 0 ? this->keyScrollY + dy : 0;
+  const int stepX = static_cast<int>(this->keyScrollX), stepY = static_cast<int>(this->keyScrollY);
+  cam.x += stepX;
+  cam.y += stepY;
+  this->keyScrollX -= stepX;
+  this->keyScrollY -= stepY;
   // The mouse at the window's edge scrolls the map, as in the original
   // (zoo.exe 0x419eb2): within 3 px of the left or top, 2 of the right or
   // bottom (8 and 7 in a window), corners both ways, 32 screen pixels 30

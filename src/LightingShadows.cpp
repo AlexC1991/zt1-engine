@@ -225,8 +225,24 @@ void DayNightLighting::updateSun(const WorldMap &map,const WorldRenderer &view) 
   // (ours: past the allowance, the maps made ahead for where the view was
   // heading are taken - waited for if not quite done - when they fit it)
   bool recentred=false;
+  // ours: how far the view's middle may go before the screen leaves the maps
+  // (their margin round the view, less 4 tiles) - past the allowance but
+  // within this, the maps there are kept, still right, while the ones made
+  // ahead for the new place finish; only past it are they made while the
+  // frame waits (they were, at the allowance, whenever a long pan had moved
+  // the place they were being made for: a 50-90 ms frame)
+  const float reach=std::max(allowance,(extent-(logicalW/64+logicalH/32))*.5f-4);
+  auto recentreReady=[&]{for(auto &job:recentreJobs)if(job.valid() && job.wait_for(std::chrono::seconds(0))!=std::future_status::ready)return false;return true;};
   if(sunExtent!=extent || !within(left,top,allowance)) {
-    if(recentring && sunExtent==extent && recentreExtent==extent && within(recentreLeft,recentreTop,allowance)){left=recentreLeft;top=recentreTop;recentred=true;}
+    if(recentring && sunExtent==extent && recentreExtent==extent && within(recentreLeft,recentreTop,allowance) &&
+       (recentreReady() || !within(left,top,reach))){left=recentreLeft;top=recentreTop;recentred=true;}
+    else if(sunExtent==extent && within(left,top,reach) && sunHash==casterHash) {
+      if(!recentring || !within(recentreLeft,recentreTop,allowance)) {
+        retireRecentre();recentreLeft=wantLeft;recentreTop=wantTop;recentreExtent=extent;recentring=true;
+        const double t0=std::floor(hour/.02)*.02;
+        for(int j=0;j<3;++j)recentreJobs[j]=launchSunJob(map,t0+j*.02,wantLeft,wantTop,extent);
+      }
+    }
     else {left=wantLeft;top=wantTop;retireRecentre();}
   } else if(recentring && within(left,top,allowance*.5f))retireRecentre(); // (back near the middle: not wanted)
   sunLeft=left;sunTop=top;sunExtent=extent;
@@ -361,6 +377,13 @@ void DayNightLighting::sampleMissed(int k) {
   const auto &atlas=sunMaps[k];
   parallelFor(receiverMissed.size(),[&](size_t b,size_t e){for(size_t i=b;i<e;++i){auto &p=receiverPoints[receiverMissed[i]];p.sun[k]=atlas.shadow(p.p,p.normal,0xFFFFFFFFu,true);}},1024);
 }
+// (a block of ground made on a worker: what it's made from, and what it made)
+struct DayNightLighting::ReceiverJob {
+  int l=0,t=0,r=0,b=0;uint64_t generation=0;GroundView view;const WorldMap *map=nullptr;
+  std::vector<float> rayMax;int rayW=0,rayH=0;float rayFloor=0;
+  std::vector<Receiver> receivers;std::vector<ReceiverPoint> points;
+  void run(){buildGround(*map,view,rayMax,rayW,rayH,rayFloor,l,t,r,b,receivers,points);}
+};
 void DayNightLighting::prepareReceivers(const WorldMap &map,const WorldRenderer &view) {
   float x0=1e9f,y0=1e9f,x1=-1e9f,y1=-1e9f;
   for(float z:{float(map.getMinHeight()),float(map.getMaxHeight())})for(int k=0;k<4;++k) {
@@ -379,8 +402,35 @@ void DayNightLighting::prepareReceivers(const WorldMap &map,const WorldRenderer 
   const int wl=std::max(0,l-kMargin),wt=std::max(0,t-kMargin),wr=std::min(map.getWidth(),r+kMargin),wb=std::min(map.getHeight(),b+kMargin);
   const bool inside=l>=receiverX0 && t>=receiverY0 && r<=receiverX1 && b<=receiverY1;
   const long long keptArea=(long long)(receiverX1-receiverX0)*(receiverY1-receiverY0),wanted=(long long)(wr-wl)*(wb-wt);
-  if(receiverGeneration==map.getGeneration() && receiverRotation==view.getRotation() && inside && keptArea<=2*wanted)return;
-  l=wl;t=wt;r=wr;b=wb;
+  // ours: the block made ahead on a worker (ReceiverJob) taken once it's done,
+  // made for this map, turn and scale and holding the view; meanwhile the
+  // block here kept while it holds the view. Within 4 tiles of its edge on a
+  // hilly map, the next one is started; past it before that one is done, it's
+  // waited for (if it holds the view), else made here as before
+  const GroundView gv=groundView(view);
+  std::shared_ptr<ReceiverJob> made;
+  if(receiverJob.valid() && receiverJob.wait_for(std::chrono::seconds(0))==std::future_status::ready)made=receiverJob.get();
+  auto fits=[&](const std::shared_ptr<ReceiverJob> &job){return job && job->generation==map.getGeneration() && job->view.rotation==gv.rotation &&
+    job->view.slope==gv.slope && job->view.ax==gv.ax && job->view.ay==gv.ay && job->view.bx==gv.bx && job->view.by==gv.by &&
+    job->view.cx==gv.cx && job->view.cy==gv.cy && job->l<=l && job->t<=t && job->r>=r && job->b>=b;};
+  const bool still=receiverGeneration==map.getGeneration() && receiverRotation==view.getRotation() && inside && keptArea<=2*wanted;
+  if(still && !fits(made)) {
+    // (a side already at the map's edge can't go further: not near it)
+    const bool nearEdge=(l-4<receiverX0 && receiverX0>0) || (t-4<receiverY0 && receiverY0>0) ||
+                        (r+4>receiverX1 && receiverX1<map.getWidth()) || (b+4>receiverY1 && receiverY1<map.getHeight());
+    const bool same=wl==receiverX0 && wt==receiverY0 && wr==receiverX1 && wb==receiverY1;
+    if(nearEdge && !same && !receiverJob.valid() && map.getMinHeight()!=map.getMaxHeight()) {
+      prepareRayMax(map,view);
+      auto job=std::make_shared<ReceiverJob>();
+      job->l=wl;job->t=wt;job->r=wr;job->b=wb;job->generation=map.getGeneration();job->view=gv;job->map=&map;
+      job->rayMax=rayMax;job->rayW=rayMaxW;job->rayH=rayMaxH;job->rayFloor=rayMaxFloor;
+      receiverJob=std::async(std::launch::async,[job]{job->run();return job;});
+    }
+    return;
+  }
+  if(!made && receiverJob.valid()){auto waited=receiverJob.get();if(fits(waited))made=waited;}
+  if(made && !fits(made))made.reset();
+  if(made){l=made->l;t=made->t;r=made->r;b=made->b;}else{l=wl;t=wt;r=wr;b=wb;}
   // ours: the points about to be made again kept, with the sun maps they
   // were asked of - a point that stays (the same place and normal) keeps its
   // sun rather than asking the map again (a pan across a block of tiles had
@@ -405,6 +455,7 @@ void DayNightLighting::prepareReceivers(const WorldMap &map,const WorldRenderer 
   } carry{*this,keep,kept};
   receiverGeneration=map.getGeneration();receiverRotation=view.getRotation();receiverX0=l;receiverX1=r;receiverY0=t;receiverY1=b;receivers.clear();receiverPoints.clear();receiverSampleFrame=size_t(-1);receiverSunStamp[0]=receiverSunStamp[1]=0;
   ++gpuReceiverGeneration;gpuGroundPoints.clear();
+  if(made){receivers=std::move(made->receivers);receiverPoints=std::move(made->points);return;} // (the points that stayed keep their sun: Carry)
   // addition: a flat map is a regular quarter-tile grid. Build each vertex
   // once without hashing or projecting it four times through adjacent quads.
   // Slopes and cliffs retain the general receiver path below.
@@ -425,13 +476,36 @@ void DayNightLighting::prepareReceivers(const WorldMap &map,const WorldRenderer 
     }
     return;
   }
+  prepareRayMax(map,view);
+  buildGround(map,gv,rayMax,rayMaxW,rayMaxH,rayMaxFloor,l,t,r,b,receivers,receiverPoints);
+}
+// ours: the view's turn and scale, for buildGround: a point's place on the
+// screen relative to the map's origin's (WorldRenderer::worldToScreenF's,
+// less the camera's part, which cancels)
+DayNightLighting::GroundView DayNightLighting::groundView(const WorldRenderer &view)const {
+  GroundView g;g.rotation=view.getRotation();g.slope=view.getHeightUnitPixels()/view.getTileHeight();
+  // (d(pu)/dx, d(pv)/dx, d(pu)/dy, d(pv)/dy for each turn, as worldToScreenF has them)
+  static const int d[4][4]={{0,-1,1,0},{-1,0,0,-1},{0,1,-1,0},{1,0,0,1}};
+  const auto &e=d[g.rotation&3];const float hw=view.getTileWidth()*.5f,hh=view.getTileHeight()*.5f;
+  g.ax=(e[0]-e[1])*hw;g.ay=(e[0]+e[1])*hh;g.bx=(e[2]-e[3])*hw;g.by=(e[2]+e[3])*hh;g.cx=0;g.cy=-view.getHeightUnitPixels();
+  return g;
+}
+// The ground's quads and their points over a block of tiles (a hilly map's:
+// a flat one is a plain grid, made in prepareReceivers)
+void DayNightLighting::buildGround(const WorldMap &map,const GroundView &gv,const std::vector<float> &rayMax,int rayW,int rayH,float rayFloor,
+                                   int l,int t,int r,int b,std::vector<Receiver> &receivers,std::vector<ReceiverPoint> &receiverPoints) {
+  auto screenOf=[&](Point p){return SDL_FPoint{gv.ax*p.x+gv.bx*p.y+gv.cx*p.z,gv.ay*p.x+gv.by*p.y+gv.cy*p.z};};
+  // (clearBound's, from the copy of rayMax)
+  static const bool slow=std::getenv("ZT_LIGHTING_SLOW_PATHS")!=nullptr;
+  auto clearBound=[&](Point p)->float{const int x=int(std::floor(p.x)),y=int(std::floor(p.y));
+    if(slow || x<0 || y<0 || x>=rayW || y>=rayH || rayMax.size()!=size_t(rayW)*rayH || rayMax.empty() || p.z<rayFloor)return -1;
+    return p.z+.01f-rayMax[size_t(y)*rayW+x];};
   std::unordered_map<uint64_t,int> samples;
   const size_t pointBudget=size_t(std::max(0,r-l)*4+1)*size_t(std::max(0,b-t)*4+1);
   samples.reserve(pointBudget);receiverPoints.reserve(pointBudget);receivers.reserve(size_t(std::max(0,r-l))*std::max(0,b-t)*16);
-  float ox,oy,od;view.worldToScreenF(0,0,0,ox,oy,od);
   auto add=[&](std::array<Point,4> points,Point normal) {
     Receiver f{};f.p=points;f.normal=normal;
-    for(int k=0;k<4;++k){float sx,sy,d;view.worldToScreenF(points[k].x,points[k].y,points[k].z,sx,sy,d);f.screen[k]={sx-ox,sy-oy};}
+    for(int k=0;k<4;++k)f.screen[k]=screenOf(points[k]);
     for(int k=0;k<4;++k) {
       const auto p=points[k];
       const uint64_t key=uint64_t(uint16_t(std::lround(p.x*4))) | uint64_t(uint16_t(std::lround(p.y*4)))<<16 | uint64_t(uint32_t(std::lround(p.z*16)))<<32;
@@ -457,7 +531,7 @@ void DayNightLighting::prepareReceivers(const WorldMap &map,const WorldRenderer 
       const float hi0=tile->cornerHeight[e==0?1:3],hi1=tile->cornerHeight[2],lo0=n->cornerHeight[0],lo1=n->cornerHeight[e==0?3:1];
       if(hi0==lo0 && hi1==lo1)continue;
       const float sign=(hi0+hi1>=lo0+lo1)?1.0f:-1.0f;
-      const float vx[4]={-1,-1,1,1},vy[4]={1,-1,-1,1};if((e==0?vx[view.getRotation()]:vy[view.getRotation()])*sign<=0)continue;
+      const float vx[4]={-1,-1,1,1},vy[4]={1,-1,-1,1};if((e==0?vx[gv.rotation]:vy[gv.rotation])*sign<=0)continue;
       for(int i=0;i<4;++i)for(int j=0;j<4;++j) {
         const float a=i*.25f,b=(i+1)*.25f,c=j*.25f,d=(j+1)*.25f;
         auto p=[&](float along,float down){return Point{e==0?float(x+1):x+along,e==0?y+along:float(y+1),
@@ -466,6 +540,44 @@ void DayNightLighting::prepareReceivers(const WorldMap &map,const WorldRenderer 
       }
     }
   }
+  // addition: ground the camera can't see - a pit's floor and the lower part
+  // of its walls, behind the higher ground in front of them - takes no
+  // shadow. Its quads, drawn over the screen after the terrain, laid the
+  // walls' and the floor's shade over the rim, the zoo wall, the path and
+  // the road in front as dark boxes. Each quad is cut where the terrain
+  // hides it, as the buildings' faces are (terrainClearance)
+  std::vector<float> clear(receiverPoints.size());
+  // (ours: only its sign is read - a point surely in view, clearBound, isn't asked of the map)
+  parallelFor(receiverPoints.size(),[&](size_t begin,size_t end){for(size_t i=begin;i<end;++i){const float c=clearBound(receiverPoints[i].p);
+    clear[i]=c>.005f?c:clearanceAt(map,gv.rotation,gv.slope,receiverPoints[i].p);}});
+  std::vector<Receiver> cut;size_t seen=0;
+  for(size_t j=0;j<receivers.size();++j) {
+    const Receiver f=receivers[j];int hidden=0;for(int k=0;k<4;++k)hidden+=clear[f.sample[k]]<0;
+    if(!hidden){receivers[seen++]=f;continue;}
+    if(hidden==4)continue;
+    Point poly[8];int n=0;
+    for(int k=0;k<4;++k) {
+      const int ia=f.sample[k],ib=f.sample[(k+1)&3];const Point a=receiverPoints[ia].p,b=receiverPoints[ib].p;const float da=clear[ia],db=clear[ib];
+      if(da>=0)poly[n++]=a;
+      if((da>=0)!=(db>=0)) {
+        // (where the edge goes out of sight: halved ten times, kept on the
+        // seen side - the clearance bends at the rim, so a straight line
+        // between the corners' put it inside the hidden ground)
+        const Point open=da>=0?a:b,gone=da>=0?b:a;float in=0,out=1;
+        auto along=[&](float s){return Point{open.x+(gone.x-open.x)*s,open.y+(gone.y-open.y)*s,open.z+(gone.z-open.z)*s};};
+        for(int i=0;i<10;++i){const float s=(in+out)*.5f;(clearanceAt(map,gv.rotation,gv.slope,along(s))>=0?in:out)=s;}
+        poly[n++]=along(in);
+      }
+    }
+    int at[8];
+    for(int i=0;i<n;++i){at[i]=int(receiverPoints.size());receiverPoints.push_back({poly[i],f.normal,0});}
+    for(int i=1;i+1<n;i+=2) {
+      const int corner[4]={0,i,i+1,std::min(i+2,n-1)};Receiver g{};g.normal=f.normal;
+      for(int k=0;k<4;++k){g.p[k]=poly[corner[k]];g.sample[k]=at[corner[k]];g.screen[k]=screenOf(g.p[k]);}
+      cut.push_back(g);
+    }
+  }
+  receivers.resize(seen);receivers.insert(receivers.end(),cut.begin(),cut.end());
 }
 void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &view,const WorldMap &map,const std::function<bool(float,float)> &accept) {
   if(sky.sun<=.001f || (!gpuAtlasReady && !sunMaps[0].size))return;prepareReceivers(map,view);
@@ -667,7 +779,7 @@ void DayNightLighting::drawShadows(SDL_Renderer *renderer,const WorldRenderer &v
       for(int c=0;c<copies;++c) {
         const float turn=(c-(copies-1)*.5f)*spread,cs=std::cos(turn),sn=std::sin(turn);
         const float rx=sdx*cs-sdy*sn,ry=sdx*sn+sdy*cs;
-        o.artwork->drawCastShadow(renderer,view.screenSide(o.sine,-o.cosine),o.frame,[&](float across,float up) {
+        o.artwork->drawCastShadow(renderer,artSide(o,view),o.frame,[&](float across,float up) {
           const float wide=acrossScale*across/tilePx;
           const float wx=o.position.x+acrossX*wide+rx*up/unit,wy=o.position.y+acrossY*wide+ry*up/unit;
           float x,y,depth;view.worldToScreenF(wx,wy,o.position.z,x,y,depth);

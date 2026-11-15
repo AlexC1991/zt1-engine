@@ -16525,6 +16525,14 @@
    "provisional": false,
    "summary": "A message into the zoo's messages (not while a game's loading, 0x638589): its kind (1, 2...; a kind-2 repeat checked by 0x458b5f), what it's about, its text - the message bar told (its element's slot 0x68) and the list added to (messageListAdd). Selling, the tank filter and others post through it"
   },
+  "0x5b391c": {
+   "by": "Claude",
+   "class": "ZTFence",
+   "confidence": "sure",
+   "name": "fenceStartCondition",
+   "provisional": false,
+   "summary": "A fence or tank wall piece made new: its strength (+0x15c) from cStrength, its life (+0x160) from cLife, and its own decay time (+0x168, and the timer +0x16c) drawn at random from minDecayTime to maxDecayTime (fences/fence.ai [Decay]: 480000 to 1200000 ms)"
+  },
   "0x5b3a55": {
    "by": "batty251 (confirmed 2026-10-12: the type tables' fixed slots)",
    "class": "ZTFenceType",
@@ -31326,9 +31334,34 @@
    "by": "Claude",
    "on": "2026-11-11",
    "what": "Named 0x4533bc rewardsApply"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-14",
+   "what": "Named 0x5b391c fenceStartCondition"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-14",
+   "what": "Note at 0x434b1d: Wear: the timer (+0x16c, ms) runs down by the update's ms; out, the piece loses a point of life (+0x160) and cDecayDelta of strength (+0x15c, never under 1), broken at life 0 (0x4858a4), the timer set back to its own decay time (+0x168). At life == cDecayedLife it posts 10033 (or 10034 for an electrified one whose current has gone). Not for the zoo wall, a gate (subtype g), a type of cStrength 500, or a tank wall"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-14",
+   "what": "Note at 0x414a73: Crushing (read 0x4a4115-0x416ed4): after the climb, jump and bash tests, an animal whose type's cCrushesFences (+0x3dc) is not 0 crosses a fence whose type's cHeight (+0x64) is no more than it - any fence but one with live current (0x4a44a0). The young have it too: ZTAnimalType::setDefaults 0x4b659e loads the default subtype's section, then the type's own. So T. rex, Allosaurus and Spinosaurus (3) cross every fence of height 3 without live current"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-14",
+   "what": "Note at 0x438c47: The habitat check (every cHabitatCheck): suitability (0x411afd) at least cHabitatPreference (+0x2bc): cHappyHabitatChange (+0x304); else under cPctHabitat (+0x310) percent of it: cVeryAngryHabitatChange (+0x30c) and message 10031; else cAngryHabitatChange (+0x308). Then a tenth of what it thinks of the others there (0x438bd4, kept to -500..150). All into pending (+0x2ac). As src/Animals.cpp tick"
   }
  ],
  "notes": {
+  "0x414a73": {
+   "by": "Claude",
+   "on": "2026-11-14",
+   "text": "Crushing (read 0x4a4115-0x416ed4): after the climb, jump and bash tests, an animal whose type's cCrushesFences (+0x3dc) is not 0 crosses a fence whose type's cHeight (+0x64) is no more than it - any fence but one with live current (0x4a44a0). The young have it too: ZTAnimalType::setDefaults 0x4b659e loads the default subtype's section, then the type's own. So T. rex, Allosaurus and Spinosaurus (3) cross every fence of height 3 without live current"
+  },
   "0x41f1ba": {
    "by": "Claude",
    "on": "2026-11-01",
@@ -31354,6 +31387,11 @@
    "on": "2026-11-11",
    "text": "Ported 2026-11-11 (src/Guests.cpp decide/sceneryWeight/pickScenery/gawkScenery): the three-way draw, scenery by cEstheticWeight, the ring spot (0x4297dc), Task81's bGawkObject bands and fPlaySetProb weights from guests.ai, cUsedThought. Not ported: the original's visited-tiles list by kind across rounds beyond our per-round reset."
   },
+  "0x434b1d": {
+   "by": "Claude",
+   "on": "2026-11-14",
+   "text": "Wear: the timer (+0x16c, ms) runs down by the update's ms; out, the piece loses a point of life (+0x160) and cDecayDelta of strength (+0x15c, never under 1), broken at life 0 (0x4858a4), the timer set back to its own decay time (+0x168). At life == cDecayedLife it posts 10033 (or 10034 for an electrified one whose current has gone). Not for the zoo wall, a gate (subtype g), a type of cStrength 500, or a tank wall"
+  },
   "0x4351a9": {
    "by": "Claude",
    "on": "2026-11-11",
@@ -31363,6 +31401,11 @@
    "by": "batty251",
    "on": "2026-10-12",
    "text": "Part of FUN_00437102 (ZTAnimal's table, slot 0x48): Ghidra made it a function once the class tables were applied (2026-10-12). That function picks a behaviour by name (bSleep, bHatch...) - a sleep ends a rampage here"
+  },
+  "0x438c47": {
+   "by": "Claude",
+   "on": "2026-11-14",
+   "text": "The habitat check (every cHabitatCheck): suitability (0x411afd) at least cHabitatPreference (+0x2bc): cHappyHabitatChange (+0x304); else under cPctHabitat (+0x310) percent of it: cVeryAngryHabitatChange (+0x30c) and message 10031; else cAngryHabitatChange (+0x308). Then a tenth of what it thinks of the others there (0x438bd4, kept to -500..150). All into pending (+0x2ac). As src/Animals.cpp tick"
   },
   "0x439cd0": {
    "by": "Claude",

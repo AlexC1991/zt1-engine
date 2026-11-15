@@ -405,8 +405,10 @@ void DayNightLighting::drawSurfaceLighting(SDL_Renderer *renderer,WorldRenderer 
       // short list until the faces are projected again - 28 bytes, not 220)
       if(faceCullSerial!=projectionSerial || faceCull.size()!=projectedFaces.size()) {
         faceCull.resize(projectedFaces.size());
-        for(size_t i=0;i<projectedFaces.size();++i){const auto &f=projectedFaces[i];
-          faceCull[i]={f.depth,f.bounds.x,f.bounds.y,f.bounds.x+f.bounds.w,f.bounds.y+f.bounds.h,uint32_t(f.instance),f.visible?1u:0u};}
+        // (ours: side by side on the cores, each to its own place - on one,
+        // a pan that chose the shapes again waited 25-40 ms for it)
+        parallelFor(projectedFaces.size(),[&](size_t begin,size_t end){for(size_t i=begin;i<end;++i){const auto &f=projectedFaces[i];
+          faceCull[i]={f.depth,f.bounds.x,f.bounds.y,f.bounds.x+f.bounds.w,f.bounds.y+f.bounds.h,uint32_t(f.instance),f.visible?1u:0u};}},4096);
         faceCullSerial=projectionSerial;
       }
       auto &hasMask=surfaceHasMask;hasMask.resize(masks.size());for(size_t m=0;m<masks.size();++m)hasMask[m]=masks[m].texture?1:0;

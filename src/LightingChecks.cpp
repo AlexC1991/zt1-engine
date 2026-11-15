@@ -149,6 +149,30 @@ int runLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,co
   world.setView(viewRect,1.0f);auto &camera=world.getCamera();camera.zoom=1;
   world.draw(renderer);world.getRenderer().centreOnWorld(39,39,map.getTile(39,39)->height);
   {
+    // (each animal lit, masked and shadowed through the side it's drawn from,
+    // in all eight facings: one facing east was lit through its south-east
+    // art, which showed past its outline - a dark band beside a giraffe's neck)
+    auto &zoo=world.getAnimals();auto &light=world.getLighting();const auto &view=world.getRenderer();
+    const bool was=Features::dayNightLighting;const double hour=light.previewHour;Features::dayNightLighting=true;light.previewHour=12;
+    bool same=true;int compared=0,eightWay=0;
+    for(int k=0;k<8;++k) {
+      const float turn=k*.7853981634f;
+      for(const auto &m:zoo.members())if(auto *e=zoo.member(m.id)){e->fx=std::sin(turn);e->fy=-std::cos(turn);}
+      world.draw(renderer);std::vector<Fences::Drawable> drawn;zoo.collect(view,map,drawn);
+      for(const auto &o:light.actors) {
+        if(!((o.owner>>54)&1) || (o.owner&7))continue; // (an animal's)
+        float x,y,d;view.worldToScreenF(o.position.x,o.position.y,o.position.z,x,y,d);
+        for(const auto &shown:drawn)if(shown.art==o.artwork && std::abs(shown.sx-x)<.01f && std::abs(shown.sy-y)<.01f) {
+          const auto side=light.artSide(o,view);same&=side==shown.side;++compared;
+          eightWay+=side==CompassDirection::N || side==CompassDirection::E || side==CompassDirection::S || side==CompassDirection::W;break;
+        }
+      }
+    }
+    report<<"Animals' lit sides compared: "<<compared<<", of them north, east, south or west: "<<eightWay<<"\n";
+    check("each animal is lit, masked and shadowed through the side it is drawn from, in eight facings",same && compared>=8*12 && eightWay>0);
+    Features::dayNightLighting=was;light.previewHour=hour;world.draw(renderer);
+  }
+  {
     Pallet palette{};palette.color_count=3;palette.colors[1]=0xFF000000;palette.colors[2]=0xFF404040;
     auto *data=static_cast<AnimationData*>(std::calloc(1,sizeof(AnimationData)));
     data->width=data->height=100;data->frame_count=1;data->pallet=&palette;

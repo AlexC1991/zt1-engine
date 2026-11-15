@@ -6,6 +6,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <atomic>
+#include <cstdint>
+#include <iterator>
 namespace LightingAssets {
 float terrainHeight(const WorldMap &map,float x,float y) {
   const auto *t=map.getTile(int(std::floor(x)),int(std::floor(y)));if(!t)return 0;
@@ -109,12 +111,49 @@ void ActorCells::sort(const SunDepth &map,uint64_t pointsKey,size_t count,const 
   for(int c=0;c<4096;++c)start[c+1]+=start[c];
   order.resize(start[4096]);std::vector<uint32_t> fill(start.begin(),start.end()-1);
   for(size_t i=0;i<count;++i)if(cell[i]>=0)order[fill[cell[i]]++]=uint32_t(i);
-}
-void ActorCells::mark(const SunDepth &map,const std::function<Point(size_t)> &at,std::vector<uint8_t> &near)const {
-  for(int c=0;c<4096;++c) {
-    if(start[c]==start[c+1] || !std::isfinite(map.actorTop[c]))continue;
-    for(uint32_t k=start[c];k<start[c+1];++k){const uint32_t i=order[k];if(!near[i] && map.actorNear(at(i)))near[i]=1;}
+  // (actorNear's texels for each point, as it finds them)
+  static const bool slow=std::getenv("ZT_LIGHTING_SLOW_PATHS")!=nullptr; // (DayNightLighting::clearBound: as it was)
+  if(slow)return;
+  look.resize(order.size());
+  for(size_t k=0;k<order.size();++k) {
+    const Point p=at(order[k]);Look &l=look[k];l.z=p.z;std::fill(std::begin(l.block),std::end(l.block),UINT32_MAX);
+    const float u=p.x+map.dx*p.z-map.x0,v=p.y+map.dy*p.z-map.y0;
+    const int px=int(std::floor(u*map.pixelScale-.5f)),py=int(std::floor(v*map.pixelScale-.5f));
+    const int x0=std::max(0,px),x1=std::min(map.size-1,px+1),y0=std::max(0,py),y1=std::min(map.size-1,py+1);
+    if(x0>x1 || y0>y1)continue;
+    int n=0;for(int yy=y0>>2;yy<=y1>>2;++yy)for(int xx=x0>>2;xx<=x1>>2;++xx)l.block[n++]=uint32_t(yy*map.changedStride+xx);
   }
+}
+// ours: a cell no actor's texel reached is passed over whole (actorNear
+// would be false for every point in it), and in the others each point's
+// look is read: each frame this asked every building corner and ground
+// point under an actor's cell, through the function, of the map
+void ActorCells::mark(const SunDepth &map,const std::function<Point(size_t)> &at,std::vector<uint8_t> &near)const {
+  static const bool slow=std::getenv("ZT_LIGHTING_SLOW_PATHS")!=nullptr; // (DayNightLighting::clearBound: as it was)
+  if(slow){for(int c=0;c<4096;++c){if(start[c]==start[c+1] || !std::isfinite(map.actorTop[c]))continue;
+    for(uint32_t k=start[c];k<start[c+1];++k){const uint32_t i=order[k];if(!near[i] && map.actorNear(at(i)))near[i]=1;}}return;}
+  for(int c=0;c<4096;++c) {
+    if(start[c]==start[c+1] || !std::isfinite(map.actorTop[c]) || !map.cellChanged(c))continue;
+    const float top=map.actorTop[c]+.001f;
+    for(uint32_t k=start[c];k<start[c+1];++k) {
+      const uint32_t i=order[k];if(near[i])continue;const Look &l=look[k];
+      if(map.heightCull && l.z>=top)continue;
+      if(!map.fineActors){near[i]=1;continue;}
+      for(const uint32_t b:l.block)if(b!=UINT32_MAX && map.actorChanged[b]){near[i]=1;break;}
+    }
+  }
+}
+bool SunDepth::cellChanged(int c)const {
+  static const bool slow=std::getenv("ZT_LIGHTING_SLOW_PATHS")!=nullptr; // (DayNightLighting::clearBound)
+  if(!fineActors || slow)return true;
+  // (the texels actorNear reads for a point in the cell: its pixel and the
+  // next, from half a texel before the cell to half after - a texel more
+  // each side, for rounding)
+  const float per=float(size)/64;const int cx=c%64,cy=c/64;
+  const int x0=std::max(0,int(std::floor(cx*per))-2),x1=std::min(size-1,int(std::ceil((cx+1)*per))+2);
+  const int y0=std::max(0,int(std::floor(cy*per))-2),y1=std::min(size-1,int(std::ceil((cy+1)*per))+2);
+  for(int yy=y0>>2;yy<=y1>>2;++yy)for(int xx=x0>>2;xx<=x1>>2;++xx)if(actorChanged[yy*changedStride+xx])return true;
+  return false;
 }
 bool SunDepth::actorNear(Point p)const {
   const float u=p.x+dx*p.z-x0,v=p.y+dy*p.z-y0;

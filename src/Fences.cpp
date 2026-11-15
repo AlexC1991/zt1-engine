@@ -153,6 +153,13 @@ void Fences::loadTypes(ResourceManager *rm) {
     this->selectArrow = rm->getAnimation("ui/select/selsmall/selsmall");
   if (!this->typeList.empty())
     return;
+  // How long a point of wear takes (zoo.exe loadDecaySettings 0x465e1a:
+  // fences/fence.ai [Decay], milliseconds)
+  if (IniReader *decay = rm->getIniReader("fences/fence.ai")) {
+    this->minDecayTime = decay->getInt("decay", "mindecaytime", 0) / 1000.0f;
+    this->maxDecayTime = decay->getInt("decay", "maxdecaytime", 0) / 1000.0f;
+    delete decay;
+  }
   std::map<std::string, Animation *> loaded;
   auto anim = [&](const std::string &path) -> Animation * {
     if (path.empty())
@@ -730,6 +737,7 @@ void Fences::place(const Edge &e, int type, int drag, const WorldMap &map) {
       return;
     have->second.type = type;
     have->second.life = static_cast<float>(this->typeList[type].life);
+    have->second.period = 0; // (a new piece: its own decay time, 0x5b391c)
     have->second.order = this->placed++;
     have->second.drag = drag;
     have->second.open = 0;
@@ -1451,16 +1459,25 @@ int Fences::fillCost(int id, bool salt) const {
 
 void Fences::update(float seconds) {
   this->rippleClock += seconds * 1000.0f;
-  // Wear: a point every cDecayDelta game days (12 s a day)
+  // Wear (zoo.exe ZTFence::update 0x434b1d): a piece loses a point of its
+  // cLife each time its own decay time runs out - a time drawn once for the
+  // piece when it's made (0x5b391c), anywhere from minDecayTime to
+  // maxDecayTime (fences/fence.ai [Decay]: 8 to 20 minutes). Each point lost
+  // is cDecayDelta off its strength (passable)
   for (auto &kv : this->edges) {
     Piece &p = kv.second;
     const FenceType &t = this->typeList[p.type];
     // (one that never wears is whole - also one an earlier build wore down)
     if (p.life < 0 || t.indestructible)
       p.life = static_cast<float>(t.life);
-    if (t.indestructible || p.tank >= 0 || t.decayDelta <= 0)
+    // (ours: with no [Decay] times read, nothing wears)
+    if (t.indestructible || p.tank >= 0 || t.decayDelta <= 0 || this->maxDecayTime <= 0)
       continue;
-    p.life = std::max(0.0f, p.life - seconds / (12.0f * t.decayDelta));
+    if (p.period <= 0)
+      p.period = this->minDecayTime +
+                 std::uniform_real_distribution<float>(0.0f, 1.0f)(this->wearRng) *
+                     (this->maxDecayTime - this->minDecayTime);
+    p.life = std::max(0.0f, p.life - seconds / std::max(1.0f, p.period));
   }
   for (Exhibit &ex : this->exhibitList) {
     if (!ex.tank)
@@ -2176,6 +2193,27 @@ static bool hasLights(const std::string &key) {
 void Fences::collect(const WorldRenderer &view, const WorldMap &map,
                      std::vector<Drawable> &out) const {
   this->lit.clear();
+  // Each tank's ground in front that stands higher than the ground at its
+  // walls' feet (a rock column, a step up out of the pit): the top of each
+  // such tile on the screen, its four corners in turn. Its front glass, posts
+  // and diver platform are cut along those tops as along the ground line -
+  // measured: the original draws such a column over the tank's front corner
+  // post, rail and glass (ExavatorZoo, Lab Play original)
+  using GroundTop = std::array<SDL_FPoint, 4>;
+  std::map<int, const std::vector<GroundTop> *> frontTops;
+  // (the highest of those tops over screen column x: 1e9 where there's none)
+  auto topOver = [](const std::vector<GroundTop> *tops, float x) {
+    float best = 1e9f;
+    if (tops)
+      for (const GroundTop &q : *tops)
+        for (int k = 0; k < 4; k++) {
+          const SDL_FPoint &a = q[k], &b = q[(k + 1) % 4];
+          if (x < std::min(a.x, b.x) || x > std::max(a.x, b.x))
+            continue;
+          best = std::min(best, std::fabs(b.x - a.x) < 0.01f ? std::min(a.y, b.y) : a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x));
+        }
+    return best;
+  };
   auto add = [&](const Edge &e, const Piece &p, int type, bool tinted, SDL_Color tint) {
     const bool placed = !tinted;
     const FenceType &t = this->typeList[type];
@@ -2230,6 +2268,24 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
         // by the ground made thousands of them, a big raised tank slowing the
         // game to 20 frames a second; one wholly over the line is drawn
         // whole, one wholly under it not at all)
+        // (and, on a front wall, along the tops of the higher ground in front
+        // of the tank, frontTops)
+        const auto tankTops = frontTops.find(ex->id);
+        const std::vector<GroundTop> *tops = ts.front && tankTops != frontTops.end() ? tankTops->second : nullptr;
+        auto cutY = [&](float x) { return std::min(groundY(x), topOver(tops, x)); };
+        // (whether a piece's art reaches over one of those tops' columns)
+        auto underTop = [&](const Drawable &d) {
+          float L, T, R, B;
+          if (!tops || tops->empty() || !d.art || !d.art->anchoredBounds(d.sx, d.sy, d.side, L, T, R, B))
+            return false;
+          for (const GroundTop &q : *tops) {
+            const float l = std::min({q[0].x, q[1].x, q[2].x, q[3].x}), r = std::max({q[0].x, q[1].x, q[2].x, q[3].x});
+            const float t = std::min({q[0].y, q[1].y, q[2].y, q[3].y});
+            if (r > L && l < R && t < B)
+              return true;
+          }
+          return false;
+        };
         auto pushCut = [&](const Drawable &d) {
           float L, T, R, B;
           if (!d.art || !d.art->anchoredBounds(d.sx, d.sy, d.side, L, T, R, B)) {
@@ -2238,9 +2294,17 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           }
           float lo = 1e9f, hi = -1e9f;
           for (float x : {L, R, std::clamp(g0x, L, R), std::clamp(g1x, L, R)}) {
-            lo = std::min(lo, groundY(x));
-            hi = std::max(hi, groundY(x));
+            lo = std::min(lo, cutY(x));
+            hi = std::max(hi, cutY(x));
           }
+          // (the ground tops' corners within it too: the cut bends there)
+          if (tops)
+            for (const GroundTop &q : *tops)
+              for (const SDL_FPoint &c : q)
+                if (c.x > L && c.x < R) {
+                  lo = std::min(lo, cutY(c.x));
+                  hi = std::max(hi, cutY(c.x));
+                }
           if (B <= lo) {
             out.push_back(d);
             return;
@@ -2253,7 +2317,10 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
             strip.clip = true;
             strip.clipX0 = x;
             strip.clipX1 = x + step;
-            strip.clipY1 = groundY(x + step * 0.5f);
+            // (under a ground top, the highest of it across the strip: at its
+            // middle alone, a post by a rock column's edge showed past it)
+            strip.clipY1 = std::min({groundY(x + step * 0.5f), topOver(tops, x), topOver(tops, x + step * 0.5f),
+                                     topOver(tops, x + step)});
             if (strip.clipY1 > T)
               out.push_back(strip);
           }
@@ -2302,7 +2369,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
                         lit ? yellow : tint, tinted || lit};
           // (on a front wall down by the ground: the ground in front hides
           // it, only what's over the ground shows - the handles' tips)
-          if (ts.front && top < ts.outside + 1.0f)
+          if (ts.front && (top < ts.outside + 1.0f || underTop(plat)))
             pushCut(plat);
           else
             out.push_back(plat);
@@ -2340,7 +2407,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           // outside, or its pieces down to the floor hung under the tank as a
           // red column; a back wall is seen down to the floor, through the
           // water - cut there, a sunken glass tank's showed its top rail only)
-          if (tp.height >= ts.outside + 0.01f || (tinted && !ts.front)) {
+          if ((tp.height >= ts.outside + 0.01f && !underTop(d)) || (tinted && !ts.front)) {
             out.push_back(d);
             continue;
           }
@@ -2483,6 +2550,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     std::vector<std::pair<uint32_t, unsigned>> ripples;
     std::shared_ptr<std::shared_ptr<GpuTankLayer>> gpu;
     bool onGpu = false;
+    std::vector<GroundTop> tops; // (frontTops: the higher ground's in front of it)
   };
   using KeptMap = std::map<int, Kept>;
   if (!this->keptTanks)
@@ -2597,6 +2665,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       if (k.onGpu)
         *k.gpu = std::make_shared<GpuTankLayer>();
       out.insert(out.end(), k.parts.begin(), k.parts.end());
+      frontTops[ex.id] = &k.tops;
       continue;
     }
     kept.erase(ex.id);
@@ -2835,6 +2904,208 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           }
     }
 
+    // (and higher ground further off: a tile standing above the ground the
+    // tank was sunk from reaches up the screen over it from further away -
+    // measured: the raised rim of a pit two or three tiles in front hid the
+    // tank's corner in the original (Excavation map, Lab Play original), where
+    // ours drew the water and glass over it)
+    {
+      int x0 = INT_MAX, y0 = INT_MAX, x1 = INT_MIN, y1 = INT_MIN;
+      for (auto [x, y] : ex.tiles)
+        x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x), y1 = std::max(y1, y);
+      constexpr int kFarthest = 16; // ours: how far off to look
+      auto highest = [&map](int x, int y) {
+        const MapTile *t = map.getTile(x, y);
+        return t ? std::max({t->cornerHeight[0], t->cornerHeight[1], t->cornerHeight[2], t->cornerHeight[3]}) : INT_MIN;
+      };
+      int hiAround = ex.groundHeight;
+      for (int y = y0 - kFarthest; y <= y1 + kFarthest; y++)
+        for (int x = x0 - kFarthest; x <= x1 + kFarthest; x++)
+          hiAround = std::max(hiAround, highest(x, y));
+      const int farReach = std::min(kFarthest, hiAround - ex.floorHeight + 1);
+      std::vector<std::pair<float, float>> at; // (each tank tile's screen column and depth)
+      std::vector<SDL_FPoint> floorAt;         // (and its floor's corners: the tank drawn down to them)
+      for (auto [x, y] : ex.tiles) {
+        float sx, sy, d;
+        view.worldToScreenF(x + 0.5f, y + 0.5f, 0, sx, sy, d);
+        at.push_back({sx, d});
+        for (int k = 0; k < 4; k++) {
+          SDL_FPoint p;
+          view.worldToScreenF(float(x + (k == 1 || k == 2)), float(y + (k >= 2)), float(ex.floorHeight), p.x, p.y, d);
+          floorAt.push_back(p);
+        }
+      }
+      // (a raised tile reaches its own half a tile to each side over the tank's
+      // columns, as well as the posts' reach past them: the near ground's
+      // column test missed one by a tank's side, its post cap over it)
+      const float column = view.getTileWidth() * 1.25f + 1.0f;
+      for (int y = y0 - farReach; y <= y1 + farReach; y++)
+        for (int x = x0 - farReach; x <= x1 + farReach; x++) {
+          const int hi = highest(x, y);
+          const int off = std::max({x0 - x, x - x1, y0 - y, y - y1});
+          if (hi <= ex.groundHeight || off > hi - ex.floorHeight + 1 || ex.tiles.count({x, y}) || cover.count({x, y}))
+            continue;
+          float sx, sy, d;
+          view.worldToScreenF(x + 0.5f, y + 0.5f, 0, sx, sy, d);
+          bool nearer = false;
+          for (const auto &[tx, td] : at)
+            if (std::fabs(tx - sx) <= column && d > td) {
+              nearer = true;
+              break;
+            }
+          if (!nearer)
+            continue;
+          // (and only one whose top stands up over the tank's lowest point in
+          // its columns: ground further off doesn't reach it on the screen)
+          float top = 1e9f, l = 1e9f, r = -1e9f;
+          if (const MapTile *t = map.getTile(x, y))
+            for (int k = 0; k < 4; k++) {
+              float px, py, pd;
+              view.worldToScreenF(float(x + (k == 1 || k == 2)), float(y + (k >= 2)), float(t->cornerHeight[k]), px, py, pd);
+              top = std::min(top, py), l = std::min(l, px), r = std::max(r, px);
+            }
+          const float reachX = view.getTileWidth() * 0.5f;
+          float bottom = -1e9f;
+          for (const SDL_FPoint &p : floorAt)
+            if (p.x >= l - reachX && p.x <= r + reachX)
+              bottom = std::max(bottom, p.y);
+          if (top >= bottom)
+            continue;
+          const Exhibit *neighbour = this->exhibit(this->exhibitAt(x, y));
+          if (neighbour && neighbour->tank)
+            continue;
+          cover.insert({x, y});
+        }
+      // (that ground is drawn again over the tank, after the rest of the
+      // ground: so is whatever ground stands in front of it and reaches over
+      // it on the screen, or a redrawn rim's cliff faces showed over the ground
+      // in front of them - the order the ground was drawn in, kept. Only by
+      // higher ground: on level ground nothing in front reaches over)
+      if (hiAround > ex.groundHeight) {
+        static const int ox[4] = {0, 1, 1, 0}, oy[4] = {0, 0, 1, 1}; // (WorldMap's TileCorner order)
+        static const int nx[4] = {0, 1, 0, -1}, ny[4] = {-1, 0, 1, 0}; // (the tile beyond each edge, corner k to k + 1)
+        struct Shot {
+          float sx = 0, d = 0, l = 0, r = 0;
+          SDL_FPoint top[4];
+          std::vector<std::pair<SDL_FPoint, SDL_FPoint>> low; // (its front edges, down its cliff faces)
+          bool made = false;
+        };
+        std::map<std::pair<int, int>, Shot> shots;
+        auto depthAt = [&](int x, int y, float &sx) {
+          float sy, d;
+          view.worldToScreenF(x + 0.5f, y + 0.5f, 0, sx, sy, d);
+          return d;
+        };
+        auto shot = [&](int x, int y) -> const Shot & {
+          Shot &s = shots[{x, y}];
+          if (s.made)
+            return s;
+          s.made = true;
+          s.d = depthAt(x, y, s.sx);
+          const MapTile *t = map.getTile(x, y);
+          int h[4] = {0, 0, 0, 0};
+          for (int k = 0; k < 4; k++) {
+            h[k] = t ? t->cornerHeight[k] : 0;
+            float d;
+            view.worldToScreenF(float(x + ox[k]), float(y + oy[k]), float(h[k]), s.top[k].x, s.top[k].y, d);
+          }
+          s.l = std::min({s.top[0].x, s.top[1].x, s.top[2].x, s.top[3].x});
+          s.r = std::max({s.top[0].x, s.top[1].x, s.top[2].x, s.top[3].x});
+          for (int k = 0; k < 4; k++) {
+            const int qx = x + nx[k], qy = y + ny[k];
+            float qsx;
+            if (depthAt(qx, qy, qsx) <= s.d)
+              continue; // (a back edge)
+            const MapTile *n = map.getTile(qx, qy);
+            SDL_FPoint e[2];
+            for (int j = 0; j < 2; j++) {
+              const int c = (k + j) % 4, vx = x + ox[c], vy = y + oy[c];
+              int down = h[c];
+              if (n) // (down to the tile in front's corner there: the cliff face)
+                for (int m = 0; m < 4; m++)
+                  if (qx + ox[m] == vx && qy + oy[m] == vy)
+                    down = std::min(down, n->cornerHeight[m]);
+              float d;
+              view.worldToScreenF(float(vx), float(vy), float(down), e[j].x, e[j].y, d);
+            }
+            s.low.push_back({e[0], e[1]});
+          }
+          return s;
+        };
+        auto lowerAt = [](const Shot &s, float px) {
+          float y = -1e9f;
+          for (const auto &[a, b] : s.low)
+            if (px >= std::min(a.x, b.x) && px <= std::max(a.x, b.x))
+              y = std::max(y, std::fabs(b.x - a.x) < 0.01f ? std::max(a.y, b.y) : a.y + (b.y - a.y) * (px - a.x) / (b.x - a.x));
+          return y;
+        };
+        auto upperAt = [](const Shot &s, float px) {
+          float y = 1e9f;
+          for (int k = 0; k < 4; k++) {
+            const SDL_FPoint &a = s.top[k], &b = s.top[(k + 1) % 4];
+            if (px >= std::min(a.x, b.x) && px <= std::max(a.x, b.x))
+              y = std::min(y, std::fabs(b.x - a.x) < 0.01f ? std::min(a.y, b.y) : a.y + (b.y - a.y) * (px - a.x) / (b.x - a.x));
+          }
+          return y;
+        };
+        // (the tiles round the tank by their screen columns, half a tile wide)
+        const float half = view.getTileWidth() * 0.5f;
+        std::map<int, std::vector<std::pair<int, int>>> columns;
+        for (int y = y0 - farReach; y <= y1 + farReach; y++)
+          for (int x = x0 - farReach; x <= x1 + farReach; x++)
+            if (map.getTile(x, y) && !ex.tiles.count({x, y})) {
+              float sx;
+              depthAt(x, y, sx);
+              columns[static_cast<int>(std::floor(sx / half))].push_back({x, y});
+            }
+        std::vector<std::pair<int, int>> todo(cover.begin(), cover.end());
+        while (!todo.empty()) {
+          const auto [tx, ty] = todo.back();
+          todo.pop_back();
+          const Shot &behind = shot(tx, ty);
+          for (int c = static_cast<int>(std::floor(behind.l / half)) - 2; c <= static_cast<int>(std::floor(behind.r / half)) + 2; c++) {
+            auto found = columns.find(c);
+            if (found == columns.end())
+              continue;
+            for (auto [fx, fy] : found->second) {
+              if (cover.count({fx, fy}))
+                continue;
+              const Shot &front = shot(fx, fy);
+              const float l = std::max(behind.l, front.l) + 0.5f, r = std::min(behind.r, front.r) - 0.5f;
+              if (front.d <= behind.d || l >= r)
+                continue;
+              bool over = false;
+              for (int k = 0; k <= 4 && !over; k++) {
+                const float px = l + (r - l) * k / 4.0f;
+                over = upperAt(front, px) < lowerAt(behind, px) - 0.5f;
+              }
+              if (!over)
+                continue;
+              const Exhibit *neighbour = this->exhibit(this->exhibitAt(fx, fy));
+              if (neighbour && neighbour->tank)
+                continue;
+              cover.insert({fx, fy});
+              todo.push_back({fx, fy});
+            }
+          }
+        }
+      }
+    }
+    // (of that ground, the tiles standing higher than the ground the tank was
+    // sunk from: their tops, frontTops)
+    std::vector<GroundTop> tops;
+    for (auto [cx, cy] : cover) {
+      const MapTile *t = map.getTile(cx, cy);
+      if (!t || std::max({t->cornerHeight[0], t->cornerHeight[1], t->cornerHeight[2], t->cornerHeight[3]}) <= ex.groundHeight)
+        continue;
+      static const float ox[4] = {0, 1, 1, 0}, oy[4] = {0, 0, 1, 1}; // (WorldMap's TileCorner order)
+      GroundTop q;
+      for (int k = 0; k < 4; k++) {
+        float d;
+        view.worldToScreenF(cx + ox[k], cy + oy[k], static_cast<float>(t->cornerHeight[k]), q[k].x, q[k].y, d);
+      }
+      tops.push_back(q);
+    }
     Drawable inside{backDepth - 0.01f, 0, 0, nullptr, CompassDirection::N, SDL_Color{255, 255, 255, 255}, false};
     std::stable_sort(frontLow.begin(), frontLow.end(),
                      [](const Sprite &p, const Sprite &q) { return p.depth < q.depth; });
@@ -2871,19 +3142,36 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       // (a tile wide: narrower, every sprite drawn in more of them - a
       // frame took twice as long with four big tanks)
       const float step = view.getTileWidth();
-      for (float x = minX; x < maxX - 0.5f; x += step) {
-        float mid = std::min(x + step * 0.5f, maxX), depth = 1e30f;
+      // measured: the original draws a building standing behind a tank's
+      // back wall (a DRT base along it) behind the glass and water all the
+      // way along. A strip sorts at its back wall's deepest point (one of
+      // its ends: the wall runs deeper toward the side corners), not its
+      // middle: a building's narrower strips behind the wall's deeper half
+      // came after the tank's and were drawn over its glass and water. The
+      // front walls stand at least that deep in the same columns, so what's
+      // in front of the tank still draws over it.
+      auto backAt = [&](float at) {
+        float depth = 1e30f;
         for (const Rim &m : rims) {
           if (m.front)
             continue;
           float ax, ay, da, bx, by, db;
           view.worldToScreenF(m.ax, m.ay, 0, ax, ay, da);
           view.worldToScreenF(m.bx, m.by, 0, bx, by, db);
-          if (mid < std::min(ax, bx) - 0.5f || mid > std::max(ax, bx) + 0.5f || std::fabs(bx - ax) < 0.01f)
+          if (at < std::min(ax, bx) - 0.5f || at > std::max(ax, bx) + 0.5f || std::fabs(bx - ax) < 0.01f)
             continue;
-          depth = std::min(depth, da + (db - da) * (mid - ax) / (bx - ax));
+          depth = std::min(depth, da + (db - da) * (at - ax) / (bx - ax));
         }
-        if (depth > 1e29f)
+        return depth;
+      };
+      for (float x = minX; x < maxX - 0.5f; x += step) {
+        float depth = -1e30f;
+        for (float at : {x, std::min(x + step * 0.5f, maxX), std::min(x + step, maxX)}) {
+          const float d = backAt(at);
+          if (d < 1e29f)
+            depth = std::max(depth, d);
+        }
+        if (depth < -1e29f)
           depth = backDepth;
         strips.push_back({x, std::min(x + step, maxX), depth - 0.01f});
       }
@@ -3004,6 +3292,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     makeWaves(*shared);
     const float halfTile = view.getTileWidth() * 0.5f;
     const size_t firstPart = out.size();
+    const auto rimTops = std::make_shared<const std::vector<GroundTop>>(tops); // (the strips' rim lines cut at them)
     for (const Strip &st : strips) {
       const int si = static_cast<int>(&st - strips.data());
       Picks picks{within(backSpan, st), within(waterSpan, st), within(frontSpan, st), within(rimSpan, st)};
@@ -3020,7 +3309,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       part.clipX1 = st.x1;
       part.clipY1 = st.y1;
       auto held = std::make_shared<const StripParts>(StripParts{std::move(picks), std::move(cover1)});
-      part.custom = [this, shared, held, si, wet, level, vp, paintInterior, gpu, whole](SDL_Renderer *r) {
+      part.custom = [this, shared, held, si, wet, level, vp, paintInterior, gpu, whole, rimTops, topOver](SDL_Renderer *r) {
       const Picks &picks = held->picks;
       const std::vector<std::pair<int, int>> &cover = held->cover;
       // The tank's walls and water are pieces laid edge to edge (a height
@@ -3045,12 +3334,26 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
         float x0, y0, x1, y1, d;
         vp->worldToScreenF(m.ax, m.ay, static_cast<float>(m.outside), x0, y0, d);
         vp->worldToScreenF(m.bx, m.by, static_cast<float>(m.outside), x1, y1, d);
-        SDL_RenderLine(r, x0, y0, x1, y1);
+        if (rimTops->empty()) {
+          SDL_RenderLine(r, x0, y0, x1, y1);
+          continue;
+        }
+        // (where higher ground in front stands over it, not: frontTops - the
+        // line is the glass's foot, hidden with it)
+        const int pieces = std::max(1, static_cast<int>(std::fabs(x1 - x0) / 2.0f));
+        for (int k = 0; k < pieces; k++) {
+          const float a = static_cast<float>(k) / pieces, b = static_cast<float>(k + 1) / pieces;
+          const float mx = x0 + (x1 - x0) * (a + b) * 0.5f, my = y0 + (y1 - y0) * (a + b) * 0.5f;
+          if (my <= topOver(rimTops.get(), mx))
+            SDL_RenderLine(r, x0 + (x1 - x0) * a, y0 + (y1 - y0) * a, x0 + (x1 - x0) * b, y0 + (y1 - y0) * b);
+        }
       }
       };
       out.push_back(std::move(part));
     }
     Kept &k = kept[ex.id];
+    k.tops = std::move(tops);
+    frontTops[ex.id] = &k.tops;
     k.key = std::move(key);
     k.parts.assign(out.begin() + static_cast<std::ptrdiff_t>(firstPart), out.end());
     k.shared = shared;

@@ -2506,8 +2506,9 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
       }
       int show=-1,home=-1;o.portal=world.fences.showPortal(edge,show,home);
       if(z.version>=55) {
-        // The original's decay timer is in milliseconds (0x434b1d).
-        const uint32_t period=uint32_t(std::max(1,type.decayDelta))*12000;
+        // The original's decay timer is in milliseconds (0x434b1d): the
+        // piece's own decay time (0x5b391c), then what's left of it.
+        const uint32_t period=uint32_t(std::max(1.0f,world.fences.wearPeriod(p)*1000.0f));
         const double fraction=life>0?double(life)-(std::ceil(life)-1):1;
         Out condition;condition.raw(o.strength);condition.raw(o.life);
         condition.raw(period);condition.raw(uint32_t(std::max(1.0,period*fraction)));

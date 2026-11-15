@@ -327,6 +327,8 @@ public:
     // The mouse at the window's edge scrolls the map (off for the
     // screenshot tests, where the mouse is wherever it happens to be)
     bool edgeScroll = true;
+    // ours: the keyboard pan's part of a pixel carried to the next frame
+    float keyScrollX = 0, keyScrollY = 0;
     // A step, 30 a second: zoo.ini [UI] mouseScrollX (32 unless the Game
     // Options' scroll speed set it - zoo.exe 0x51a33c, 0x606800)
     static inline float kEdgeScrollPixels = 32.0f;

@@ -9,7 +9,21 @@
 #include <cstdlib>
 #include <cstring>
 using LightingAssets::Point;
-void DayNightLighting::addActor(Animation *art,int frame,Point position,float fx,float fy,float halfX,float halfY,uint64_t id) {
+// ours: the side an animal, guest or keeper is drawn from - one of eight, as
+// Animals/Guests/Staff::facing pick it. screenSide gives four: one facing east
+// was masked, lit and shadowed through its south-east art, so the lighting
+// showed past its outline (a dark band beside a giraffe's neck)
+static CompassDirection drawnFacing(const WorldRenderer &view,float x,float y,float fx,float fy) {
+  float x0,y0,x1,y1,d;view.worldToScreenF(x,y,0,x0,y0,d);view.worldToScreenF(x+fx,y+fy,0,x1,y1,d);
+  int octant=int(std::lround(std::atan2(x1-x0,-(y1-y0))/(3.14159265f/4.0f)));octant=(octant%8+8)%8;
+  static const CompassDirection dirs[8]={CompassDirection::N,CompassDirection::NE,CompassDirection::E,CompassDirection::SE,
+    CompassDirection::S,CompassDirection::SW,CompassDirection::W,CompassDirection::NW};
+  return dirs[octant];
+}
+CompassDirection DayNightLighting::artSide(const Instance &o,const WorldRenderer &view)const {
+  return o.side>=0?CompassDirection(o.side):view.screenSide(o.sine,-o.cosine);
+}
+void DayNightLighting::addActor(Animation *art,int frame,Point position,float fx,float fy,float halfX,float halfY,uint64_t id,CompassDirection side) {
   if(!art || actors.size()>=maxActors)return;
   auto key=art->lightingKey();if(key.empty())return;
   const int count=std::max(1,art->frameCount()),raw=std::max(0,frame)%count;
@@ -62,10 +76,10 @@ void DayNightLighting::addActor(Animation *art,int frame,Point position,float fx
   // The native renderer has eight facings. Match its snapped orientation;
   // continuous steering must not slide the shadow away from the shown pose.
   const float angle=std::round(std::atan2(fx,-fy)/(.7853981634f))*.7853981634f;
-  actors.push_back({&found->second.model,nullptr,position,std::cos(angle),std::sin(angle),0,id,art,frame});
+  actors.push_back({&found->second.model,nullptr,position,std::cos(angle),std::sin(angle),0,id,art,frame});actors.back().side=int(side);
 }
 void DayNightLighting::collectActors(World &world) {
-  actors.clear();actorFaces.clear();++actorTick;
+  actors.clear();actorFaces.clear();++actorTick;swimmers.clear();
   // (the poses made on a worker since the last frame, kept as made at once)
   for(auto i=pendingActorModels.begin();i!=pendingActorModels.end();) {
     if(i->second.result.wait_for(std::chrono::seconds(0))!=std::future_status::ready){++i;continue;}
@@ -73,13 +87,14 @@ void DayNightLighting::collectActors(World &world) {
     actorModels.emplace(i->first,ActorModel{std::move(model),actorTick});i=pendingActorModels.erase(i);
   }
   if(sky.sun<=.001f && sky.lamps<=.001f)return;
-  struct Pose {Animation *art;int frame;Point p;float fx,fy,hx,hy,distance;uint64_t id;};std::vector<Pose> poses;
+  struct Pose {Animation *art;int frame;Point p;float fx,fy,hx,hy,distance;uint64_t id;CompassDirection side;};std::vector<Pose> poses;
   auto &map=world.getMap();auto &view=world.getRenderer();
-  auto add=[&](Animation *a,int frame,Point p,float fx,float fy,float hx,float hy,uint64_t id) {
+  // (side: as it's drawn - an animal, guest or keeper one of eight, the rest screenSide's four)
+  auto add=[&](Animation *a,int frame,Point p,float fx,float fy,float hx,float hy,uint64_t id,CompassDirection side) {
     float x,y,d;view.worldToScreenF(p.x,p.y,p.z,x,y,d);
     if(x< -250 || x>logicalW+250 || y< -250 || y>logicalH+350)return;
-    if(a){float l,t,r,b;const auto side=view.screenSide(fx,fy);if(a->anchoredBounds(x,y,side,l,t,r,b))covers.push_back({id,a,side,x,y,d,l,t,r,b,frame});}
-    poses.push_back({a,frame,p,fx,fy,hx,hy,(x-logicalW*.5f)*(x-logicalW*.5f)+(y-logicalH*.5f)*(y-logicalH*.5f),id});
+    if(a){float l,t,r,b;if(a->anchoredBounds(x,y,side,l,t,r,b))covers.push_back({id,a,side,x,y,d,l,t,r,b,frame});}
+    poses.push_back({a,frame,p,fx,fy,hx,hy,(x-logicalW*.5f)*(x-logicalW*.5f)+(y-logicalH*.5f)*(y-logicalH*.5f),id,side});
   };
   auto &animals=world.getAnimals();
   for(const auto &m:animals.members()) {
@@ -92,7 +107,9 @@ void DayNightLighting::collectActors(World &world) {
     else if(m.mode==Animals::Member::Mode::PingPong){f%=2*count;f=f<count?f:2*count-1-f;}
     else f%=count;
     const bool tank=animals.tankAt && animals.tankAt(m.x,m.y)>=0;
+    if(tank){const uint64_t id=(uint64_t(1)<<54)|(uint64_t(uint32_t(m.id))<<3);swimmers.insert(id);swimmers.insert(id|4);}
     const auto &t=animals.types()[m.type];
+    CompassDirection side=drawnFacing(view,m.x,m.y,m.fx,m.fy);if(!a->hasFrames(side))side=CompassDirection::N; // (as Animals::collect draws it)
     const Point p{m.x,m.y,LightingAssets::terrainHeight(map,m.x,m.y)+(tank?m.swimZ:0)};
     if(!m.boxed && !m.egg)if(const int material=LightingAssets::fluorescenceProfile(t.file)) {
       float x,y,d;view.worldToScreenF(p.x,p.y,p.z,x,y,d);
@@ -101,8 +118,8 @@ void DayNightLighting::collectActors(World &world) {
       if(auto *under=animals.underArt(m,a))addFluorescence(under,x,y,excitation,material);
     }
     if(!m.boxed)actorEmission(a,f,p,m.fx,m.fy,((uint64_t(1)<<54)|(uint64_t(uint32_t(m.id))<<3)),LightingAssets::actorEffect(t.file,m.anim,f));
-    add(a,f,p,m.boxed?0:m.fx,m.boxed?-1:m.fy,std::max(.25f,t.footX/4.0f),std::max(.25f,t.footY/4.0f),((uint64_t(1)<<54)|(uint64_t(uint32_t(m.id))<<3)));
-    if(tank && !m.boxed)if(auto *under=animals.underArt(m,a))add(under,f,p,m.fx,m.fy,std::max(.25f,t.footX/4.0f),std::max(.25f,t.footY/4.0f),((uint64_t(1)<<54)|(uint64_t(uint32_t(m.id))<<3)|4));
+    add(a,f,p,m.boxed?0:m.fx,m.boxed?-1:m.fy,std::max(.25f,t.footX/4.0f),std::max(.25f,t.footY/4.0f),((uint64_t(1)<<54)|(uint64_t(uint32_t(m.id))<<3)),side);
+    if(tank && !m.boxed)if(auto *under=animals.underArt(m,a))add(under,f,p,m.fx,m.fy,std::max(.25f,t.footX/4.0f),std::max(.25f,t.footY/4.0f),((uint64_t(1)<<54)|(uint64_t(uint32_t(m.id))<<3)|4),under->hasFrames(side)?side:CompassDirection::N);
   }
   // addition: native food-stage, dung and litter silhouettes at their real floor.
   for(const auto &i:world.getItems().items())if(auto *a=world.getItems().artOf(i)) {
@@ -111,14 +128,14 @@ void DayNightLighting::collectActors(World &world) {
     // ZooItems always requests SE artwork; recover the equivalent world facing.
     const bool south=a->lightingFrame(CompassDirection::SE,frame).surface!=nullptr;
     const float angle=(view.getRotation()-(south?2:3))*1.5707963268f;
-    add(a,frame,{i.x,i.y,z},std::sin(angle),-std::cos(angle),.35f,.35f,(uint64_t(1)<<53)|size_t(uint32_t(i.id)));
+    add(a,frame,{i.x,i.y,z},std::sin(angle),-std::cos(angle),.35f,.35f,(uint64_t(1)<<53)|size_t(uint32_t(i.id)),view.screenSide(std::sin(angle),-std::cos(angle)));
   }
   auto &ambient=world.getAmbient();
   for(const auto &f:ambient.flyers) {
     const auto &k=ambient.kinds[f.kind];auto *a=k.idle;if(!a)continue;
     const int frame=int(f.age*1000/std::max(1u,a->frameTimeMs()));
     if(k.key=="santa")if(const auto *asset=LightingAssets::find("santa"))actorEmission(a,frame,{f.x,f.y,ambient.groundAt(map,f.x,f.y)+6.0f},f.vx,f.vy,(uint64_t(1)<<55)+size_t(&f-ambient.flyers.data()),asset->id);
-    add(a,frame,{f.x,f.y,ambient.groundAt(map,f.x,f.y)+6.0f},f.vx,f.vy,.6f,.6f,(uint64_t(1)<<55)+size_t(&f-ambient.flyers.data()));
+    add(a,frame,{f.x,f.y,ambient.groundAt(map,f.x,f.y)+6.0f},f.vx,f.vy,.6f,.6f,(uint64_t(1)<<55)+size_t(&f-ambient.flyers.data()),view.screenSide(f.vx,f.vy));
   }
   for(size_t i=0;i<world.objectsMutable().objects().size();++i){const auto &o=world.objectsMutable().objects()[i];const int material=LightingAssets::fluorescenceProfile(PlacedObjects::fileOf(o));if(!material)continue;
     const float ground=LightingAssets::terrainHeight(map,o.x,o.y),z=world.objectsMutable().tankHeight?world.objectsMutable().tankHeight(o,ground):ground;
@@ -144,13 +161,13 @@ void DayNightLighting::collectActors(World &world) {
         const float phase=float(std::fmod(m.baseAnimTime,1.2));const float pulse=phase<.18f?std::sin(phase/.18f*3.1415926536f):0;
         actorEmission(a,frame,p,fx,fy,owner,LightingAssets::aircraftProfile(m.anim,1),pulse);
       }
-      if(a)add(a,frame,p,fx,fy,1,1,owner);
+      if(a)add(a,frame,p,fx,fy,1,1,owner,parked?view.screenSide(fx,fy):drawnFacing(view,m.x,m.y,m.fx,m.fy)); // (as Staff::collect)
       continue;
     }
     auto *a=staff.art(m,m.anim);if(!a)continue;
     int f=int(m.animTime*1000/(a->frameTimeMs()?a->frameTimeMs():100u));
     if(m.climbing){f=std::min(f,std::max(0,a->frameCount()-1));if(m.climbDown)f=std::max(0,a->frameCount()-1-f);}
-    add(a,f,{m.x,m.y,staff.heightOf(m,map)},m.fx,m.fy,.35f,.35f,((uint64_t(1)<<54)|(uint64_t(uint32_t(m.id))<<3)|1));
+    add(a,f,{m.x,m.y,staff.heightOf(m,map)},m.fx,m.fy,.35f,.35f,((uint64_t(1)<<54)|(uint64_t(uint32_t(m.id))<<3)|1),drawnFacing(view,m.x,m.y,m.fx,m.fy));
   }
   auto &guests=world.getGuests();
   for(const auto &g:guests.guests()) {
@@ -158,14 +175,14 @@ void DayNightLighting::collectActors(World &world) {
     const int frame=int(g.animTime*1000/std::max(1u,a->frameTimeMs()))%std::max(1,a->frameCount());
     const Point p{g.x,g.y,LightingAssets::terrainHeight(map,g.x,g.y)+g.showZ};
     actorEmission(a,frame,p,g.fx,g.fy,((uint64_t(1)<<54)|(uint64_t(uint32_t(g.id))<<3)|2),LightingAssets::actorEffect("guests/"+guests.types()[g.type].key,g.anim,frame));
-    add(a,frame,p,g.fx,g.fy,.35f,.35f,((uint64_t(1)<<54)|(uint64_t(uint32_t(g.id))<<3)|2));
+    add(a,frame,p,g.fx,g.fy,.35f,.35f,((uint64_t(1)<<54)|(uint64_t(uint32_t(g.id))<<3)|2),drawnFacing(view,g.x,g.y,g.fx,g.fy));
   }
   std::stable_sort(poses.begin(),poses.end(),[](const auto &a,const auto &b){return a.distance<b.distance;});
   // (the graphics quality's animals and guests: off, none of their light or
   // shadows; simple, their shadows only - not lit in 3D, below)
   const int creatureLight=GraphicsQuality::creatureLight();
   if(creatureLight==0)poses.clear();
-  for(const auto &p:poses)addActor(p.art,p.frame,p.p,p.fx,p.fy,p.hx,p.hy,p.id);
+  for(const auto &p:poses)addActor(p.art,p.frame,p.p,p.fx,p.fy,p.hx,p.hy,p.id,p.side);
   collectGates(world);
   // Only evict entries which no actor in this frame borrows.
   while(actorModels.size()>maxActorModels) {
@@ -185,14 +202,36 @@ void DayNightLighting::collectActors(World &world) {
     budget-=int(o.model->faces.size());
     jobs.push_back({i,total});total+=o.model->faces.size();
   }
-  actorFaces.assign(total,ProjectedFace{});
-  parallelFor(jobs.size(),[&](size_t begin,size_t end){for(size_t j=begin;j<end;++j) {
-    const size_t i=jobs[j].actor;const auto &o=actors[i];size_t at=jobs[j].first;
-    const auto local=irradiance({o.position.x,o.position.y,o.position.z+1},{0,0,1},uint64_t(-1));
-    for(const auto &f:o.model->faces) {
-      ProjectedFace &d=actorFaces[at++];d.instance=instances.size()+i;d.local=local;
+  actorFaces.assign(total,ProjectedFace{});prepareRayMax(map,view);
+  // (ours: the lamps' light on each only while they're lit - by day it's
+  // multiplied by nought wherever it's used, and each lamp's ray was cast)
+  static const bool slow=std::getenv("ZT_LIGHTING_SLOW_PATHS")!=nullptr; // (DayNightLighting::clearBound)
+  std::vector<std::array<float,3>> locals(jobs.size());
+  if(sky.lamps>0 || slow)parallelFor(jobs.size(),[&](size_t begin,size_t end){for(size_t j=begin;j<end;++j){const auto &o=actors[jobs[j].actor];
+    locals[j]=irradiance({o.position.x,o.position.y,o.position.z+1},{0,0,1},uint64_t(-1));}},8);
+  // (ours: shared out by faces, not by actors - a dinosaur's thousands of
+  // faces kept one core busy while the others, and the frame, waited; each
+  // part starts at its first face's actor, partway through its faces)
+  auto run=[&](size_t begin,size_t end){
+    size_t j=size_t(std::upper_bound(jobs.begin(),jobs.end(),begin,[](size_t at,const Job &job){return at<job.first;})-jobs.begin())-1;
+    for(size_t at=begin;at<end;++j) {
+    const size_t i=jobs[j].actor;const auto &o=actors[i];const auto &local=locals[j];
+    const auto &faces=o.model->faces;const size_t stop=std::min(end,jobs[j].first+faces.size());
+    for(;at<stop;++at) {
+      const auto &f=faces[at-jobs[j].first];
+      ProjectedFace &d=actorFaces[at];d.instance=instances.size()+i;d.local=local;
       auto rotate=[&](Point p){return Point{p.x*o.cosine-p.y*o.sine,p.x*o.sine+p.y*o.cosine,p.z};};d.normal=rotate(f.normal);d.outward=rotate(f.outward);
-      for(int k=0;k<4;++k){auto p=toWorld(o,f.p[k]);float sx,sy,depth;view.worldToScreenF(p.x,p.y,p.z,sx,sy,depth);d.p[k]={sx-ox,sy-oy};d.world[k]=p;d.terrain[k]=terrainClearance(p,view);d.height[k]=f.p[k].z;d.depth+=.25f*(depth+p.z*.5f);}
+      // (ours: a face whose corners are all surely in view - clearBound - is
+      // never cut by the ground, so its clearances aren't asked of the map;
+      // they're only read when a corner is hidden, and then all four are)
+      // (addition: an animal swimming in a tank is lit as one surface, facing
+      // up to the water's - the light through the water reaches all of it
+      // alike. Lit face by face, as on land, its hull's belly and sides showed
+      // through the water as dark and light squares on a shark)
+      if(swimmers.count(o.owner))d.normal={0,0,1};
+      Point corner[4];bool seen=true;float bound[4];
+      for(int k=0;k<4;++k){corner[k]=toWorld(o,f.p[k]);bound[k]=clearBound(corner[k]);seen=seen && bound[k]>.005f;}
+      for(int k=0;k<4;++k){const Point p=corner[k];float sx,sy,depth;view.worldToScreenF(p.x,p.y,p.z,sx,sy,depth);d.p[k]={sx-ox,sy-oy};d.world[k]=p;d.terrain[k]=seen?bound[k]:terrainClearance(p,view);d.height[k]=f.p[k].z;d.depth+=.25f*(depth+p.z*.5f);}
       float l=d.p[0].x,t=d.p[0].y,r=l,b=t;
       for(auto p:d.p){l=std::min(l,p.x);r=std::max(r,p.x);t=std::min(t,p.y);b=std::max(b,p.y);}
       d.bounds={l,t,r-l,b-t};
@@ -200,7 +239,9 @@ void DayNightLighting::collectActors(World &world) {
       // (a gate, as a fence, is not shaded itself, but lit at night - LightingStructures)
       d.visible=(o.shaded || (o.nightReceiver && sky.shadow<.02f)) && d.outward.x*gx[view.getRotation()]+d.outward.y*gy[view.getRotation()]+d.outward.z*2>0;
     }
-  }},8);
+  }};
+  if(!slow)parallelFor(total,run,256);
+  else parallelFor(jobs.size(),[&](size_t begin,size_t end){for(size_t j=begin;j<end;++j)run(jobs[j].first,jobs[j].first+actors[jobs[j].actor].model->faces.size());},8); // (as it was: by actors)
   // ours: sorted by index, then moved into that order once (the same order:
   // a stable sort of the faces moved each large face about many times)
   // (each face's depth and place side by side, sorted by both: the order a

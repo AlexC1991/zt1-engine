@@ -6,6 +6,7 @@
 #include "Research.hpp"
 #include "RenderSettings.hpp"
 #include "DisplaySettings.hpp"
+#include "GpuFsr.hpp"
 #include <SDL3_image/SDL_image.h>
 #include <SDL3/SDL_opengl.h>
 #include <algorithm>
@@ -78,8 +79,133 @@ bool GameBenchmark::start(World &world,ResourceManager *rm,SDL_Renderer *rendere
   if(SDL_GL_GetCurrentContext() && getString)status<<"GPU="<<reinterpret_cast<const char*>(getString(GL_RENDERER))<<"\n";
   status.flush();epoch=SDL_GetPerformanceCounter();return true;
 }
+// ours: the saved-zoo timing (ZT_GAME_BENCH_ZOO). Each phase: its name, how
+// long, the hour it shows (-1: night/day as the phase before), whether the
+// view pans and whether it's measured
+namespace {
+struct ZooPhase {const char *name;double seconds,hour;bool pan,measured;};
+const ZooPhase kZooPhases[]={
+  {"warmup-day",12,12,false,false},{"day-still",15,12,false,true},{"day-pan",15,12,true,true},
+  {"warmup-night",6,0,false,false},{"night-still",15,0,false,true},{"night-pan",15,0,true,true},
+  {"shots",0,12,false,false}};
+constexpr int kZooPhaseCount=int(sizeof kZooPhases/sizeof kZooPhases[0]);
+// (the shots, the world paused: panned kShotWarm frames, then kShotCount
+// more each captured as it moves; then each of those places held still for
+// kShotHold frames and captured again; then the last with the lighting off.
+// At noon, then at midnight)
+constexpr int kShotWarm=40,kShotCount=8,kShotHold=4,kShotPan=kShotWarm+kShotCount,
+              kShotOff=kShotPan+kShotCount*kShotHold,kShotEnd=kShotOff+3;
+}
+bool GameBenchmark::startZoo(World &world,SDL_Renderer *renderer) {
+  const char *folder=std::getenv("ZT_GAME_BENCH_OUT");if(!folder || !*folder)return false;
+  out=folder;std::filesystem::create_directories(out);zoo=true;
+  name=std::getenv("ZT_GAME_BENCH_NAME")?std::getenv("ZT_GAME_BENCH_NAME"):"zoo";
+  frames.open(out+"/frames.csv");status.open(out+"/status.txt");checks.open(out+"/checks.txt");
+  frames<<"phase,elapsed_seconds,frame_ms,hour,camera_x,camera_y\n"<<std::fixed<<std::setprecision(4);
+  Features::dayNightLighting=true;world.edgeScroll=false;world.setPaused(false);
+  const int fpsLimit=std::getenv("ZT_GAME_BENCH_FPS")?std::max(0,std::atoi(std::getenv("ZT_GAME_BENCH_FPS"))):0;
+  Display::setFrameLimit(fpsLimit);Display::setVsync(false);
+  int w=0,h=0;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);
+  ZT_RendererInfo info{};ZT_GetRendererInfo(renderer,&info);
+  status<<"name="<<name<<"\nzoo="<<std::getenv("ZT_GAME_BENCH_ZOO")<<"\nrenderer="<<(info.name?info.name:"")<<"\noutput="<<w<<"x"<<h
+        <<"\nzoom="<<world.getCamera().zoom<<"\nfps_limit="<<fpsLimit<<"\nanimals="<<world.getAnimals().members().size()
+        <<"\nguests="<<world.getGuests().guests().size()<<"\nobjects="<<world.objectsMutable().objects().size()<<"\n";
+  status.flush();zooPhase=0;zooFrame=0;zooPhaseStart=lastPresent=epoch=SDL_GetPerformanceCounter();
+  SDL_Log("[GameBench] zoo %s: %dx%d on %s",name.c_str(),w,h,info.name?info.name:"?");
+  return true;
+}
+void GameBenchmark::zooFrameStep(World &world) {
+  const ZooPhase &p=kZooPhases[zooPhase];const double t=seconds(zooPhaseStart);
+  auto &light=world.getLighting();auto &cam=world.getCamera();
+  if(p.name==std::string("shots")) {
+    // (noon for the first kShotEnd frames, then midnight)
+    // (ZT_GAME_BENCH_SHOT_HOUR: the day shots' hour, noon unless set)
+    const double dayHour=std::getenv("ZT_GAME_BENCH_SHOT_HOUR")?std::atof(std::getenv("ZT_GAME_BENCH_SHOT_HOUR")):12;
+    const int k=zooFrame%kShotEnd;light.previewHour=zooFrame<kShotEnd?dayHour:0;
+    // (ZT_GAME_BENCH_SHOT_RUNNING: the world and the sun going on meanwhile)
+    static const bool running=std::getenv("ZT_GAME_BENCH_SHOT_RUNNING")!=nullptr;
+    if(running)light.previewHour+=t/30.0;
+    // (ZT_GAME_BENCH_SHOT_OFF: every shot with the lighting off, to compare with)
+    world.setPaused(!running);Features::dayNightLighting=k<kShotOff && !std::getenv("ZT_GAME_BENCH_SHOT_OFF");
+    if(k==0)shotPos.clear();
+    // (ZT_GAME_BENCH_KEYS: panned by the right arrow key held down - the
+    // player's own way, World::handleCameraInput - not moved here)
+    static const bool keys=std::getenv("ZT_GAME_BENCH_KEYS")!=nullptr;
+    if(keys)const_cast<bool*>(SDL_GetKeyboardState(nullptr))[SDL_SCANCODE_RIGHT]=k<kShotPan;
+    if(k<kShotPan){
+      // (ZT_GAME_BENCH_SHOT_STEP: camera pixels a frame, 10 at zoom 1 unless set)
+      const int step=std::getenv("ZT_GAME_BENCH_SHOT_STEP")?std::atoi(std::getenv("ZT_GAME_BENCH_SHOT_STEP")):std::max(1,int(std::lround(10/cam.zoom)));
+      // (ZT_GAME_BENCH_SHOT_STEPY: down the screen a frame, half the step unless set)
+      const int stepY=std::getenv("ZT_GAME_BENCH_SHOT_STEPY")?std::atoi(std::getenv("ZT_GAME_BENCH_SHOT_STEPY")):step/2;
+      if(!keys){cam.x+=step;cam.y+=stepY;}
+    } else if(k<kShotOff && (k-kShotPan)%kShotHold==0) {
+      const auto &at=shotPos[size_t((k-kShotPan)/kShotHold)];cam.x=at.first;cam.y=at.second;
+    }
+    return;
+  }
+  // (the sun goes on as in play: an hour each 30 seconds, DayNightLighting::hourAt)
+  light.previewHour=std::fmod(p.hour+t/30.0,24.0);
+  // (shots only: the zoo held as saved, so two runs' pictures can be compared)
+  if(std::getenv("ZT_GAME_BENCH_SHOTS_ONLY")){world.setPaused(true);light.previewHour=p.hour;}
+  // (ZT_GAME_BENCH_KEYS: the pans by the arrow keys held down, as a player
+  // pans - World::handleCameraInput - right then left, turning every 2.5 s)
+  if(std::getenv("ZT_GAME_BENCH_KEYS")) {
+    bool *keys=const_cast<bool*>(SDL_GetKeyboardState(nullptr));
+    const bool right=int(t/2.5)%2==0;keys[SDL_SCANCODE_RIGHT]=p.pan && right;keys[SDL_SCANCODE_LEFT]=p.pan && !right;
+  } else if(p.pan) {
+    // (a player's pan: 600 screen pixels a second - between the arrow keys'
+    // 300 and the edge scroll's 960 - turning back every 2.5 seconds, in
+    // whole pixels as World::handleCameraInput moves it)
+    if(int(t/2.5)%2!=(panDir>0?0:1))panDir=-panDir;
+    static Uint64 last=0;const Uint64 now=SDL_GetPerformanceCounter();
+    const float dt=last?float(double(now-last)/SDL_GetPerformanceFrequency()):0;last=now;
+    panCarry+=600.0f*std::min(dt,.1f)/cam.zoom;const int step=int(panCarry);panCarry-=step;
+    cam.x+=panDir*step;cam.y+=panDir*step/2;
+  }
+}
+void GameBenchmark::zooPresent(World &world,SDL_Renderer *renderer) {
+  // (where the view was as each captured pan frame was drawn)
+  if(kZooPhases[zooPhase].name==std::string("shots")){const int k=zooFrame%kShotEnd;if(k>=kShotWarm && k<kShotPan)shotPos.push_back({world.getCamera().x,world.getCamera().y});}
+  // (ZT_GAME_BENCH_PAN_SHOTS: three frames in a row captured mid-pan, the
+  // world running, as a player sees them)
+  if(kZooPhases[zooPhase].pan && std::getenv("ZT_GAME_BENCH_PAN_SHOTS") && zooFrame>=200 && zooFrame<203)
+    shot(renderer,(std::string(kZooPhases[zooPhase].name)+"-live"+std::to_string(zooFrame-200)).c_str());
+  if(kZooPhases[zooPhase].name!=std::string("shots"))return;
+  const int k=zooFrame%kShotEnd;const char *when=zooFrame<kShotEnd?"day":"night";
+  if(k>=kShotWarm && k<kShotPan)shot(renderer,(std::string(when)+"-pan"+std::to_string(k-kShotWarm)).c_str());
+  else if(k>=kShotPan && k<kShotOff && (k-kShotPan)%kShotHold==kShotHold-1)shot(renderer,(std::string(when)+"-held"+std::to_string((k-kShotPan)/kShotHold)).c_str());
+  else if(k==kShotEnd-1)shot(renderer,(std::string(when)+"-off").c_str());
+}
+bool GameBenchmark::zooAfter(World &world) {
+  const ZooPhase &p=kZooPhases[zooPhase];
+  const Uint64 now=SDL_GetPerformanceCounter();const double ms=1000.*(now-lastPresent)/SDL_GetPerformanceFrequency();lastPresent=now;
+  ++zooFrame;
+  if(p.measured){
+    phaseMs.push_back(ms);
+    frames<<p.name<<','<<seconds(zooPhaseStart)<<','<<ms<<','<<world.getLighting().previewHour<<','<<world.getCamera().x<<','<<world.getCamera().y<<'\n';
+  }
+  const bool done=p.name==std::string("shots")?zooFrame>=2*kShotEnd:seconds(zooPhaseStart)>=p.seconds;
+  if(!done)return false;
+  if(p.measured && !phaseMs.empty()) {
+    std::vector<double> v=phaseMs;std::sort(v.begin(),v.end());double total=0;for(double x:v)total+=x;
+    const double median=v[v.size()/2],p95=v[std::min(v.size()-1,v.size()*95/100)],p99=v[std::min(v.size()-1,v.size()*99/100)];
+    char row[256];std::snprintf(row,sizeof row,"%-12s frames %5zu  fps %6.1f  median %6.2f ms  mean %6.2f  p95 %6.2f  p99 %6.2f  max %6.1f  >33ms %zu\n",
+      p.name,v.size(),1000.0*v.size()/total,median,total/v.size(),p95,p99,v.back(),size_t(std::count_if(v.begin(),v.end(),[](double x){return x>33.333;})));
+    status<<row;status.flush();SDL_Log("[GameBench] %s",row);
+  }
+  phaseMs.clear();zooFrame=0;
+  // (ZT_GAME_BENCH_SHOTS_ONLY: the warm-up, then straight to the shots)
+  static const bool shotsOnly=std::getenv("ZT_GAME_BENCH_SHOTS_ONLY")!=nullptr;
+  ++zooPhase;while(shotsOnly && zooPhase<kZooPhaseCount-1)++zooPhase;
+  if(zooPhase>=kZooPhaseCount){status<<"complete=1\n";status.flush();frames.flush();return true;}
+  zooPhaseStart=SDL_GetPerformanceCounter();
+  if(kZooPhases[zooPhase].measured && std::getenv("ZT_GAME_BENCH_PROFILE"))FrameProfile::start();
+  SDL_Log("[GameBench] phase %s",kZooPhases[zooPhase].name);
+  return false;
+}
 void GameBenchmark::beforeFrame(World &world) {
   if(!enabled())return;
+  if(zoo){zooFrameStep(world);return;}
   simulationMs=0;
   if(phase==0) {
     const double t=seconds(epoch);const int r=int(t/5)%4;
@@ -100,21 +226,28 @@ void GameBenchmark::beforeFrame(World &world) {
     world.centreOn(part<30?36:float(36+8*std::sin(theta)),part<30?32:float(32+6*std::cos(theta)));
   }
 }
-void GameBenchmark::beforeSimulation(){if(enabled())simulationStart=SDL_GetPerformanceCounter();}
+void GameBenchmark::beforeSimulation(){if(zoo)return;if(enabled())simulationStart=SDL_GetPerformanceCounter();}
 void GameBenchmark::afterSimulation(){if(enabled())simulationMs=1000*seconds(simulationStart);}
 void GameBenchmark::shot(SDL_Renderer *renderer,const char *name) {
+  // (ZT_GAME_BENCH_SHOT_FINISHED: the picture as the screen gets it - the
+  // brightness and colour filter pass, which the present step runs, done
+  // first; the frame shown then has it twice, the picture once)
+  static const bool finished=std::getenv("ZT_GAME_BENCH_SHOT_FINISHED")!=nullptr;
+  if(finished)GpuFsr::finishFrame(renderer);
   int w=0,h=0;SDL_GetCurrentRenderOutputSize(renderer,&w,&h);
   SDL_Surface *image=SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);
   if(image){if(ZT_RenderReadPixels(renderer,nullptr,SDL_PIXELFORMAT_RGBA32,image->pixels,image->pitch)==0)IMG_SavePNG(image,(out+"/"+name+".png").c_str());SDL_DestroySurface(image);}
 }
-void GameBenchmark::beforePresent(World &,SDL_Renderer *renderer) {
+void GameBenchmark::beforePresent(World &world,SDL_Renderer *renderer) {
   if(!enabled())return;
+  if(zoo){zooPresent(world,renderer);return;}
   if(phase==2){shot(renderer,"daylight-before");Features::dayNightLighting=true;phase=3;sample=0;}
   else if(phase==3 && ++sample==4){shot(renderer,"night-before-switch-off");Features::dayNightLighting=false;phase=4;sample=0;}
   else if(phase==4 && ++sample==4){shot(renderer,"daylight-after-switch-off");checks<<"PASS night-to-off capture sequence complete\n";checks.flush();phase=5;}
 }
 bool GameBenchmark::afterPresent(World &world,double pending,double discarded) {
   if(!enabled())return false;
+  if(zoo)return zooAfter(world);
   if(phase==5){status<<"complete=1\n";status.flush();return true;}
   if(phase!=1)return false;
   const Uint64 now=SDL_GetPerformanceCounter();

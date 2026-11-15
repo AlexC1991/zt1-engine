@@ -286,7 +286,26 @@ int runLightingProjectionChecks(World &world,ResourceManager *rm,SDL_Renderer *r
   check("terrain hides buried wall receivers but keeps exposed inner wall receivers in four views",cameraHides);
   check("buried tank posts do not change visible grass pixels in four views",soilCases>=4 && soilHidden);
   check("native receiver mask storage remains within four atlas pages",!light.maskPages.empty() && light.maskPages.size()<=4);
-  light.previewHour=12;capture("projection_day");Features::dayNightLighting=false;capture("projection_original");Features::dayNightLighting=true;light.previewHour=0;
+  light.previewHour=12;capture("projection_day");
+  // (the day's ground shadow stops where nearer ground hides the ground: a
+  // pit's floor and walls behind its rim drew dark boxes over the rim)
+  float hiddenMost=0;int pitQuads=0;
+  for(const auto &f:light.receivers){for(int k=0;k<4;++k)hiddenMost=std::min(hiddenMost,light.terrainClearance(f.p[k],world.getRenderer()));pitQuads+=f.p[0].z<0;}
+  log<<"day receivers="<<light.receivers.size()<<" in the pit="<<pitQuads<<" most hidden corner="<<hiddenMost<<"\n";
+  check("day ground shadow stops where nearer ground hides it, and the pit's seen floor keeps its own",!light.receivers.empty() && hiddenMost>-.1f && pitQuads>0);
+  // (ours: clearBound - the shortcut taken for animals' and guests' faces and
+  // the ground's cut - never calls a hidden point seen, and never claims more
+  // clearance than terrainClearance finds: across the map, at the ground and
+  // above it, the pit and the tank included, in four views)
+  {bool sound=true;int sure=0,asked=0;auto &view=world.getRenderer();const auto &map=world.getMap();
+    for(int r=0;r<4;++r){light.prepareRayMax(map,view);
+      for(float y=.3f;y<map.getHeight();y+=1.7f)for(float x=.6f;x<map.getWidth();x+=1.3f)for(float lift:{0.0f,.3f,1.0f,2.5f}){
+        const Point p{x,y,LightingAssets::terrainHeight(map,x,y)+lift};const float b=light.clearBound(p);++asked;
+        if(b>.005f){++sure;const float exact=light.terrainClearance(p,view);sound=sound && exact>0 && b<=exact+1e-4f;}}
+      world.rotateView(1);}
+    log<<"clearance shortcut: "<<sure<<" of "<<asked<<" points taken as seen\n";
+    check("the ground's clearance shortcut never shows a hidden point, in four views",sound && sure>0 && sure<asked);}
+  Features::dayNightLighting=false;capture("projection_original");Features::dayNightLighting=true;light.previewHour=0;
   log<<"Failures: "<<failed<<'\n';std::ofstream(out+"/projection-checks.txt")<<log.str();SDL_Log("[ProjectionChecks] %s",log.str().c_str());
   // addition: timed presentation of this native projector/tank fixture. Separate
   // from offline recording; no screenshot readback inside the measured loop.

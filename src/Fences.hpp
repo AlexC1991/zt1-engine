@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <random>
 #include <set>
 #include <string>
 #include <vector>
@@ -119,8 +120,14 @@ public:
     int tank = -1;   // the tank exhibit it walls, raised (-1: none)
     int tank2 = -1;  // a second tank, on its other side (a wall two share)
     float life = -1; // its wear left (cLife when new; -1: not set yet)
+    // Its own decay time (zoo.exe 0x5b391c, ZTFence+0x168): the seconds a
+    // point of its wear takes (0: not drawn yet)
+    float period = 0;
     float open = 0;  // a gate: how far open (its art's frames, 0 shut)
   };
+  // What the original saves for a piece's decay time, in seconds: its own,
+  // or one not drawn yet the least there is
+  float wearPeriod(const Piece &p) const { return p.period > 0 ? p.period : this->minDecayTime; }
   struct Exhibit {
     int id = 0;
     std::string name;
@@ -512,6 +519,11 @@ public:
   int highlightFilter = -1;
   // Game time (ms) for the water's ripples along the walls
   float rippleClock = 0;
+  // How long a point of a fence's wear takes (zoo.exe loadDecaySettings
+  // 0x465e1a: fences/fence.ai [Decay] minDecayTime and maxDecayTime,
+  // milliseconds there; seconds here)
+  float minDecayTime = 0, maxDecayTime = 0;
+  std::mt19937 wearRng{2001};
   // What's in a tank (its objects, its animals), drawn with its inside:
   // those under the water before it (surface false), on it after
   std::function<void(SDL_Renderer *, int tank, bool surface, float level)> drawTankContents;

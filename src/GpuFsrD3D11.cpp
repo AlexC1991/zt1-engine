@@ -241,6 +241,28 @@ float4 main(float4 pos : SV_Position) : SV_Target {
 }
 )";
 
+// addition (Features::hdrOutput): the finished frame - ordinary sRGB, drawn
+// as ever - onto an HDR10 swap chain, as games present HDR: the sRGB curve
+// undone, white set to the paper white (p0.x nits: Windows' SDR content
+// brightness), BT.709's primaries to BT.2020's, and the PQ curve (SMPTE
+// ST 2084, 10000 nits at 1)
+const char *kHdr10 = R"(
+float3 toLinear(float3 c) { return lerp(c / 12.92, pow((c + 0.055) / 1.055, 2.4), step(0.04045, c)); }
+float3 pq(float3 l) {
+  const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+  float3 p = pow(saturate(l), m1);
+  return pow((c1 + c2 * p) / (1.0 + c3 * p), m2);
+}
+float4 main(float4 pos : SV_Position) : SV_Target {
+  float3 c = toLinear(saturate(src.SampleLevel(samp, pos.xy / uSize, 0).rgb));
+  const float3x3 to2020 = float3x3(0.627404, 0.329283, 0.043313,
+                                   0.069097, 0.919540, 0.011362,
+                                   0.016391, 0.088013, 0.895595);
+  return float4(pq(mul(to2020, c) * (p0.x / 10000.0)), 1.0);
+}
+)";
+ID3D11PixelShader *g_hdr10 = nullptr;
+
 ID3DBlob *compileBlob(const std::string &body, const char *target, std::string &log) {
   log.clear();
   if (!g_compile)
@@ -583,6 +605,42 @@ bool screenPass(SDL_Renderer *renderer, unsigned prog, const std::vector<std::pa
   return true;
 }
 
+bool hdr10Pass(SDL_Renderer *renderer, SDL_Texture *frame, float paperWhiteNits) {
+  if (!g_dev && !init(renderer))
+    return false;
+  if (!g_hdr10)
+    g_hdr10 = pixelShader(kHdr10, "HDR10");
+  if (!g_hdr10 || !g_vs || !g_cb || !g_point || !frame)
+    return false;
+  auto *tex = static_cast<ID3D11Texture2D *>(
+      SDL_GetPointerProperty(SDL_GetTextureProperties(frame), SDL_PROP_TEXTURE_D3D11_TEXTURE_POINTER, nullptr));
+  ID3D11ShaderResourceView *srv = nullptr;
+  if (!tex || FAILED(g_dev->CreateShaderResourceView(tex, nullptr, &srv)))
+    return false;
+  SDL_SetRenderTarget(renderer, nullptr);
+  ID3D11RenderTargetView *window = boundTarget(renderer); // (SDL's queue sent: the frame is finished)
+  ID3D11Texture2D *back = textureOf(window);
+  if (!back) {
+    release(window);
+    srv->Release();
+    return false;
+  }
+  D3D11_TEXTURE2D_DESC d{};
+  back->GetDesc(&d);
+  back->Release();
+  Consts c{};
+  c.uSize[0] = float(d.Width);
+  c.uSize[1] = float(d.Height);
+  c.p[0] = paperWhiteNits;
+  Saved s;
+  s.save();
+  draw(window, viewport(0, 0, float(d.Width), float(d.Height)), g_hdr10, srv, g_point, false, c);
+  s.restore();
+  window->Release();
+  srv->Release();
+  return true;
+}
+
 void colourPass(SDL_Renderer *renderer, const float matrix[3][3], float gamma) {
   if (!g_dev || !g_colour)
     return;
@@ -688,6 +746,7 @@ unsigned compile(const std::string &, const std::vector<std::string> &, std::str
 }
 bool screenPass(SDL_Renderer *, unsigned, const std::vector<std::pair<std::string, float>> &, bool) { return false; }
 void colourPass(SDL_Renderer *, const float[3][3], float) {}
+bool hdr10Pass(SDL_Renderer *, SDL_Texture *, float) { return false; }
 void endLayer(SDL_Renderer *, int, SDL_Texture *, int, int, float, float, bool, const SDL_Rect *, bool, float, float) {}
 } // namespace D3D11
 } // namespace GpuFsr

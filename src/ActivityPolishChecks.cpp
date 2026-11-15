@@ -1058,6 +1058,258 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
   for(const auto &[days,text]:std::vector<std::pair<double,int>>{{0,3420},{59.9,3420},{60,3421},{239.9,3421},{240,3422},{359.9,3422},{360,3423}}) {
     g.clock=days*ZooSim::kSecondsPerDay;check("original time-in-park boundary "+std::to_string(days),g.timeInParkText(arrived)==text);
   }
+  // The dinosaurs only an electric fence holds (zoo.exe 0x414a73: their
+  // cCrushesFences takes any fence no higher, unless its current is live -
+  // T. rex, Allosaurus, Spinosaurus) stay in and come up to a normal
+  // happiness (0x438c47) in a good electrified paddock - its terrain, the
+  // foliage, rocks and objects they like, a shelter, a scientist with their
+  // food - when its fence has stood 45 minutes unmended. A point of a
+  // fence's wear takes each piece its own 8 to 20 minutes (0x434b1d,
+  // 0x5b391c: fences/fence.ai [Decay]), so the current's still live then; it
+  // took every piece the same few minutes before, the current gone in 40
+  {
+    a.clear();world.reindex();
+    const int electric=f.typeIndex("dzchn");
+    const int dex=rectangle(44,6,18,18,electric,"Dinosaur paddock");
+    check("dinosaur paddock built",dex>=0);
+    const Fences::Exhibit *dx=dex>=0?f.exhibit(dex):nullptr;
+    // Its wear: no piece a whole point down before minDecayTime, each one
+    // down by maxDecayTime, and not all at once
+    if(dx) {
+      std::vector<Fences::Edge> ring;
+      for(const auto &[e,p]:f.pieces())if(f.exhibitOf(e)==dex && !p.gate)ring.push_back(e);
+      const float whole=static_cast<float>(f.types()[electric].life);
+      auto worn=[&]{int n=0;for(const auto &e:ring)n+=f.lifeOf(e)<=whole-1;return n;};
+      for(int s=0;s<static_cast<int>(f.minDecayTime)-1;++s)f.update(1.0f);
+      const int early=worn();
+      int some=0;
+      for(int s=static_cast<int>(f.minDecayTime)-1;s<static_cast<int>(f.maxDecayTime)+1;++s) {
+        f.update(1.0f);
+        const int n=worn();some+=n>0 && n<static_cast<int>(ring.size());
+      }
+      check("a fence's wear: a point takes each piece its own time, from minDecayTime to maxDecayTime ("+
+            std::to_string(static_cast<int>(f.minDecayTime))+" to "+std::to_string(static_cast<int>(f.maxDecayTime))+" s)",
+            f.minDecayTime>0 && f.maxDecayTime>f.minDecayTime && !ring.empty() && early==0 && some>0 &&
+            worn()==static_cast<int>(ring.size()));
+    }
+    // (a path round it, its gate on the west side, and a scientist for it)
+    for(int k=5;k<=24;++k)for(auto [x,y]:{std::pair{43,k},std::pair{62,k},std::pair{38+k,5},std::pair{38+k,24}})
+      if(f.exhibitAt(x,y)<0 && world.canLayPath(x,y))map.setPath(x,y,"path");
+    if(dx)f.moveGate({false,44,14});
+    world.reindex();
+    int scientist=-1;
+    std::vector<std::string> pieces;
+    for(const char *c:{"foliage","rocks","scenery","shelters","toys"})
+      for(const CatalogItem *it:ItemCatalog::get().inCategory(c,false))pieces.push_back(it->file);
+    for(size_t ti=0;dx && ti<a.typeList.size();++ti) {
+      const Animals::Type &t=a.typeList[ti];
+      if(!t.dinosaur || t.swims || t.crush<f.types()[electric].height)continue;
+      const int kind=static_cast<int>(ti);
+      // (a scientist of its own, starting at the gate)
+      st.clear();world.reindex();
+      scientist=st.hire(st.typeOfFile("staff/scient.ai"),43.5f,14.5f,map,f);
+      if(scientist>=0)st.assign(scientist,dex,f);
+      std::vector<std::pair<int,int>> tiles(dx->tiles.begin(),dx->tiles.end());
+      const int N=static_cast<int>(tiles.size());
+      // (its fence as new, then 45 minutes of wear with nobody mending it)
+      std::vector<Fences::Edge> edges;
+      for(const auto &[e,p]:f.pieces())if(f.exhibitOf(e)==dex)edges.push_back(e);
+      for(const auto &e:edges)f.repair(e);
+      for(int s=0;s<45*60;++s)f.update(1.0f);
+      int live=0,ring=0;
+      for(const auto &e:edges)if(const auto *p=f.at(e);p && !p->gate){++ring;live+=f.liveElectric(e);}
+      check(t.key+": the paddock's current is still live after 45 minutes' wear ("+std::to_string(live)+" of "+
+            std::to_string(ring)+" pieces)",ring>0 && live==ring);
+      // Its terrain, in the shares it likes (the rest the one it likes best)
+      int best=0;
+      for(int k=0;k<18;++k)if(t.compatTerrain[k]>t.compatTerrain[best])best=k;
+      size_t at=0;
+      std::vector<int> terrainOf(tiles.size(),best);
+      for(int k=0;k<18;++k)if(t.compatTerrain[k]>0 && k!=best)
+        for(int n=0;n<(t.compatTerrain[k]*N+99)/100 && at<tiles.size();++n)terrainOf[at++]=k;
+      for(size_t i=0;i<tiles.size();++i)map.getTileMutable(tiles[i].first,tiles[i].second)->terrainType=terrainOf[i];
+      map.touch();
+      // Free land tiles, spread about
+      std::vector<std::pair<int,int>> spots;
+      // (and the ground by the gate left clear, for the scientist and the food)
+      for(size_t i=0;i<tiles.size();++i)if(terrainOf[i]!=9 && terrainOf[i]!=10 &&
+          (std::abs(tiles[i].first-44)>2 || std::abs(tiles[i].second-14)>2))spots.push_back(tiles[i]);
+      std::stable_sort(spots.begin(),spots.end(),[](auto p,auto q){return (p.first*7+p.second*3)%11<(q.first*7+q.second*3)%11;});
+      size_t spot=0;
+      // Its animals, as many as it wants of its kind: bought, so eggs
+      const int n=std::max(1,t.numberMin);
+      std::vector<int> herd;
+      for(int i=0;i<n && spot<spots.size();++i,++spot)
+        if(int id=a.adopt(kind,i%2==1,spots[spot].first+0.5f,spots[spot].second+0.5f,map,f);id>=0)herd.push_back(id);
+      world.reindex();
+      const size_t base=objects.objects().size();
+      auto value=[&](const std::string &file){
+        const Animals::ObjectInfo &o=a.infoOf(file);
+        auto v=[&](int key){auto it=t.suitable.find(key);return it==t.suitable.end()?0:it->second;};
+        return v(o.habitat)+v(o.nameId);
+      };
+      auto score=[&]{a.markDirty(dex);const Animals::Rating *r=herd.empty()?nullptr:a.rating(*a.member(herd[0]),map,f);return r?r->score:0.0f;};
+      auto place=[&](const std::string &file){
+        const Animals::ObjectInfo &o=a.infoOf(file);
+        while(spot<spots.size()) {
+          auto [x,y]=spots[spot++];
+          if(objects.add(file,x+o.fx/4.0f,y+o.fy/4.0f,0))return true;
+        }
+        return false;
+      };
+      // The best liked of each sort: a tree or bush, a rock, anything else
+      // small, and a shelter it can use
+      std::string tree,rock,other,shelter;
+      for(const std::string &file:pieces) {
+        const Animals::ObjectInfo &o=a.infoOf(file);
+        const int v=value(file);
+        if(o.building) {
+          if(o.shelter && o.capacity>=n && v>=0 && (shelter.empty() || v>value(shelter)))shelter=file;
+          continue;
+        }
+        if(v<=0 || o.fx>2 || o.fy>2 || o.stink)continue;
+        std::string &slot=o.foliage?tree:o.rock?rock:other;
+        if(slot.empty() || v>value(slot))slot=file;
+      }
+      if(t.needShelter && !shelter.empty())place(shelter);
+      // Then as a player would: whatever helps most, one at a time
+      float now=score();
+      for(int added=0;added<200;++added) {
+        std::string pick;float gain=0;
+        for(const std::string *c:{&tree,&rock,&other}) {
+          if(c->empty())continue;
+          const size_t s=spot;
+          if(!place(*c))continue;
+          const float sc=score();
+          objects.remove(static_cast<int>(objects.objects().size())-1);spot=s;
+          if(sc>now+gain){gain=sc-now;pick=*c;}
+        }
+        if(pick.empty())break;
+        place(pick);now=score();
+      }
+      // Then 20 minutes, the scientist feeding them: hatched, zapped by the
+      // fence till they've learnt it (0x438ebc), and happy after
+      world.reindex();
+      float peak=-100;
+      const bool paused=world.isPaused();world.setPaused(false);
+      for(int k=0;k<24000;++k) {
+        world.update(SDL_GetKeyboardState(nullptr),0.05f);
+        if(k<12000 || k%20)continue;
+        float least=herd.empty()?-100.0f:100.0f;
+        for(int id:herd)if(const auto *m=a.member(id))least=std::min(least,m->happiness);
+        peak=std::max(peak,least);
+      }
+      world.setPaused(paused);
+      int loose=0;
+      for(int id:herd)if(const auto *m=a.member(id))loose+=m->exhibit!=dex;
+      const Animals::Rating *r=herd.empty()||!a.member(herd[0])?nullptr:a.rating(*a.member(herd[0]),map,f);
+      out<<"DINOSAUR "<<t.key<<" x"<<n<<": happiness up to "<<peak<<", "<<loose<<" out; its exhibit "<<(r?r->score:-1)
+         <<" (it wants "<<t.habitatPreference<<"), food there "<<world.getItems().foodIn(dex)<<"\n";
+      check(t.key+" stays in its electrified paddock and comes up to a normal happiness",
+            !herd.empty() && loose==0 && peak>=50);
+      a.clear();
+      for(int i=static_cast<int>(objects.objects().size())-1;i>=static_cast<int>(base);--i)objects.remove(i);
+      world.getItems().removeIn(dex,ZooItems::Kind::Food);world.getItems().removeIn(dex,ZooItems::Kind::Dung);
+      for(auto [x,y]:tiles)map.getTileMutable(x,y)->terrainType=0;
+      map.touch();world.reindex();
+    }
+  }
+  // Zookeeper Recommendations for an animal its exhibit makes unhappier
+  // (0x438c47: suitability under its cHabitatPreference) - a Herrerasaurus
+  // (it wants 90) in a paddock of its terrain, a little foliage and rock
+  // near what it likes, few native objects: the original's flags (0x447164)
+  // find nothing and it says "well suited" while the animal grows angrier
+  // (measured in zoo.exe with a player's zoo); with suitabilityAdvice on,
+  // the parts costing it are named, the native objects first
+  {
+    a.clear();world.reindex();
+    const int herrera=a.typeOfFile("animals/herrera.ai");
+    // (clear ground in the zoo for it: no exhibit, path or object near)
+    int px=-1,py=-1;
+    for(int y=2;y+14<map.getHeight() && px<0;++y)for(int x=2;x+12<map.getWidth() && px<0;++x) {
+      bool clear=true;
+      for(int j=-1;j<=12 && clear;++j)for(int i=-1;i<=10 && clear;++i)
+        clear=f.insideZoo(x+i,y+j) && f.exhibitAt(x+i,y+j)<0 && !map.isPath(x+i,y+j);
+      for(const auto &o:objects.objects())clear=clear && (o.x<x-2 || o.x>x+12 || o.y<y-2 || o.y>y+14);
+      if(clear)px=x,py=y;
+    }
+    const int hex=herrera<0 || px<0?-1:rectangle(px,py,10,12,f.typeIndex("chainlnk"),"Advice paddock");
+    check("advice paddock built",herrera>=0 && hex>=0);
+    const Fences::Exhibit *hx=hex>=0?f.exhibit(hex):nullptr;
+    check("advice paddock: 120 tiles, as the player's",hx && hx->tiles.size()==120);
+    if(hx) {
+      const Animals::Type &t=a.typeList[herrera];
+      std::vector<std::pair<int,int>> tiles(hx->tiles.begin(),hx->tiles.end());
+      const int N=static_cast<int>(tiles.size());
+      // (its terrain in the shares it likes, the rest its favourite)
+      int best=0;
+      for(int k=0;k<18;++k)if(t.compatTerrain[k]>t.compatTerrain[best])best=k;
+      std::vector<int> terrainOf(tiles.size(),best);
+      size_t at=0;
+      for(int k=0;k<18;++k)if(t.compatTerrain[k]>0 && k!=best)
+        for(int n=0;n<(t.compatTerrain[k]*N+50)/100 && at<tiles.size();++n)terrainOf[at++]=k;
+      for(size_t i=0;i<tiles.size();++i)map.getTileMutable(tiles[i].first,tiles[i].second)->terrainType=terrainOf[i];
+      map.touch();
+      std::vector<std::pair<int,int>> land;
+      for(size_t i=0;i<tiles.size();++i)if(terrainOf[i]!=9 && terrainOf[i]!=10)land.push_back(tiles[i]);
+      // (trees it doesn't mind on its cTreePref share of the tiles, and two
+      // rocks)
+      std::string tree,rock;
+      for(const char *c:{"foliage","rocks"})
+        for(const CatalogItem *it:ItemCatalog::get().inCategory(c,false)) {
+          const Animals::ObjectInfo &o=a.infoOf(it->file);
+          auto v=[&](int key){auto i=t.suitable.find(key);return i==t.suitable.end()?0:i->second;};
+          if(o.building || o.fx>2 || o.fy>2 || o.stink || v(o.habitat)+v(o.nameId)<0)continue;
+          if(o.foliage && v(o.habitat)+v(o.nameId)==0 && tree.empty())tree=it->file;
+          if(o.rock && !o.foliage && rock.empty())rock=it->file;
+        }
+      const size_t base=objects.objects().size();
+      size_t spot=0;
+      const int trees=(t.treePref*N+50)/100;
+      for(int n=0;n<trees && !tree.empty() && spot<land.size();++n,spot+=7)
+        objects.add(tree,land[spot].first+0.5f,land[spot].second+0.5f,0);
+      for(int n=0;n<2 && !rock.empty() && spot<land.size();++n,spot+=7)
+        objects.add(rock,land[spot].first+0.5f,land[spot].second+0.5f,0);
+      // (one grown male: company and room as it likes)
+      const int id=a.adopt(herrera,false,land[1].first+0.5f,land[1].second+0.5f,map,f,true);
+      world.reindex();a.markDirty(hex);
+      const int s=id>=0?a.suitability(id,map,f):-1;
+      auto says=[&](const std::vector<std::pair<std::string,bool>> &lines,int sid,bool *red=nullptr){
+        std::string text=rm?rm->getString(sid):"";text=text.substr(0,text.find("%s"));
+        for(const auto &[line,r]:lines)if(!text.empty() && line.rfind(text,0)==0){if(red)*red=r;return true;}
+        return false;
+      };
+      const bool was=Features::suitabilityAdvice;
+      Features::suitabilityAdvice=false;
+      const auto original=id>=0?a.advice(id,map,f):std::vector<std::pair<std::string,bool>>{};
+      Features::suitabilityAdvice=true;
+      const auto ours=id>=0?a.advice(id,map,f):std::vector<std::pair<std::string,bool>>{};
+      Features::suitabilityAdvice=was;
+      for(const auto &[line,r]:original)out<<"ADVICE original: "<<line<<"\n";
+      for(const auto &[line,r]:ours)out<<"ADVICE suitabilityadvice: "<<line<<(r?" (red)":"")<<"\n";
+      {int kind=0,kindAdults=0,adults=0;if(const auto *m=a.member(id))a.company(*m,kind,kindAdults,adults);
+       out<<"ADVICE paddock "<<N<<" tiles, exhibit "<<f.exhibit(hex)->tiles.size()<<", kind "<<kind<<" adults "<<adults<<" density "<<t.animalDensity<<"\n";}
+      out<<"ADVICE herrera suitability "<<s<<" (wants "<<t.habitatPreference<<"), "<<trees<<" "<<tree<<", 2 "<<rock<<"\n";
+      bool objectsRed=false;
+      check("a Herrerasaurus in a paddock short of native objects is under the suitability it wants",s>=0 && s<t.habitatPreference);
+      check("off: its recommendations are the original's, the exhibit well suited",original.size()==1 && says(original,9900));
+      check("suitabilityadvice: not called well suited, its missing native objects named first and red",
+            !ours.empty() && !says(ours,9900) && says(ours,9915,&objectsRed) && objectsRed && ours.front().first.rfind(rm->getString(9915).substr(0,20),0)==0);
+      // (and at what it wants, nothing more than the original says)
+      Features::suitabilityAdvice=true;
+      const int wants=t.habitatPreference;
+      a.typeList[herrera].habitatPreference=std::max(0,s);
+      const auto content=a.advice(id,map,f);
+      a.typeList[herrera].habitatPreference=wants;
+      Features::suitabilityAdvice=was;
+      check("suitabilityadvice: an animal its exhibit suits is told what the original tells it",content==original);
+      a.clear();
+      for(int i=static_cast<int>(objects.objects().size())-1;i>=static_cast<int>(base);--i)objects.remove(i);
+      for(auto [x,y]:tiles)map.getTileMutable(x,y)->terrainType=0;
+      map.touch();world.reindex();
+    }
+  }
   a.clear();st.clear();g.clear();world.reindex();world.centreOn(31,32);
-  out<<passed<<"/"<<total<<" parity checks passed\n";return out.str();
+  out<<passed<<"/"<<total<<" parity checks passed\n";
+  return out.str();
 }

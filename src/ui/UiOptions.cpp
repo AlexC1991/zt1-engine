@@ -237,6 +237,7 @@ enum : int {
   kResLabel, kResBar, kFpsLimLabel, kFpsLimBar, kVsync, kVsyncText = 14,
   kBrightLabel, kBrightBar, kFps, kFpsText = 18,
   kApiLabel = 19, kApiAuto = 20, kApiD3d = 22, kApiGl = 24, kApiSet = 26, kApiNote = 27, kApiVk = 28,
+  kHdr = 30, kHdrText = 31,
 }; // Display
 enum : int {
   kScaleLabel = 1, kScaleBar, kScaleAuto, kScaleNote,
@@ -314,7 +315,7 @@ std::string extraName(const std::string &name) {
       {"dragwindows", "Drag any window"},       {"infocloseslists", "Windows close lists"},
       {"tankgroundback", "Tank ground restored"}, {"nofenceonpath", "No fences on paths"},
       {"modfilter", "Mods buy filter"},          {"custommaps", "Custom maps"},
-      {"tankclip", "Tank edge clipping"},       {"infinitemoney", "Cheat: infinite money"}};
+      {"tankclip", "Tank edge clipping"},       {"suitabilityadvice", "Full exhibit advice"},       {"infinitemoney", "Cheat: infinite money"}};
   auto it = names.find(name);
   return it == names.end() ? name : it->second;
 }
@@ -543,6 +544,8 @@ std::string optionsLayout() {
   y += 22;
   t += heading(pageId(kDisplay, kHeadFirst + 2), y, "Picture");
   y += kHeadH;
+  toggle(pageId(kDisplay, kHdr), y);
+  y += kRow;
   label(pageId(kDisplay, kBrightLabel), y);
   t += slider(pageId(kDisplay, kBrightBar), kControlX, y, kControlW - 30);
   y += kRow;
@@ -1637,6 +1640,14 @@ void UiOptions::wire() {
              GpuFsr::available() ? "Lightens or darkens the whole picture: 100% is as the game draws it."
                                  : "Needs shaders on the graphics card, which aren't available here.");
   }
+  onOff(kDisplay, kHdr, "HDR output (HDR monitors; from the next start)", Features::hdrOutput, [](bool on) {
+    Features::hdrOutput = on;
+    Settings::setInt("user", "hdroutput", on ? 1 : 0);
+  });
+  describe({pageId(kDisplay, kHdr), pageId(kDisplay, kHdr + 1)},
+           "With Windows' HDR on for this monitor, the game sends an HDR10 picture itself (Direct3D 11), as modern games "
+           "do: the same colours, white at Windows' SDR content brightness, and Windows' Auto HDR leaves it alone. "
+           "Off: an ordinary picture. Used from the next time the game starts.");
   onOff(kDisplay, kFps, "Show the frame rate (F3)", g_showDiagnostics, [](bool on) { g_showDiagnostics = on; });
   describe({pageId(kDisplay, kFps), pageId(kDisplay, kFps + 1)},
            "Frames a second, memory and the renderer in the corner of the screen.");
