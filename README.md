@@ -36,7 +36,7 @@ Think of it as OpenRCT2 for Zoo Tycoon. The original game is the spec. Every rul
 > You need your own copy of Zoo Tycoon. The engine ships **none** of the game's art, sound or files: it imports them from your install the first time it runs.
 
 > [!IMPORTANT]
-> **Status: alpha.** The base game's freeform mode is playable and being polished against the original. A new alpha comes out **every week**. Expect rough edges, back up saves you care about, and please report anything that behaves differently from the original.
+> **Status: alpha.** The base game's freeform mode is playable and being polished against the original. New alphas come out regularly. Expect rough edges, back up saves you care about, and please report anything that behaves differently from the original.
 
 ---
 
@@ -60,10 +60,10 @@ This is made out of love for the game. It isn't affiliated with Microsoft or Blu
 
 | Where | What |
 |---|---|
-| **[GitHub Releases](https://github.com/AlexC1991/zt1-engine/releases)** | Every weekly alpha, with release notes |
+| **[GitHub Releases](https://github.com/AlexC1991/zt1-engine/releases)** | Every alpha, with release notes |
 | **CodeRook** | The same builds, as releases of the `zt1-engine` project (the game and the Lab update from there first) |
 
-Both places get the same three files each week. **Two of them play the game; the third is for looking inside it.**
+Both places get the same three files with each alpha. **Two of them play the game; the third is for looking inside it.**
 
 | Download | What it is |
 |---|---|
@@ -110,7 +110,8 @@ The base game's **freeform** mode is the focus, and most of it works as in the o
 - **Escapes and predators:** jumpers jump, climbers climb, bashers break fences. Loose meat-eaters chase guests and keepers dart and crate them. Predators hunt their prey in exhibits.
 - **Guests:** arriving by the zoo's rating, needs, shops, tours, donations, thoughts, litter, fleeing.
 - **Staff:** zookeepers, maintenance workers and tour guides, with hiring, firing and duties.
-- **The zoo's business:** zoo rating, admissions, marketing, finances, graphs, research and conservation, freeform goals and awards.
+- **The zoo's business:** zoo rating, admissions, marketing, finances, graphs, research and conservation, freeform goals and awards, private foundation donations.
+- **Scenarios:** each scenario starts with its goals, time limit, money settings and locked items; animals and items arrive as you meet its goals, and it ends with the original's win or lose. Wins are remembered, so later scenarios open and each tutorial leads on to the next. The tutorials' step-by-step popups and some scenario events are still being copied.
 - **Sound:** music, ambience, crowds, guests, animals and buildings.
 
 **Marine Mania** (Complete Collection) is in: tanks, marine animals, tank filters, Marine Specialists who climb in, feed and clean underwater as in the original, and scheduled animal shows with their tricks, audiences and income. **Dinosaur Digs** has started: dinosaurs, eggs and DRT capture work, and the rest is still being checked against the original.
@@ -119,16 +120,17 @@ The base game's **freeform** mode is the focus, and most of it works as in the o
 
 **Game Options** is a window with every setting, opened from the in-game disk button or the main menu. Each page is one list you scroll, with the setting under the mouse explained at its foot. Switch it off (Controls › Game Options) to get the original's side panel back.
 
-- **Display:** window, borderless or full screen at any resolution, a frame rate limit, vertical sync and brightness.
+- **Display:** window, borderless or full screen at any resolution, a frame rate limit, vertical sync, brightness, the graphics API (Auto, Direct3D 11, OpenGL or Vulkan) and HDR output for HDR monitors (experimental).
+- **Quality presets:** Low, Medium, High or Ultra, with an Auto-detect button. The first start picks one to suit the PC: Low on laptops and other built-in graphics, High on a graphics card.
 - **Interface size:** menus and panels scaled to suit a big screen, from 0.5x up.
 - **Art upscaling:** how the 2001 art looks when drawn bigger: FSR (AMD's upscaler, on the graphics card), Stylized, Sharp, Smooth or MMPX pixel-art scaling, with an Art Sharpness slider.
 - **Effects:** anti-aliasing (FXAA), bloom, a tilt-shift miniature look, contrast and vibrance, a vignette and film grain. They apply to the zoo only, never the menus, and all are off unless you pick them.
-- **Day and night:** an optional twelve-minute day with sunrise and sunset, sun shadows in each object's real shape, and buildings, lamps, signs and fires that light up at night.
+- **Day and night:** an optional twelve-minute day with sunrise and sunset, sun shadows in each object's real shape, and buildings, lamps, signs and fires that light up at night. Its own settings set the shadow quality and range, the light on animals and guests, lamp light, and whether the lighting is worked out on the graphics card or the processor.
 - **Game speed:** an optional button beside Pause for normal, 2x and 5x speed. While it or day and night is on, a 24-hour clock shows beside the date.
 - **Accessibility:** colour-blind filters and a bigger mouse pointer.
 - **HD art (optional mods):** zoomed in, the map's art can be drawn from much bigger HD pictures. See [Modding](#modding).
 
-The game draws with Direct3D 11, the fastest on Windows, with every setting above. Only shader mods, which are written for OpenGL, switch it to OpenGL.
+The game runs on SDL3 and draws with Direct3D 11 by default, the fastest on Windows, with every setting above; with Direct3D 11 the day and night lighting is worked out on the graphics card. OpenGL and Vulkan can be picked instead. Only shader mods, which are written for OpenGL, switch the game to OpenGL.
 
 | | |
 |---|---|
@@ -143,17 +145,18 @@ Each is a switch; off means the original's behaviour. They're on the Gameplay, C
 
 | Switch | What it does |
 |---|---|
-| `allUnlocked` | every item available in freeform from day one |
-| `fenceModes` / `pathModes` | fence and path drags that can bend; Tab cycles the shape |
-| `elevatedPaths` | raised walkways and stairs, from the original's path art |
-| `staffPaths` / `smoothRoutes` | staff keep to paths; walkers take straighter routes |
-| `mapTooltips` | hints over the map, not only on buttons |
+| `allunlocked` | every item available in freeform from day one |
+| `fencemodes` / `pathmodes` | fence and path drags that can bend; Tab cycles the shape |
+| `elevatedpaths` | raised walkways and stairs, from the original's path art |
+| `staffpaths` / `smoothroutes` | staff keep to paths; walkers take straighter routes |
+| `maptooltips` | hints over the map, not only on buttons |
 | `hotkeys` | Esc / right-click put tools away, Ctrl+Z undoes, Q/E rotate, F11 full screen |
 | `daynight` | the day and night cycle and its lighting |
 | `fastforward` | the game speed button (with day and night, it brings the 24-hour clock) |
 | `dragwindows` / `smartstack` | drag any window by its title; windows step aside instead of covering each other |
 | `tankclip` / `tankgroundback` / `nofenceonpath` | tank animals cut off at the glass; the ground put back when a tank goes; no fences across paths |
 | `mods` / `modmenu` / `custommaps` | load mods; the Mod Menu; freeform maps made in the Lab |
+| `suitabilityadvice` | Full exhibit advice: while an exhibit is less suitable than its animals want, their recommendations name each thing holding it back |
 | `infinitemoney` | a cheat: buy anything, whatever your cash |
 
 ---
@@ -223,10 +226,10 @@ You're also free to fork it and take it your own way. That's what open source is
 
 1. **Base Zoo Tycoon freeform, one to one with the original.** Every system checked against `zoo.exe`, function by function.
 2. ~~An options menu for the extras, and a friendlier mod menu~~ (done: the Game Options window, the Mod Menu and the mod repository).
-3. **Scenarios:** every scenario's goals and events.
+3. **Scenarios:** goals, time limits, unlocks, winning and losing are in; the tutorials' steps and the remaining scenario events are next.
 4. **Marine Mania and Dinosaur Digs:** tanks, marine animals, specialists, scheduled shows, dinosaur eggs and DRT capture are implemented; wider expansion parity remains in progress.
 5. **The original's `.zoo` saves:** imports and shared original-compatible export are implemented. Exact AI/task continuation and remaining state conversion still need work.
-6. **Graphics for today's PCs, always optional:** more of what a modern game's graphics page offers, such as smoother zoomed-out art and ambient occlusion, each one a switch that's off unless you pick it.
+6. **Graphics for today's PCs, always optional:** quality presets, Direct3D 11, OpenGL and Vulkan, and lighting on the graphics card are in; HDR output is experimental. Next: more of what a modern game's graphics page offers, such as smoother zoomed-out art and ambient occlusion, each one a switch that's off unless you pick it.
 
 ---
 
@@ -261,7 +264,7 @@ No. The installer version reads your game where it is and never writes to that f
 It's made for Windows 10 and 11 on ordinary PCs. Everything beyond the original look (effects, day and night, HD art) is off unless you switch it on, and each setting in Game Options says what it does. The HD art mods are the heaviest: they need more memory, and their Graphics card memory setting keeps that down.
 
 **Can I load my old saves, or play scenarios?**
-Original `.zoo` saves can be imported. New shared `.zoo` saves contain a compatible stock world for the original game and the full engine state in the same file; engine-only `.zt1save` files remain available. Compatibility is incomplete, especially exact AI/task continuation and scenarios. Resaving in the original removes engine-only data from that copy, so keep a separate engine copy and older backups.
+Original `.zoo` saves can be imported. New shared `.zoo` saves contain a compatible stock world for the original game and the full engine state in the same file; engine-only `.zt1save` files remain available. Compatibility is incomplete, especially exact AI/task continuation. Scenarios play with their goals, unlocks, winning and losing; the tutorials' step-by-step popups are still to come. Resaving in the original removes engine-only data from that copy, so keep a separate engine copy and older backups.
 
 **Something behaves differently from the original. Where do I report it?**
 Open an issue. Say what you did, what the original does and what the engine does. A screenshot or a saved zoo helps a lot. These reports are the most useful thing anyone can send me.
@@ -340,4 +343,4 @@ The icon is from [a picture by Magda Ehlers on Pexels](https://www.pexels.com/ph
 
 ## License
 
-MIT: see [LICENSE.txt](LICENSE.txt). Third-party libraries (SDL2, SDL2_image, SDL2_mixer, SDL2_ttf, FreeType, pe-resource-loader, libzip, zlib) keep their own licenses: see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+MIT: see [LICENSE.txt](LICENSE.txt). Third-party libraries (SDL3, SDL3_image, SDL3_mixer, SDL3_ttf, FreeType, pe-resource-loader, libzip, zlib, Dear ImGui) keep their own licenses: see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

@@ -2,7 +2,7 @@
 
 ZT1-Engine uses these libraries, each under its own license:
 
-- SDL2, SDL2_image, SDL2_mixer, SDL2_ttf (zlib license)
+- SDL3, SDL3_image, SDL3_mixer, SDL3_ttf (zlib license); SDL2 and its libraries, also zlib license, for the older SDL2 build option
 - FreeType2 (the FreeType License, below)
 - pe-resource-loader
 - libzip (BSD 3-clause)

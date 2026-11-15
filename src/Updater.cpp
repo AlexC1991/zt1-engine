@@ -302,10 +302,15 @@ bool verifyUpdateSignature(const std::string &message, const std::string &encode
 }
 #endif
 
-// The first feed that answers, and what it offers (ZT1_UPDATE_FEED, a folder
-// URL ending in /, takes their place: for trying an update out)
+// The newest release any feed offers with a valid signed feed: every feed is
+// read (taking the first that answered, CodeRook still offered the last
+// release while a new one's files were uploading there, though GitHub had the
+// new one). ZT1_UPDATE_FEED, a folder URL ending in /, takes their place: for
+// trying an update out
 bool lookUp(Updater::Release &out) {
 #ifdef _WIN32
+  Updater::Release best;
+  bool found = false;
   std::vector<Feed> feeds(std::begin(kFeeds), std::end(kFeeds));
   if (const char *test = std::getenv("ZT1_UPDATE_FEED"))
     feeds = {{"ZT1_UPDATE_FEED", test, "latest.yml"}};
@@ -343,14 +348,21 @@ bool lookUp(Updater::Release &out) {
       validSize = std::stoull(out.size) > 0 && std::stoull(out.size) <= 2ULL * 1024 * 1024 * 1024;
     const std::string signedFields = app + "\n" + out.version + "\n" + out.file + "\n" + out.size + "\n" + out.sha512;
     if (validVersion && app == "zt1-engine" && out.file == expected && validHash && validSize &&
-        verifyUpdateSignature(signedFields, out.signature))
-      return true;
+        verifyUpdateSignature(signedFields, out.signature)) {
+      SDL_Log("[Updater] %s offers %s", f.name, out.version.c_str());
+      if (!found || newer(out.version, best.version))
+        best = out, found = true;
+      continue;
+    }
     SDL_Log("[Updater] %s: latest.yml is invalid or its update signature is not trusted", f.name);
   }
+  if (found)
+    out = best;
+  return found;
 #else
   (void)out;
-#endif
   return false;
+#endif
 }
 
 

@@ -55,18 +55,23 @@ function readFrom(base) {
   }));
 }
 
-// The first source whose manifest is valid (and where its installer is)
+// The newest release any source offers with a valid manifest (and where its
+// installer is): every source is read - taking the first that answered,
+// CodeRook still offered the last release while a new one's files were
+// uploading there, though GitHub had the new one
 async function readManifest() {
   let last = new Error('No update source answered');
+  let best = null;
   for (const base of sources()) {
     try {
       const m = validate(await readFrom(base));
       m.base = base;
-      return m;
+      if (!best || compareVersions(m.version, best.version) > 0) best = m;
     } catch (e) {
       last = e;
     }
   }
+  if (best) return best;
   throw last;
 }
 
