@@ -48,6 +48,9 @@ public:
   // Shared with the Lab checker: unsupported steps cannot be mistaken for handled ones.
   enum class Command { Unknown, EndTrick, Play, PlayWithSound, PlayTime, PlayPingPong, PlayReverse, Halt, SetBase, KeepControl, Die, PlaySet, PlaySetTank, PlaySetProb, PlaySetTerrain, Walk, Move, Run, Trot, MoveWithSound, MoveReverse, FaceTowardFood, Hatch, Dustball, EnterBuilding, ExitBuilding, CaughtPrey, FaceTowardTarget, PlayStopAtEnd, TargetBuilding, PlaySpecial };
   static Command behaviorCommand(const std::string &name);
+  struct Step;
+  // A [BehaviorSet] line read as zoo.exe's parser 0x437d9b reads it
+  static bool parseLine(const std::string &text, Step &out);
   // One step of a behaviour set: f = fPlay(stand)
   struct Step {
     std::string fn;
@@ -214,6 +217,11 @@ public:
     enum class Mode { Once, Loop, PingPong, Reverse } mode = Mode::Loop;
     std::string anim = "stand";
     float animTime = 0, playFor = 0;
+    // fPlay's other animations, in turn after the first (zoo.exe 0x440b92
+    // plays every one its line names); for the step it belongs to (the
+    // stack's depth and line), so an interrupted one isn't played later
+    std::vector<std::string> playQueue;
+    std::pair<size_t, size_t> playQueueAt{0, 0};
     // The behaviour sets it's in (a set can play another), and where
     std::vector<std::pair<std::string, size_t>> stack;
     bool stepping = false; // a step is under way (playing or walking)
@@ -500,7 +508,8 @@ public:
   std::function<int(int tank)> tankLevel;
   // The height a move in a tank ends at (zoo.exe 0x43dc11)
   float tankTargetHeight(Member &m, const std::string &target);
-  Animation *art(const Member &m, const std::string &name) const;
+  // (orStand: a name it hasn't gets its stand - false, nothing)
+  Animation *art(const Member &m, const std::string &name, bool orStand = true) const;
   Animation *preview(int type, bool female) const;
   // Its crate: its own box_idle ([<subtype>/Animations], the adult's
   // else - a sea animal's aquabox, a dinosaur's dinobox: ZTAnimalType's

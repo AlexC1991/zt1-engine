@@ -2,10 +2,37 @@
 #include "IniReader.hpp"
 #include "OriginalConstants.hpp"
 #include "ResourceManager.hpp"
+#include "Settings.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+
+bool Original::confirmSell() {
+  return Settings::getInt("UI", "confirmSell", 1) != 0;
+}
+
+bool Original::sellNeedsConfirm(ResourceManager *rm, const std::string &file) {
+  if (!rm || !confirmSell())
+    return false;
+  IniReader *ai = rm->getIniReader(file);
+  if (!ai)
+    return false;
+  bool ask = std::atoi(ai->get("Characteristics/Integers", "cNeedsConfirm", "0").c_str()) == 1;
+  delete ai;
+  return ask;
+}
+
+std::string Original::sellQuestion(ResourceManager *rm, const std::string &name, float refund) {
+  std::string s = rm ? rm->getString(154) : "";
+  size_t at = s.find("%s");
+  if (at != std::string::npos)
+    s.replace(at, 2, name);
+  std::string digits = std::to_string(static_cast<long long>(std::trunc(refund)));
+  for (int i = static_cast<int>(digits.size()) - 3; i > 0; i -= 3)
+    digits.insert(i, ",");
+  return s + "$" + digits;
+}
 
 // economy.cfg's [characteristics] into Original::economy() (zoo.exe
 // ZTGameMgr::loadConfig 0x591c0f): a key it leaves out keeps the original's

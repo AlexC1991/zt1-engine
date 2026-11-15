@@ -48,7 +48,7 @@ public:
     std::string file, key;
     Kind kind = Kind::Keeper;
     int nameId = 0, salary = 0, dutiesText = 0;
-    float speed = 0.55f; // tiles a second
+    float speed = 0.466f; // tiles a second (cSlowRate's: Original::unitTilesPerSecond)
     bool sexes[2] = {true, false};
     // Animation name -> art path (no .ani), per sex (0 m, 1 f)
     std::map<std::string, std::string> anims[2];
@@ -70,10 +70,16 @@ public:
     // cCrowdCheck (ticks between looks for followers), cCrowdRadius (tiles),
     // cInformGuestTime (seconds of each of its two talks)
     int tourBonus = 30, followChance = 60, maxGroup = 15, crowdCheck = 5, crowdRadius = 1, informTime = 5;
-    // cSlowRate (walking: a 60th of a tile a second; keeper training raises
-    // it), cCleanTrashRadius (maintenance: over 0, sweeping takes the litter
-    // all round, not just beside), cFixFenceModifier
-    int slowRate = 33, cleanTrashRadius = 0, fixFenceModifier = 0;
+    // cSlowRate (walking; keeper training raises it) and cFastRate (running
+    // after an escaped animal): 64ths of a tile, whole ones an update
+    // (Original::unitTilesPerSecond), cCleanTrashRadius (maintenance: over
+    // 0, sweeping takes the litter all round, not just beside),
+    // cFixFenceModifier
+    int slowRate = 33, fastRate = 66, cleanTrashRadius = 0, fixFenceModifier = 0;
+    // Maintenance: how often (ms) the work it couldn't get to is forgotten -
+    // cClearInvalidListInterval (ZTMaintType +0x1fc, 10000 by setDefaults
+    // 0x4c3bb3; the shipped maint.ai doesn't set it)
+    int clearInvalidMs = 10000;
   };
   enum class Job { None, Fence, Filter, Litter, Visit, Catch, Tour, Trash, Dung };
   enum class HeliStage { Parked, SpinUp, Ascend, Chase, Fire, Return, Descend, SpinDown };
@@ -104,6 +110,10 @@ public:
     std::string dutyArg;      // its %s (the exhibit's name)
     bool duties[4] = {true, true, true, true}; // maint: trash, sweep, fences, filters
     std::vector<int> exhibits; // keepers: assigned exhibits
+    // Maintenance: the work tiles it found no way to (zoo.exe unit +0x27c),
+    // left out of its looks until cleared (+0x29c counting down)
+    std::vector<std::pair<int, int>> invalid;
+    float invalidClear = 0;
     Job job = Job::None;
     Fences::Edge jobEdge = {false, -1, -1};
     int jobFilter = -1;
@@ -237,6 +247,19 @@ public:
     this->upkeep = 0;
     return u;
   }
+  // Messages for the message bar (zoo.exe 0x49cec0's priority as kind):
+  // a keeper that can't get to its exhibit (11004 / 11001). Taken since
+  // last asked.
+  struct Notice {
+    std::string text;
+    int kind = 0;
+    int member = -1;
+  };
+  std::vector<Notice> takeNotices() {
+    std::vector<Notice> n;
+    n.swap(this->notices);
+    return n;
+  }
   // The art an animation of a member draws with (its colours)
   Animation *art(const Member &m, const std::string &name) const;
   Animation *preview(int type) const;
@@ -274,6 +297,8 @@ private:
   double clock = 0;
   static constexpr double kRevisitSeconds = 90.0; // zoo.ini [AI] exhibitServiceInterval (ticks)
   double upkeep = 0;
+  std::vector<Notice> notices;
+  void pathTrouble(const Member &m, const std::string &exhibit, bool blocked);
   void catchStep(Member &m, float seconds, const WorldMap &map, const Fences &fences);
   WorldIndex *index = nullptr;
   const Walkways *walkways = nullptr;

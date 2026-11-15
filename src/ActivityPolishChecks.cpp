@@ -8,6 +8,7 @@
 #include "ui/UiGameScreen.hpp"
 #include <filesystem>
 #include "Features.hpp"
+#include "OriginalConstants.hpp"
 #include "SpriteDatabase.hpp"
 #include <algorithm>
 #include <cmath>
@@ -711,6 +712,74 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       }
       check("a guide only tours the viewing area a guest is at ("+std::to_string(there)+" of "+std::to_string(trips)+", 0x58b0a3)",
             trips==20&&there==20);
+      // The sight line (zoo.exe viewingSees 0x4f39a2 -> 0x4f2d44, 0x4f2fcf,
+      // 0x4f2fa0): the lone area west of the paddock (-2,4: the tour zoo's
+      // 15,42) sees all 64 tiles on flat ground through chain-link (its
+      // cSeeThrough); a ridge of ground between hides them all; a maple
+      // (cHeight 3, cBlocksLOS by default) on the tile in front hides the
+      // tiles straight behind it, not the rest
+      {
+        auto lone=[&]()->const ViewingAreas::Area*{
+          va.refresh(map,f);
+          for(int i:va.of(pad)){const auto &ar=va.areas()[i];
+            if(ar.viewing.size()==1&&ar.viewing[0]==std::make_pair(bx-2,by+4))return &ar;}
+          return nullptr;};
+        auto sees=[&](const ViewingAreas::Area *ar,int x,int y){
+          return ar&&std::find(ar->seen.begin(),ar->seen.end(),std::make_pair(x,y))!=ar->seen.end();};
+        const ViewingAreas::Area *ar=lone();
+        const size_t flat=ar?ar->seen.size():0;
+        for(int k=-3;k<=11;++k)map.raiseVertex(bx-1,by+k,2);
+        ar=lone();const size_t ridge=ar?ar->seen.size():99;
+        // the guest's area sees the zebra on flat ground, not over the ridge
+        // (0x4232f4 / 0x447a00: the animals on its seen tiles)
+        int seenRidge=-1,seenFlat=-1;
+        if(!g.list.empty()){auto &q=g.list.back();q.x=bx-1.5f;q.y=by+4.5f;q.target=pad;q.state=Guests::State::Gawking;
+          Guests::Sight s;seenRidge=g.areaSight(q,s)?s.animals:-1;}
+        for(int k=-3;k<=11;++k)map.raiseVertex(bx-1,by+k,-2);
+        ar=lone();const size_t back=ar?ar->seen.size():0;
+        if(!g.list.empty()){auto &q=g.list.back();Guests::Sight s;seenFlat=g.areaSight(q,s)?s.animals:-1;}
+        // (the maple: on the ground as it is, then with the ground there
+        // lowered to 0 - the original weighs scenery against the line's
+        // doubled height with its own corner and cHeight not doubled, so it
+        // only hides the view on ground under cHeight - 2)
+        const int ground=map.getTile(bx-2,by+4)->height;
+        const bool tree=objects.add("scenery/foliage/maple.ai",bx-0.5f,by+4.5f,0);
+        ar=lone();const size_t high=ar?ar->seen.size():0;
+        for(int yy=by-3;yy<=by+12;++yy)for(int xx=bx-4;xx<=bx+10;++xx)map.raiseVertex(xx,yy,-ground);
+        ar=lone();
+        const size_t behind=ar?ar->seen.size():0;
+        const bool straight=sees(ar,bx,by+4)||sees(ar,bx+7,by+4),corner=sees(ar,bx,by);
+        if(tree)objects.remove(static_cast<int>(objects.objects().size())-1);
+        ar=lone();const size_t low=ar?ar->seen.size():0;
+        for(int yy=by-3;yy<=by+12;++yy)for(int xx=bx-4;xx<=bx+10;++xx)map.raiseVertex(xx,yy,ground);
+        ar=lone();const size_t gone=ar?ar->seen.size():0;
+        out<<"SIGHT lone area: flat "<<flat<<", ridge "<<ridge<<", back "<<back<<", maple at height "<<ground<<" "<<high
+           <<", at 0 "<<behind<<", gone "<<low<<" / "<<gone
+           <<"; guest sees "<<seenFlat<<" animal(s), over the ridge "<<seenRidge<<"; maple put down "<<tree<<"\n";
+        check("the lone west area sees all 64 tiles through chain-link on flat ground (0x4f39a2)",flat==64&&back==64&&gone==64&&low==64);
+        check("ground higher than the sight line hides the exhibit (0x4f2d44)",ridge==0);
+        check("a maple in front at ground 0 hides the tiles straight behind it, not the rest (0x4f2d44: cBlocksLOS, cHeight)",
+              tree&&behind<64&&behind>0&&!straight&&corner);
+        check("...on ground 1 or higher it hides nothing (0x4f34fc: corner + cHeight against the doubled line)",
+              ground<1||high==64);
+        check("a watching guest's area sees the zebra on its seen tiles, none over the ridge (0x447a00)",
+              seenFlat==1&&seenRidge<=0);
+        // How long it watches (zoo.exe 0x42e793): guests.ai's cGawkTime by
+        // the exhibit's suitability, 0-5 more, plus cGawkAttrTime by its
+        // attractiveness
+        if(!g.list.empty()&&zebra>=0){
+          auto &q=g.list.back();const Guests::Type &t=g.typeList[q.type];
+          const int s=a.exhibitSuitability(pad);
+          const int band=s<=-60?0:s<=20?1:s<=60?2:s<=80?3:4;
+          int attract=0;for(auto &m:a.members())if(m.exhibit==pad)attract+=static_cast<int>(a.types()[m.type].forAge(m.baby).attractiveness);
+          const int bonus=t.gawkAttrTime[attract<20?0:attract<50?1:attract<90?2:attract<150?3:attract<200?4:5];
+          int lo=999,hi=-1;for(int k=0;k<60;++k){const int v=g.gawkSeconds(q);lo=std::min(lo,v);hi=std::max(hi,v);}
+          out<<"GAWK suitability "<<s<<" attractiveness "<<attract<<": "<<lo<<"-"<<hi<<" s\n";
+          check("gawk time is cGawkTime by suitability + 0-5 + cGawkAttrTime (0x42e793, guests.ai)",
+                t.gawkTime.size()==5&&t.gawkAttrTime.size()==6&&lo>=t.gawkTime[band]+bonus&&hi<=t.gawkTime[band]+bonus+(band?5:0)&&
+                (band==0||hi>lo));
+        }
+      }
       // (taken away again: the fixtures below start on the empty map)
       a.clear();st.clear();g.clear();
       for(int k=0;k<8;++k){f.remove({true,bx+k,by},map);f.remove({true,bx+k,by+8},map);f.remove({false,bx,by+k},map);f.remove({false,bx+8,by+k},map);}
@@ -794,6 +863,95 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         check("crowded: its next walk heads away (0x42f6a9: way 6, 7 or 0) and the way's forgotten",away && z->crowdDir==-1);
       }
       a.viewAreas=hook;
+      a.clear();
+    }
+  }
+  {
+    // The behaviour-set runner. zoo.exe 0x437d9b reads a line: spaces and
+    // quotes out, a piece per ',', an empty one kept but none after a
+    // trailing ','. fPlaySetProb (0x43df67, 0x43e0d3) needs an even count
+    // whose chances make exactly 100 and rolls 1..100, then what's left; a
+    // line its handler can't run fails the sets it's in (0x435f0a,
+    // 0x435e57 - measured: Mexican wolves leave bCalm1 at fPlay(lie_paw));
+    // fPlay (0x440b92) plays each animation it names; fPlayTime (0x424ee7)
+    // whole plays; a loose rampager's set is bEscapedRampage (0x437102)
+    Animals::Step s1,s2,s3,s4;
+    const bool p1=Animals::parseLine("fPlaySetProb(bTense1,70,bAngry3,30,)",s1);
+    const bool p2=Animals::parseLine("fDie()",s2);
+    const bool p3=Animals::parseLine("fPlay( stand , \"walk\")",s3);
+    const bool p4=Animals::parseLine("fPlaySetProb(a,,b)",s4);
+    check("behaviour lines read as 0x437d9b: trailing ',' adds nothing, '()' is one empty, spaces and quotes out",
+          p1&&s1.fn=="fplaysetprob"&&s1.args.size()==4&&s1.args[3]=="30"&&p2&&s2.args.size()==1&&s2.args[0].empty()&&
+          p3&&s3.args==std::vector<std::string>{"stand","walk"}&&p4&&s4.args.size()==3&&s4.args[1].empty());
+    const int zebra=a.typeOfFile("animals/zebra.ai");
+    if(zebra>=0) {
+      a.clear();
+      const int id=a.adopt(zebra,false,30.5f,32.5f,map,f,true);
+      Animals::Member *z=a.member(id);
+      Animals::Type &zt=a.typeList[zebra];
+      auto setOf=[&](const std::vector<std::string> &lines){
+        std::vector<Animals::Step> steps;
+        for(const auto &l:lines){Animals::Step s;if(Animals::parseLine(l,s))steps.push_back(s);}
+        return steps;};
+      const auto keepSets=zt.sets[0];
+      zt.sets[0]["bparityprob"]=setOf({"fPlaySetProb(bparitya,30,bparityb,70)"});
+      zt.sets[0]["bparity80"]=setOf({"fPlaySetProb(bparitya,30,bparityb,50)","fPlay(stand)"});
+      zt.sets[0]["bparityodd"]=setOf({"fPlaySetProb(bparitya,30,bparityb)","fPlay(stand)"});
+      zt.sets[0]["bparitymiss"]=setOf({"fPlaySetProb(bparitya,30,bparitygone,70)"});
+      zt.sets[0]["bparitya"]=setOf({"fPlayTime(stand,4)"});
+      zt.sets[0]["bparityb"]=setOf({"fPlayTime(stand,4)"});
+      zt.sets[0]["bparityplay"]=setOf({"fPlay(stand,nothere,walk)"});
+      zt.sets[0]["bparitytime"]=setOf({"fPlayTime(stand)","fPlay(walk)"});
+      zt.sets[0]["bparityanim"]=setOf({"fPlay(stand)","fPlay(nothere)","fPlay(walk)"});
+      zt.sets[0]["bparityouter"]=setOf({"fPlaySet(bparityanim)","fPlay(walk)"});
+      zt.sets[0]["bescapedrampage"]=setOf({"fPlayTime(stand,4)"});
+      if(z) {
+        z->x=30.5f;z->y=32.5f;
+        auto start=[&](const char *set){a.labBehave(id,set);z->playQueue.clear();z->anim="parityheld";a.nextStep(*z,map,f);};
+        int picksA=0,picksB=0;
+        for(int i=0;i<2000;++i){
+          start("bparityprob");
+          const std::string top=z->stack.empty()?"":z->stack.back().first;
+          picksA+=top=="bparitya";picksB+=top=="bparityb";
+        }
+        out<<"SETPROB 30/70 over 2000: "<<picksA<<" "<<picksB<<"\n";
+        check("fPlaySetProb picks by its chances (30/70 within 4%: 0x43e0d3)",
+              picksA+picksB==2000&&std::abs(picksA-600)<80);
+        auto fails=[&](const char *set){start(set);return z->stack.empty()&&z->anim=="parityheld";};
+        check("fPlaySetProb whose chances don't make 100 fails its set, its animation held (0x43df67)",fails("bparity80"));
+        check("fPlaySetProb with an odd count fails its set (0x43df67)",fails("bparityodd"));
+        check("fPlayTime with one argument fails its set (0x424e7f)",fails("bparitytime"));
+        int missA=0,missFail=0;
+        for(int i=0;i<1000;++i){
+          start("bparitymiss");
+          missA+=z->stack.size()==2&&z->stack.back().first=="bparitya";
+          missFail+=z->stack.empty();
+        }
+        out<<"SETPROB missing set 30/70 over 1000: picked "<<missA<<" failed "<<missFail<<"\n";
+        check("fPlaySetProb picking a set it hasn't fails its set (0x43ddc1), else plays its pick",
+              missA+missFail==1000&&std::abs(missA-300)<60);
+        start("bparityplay");
+        const std::string first=z->anim;
+        z->animTime=z->playFor;a.nextStep(*z,map,f);
+        const std::string second=z->anim;
+        check("fPlay plays each animation it names in turn, missing ones passed over (0x440b92)",
+              first=="stand"&&second=="walk");
+        start("bparityouter");
+        const bool stood=z->anim=="stand"&&z->stack.size()==2;
+        z->animTime=z->playFor;a.nextStep(*z,map,f);
+        check("fPlay of an animation it hasn't fails its set and the set that played it (0x440b92, 0x435e57)",
+              stood&&z->stack.empty()&&z->anim=="stand");
+        start("bparitya");
+        const float loop=a.animSeconds(*z,"stand");
+        float want=loop;for(float left=4.0f-loop;left>=0.001f&&loop>0;left-=loop)want+=loop;
+        check("fPlayTime plays whole loops: 4 s rounded up to whole plays of stand (0x424ee7)",
+              z->anim=="stand"&&loop>0&&std::abs(z->playFor-want)<0.01f&&z->playFor>=4.0f-0.001f);
+        z->stack.clear();z->playQueue.clear();z->escaped=true;z->rampaging=true;z->exhibit=-1;
+        a.nextStep(*z,map,f);
+        check("loose and rampaging: bEscapedRampage first (0x437102)",
+              !z->stack.empty()&&z->stack.front().first=="bescapedrampage");
+      }
+      zt.sets[0]=keepSets;
       a.clear();
     }
   }
@@ -1637,6 +1795,105 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         g.releaseTour(guide);
       }
       type=originalType;
+    }
+    // Walking speed (zoo.exe 0x435c42 at zoo.ini UpdateRate 15): whole 64ths
+    // of a tile an update, at least one - cSlowRate 33 two, 0.466 tiles a
+    // second (a tour guide measured 0.46-0.47, #152), cFastRate 66 four
+    {
+      bool speeds=true;
+      for(const auto &t:st.typeList)
+        if(t.kind!=Staff::Kind::Helicopter)speeds=speeds&&t.speed==Original::unitTilesPerSecond(t.slowRate);
+      using Original::unitTilesPerSecond;
+      out<<"STAFF speed 33 "<<unitTilesPerSecond(33)<<" 66 "<<unitTilesPerSecond(66)<<"\n";
+      check("staff walk whole steps an update: cSlowRate 33 at 0.466 tiles a second, 34 no faster, 66 at 0.933, "
+            "under 15 one step (0x435c42)",
+            speeds&&std::abs(unitTilesPerSecond(33)-2000.0f/67/64)<1e-5f&&unitTilesPerSecond(34)==unitTilesPerSecond(33)&&
+            std::abs(unitTilesPerSecond(66)-4000.0f/67/64)<1e-5f&&unitTilesPerSecond(10)==unitTilesPerSecond(1)&&
+            guideType>=0&&std::abs(st.typeList[guideType].speed-0.4664f)<0.001f);
+    }
+    // Maintenance: work it has no way to goes on its list (the jobs' route
+    // failures -> 0x4a97ed), passed over in its looks (0x4a1d4c) until the
+    // list is emptied every cClearInvalidListInterval, 10 s (0x439c06)
+    {
+      const int maintType=st.typeOfFile("staff/maint.ai");
+      const int shut=items.add(ZooItems::Kind::Litter,-1,27.5f,29.5f); // (in the paddock)
+      const int open=items.add(ZooItems::Kind::Litter,-1,22.5f,38.5f);
+      const int w=maintType>=0?st.hire(maintType,22.5f,32.5f,map,f):-1;
+      out<<"STAFF maintenance worker "<<w<<"\n";
+      world.reindex();
+      Staff::Member *m=st.member(w);
+      const bool took=m&&st.findWork(*m,map,f);
+      m=st.member(w);
+      if(m)out<<"STAFF unreachable litter "<<shut<<" (in "<<f.exhibitAt(27,29)<<"), open "<<open<<": took "<<took
+             <<" job "<<static_cast<int>(m->job)<<" item "<<m->jobItem<<" list "<<m->invalid.size()<<"\n";
+      check("maintenance: litter it can't get to goes on its list, the next nearest taken (0x4a97ed, 0x4a1d4c)",
+            maintType>=0&&took&&m&&m->job==Staff::Job::Litter&&m->jobItem==open&&m->invalid.size()==1&&
+            m->invalid[0]==std::make_pair(27,29));
+      bool cleared=false;
+      if(m) {
+        m->workCheck=999;m->invalidClear=0.5f;
+        st.update(0.3f,map,f);m=st.member(w);
+        const bool kept=m&&m->invalid.size()==1;
+        st.update(0.3f,map,f);m=st.member(w);
+        cleared=kept&&m&&m->invalid.empty()&&std::abs(m->invalidClear-st.typeList[maintType].clearInvalidMs/1000.0f)<0.01f;
+      }
+      check("maintenance: its list is emptied every cClearInvalidListInterval ("+std::to_string(maintType>=0?st.typeList[maintType].clearInvalidMs:0)+
+            " ms, 0x439c06)",cleared&&st.typeList[maintType].clearInvalidMs==10000);
+      items.remove(shut);items.remove(open);
+      if(w>=0)st.fire(w);
+    }
+    // A keeper with no way to its exhibit's gate (Task65 0x423f57 ->
+    // staffPathTrouble 0x4e85e8): "%s is having trouble getting to %s."
+    // (11004); something in front of the gate, "The entrance to %s is
+    // blocked..." (11001); the look ends
+    if(z>=0) {
+      int ox=-1,oy=-1;
+      for(const auto &kv:f.pieces()) {
+        if(!kv.second.gate||f.exhibitOf(kv.first)!=land)continue;
+        const Fences::Edge &e=kv.first;
+        const int ax=e.alongX?e.x:e.x-1,ay=e.alongX?e.y-1:e.y;
+        const bool aIn=f.exhibitAt(ax,ay)==land;
+        ox=aIn?e.x:ax;oy=aIn?e.y:ay;
+        break;
+      }
+      std::vector<int> cans;
+      auto can=[&](int x,int y){if(objects.add("scenery/other/lrock1.ai",x+0.5f,y+0.5f,0)&&objects.last())cans.push_back(objects.last()->id);};
+      // (the gate's outside tile walled in by rocks, a tile each: it's clear,
+      // but no way to it)
+      if(ox>=0)for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)
+        if((dx||dy)&&f.exhibitAt(ox+dx,oy+dy)<0)can(ox+dx,oy+dy);
+      world.reindex();
+      st.takeNotices();
+      const int keeperType=st.typeOfFile("staff/keeper.ai");
+      const int k=keeperType>=0?st.hire(keeperType,22.5f,30.5f,map,f):-1;
+      const int says=k>=0?st.assign(k,land,f):-1;
+      world.reindex();
+      Staff::Member *km=st.member(k);
+      const bool went=km&&st.findWork(*km,map,f);
+      km=st.member(k);
+      const auto told=st.takeNotices();
+      const std::string name=km?km->name:"?";
+      const std::string want=rm?rm->getString(11004):"";
+      out<<"STAFF keeper gate "<<ox<<","<<oy<<" rocks "<<cans.size()<<" blocked "<<world.getIndex().blocked(ox-1,oy)
+         <<" went "<<went<<" job "<<(km?static_cast<int>(km->job):-1)<<" says "<<(told.empty()?"(nothing)":told[0].text)<<"\n";
+      check("a keeper with no way to its exhibit's gate: \""+name+" is having trouble getting to Parity paddock.\" (11004), "
+            "the look over (0x4e85e8)",
+            ox>=0&&says==0&&!went&&km&&km->job==Staff::Job::None&&told.size()==1&&told[0].kind==2&&
+            want.find("%s")!=std::string::npos&&told[0].text.find(name)!=std::string::npos&&
+            told[0].text.find("Parity paddock")!=std::string::npos);
+      can(ox,oy);
+      world.reindex();
+      km=st.member(k);
+      const bool went2=km&&st.findWork(*km,map,f);
+      const auto told2=st.takeNotices();
+      out<<"STAFF keeper blocked gate says "<<(told2.empty()?"(nothing)":told2[0].text)<<"\n";
+      check("something in front of the gate: \"The entrance to Parity paddock is blocked...\" (11001, 0x4e8537)",
+            !went2&&told2.size()==1&&told2[0].text.find("Parity paddock")!=std::string::npos&&
+            told2[0].text.find(name)==std::string::npos);
+      for(int id:cans)for(size_t i=0;i<objects.objects().size();++i)
+        if(objects.objects()[i].id==id){objects.remove(static_cast<int>(i));break;}
+      if(k>=0)st.fire(k);
+      world.reindex();
     }
   }
   // Guests' needs and surroundings as zoo.exe runs them (ZTGuestType::

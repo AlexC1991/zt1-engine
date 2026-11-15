@@ -10,6 +10,7 @@
 
 class Fences;
 class Guests;
+class PlacedObjects;
 class ResourceManager;
 class WorldMap;
 
@@ -33,6 +34,9 @@ public:
   };
 
   void setResources(ResourceManager *rm) { this->rm = rm; }
+  // The scenery that can stand in an area's sight line (0x4f2d44: the
+  // tiles' quarter slots)
+  void setObjects(const PlacedObjects *objects) { this->objects = objects; }
   // Brought up to date with the map: an exhibit or fence changed, a path
   // taken up - all made again (0x44ba57 for each exhibit); paths only laid -
   // each new one added to the exhibits near it (0x451d6d)
@@ -47,6 +51,7 @@ public:
 
 private:
   ResourceManager *rm = nullptr;
+  const PlacedObjects *objects = nullptr;
   std::vector<Area> list;
   // Each viewing tile's 8 slots (N, NE, E, SE, S, SW, W, NW): the area that
   // sees its exhibit that way (the habitat manager's grid [0x63805c]+0x28,
@@ -59,6 +64,14 @@ private:
   std::set<std::pair<int, int>> paths;
   bool built = false;
   std::map<int, bool> habitatFenceType; // fence type -> has [HabitatFence]
+  // What stands in the sight lines: each quarter tile (in half tiles) with
+  // scenery that blocks the view (cBlocksLOS), its type's cHeight
+  std::map<std::pair<int, int>, int> blockers;
+  std::map<std::string, std::pair<bool, int>> blockerType; // file -> cBlocksLOS, cHeight
+  std::map<std::string, std::pair<int, int>> footprintHalf; // file -> cFootprintX, Y
+  // (ours: what the sight lines last saw - the ground, the scenery, the
+  // tanks' glass - so a change is looked at again)
+  size_t sightKey = 0;
 
   bool habitatFence(const Fences &fences, int type);
   bool fenceOnSide(const Fences &fences, int x, int y, int dir);
@@ -66,7 +79,12 @@ private:
   void add(const WorldMap &map, const Fences &fences, int exhibit, int x, int y);
   void make(const WorldMap &map, const Fences &fences, int exhibit, int x, int y);
   void addViewing(const WorldMap &map, const Fences &fences, int area, int x, int y);
-  void see(const Fences &fences, int area);
+  void see(const WorldMap &map, const Fences &fences, int area);
+  size_t findBlockers(const WorldMap &map, const Fences &fences);
+  bool sees(const WorldMap &map, const Fences &fences, std::pair<int, int> from, std::pair<int, int> to) const;
+  bool line(const WorldMap &map, const Fences &fences, int x0, int y0, int z0, int x1, int y1, int z1) const;
+  bool stepBlocked(const WorldMap &map, const Fences &fences, int tx, int ty, int px, int py, int base) const;
+  bool edgeBlocks(const WorldMap &map, const Fences &fences, int tx, int ty, int side, int base) const;
   bool hasArea(int x, int y, int exhibit) const;
 };
 

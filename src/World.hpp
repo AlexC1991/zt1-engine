@@ -120,6 +120,7 @@ public:
         bool askDrainTank = false;     // a tank wall clicked: ask first
         bool askEscape = false;        // an exhibit's wall with animals: ask first
         std::string askMerge;          // a wall between two exhibits: "merge A with B?"
+        std::string askSell;           // a building or tank filter bulldozed: "Are you sure you want to sell %s?" first (zoo.exe removeObject 0x50a0b0)
         int exhibit = -1;              // no tool: the exhibit clicked
         bool outsideZoo = false;       // fence tried outside the zoo wall
         int messageId = 0;             // a message to show (lang string)
@@ -293,6 +294,9 @@ public:
     // Takes away the exhibit wall asked about ("Deleting this fence piece
     // will allow any animals in this exhibit to escape."): its refund
     int confirmFenceRemoval();
+    // Takes away the building or filter the bulldozer asked about (its
+    // cNeedsConfirm): its refund
+    float confirmSell();
     // Undo (zoo.exe 0x4de527, the Single_Undo button 1075): one level -
     // everything done since the last click on the map, undone newest
     // first, with exactly the money it took or gave back
@@ -557,6 +561,11 @@ private:
     Fences::Edge highlight = {false, -1, -1};
     Fences::Edge pendingDrain = {false, -1, -1};
     Fences::Edge pendingFence = {false, -1, -1};
+    int pendingSellObject = 0;                   // (an object's id; 0 none)
+    int pendingSellFilterX = -1, pendingSellFilterY = -1; // (a filter's tile)
+    // The scenery or building at index o taken away by the bulldozer: undo
+    // kept, its exhibit's animals told; its refund
+    float bulldozeObject(int o);
     // A fence piece taken away: the exhibits worked out again, gates no
     // exhibit is behind made plain, the animals told
     int removeFence(const Fences::Edge &e);

@@ -300,6 +300,7 @@ bool World::loadFreeform(const std::string &path) {
   ambient.load(resourceManager);
   ambient.clear();
   staff.loadTypes(resourceManager);
+  staff.viewingAreas().setObjects(&placedObjects);
   staff.clear();
   items.load(resourceManager);
   items.clear();
@@ -3260,7 +3261,8 @@ void World::mouseMove(int x, int y) {
       c.zoom = saved;
       if (f >= 0) {
         this->fences.highlightFilter = f;
-        this->hoverPrice = static_cast<int>(std::lround(this->fences.filterType(this->fences.filters()[f].file).cost * Original::sellFactor));
+        // (what it sells for: ZTTankFilter::sellValue 0x50c961)
+        this->hoverPrice = static_cast<int>(std::lround(this->fences.sellValue(f)));
         if (const CatalogItem *it = item(this->fences.filters()[f].file))
           this->bulldozeTip = it->name;
         return;
@@ -3851,38 +3853,42 @@ World::ToolResult World::bulldozeClick(int x, int y) {
   float wx = 0, wy = 0;
   bool onMap = this->pick(x, y, wx, wy);
     this->mouseMove(x,y); // Clicking consumes exactly the target highlighted at this position.
+    // A tank filter under it: sold (zoo.exe deleteHovered 0x509176 ->
+    // sellObject 0x50a432 -> removeObject 0x50a0b0) for its sell value
+    // (ZTTankFilter::sellValue 0x50c961), asked first (its cNeedsConfirm)
     {
       int f = this->fences.highlightFilter;
       if (f >= 0) {
-        r.refund = this->fences.filterType(this->fences.filters()[f].file).cost * Original::sellFactor;
+        const Fences::Filter &fl = this->fences.filters()[f];
+        if (Original::sellNeedsConfirm(this->resourceManager, fl.file)) {
+          this->pendingSellObject = 0;
+          this->pendingSellFilterX = fl.x;
+          this->pendingSellFilterY = fl.y;
+          r.askSell = Original::sellQuestion(this->resourceManager, fl.name, this->fences.sellValue(f));
+          return r;
+        }
+        r.refund = this->fences.sellValue(f);
         this->fences.removeFilter(f);
         return r;
       }
     }
-    // Scenery under it: taken away, 80% of its price back
+    // Scenery under it: taken away, 80% of its price back (ZTEntity::
+    // objectSellValue 0x41ec7f); a building (cNeedsConfirm) asked first
     {
       int o = this->placedObjects.highlight;
       if (o >= 0) {
-        std::string file = PlacedObjects::fileOf(this->placedObjects.objects()[o]);
-        for (const CatalogItem &item : ItemCatalog::get().all())
-          if (item.file == file)
-            r.refund = item.cost * Original::sellFactor;
-        const PlacedObjects::Object &gone = this->placedObjects.objects()[o];
-        {
-          UndoStep u{UndoStep::Kind::RemovedObject};
-          u.object = gone;
-          u.money = r.refund;
-          this->recordUndo(u);
+        const PlacedObjects::Object &it = this->placedObjects.objects()[o];
+        if (Original::sellNeedsConfirm(this->resourceManager, PlacedObjects::fileOf(it))) {
+          float value = 0;
+          for (const CatalogItem &item : ItemCatalog::get().all())
+            if (item.file == PlacedObjects::fileOf(it))
+              value = item.cost * Original::sellFactor;
+          this->pendingSellObject = it.id;
+          this->pendingSellFilterX = this->pendingSellFilterY = -1;
+          r.askSell = Original::sellQuestion(this->resourceManager, it.label.empty() ? it.name : it.label, value);
+          return r;
         }
-        int ex = this->fences.exhibitAt(static_cast<int>(std::floor(gone.x)), static_cast<int>(std::floor(gone.y)));
-        ZT_STEP("", "Bulldozes scenery: 80% back", {"object", file}, {"refund", r.refund}, {"exhibit", ex});
-        this->animals.snapshot(ex, this->worldMap, this->fences);
-        this->placedObjects.remove(o);
-        this->animals.markDirty();
-        this->animals.react(ex, Animals::Change::Object, file, -1, true, this->worldMap, this->fences);
-        this->reindex();
-        this->bulldozeTip.clear();
-        this->hoverPrice = -1;
+        r.refund = this->bulldozeObject(o);
         return r;
       }
     }
@@ -4563,6 +4569,54 @@ World::UndoMoney World::undo() {
   this->animals.markDirty();
   this->reindex();
   return m;
+}
+
+float World::bulldozeObject(int o) {
+  float refund = 0;
+  std::string file = PlacedObjects::fileOf(this->placedObjects.objects()[o]);
+  for (const CatalogItem &item : ItemCatalog::get().all())
+    if (item.file == file)
+      refund = item.cost * Original::sellFactor;
+  const PlacedObjects::Object &gone = this->placedObjects.objects()[o];
+  {
+    UndoStep u{UndoStep::Kind::RemovedObject};
+    u.object = gone;
+    u.money = refund;
+    this->recordUndo(u);
+  }
+  int ex = this->fences.exhibitAt(static_cast<int>(std::floor(gone.x)), static_cast<int>(std::floor(gone.y)));
+  ZT_STEP("", "Bulldozes scenery: 80% back", {"object", file}, {"refund", refund}, {"exhibit", ex});
+  this->animals.snapshot(ex, this->worldMap, this->fences);
+  this->placedObjects.remove(o);
+  this->animals.markDirty();
+  this->animals.react(ex, Animals::Change::Object, file, -1, true, this->worldMap, this->fences);
+  this->reindex();
+  this->bulldozeTip.clear();
+  this->hoverPrice = -1;
+  return refund;
+}
+
+// The sell question's Yes (zoo.exe removeObjectBooks 0x50c0b2: the dialog,
+// then 0x4f94be takes it away and books the money)
+float World::confirmSell() {
+  float refund = 0;
+  if (this->pendingSellObject) {
+    int o = this->placedObjects.indexOf(this->pendingSellObject);
+    if (o >= 0)
+      refund = this->bulldozeObject(o);
+  } else if (this->pendingSellFilterX >= 0) {
+    const auto &list = this->fences.filters();
+    for (size_t f = 0; f < list.size(); f++)
+      if (list[f].x == this->pendingSellFilterX && list[f].y == this->pendingSellFilterY) {
+        refund = this->fences.sellValue(static_cast<int>(f));
+        this->fences.removeFilter(static_cast<int>(f));
+        this->reindex();
+        break;
+      }
+  }
+  this->pendingSellObject = 0;
+  this->pendingSellFilterX = this->pendingSellFilterY = -1;
+  return refund;
 }
 
 int World::removeFence(const Fences::Edge &e) {

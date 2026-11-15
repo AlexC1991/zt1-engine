@@ -445,6 +445,32 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     check("let go: the paths and scenery taken, the snack stand left, the money shown paid back ($" +
               std::to_string(r.refund) + ")",
           pathsLeft == 0 && world.getObjects().objects().size() == objects - 2 && std::lround(r.refund) == shown);
+    // A click on the snack stand: a building (cNeedsConfirm 1) is asked
+    // about first, "Are you sure you want to sell Snack Stand 1? Refund:
+    // $N" (zoo.exe deleteHovered 0x509176 -> sellObject 0x50a432 ->
+    // removeObject 0x50a0b0 -> sellConfirmDialog 0x50bf8d); Yes, gone with
+    // its 80%
+    if (building) {
+      const size_t before = world.getObjects().objects().size();
+      centre(bx + 1, by + 4, px, py);
+      world.mouseMove(px, py);
+      world.mouseDown(px, py);
+      r = world.mouseUp(px, py);
+      const bool asked = !r.askSell.empty() && r.refund == 0 && world.getObjects().objects().size() == before;
+      const std::string expect = rm->getString(154).substr(0, rm->getString(154).find("%s"));
+      check("a building bulldozed is asked about first (\"" + r.askSell + "\")",
+            asked && r.askSell.rfind(expect, 0) == 0 &&
+                r.askSell.find("Refund: $" + std::to_string(static_cast<int>(building->cost * Original::sellFactor))) != std::string::npos);
+      const float back = world.confirmSell();
+      check("Yes: the building gone, $" + std::to_string(back) + " back (80% of $" + std::to_string(building->cost) + ")",
+            world.getObjects().objects().size() == before - 1 && std::abs(back - building->cost * Original::sellFactor) < 1e-3f);
+    }
+    check("buildings and the tank filter ask (cNeedsConfirm 1), a trash can doesn't",
+          Original::sellNeedsConfirm(rm, "scenery/building/vendfood.ai") == Original::confirmSell() &&
+              Original::sellNeedsConfirm(rm, "scenery/other/filter1.ai") == Original::confirmSell() &&
+              !Original::sellNeedsConfirm(rm, "scenery/other/trshcan.ai"));
+    check("the question's refund cut toward zero and grouped (\"" + Original::sellQuestion(rm, "X", 1234.9f) + "\")",
+          Original::sellQuestion(rm, "X", 1234.9f).find("Refund: $1,234") != std::string::npos);
     world.setBulldozer(false);
   }
 

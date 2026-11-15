@@ -57,6 +57,10 @@ struct FenceType {
   bool tank = false;    // [TankFence]
   bool showFence = false; // cIsShowFence (Marine Mania show-tank walls).
   bool seeThrough = false; // cSeeThrough: a glass wall (the tank seen through it)
+  // Its gate's own (g/Characteristics/Integers): cSeeThrough, cHeight - the
+  // gates of see-through fences are solid (chain-link, glass: 0)
+  bool gateSeeThrough = false;
+  int gateHeight = 0;
   bool zooWall = false; // the zoo's own walls (not an exhibit's)
   // [f|g][flat, rising, falling]
   Animation *art[2][3] = {{nullptr, nullptr, nullptr}, {nullptr, nullptr, nullptr}};
@@ -453,6 +457,10 @@ public:
   // The filter drawn nearest a logical screen point (-1: none near)
   int filterAt(float sx, float sy, const WorldRenderer &view, const WorldMap &map) const;
   void removeFilter(int index);
+  // What a filter sells for (zoo.exe ZTTankFilter::sellValue 0x50c961,
+  // class slot 0x120): broken, nothing; at cDecayedHealth or under, half of
+  // 80% of its cost; else 80%
+  float sellValue(int index) const;
   Filter *filter(int index) {
     return index >= 0 && index < static_cast<int>(this->filterList.size())
                ? &this->filterList[index]

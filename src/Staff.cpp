@@ -84,7 +84,11 @@ void Staff::loadTypes(ResourceManager *rm) {
       t.salary = ai->getInt(ints, "cpurchasecost", ai->getInt(ints, "cmonthlycost", 0));
       t.dutiesText = ai->getInt(ints, "cdutiestextid", 0);
       t.slowRate = ai->getInt(ints, "cslowrate", 33);
-      t.speed = t.slowRate / 60.0f;
+      t.fastRate = ai->getInt(ints, "cfastrate", 66);
+      // (zoo.exe 0x435c42: whole 64ths of a tile an update - #152)
+      t.speed = Original::unitTilesPerSecond(t.slowRate);
+      if (t.kind == Kind::Maint)
+        t.clearInvalidMs = ai->getInt(ints, "cclearinvalidlistinterval", t.clearInvalidMs);
       if (t.kind == Kind::Guide) {
         t.tourBonus = ai->getInt(ints, "ctourguidebonus", 30);
         t.followChance = ai->getInt(ints, "cfollowchance", 60);
@@ -187,6 +191,7 @@ void Staff::clear() {
   // (a zoo loaded afresh: no exhibit visited yet - the last zoo's visits
   // kept a reloaded tank "not due" for the service interval)
   this->lastVisit.clear();
+  this->notices.clear();
   this->selected = this->hovered = this->carried = -1;
 }
 
@@ -863,7 +868,14 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
     return nullptr;
   };
   std::vector<Entry> entries;
+  // (an entry whose tile it found no way to before is passed over until the
+  // list is cleared: 0x4a1d4c, the worker's +0x27c)
+  auto invalid = [&](int ex, int ey) {
+    return std::find(m.invalid.begin(), m.invalid.end(), std::make_pair(ex, ey)) != m.invalid.end();
+  };
   auto add = [&](bool flagged, Job job, Fences::Edge edge, int item, int ex, int ey) {
+    if (invalid(ex, ey))
+      return;
     Member *h = holderOf(job, job == Job::Fence ? &edge : nullptr, item);
     entries.push_back({flagged, job, edge, item, ex, ey, tileDist(mx, my, ex, ey), h});
   };
@@ -951,6 +963,14 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
     h->dutyId = kMaintMonitoring;
     h->dutyArg.clear();
   };
+  // No way to it: its tile goes on the worker's list (the jobs' route
+  // failures: 0x4a20e1, 0x4a289f, 0x595af4, 0x5ec29f, 0x61b0e6 -> 0x4a97ed)
+  // (ours: the next entry is tried in the same look, where the original
+  // takes it on its next tick)
+  auto noWay = [&](const Entry &s) {
+    if (!invalid(s.ex, s.ey))
+      m.invalid.push_back({s.ex, s.ey});
+  };
   for (const Entry &s : entries) {
     if (s.job == Job::Litter || s.job == Job::Dung) {
       const ZooItems::Item *it = this->items->item(s.item);
@@ -961,6 +981,7 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
         m.dutyId = s.job == Job::Dung ? kGoingToCleanUp : kGoingToSweep;
         return true;
       }
+      noWay(s);
       continue;
     }
     if (s.job == Job::Trash) {
@@ -975,6 +996,7 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
           m.dutyId = kGoingToCan;
           return true;
         }
+      noWay(s);
       continue;
     }
     if (s.job == Job::Filter) {
@@ -1001,6 +1023,7 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
           return true;
         }
       }
+      noWay(s);
       continue;
     }
     // A fence: stand at the tile's side nearest the piece
@@ -1019,6 +1042,7 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
       m.dutyId = kGoingToFix;
       return true;
     }
+    noWay(s);
   }
   return false;
 }
@@ -1178,7 +1202,10 @@ bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences) {
       if (last != this->lastVisit.end() && this->clock - last->second <= 1000.0)
         continue;
     }
-    // Its gate: the tile outside it and the one in
+    // This is the one picked (0x49d7c7). Its gate: the tile outside it and
+    // the one in. No way to it, and Task65 (0x423f57 -> 0x58c060) says so
+    // and ends the look - the next exhibit waits for the next one
+    bool blocked = false;
     for (const auto &kv : fences.pieces()) {
       if (!kv.second.gate || fences.exhibitOf(kv.first) != ex)
         continue;
@@ -1187,8 +1214,12 @@ bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences) {
       int bx = e.x, by = e.y;
       bool aIn = fences.exhibitAt(ax, ay) == ex;
       int ox = aIn ? bx : ax, oy = aIn ? by : ay, ix = aIn ? ax : bx, iy = aIn ? ay : by;
-      if (!walkable(ox, oy, map, fences))
+      // (something standing in front of the gate: 0x4e8537's 3; ours
+      // doesn't test the tile inside)
+      if (!walkable(ox, oy, map, fences)) {
+        blocked = true;
         continue;
+      }
       m.outX = ox + 0.5f;
       m.outY = oy + 0.5f;
       m.inX = ix + 0.5f;
@@ -1207,8 +1238,41 @@ bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences) {
       ZT_STEP("", "Off to visit the exhibit, by its gate", {"exhibit", fences.exhibit(ex)->name}, {"gate x", ox}, {"gate y", oy});
       return true;
     }
+    pathTrouble(m, fences.exhibit(ex)->name, blocked);
+    m.dutyId = kMonitoring;
+    m.dutyArg.clear();
+    return false;
   }
   return false;
+}
+
+// zoo.exe 0x4e85e8 (staffPathTrouble, from Task65_KeeperGoToHabitat
+// 0x423f57 when the keeper has no way to the habitat's gate): the gate
+// tested (0x4e8537) - fenced on both sides (1), something on either of its
+// tiles (3) or past the staff's route distance (4) - "The entrance to %s is
+// blocked and is not accessible to zoo staff." (11001); else "%s is having
+// trouble getting to %s." (11004), the keeper's name and the habitat's;
+// either posted with priority 2 (0x49cec0)
+// (ours: only 3 is told apart - 1 and 4 need the original's route distance
+// fields, issue #145 - so a gate with no route to it says 11004)
+void Staff::pathTrouble(const Member &m, const std::string &exhibit, bool blocked) {
+  ZT_STEP("0x4e85e8", "No way to the exhibit's gate: the keeper says so", {"exhibit", exhibit},
+          {"message", blocked ? 11001 : 11004});
+  if (!this->rm)
+    return;
+  std::string s = this->rm->getString(blocked ? 11001 : 11004);
+  std::vector<const std::string *> args;
+  if (!blocked)
+    args.push_back(&m.name);
+  args.push_back(&exhibit);
+  size_t from = 0;
+  for (const std::string *arg : args)
+    if (size_t at = s.find("%s", from); at != std::string::npos) {
+      s.replace(at, 2, *arg);
+      from = at + arg->size();
+    }
+  SDL_Log("[Staff] %s", s.c_str());
+  this->notices.push_back({s, 2, m.id});
 }
 
 // The next step of a visit, when the last walk or animation is done
@@ -2135,6 +2199,16 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
     m.animTime += seconds;
     m.baseAnimTime += seconds;
     m.workCheck -= seconds;
+    // zoo.exe 0x439c06 (ZTMaintenanceWorker's update): every
+    // cClearInvalidListInterval ms its list of work it couldn't get to is
+    // emptied
+    if (t.kind == Kind::Maint) {
+      m.invalidClear -= seconds;
+      if (m.invalidClear <= 0) {
+        m.invalid.clear();
+        m.invalidClear = t.clearInvalidMs / 1000.0f;
+      }
+    }
     if (m.id == this->carried) {
       if (t.kind == Kind::Helicopter) {
         releaseCatch(m); Sound::get().stop(m.rotorChannel); m.rotorChannel = -1;
@@ -2271,9 +2345,10 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
     if (m.pathAt < m.path.size()) {
       auto [tx, ty] = m.path[m.pathAt];
       float dx = tx - m.x, dy = ty - m.y, dist = std::hypot(dx, dy);
-      // (running after an animal: cFastRate 66)
+      // (running after an animal: cFastRate, by the same steps as
+      // walking - zoo.exe 0x435c42)
       bool running = m.job == Job::Catch;
-      float step = (running ? 66.0f / 60.0f : t.speed) * seconds;
+      float step = (running ? Original::unitTilesPerSecond(t.fastRate) : t.speed) * seconds;
       const char *moving = running ? "run" : m.sweeping ? "subclean" : "walk";
       if (m.anim != moving) {
         m.anim = moving;

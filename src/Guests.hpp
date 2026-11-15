@@ -52,6 +52,8 @@ public:
     std::map<std::string, std::string> anims; // name -> art path (no .ani)
     std::string fullPal;
     std::vector<std::string> slots[4]; // shirt, pants or skirt, hair, skin palettes
+    // Watching an exhibit: [<kind>\BehaviorSetGawk] f = fPlaySetProb(bGawk1,
+    // <w>, bGawk2, <w>, bGawk3, <w>): gawk, camera, stand
     int gawkWeights[3] = {45, 10, 45}; // gawk, camera, stand
     // Looking at scenery (guests.ai [<kind>\BehaviorSet\bGawkObj1..6]: its
     // fPlaySetProb weights of bGawk1, bGawk2, bGawk3), by the object's
@@ -73,6 +75,14 @@ public:
     int souvenirMed = 5, souvenirHigh = 10, angryTrash = -5, escapedChange = -100, initialHappiness = 50;
     int estheticThreshold = 200, happyEsthetic = 5, crowdedThreshold = 75, crowdedChange = -3;
     int stinkThreshold = 2, sickChange = -40;
+    // Watching an exhibit (zoo.exe guestViewingTick 0x43afde, Task70's
+    // gawk time 0x42e793): cSickAnimalChange, cHappyAnimalChange1/2,
+    // cAngryAnimalChange1/2/3, cDifferentSpeciesThreshold/Change; its
+    // cGawkTime list by the exhibit's suitability, cGawkAttrTime by its
+    // attractiveness
+    int sickAnimalChange = -20, happyAnimal1 = 10, happyAnimal2 = 5, angryAnimal1 = -10, angryAnimal2 = -25,
+        angryAnimal3 = -35, speciesThreshold = 4, speciesChange = 5;
+    std::vector<int> gawkTime{10, 15, 25, 35, 45}, gawkAttrTime{0, 1, 4, 7, 10, 20};
     int sawReset = 20; // cSawAnimalReset
     // Sick from a smell (zoo.exe chooseTask 0x5b0509, Task79_GuestSick):
     // cSickChance in 100 each time it picks what to do next; drawn with
@@ -494,6 +504,18 @@ private:
   int findPredator(const Guest &g) const; // (an animal id, -1 none)
   // How crowded the viewing area it stands in is (zoo.exe 0x425f6a)
   int areaCrowd(const Guest &g) const;
+  // What the viewing area it stands in sees (zoo.exe 0x4232f4 -> the
+  // area's counts, 0x447a00): the animals on its seen tiles, their kinds,
+  // the sick among them; false: it stands in none of its exhibit's areas
+  struct Sight {
+    int animals = 0, species = 0, sick = 0;
+  };
+  bool areaSight(const Guest &g, Sight &out) const;
+  // One of an exhibit's animals whose happiness is lo..hi, at random
+  // (zoo.exe 0x426049; -1 none)
+  int pickAnimal(int exhibit, int lo, int hi);
+  // How long it watches (zoo.exe 0x42e793), in seconds
+  int gawkSeconds(const Guest &g);
   bool fleeGround(int x, int y) const;
   void refreshBlocks();
   const Block *blockAt(float x, float y) const;

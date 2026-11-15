@@ -94,6 +94,24 @@ inline constexpr float foundationBelowCash = 1000.0f;
 // this much less with every tile between it and them (0x630d68, a double;
 // the product truncated each time)
 inline constexpr double guestCrowdFalloff = 0.9;
+// A viewing area's sight line (zoo.exe viewingSees 0x4f39a2 -> 0x4f2d44):
+// the line runs in half tiles, its height in half height units from a
+// tile's own height doubled and this much over it at either end
+inline constexpr int sightEyeHeight = 2;
+// ...a fence on a tile edge it crosses (0x4f2fa0) hides what's behind when
+// its height (cHeight; a tank wall its own, ZTFence +0x454) plus how much
+// higher its tile is than the viewing tile is over this
+inline constexpr int sightFenceClear = 1;
+// A tank's glass (cSeeThrough) is seen through while its water's purity is
+// over this (zoo.exe 0x6390b0, read live: the "can not see" line)
+inline constexpr float seeThroughPurity = 1.0f;
+// Scenery hides what's behind it unless its .ai says cBlocksLOS 0 (zoo.exe
+// sceneryTypeLoad 0x4ba5b0: 1 when the file doesn't set it - the show toys
+// set 0)
+inline constexpr int sceneryBlocksLOS = 1;
+// A guest done watching gives a donation only while its viewing area's
+// crowd (0x425f6a) is under this (guestDoneViewingExhibit 0x42ea14: 0x32)
+inline constexpr int donationCrowdLimit = 50;
 inline Economy &economy() {
   static Economy e;
   return e;
@@ -102,12 +120,47 @@ inline Economy &economy() {
 // for a scenario (its .scn), its [start] economy file over it
 void loadEconomy(ResourceManager *rm, const std::string &scenario = "");
 
+// Selling or bulldozing something (sellObject 0x50a432 -> removeObject
+// 0x50a0b0): asked first when its type has cNeedsConfirm (type +0x134, its
+// .ai's [Characteristics/Integers]; the buildings and the tank filter say
+// 1) and zoo.ini's [UI] confirmSell isn't 0 (0x51f80c into +0x456, read by
+// sellConfirmDialog 0x50bf8d; 1 when it's not there). Animals (and staff,
+// fired) are asked whatever their type says, if confirmSell is on
+bool sellNeedsConfirm(ResourceManager *rm, const std::string &file);
+// The question (sellConfirmDialog 0x50bf8d): text 154 "Are you sure you
+// want to sell %s?\nRefund: " with the thing's name, then the refund cut
+// toward zero (removeObject's fistp in the chop mode, 0x50c0bf) and grouped
+// ("$1,234", moneyToText 0x40eca1 with grouping on)
+std::string sellQuestion(ResourceManager *rm, const std::string &name, float refund);
+// Whether zoo.ini's [UI] confirmSell asks (0x51f80c; default 1)
+bool confirmSell();
+
 // ZTGameMgr::setAdmissionPrice 0x4bbf10: no more than the most, and the
 // least if that leaves it at or below the least
 inline float clampAdmission(float price) {
   const Economy &e = economy();
   float p = price < e.maxAdmission ? price : e.maxAdmission;
   return p <= e.minAdmission ? e.minAdmission : p;
+}
+
+// The game's updates a second: zoo.ini [user] UpdateRate=15. measured: in
+// the running original (2026-11-15) the ms each update moves on by
+// (moveAccumulate's counter, read live) was never under 67, mostly 67-69
+inline constexpr int updateRate = 15;
+inline constexpr int updateMs = (1000 + updateRate - 1) / updateRate; // 67
+// A unit's position steps: 64 to a tile (its +0x114/+0x118)
+inline constexpr int unitStepsPerTile = 64;
+// zoo.exe 0x435c42 (moveAccumulate): each update a moving unit takes
+// max(1, floor(speed x ms / 1000)) steps and drops the rest (its counter
+// +0x1e8 is zeroed first); its speed (+0x1f8, set through class slot 0x1c0)
+// is the .ai rate it moves at - cSlowRate walking, cFastRate running. So a
+// rate's tiles a second: cSlowRate 33 takes 2 steps an update, 0.466 tiles a
+// second (measured: tour guides 0.46-0.47 over 8-12 s walks, issue #152)
+inline float unitTilesPerSecond(int rate) {
+  int steps = rate * updateMs / 1000;
+  if (steps < 1)
+    steps = 1;
+  return static_cast<float>(steps) * 1000.0f / updateMs / unitStepsPerTile;
 }
 
 } // namespace Original

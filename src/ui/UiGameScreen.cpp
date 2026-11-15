@@ -3481,12 +3481,30 @@ void UiGameScreen::setupFilterPanel() {
     sell->onClick = [this] {
       if (!this->fences || !this->fences->filter(this->shownFilter))
         return;
-      int refund = this->fences->filterType(this->fences->filter(this->shownFilter)->file).cost / 2;
-      this->fences->removeFilter(this->shownFilter);
-      if (this->sim && refund > 0)
-        this->sim->earn(ZooSim::Construction, refund);
-      this->shownFilter = -1;
-      this->setPanelOpen(46, false);
+      // (zoo.exe sellSelected 0x48d052 -> sellObject 0x50a432: its sell
+      // value, ZTTankFilter::sellValue 0x50c961, asked first - filter1.ai's
+      // cNeedsConfirm - and booked on Recycling Benefit, bookRemovalRefund
+      // 0x4f9329)
+      const Fences::Filter *f = this->fences->filter(this->shownFilter);
+      const int x = f->x, y = f->y;
+      auto sell = [this, x, y] {
+        if (!this->fences)
+          return;
+        for (size_t i = 0; i < this->fences->filters().size(); i++)
+          if (this->fences->filters()[i].x == x && this->fences->filters()[i].y == y) {
+            float refund = this->fences->sellValue(static_cast<int>(i));
+            this->fences->removeFilter(static_cast<int>(i));
+            if (this->sim && refund > 0)
+              this->sim->earn(ZooSim::Recycling, refund);
+            break;
+          }
+        this->shownFilter = -1;
+        this->setPanelOpen(46, false);
+      };
+      if (Original::sellNeedsConfirm(this->resource_manager, f->file))
+        this->askConfirm(Original::sellQuestion(this->resource_manager, f->name, this->fences->sellValue(this->shownFilter)), sell);
+      else
+        sell();
     };
 }
 
@@ -4194,19 +4212,20 @@ void UiGameScreen::setupAnimalPanel() {
       if (!m)
         return;
       int id = m->id;
-      std::string ask = this->resource_manager->getString(154);
-      size_t at = ask.find("%s");
-      if (at != std::string::npos)
-        ask.replace(at, 2, m->name);
-      ask += formatPrice(static_cast<int>(std::lround(this->animals->sellValue(id))));
-      this->askConfirm(ask, [this, id] {
+      // (zoo.exe removeObject 0x50a0b0: an animal always asked, while
+      // confirmSell is on; the refund cut, not rounded)
+      auto sell = [this, id] {
         if (this->animalRequest)
           this->animalRequest(AnimalRequest::Sell, id);
         if (this->shownAnimal == id) {
           this->shownAnimal = -1;
           this->setPanelOpen(6, false);
         }
-      });
+      };
+      if (Original::confirmSell())
+        this->askConfirm(Original::sellQuestion(this->resource_manager, m->name, static_cast<float>(this->animals->sellValue(id))), sell);
+      else
+        sell();
     };
   if (UiText *name = dynamic_cast<UiText *>(z->getElementById(3102)))
     name->onCommit = [this](const std::string &typed) {
@@ -4295,10 +4314,27 @@ void UiGameScreen::showBuilding(int id) {
   if (UiButton *sell = dynamic_cast<UiButton *>(z->getElementById(commerce ? 4516 : 4616)))
     sell->onClick = [this, commerce] {
       int id = this->shownBuilding;
-      if (this->sellBuilding)
-        this->sellBuilding(id);
-      this->setPanelOpen(commerce ? 21 : 20, false);
-      this->shownBuilding = -1;
+      auto sell = [this, commerce, id] {
+        if (this->sellBuilding)
+          this->sellBuilding(id);
+        if (this->shownBuilding == id) {
+          this->setPanelOpen(commerce ? 21 : 20, false);
+          this->shownBuilding = -1;
+        }
+      };
+      // (zoo.exe sellSelected 0x48d052 -> removeObject 0x50a0b0: a building
+      // - cNeedsConfirm - asked first, "Are you sure you want to sell %s?
+      // Refund: $N", its 80%)
+      const PlacedObjects::Object *b = this->objects ? this->objects->byId(id) : nullptr;
+      if (b && Original::sellNeedsConfirm(this->resource_manager, PlacedObjects::fileOf(*b))) {
+        float value = 0;
+        for (const CatalogItem &item : ItemCatalog::get().all())
+          if (item.file == PlacedObjects::fileOf(*b))
+            value = item.cost * Original::sellFactor;
+        this->askConfirm(Original::sellQuestion(this->resource_manager, b->label.empty() ? b->name : b->label, value), sell);
+      } else {
+        sell();
+      }
     };
   this->refreshBuilding();
 }

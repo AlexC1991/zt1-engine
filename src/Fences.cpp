@@ -3,6 +3,7 @@
 #include "LightingAssets.hpp"
 #include <unordered_map>
 #include "Features.hpp"
+#include "OriginalConstants.hpp"
 #include <random>
 #include "Sound.hpp"
 
@@ -137,7 +138,7 @@ constexpr int kBaseStepPerTile = 8;    // measured: a 2 x 2 tank's base step $32
 constexpr double kSaltWaterPrice = 1.5;  // saltWater
 constexpr double kFreshWaterPrice = 1.0; // freshWater
 constexpr float kPurityDecaySeconds = 30.0f; // waterPurityDecayTime 30000 ms
-constexpr float kSeeThroughPurity = 1.0f; // (zoo.exe 0x6390b0, read live: the "can not see" line)
+constexpr float kSeeThroughPurity = Original::seeThroughPurity; // (zoo.exe 0x6390b0)
 
 std::string fileStem(const std::string &file) {
   size_t slash = file.find_last_of('/'), dot = file.find_last_of('.');
@@ -253,6 +254,8 @@ void Fences::loadTypes(ResourceManager *rm) {
     t.jumpable = ai->getInt(fints, "cisjumpable", 0) != 0;
     t.climbable = ai->getInt(fints, "cisclimbable", 0) != 0;
     t.seeThrough = ai->getInt(fints, "cseethrough", 0) != 0;
+    t.gateSeeThrough = ai->getInt("g/characteristics/integers", "cseethrough", 0) != 0;
+    t.gateHeight = ai->getInt("g/characteristics/integers", "cheight", t.height);
     t.electrified = ai->getInt(fints, "ciselectrified", 0) != 0;
     t.indestructible = ai->getInt(fints, "cindestructible", 0) != 0 || t.zooWall || t.tank;
     t.det[0] = artOf("f", "det");
@@ -1802,6 +1805,20 @@ void Fences::newMonth() {
 void Fences::removeFilter(int index) {
   if (index >= 0 && index < static_cast<int>(this->filterList.size()))
     this->filterList.erase(this->filterList.begin() + index);
+}
+
+// zoo.exe ZTTankFilter::sellValue 0x50c961: health (+0x15c) 0 or less,
+// nothing; else its cost (type slot 0xa4) x 0.8, halved (0x630d54) while
+// the health is at or under cDecayedHealth (type +0x16c)
+float Fences::sellValue(int index) const {
+  if (index < 0 || index >= static_cast<int>(this->filterList.size()))
+    return 0;
+  const Filter &f = this->filterList[index];
+  if (f.health <= 0)
+    return 0;
+  const FilterType &k = this->filterType(f.file);
+  float v = k.cost * Original::sellFactor;
+  return f.health <= k.decayedHealth ? v * Original::sellHalf : v;
 }
 
 // ----------------------------------------------------------------------------

@@ -741,7 +741,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
   };
   // Buildings bought: their panel; sold for 80% of their price back, as it
   // is (ZTEntity::objectSellValue 0x41ec7f; removeObject 0x50a0b0 books the
-  // float on the refunds row, bookRefund 0x48d2da)
+  // float on Recycling Benefit, bookRemovalRefund 0x4f9329)
   g_hud->setObjects(&world->objectsMutable(), [world, rm](int id) {
     PlacedObjects &po = world->objectsMutable();
     int i = po.indexOf(id);
@@ -773,10 +773,14 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
     switch (r) {
     case UiGameScreen::AnimalRequest::PickUp: world->pickUpAnimal(id); break;
     case UiGameScreen::AnimalRequest::Sell: {
+      // (zoo.exe removeObject 0x50a0b0: an animal's money back booked by
+      // bookRefund 0x48d2da, book 10 - the Finances' Recycling Benefit row
+      // (financesRefresh's rows 0x635a90: 3939 sums books 9 and 10), not
+      // Animal Purchases)
       double refund = world->getAnimals().sellValue(id);
       world->sellAnimal(id);
       if (refund > 0)
-        g_sim.earn(ZooSim::AnimalPurchase, refund);
+        g_sim.earn(ZooSim::Recycling, refund);
       updateHudClock(rm);
       break;
     }
@@ -913,6 +917,15 @@ static void handleToolResult(const World::ToolResult &r, ResourceManager *rm) {
   if (r.askEscape)
     g_hud->askConfirm(rm->getString(157), [rm] {
       if (int refund = g_world->confirmFenceRemoval())
+        g_sim.earn(ZooSim::Recycling, refund);
+      updateHudClock(rm);
+    });
+  // A building or tank filter bulldozed: "Are you sure you want to sell
+  // %s?" first, its refund on Recycling Benefit (zoo.exe removeObject
+  // 0x50a0b0 -> bookRemovalRefund 0x4f9329)
+  if (!r.askSell.empty())
+    g_hud->askConfirm(r.askSell, [rm] {
+      if (float refund = g_world->confirmSell(); refund > 0)
         g_sim.earn(ZooSim::Recycling, refund);
       updateHudClock(rm);
     });
@@ -1144,6 +1157,11 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
         for (const auto &kv : fn.pieces())
           if (kv.second.type >= 0 && kv.second.type < static_cast<int>(fn.types().size()))
             v += fn.types()[kv.second.type].cost;
+        // (tank filters too: every 'objects' entity's type cost, slot 0xa4 -
+        // ZTTankFilterType's is its +0x100 like the scenery's; staff, whose
+        // unit types have none, add nothing)
+        for (const Fences::Filter &f : fn.filters())
+          v += fn.filterType(f.file).cost;
         // (each path tile is an object too)
         const WorldMap &wm = g_world->getMap();
         for (int y = 0; y < wm.getHeight(); y++)
@@ -1288,6 +1306,12 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
   for (const Animals::Notice &n : g_world->getAnimals().takeNotices())
     g_hud->postMessage(n.text, n.kind, n.animal >= 0 ? UiGameScreen::Subject::Animal : UiGameScreen::Subject::None,
                        n.animal);
+  // A keeper with no way to its exhibit (zoo.exe 0x4e85e8: 11004 / 11001)
+  // (ours: the message's place is the keeper; the original's is the
+  // habitat's tile, 0x410349)
+  for (const Staff::Notice &n : g_world->getStaff().takeNotices())
+    g_hud->postMessage(n.text, n.kind, n.member >= 0 ? UiGameScreen::Subject::Staff : UiGameScreen::Subject::None,
+                       n.member);
   // zoo.exe 0x49340d: a tank too murky to see into (10549, priority 0)
   for (int id : g_world->getFences().takeMurkyTanks())
     if (const Fences::Exhibit *tank = g_world->getFences().exhibit(id)) {
@@ -3065,7 +3089,7 @@ static void applyResearch(const ResearchProgram &p) {
       else if ((t.kind == Staff::Kind::Keeper || t.kind == Staff::Kind::Scientist || t.kind == Staff::Kind::Trainer) &&
                which == 0) {
         t.slowRate = researchChange(t.slowRate, value, mode);
-        t.speed = t.slowRate / 60.0f;
+        t.speed = Original::unitTilesPerSecond(t.slowRate);
       }
       // (keepers' index 1 changes nothing outside the scientists: zoo.exe)
     }
@@ -3105,7 +3129,7 @@ static void resetResearchEffects() {
   }
   for (size_t i = 0; i < st.size(); i++) {
     st[i].slowRate = staffBase[i].slowRate;
-    st[i].speed = st[i].slowRate / 60.0f;
+    st[i].speed = Original::unitTilesPerSecond(st[i].slowRate);
     st[i].tourBonus = staffBase[i].tourBonus;
     st[i].cleanTrashRadius = staffBase[i].cleanTrashRadius;
     st[i].fixFenceModifier = staffBase[i].fixFenceModifier;
@@ -6038,6 +6062,23 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                 filter = fences.placeFilter(fx, fy, world->getMap());
             }
           SDL_Log("[TankLab] filter placed: %d", static_cast<int>(filter));
+          // Its sell value (zoo.exe ZTTankFilter::sellValue 0x50c961): 80% of
+          // its cost; worn to cDecayedHealth, half that; broken, nothing
+          if (filter && !fences.filters().empty()) {
+            const int fi = static_cast<int>(fences.filters().size()) - 1;
+            Fences::Filter &fl = const_cast<Fences::Filter &>(fences.filters()[fi]);
+            const Fences::FilterType &k = fences.filterType(fl.file);
+            const float health = fl.health;
+            const float full = fences.sellValue(fi);
+            fl.health = static_cast<float>(k.decayedHealth);
+            const float worn = fences.sellValue(fi);
+            fl.health = 0;
+            const float broken = fences.sellValue(fi);
+            fl.health = health;
+            check(("a filter sells for $" + std::to_string(full) + ", worn $" + std::to_string(worn) + ", broken $" +
+                   std::to_string(broken) + " (cost $" + std::to_string(k.cost) + ")").c_str(),
+                  std::abs(full - k.cost * 0.8f) < 1e-3f && std::abs(worn - k.cost * 0.4f) < 1e-3f && broken == 0);
+          }
           for (Animals::Member &m : const_cast<std::vector<Animals::Member> &>(an.members()))
             if (m.exhibit == (tk ? tk->id : -2))
               m.hunger = 80;
@@ -6555,11 +6596,22 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         }
         click(4910);
         capture("filter_panel_finance");
+        // Sell: asked first (filter1.ai's cNeedsConfirm), then 80% of its
+        // price back on Recycling Benefit (zoo.exe sellObject 0x50a432,
+        // ZTTankFilter::sellValue 0x50c961, bookRemovalRefund 0x4f9329)
         {
           double cash = g_sim.cash();
+          const double recycling = g_sim.history().back().lines[ZooSim::Recycling];
+          const float value = fences.sellValue(0);
           click(4906);
-          check("filter sold for half", fences.filters().empty() &&
-                                            std::lround(g_sim.cash() - cash) == fences.filterType().cost / 2);
+          const bool asked = g_hud->hasDialog() && !fences.filters().empty();
+          enter();
+          check(("filter Sell asks, then gives $" + std::to_string(std::lround(g_sim.cash() - cash)) +
+                 " back on Recycling Benefit (80% of $" + std::to_string(fences.filterType().cost) + ")").c_str(),
+                asked && fences.filters().empty() &&
+                    std::abs(g_sim.cash() - cash - fences.filterType().cost * Original::sellFactor) < 0.01 &&
+                    std::abs(value - fences.filterType().cost * Original::sellFactor) < 0.01f &&
+                    std::abs(g_sim.history().back().lines[ZooSim::Recycling] - recycling - value) < 0.01);
           check("its panel closes", !g_hud->isPanelOpen(46));
         }
       } else {
@@ -8120,6 +8172,8 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                          static_cast<double>(std::lround(sold.health) - soldType.minHits) / soldType.maxHits) *
                         0.5 * (sold.sick ? 0.5 : 1.0);
         cash = g_sim.cash();
+        const double recycling = g_sim.history().back().lines[ZooSim::Recycling];
+        const double purchases = g_sim.history().back().lines[ZooSim::AnimalPurchase];
         g_hud->showAnimal(id2);
         click(3111);
         capture("animal_sell_ask");
@@ -8133,6 +8187,11 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         }
         check(("sold for $" + std::to_string(refund)).c_str(),
               !an.member(id2) && std::abs(refund - expect) < 0.01 && std::abs(g_sim.cash() - cash - refund) < 0.01);
+        // (booked on Recycling Benefit, as zoo.exe removeObject 0x50a0b0's
+        // bookRefund 0x48d2da: Finances' 3939 sums books 9 and 10)
+        check("the sale on Recycling Benefit, not Animal Purchases",
+              std::abs(g_sim.history().back().lines[ZooSim::Recycling] - recycling - refund) < 0.01 &&
+                  g_sim.history().back().lines[ZooSim::AnimalPurchase] == purchases);
         // Moved: picked up, put down elsewhere in the exhibit
         world->pickUpAnimal(id1);
         auto [mx, my] = inside[1];

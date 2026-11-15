@@ -41,6 +41,9 @@ constexpr int kMatePickDelay = 3;
 // (animals.ai cDefenseRadius 3, zoo.exe 0x641560: how near two that both
 // cPreattack get before their stand-off)
 constexpr float kDefenseRadius = 3.0f;
+// ours: how soon an animal whose behaviour line couldn't run picks again
+// (the original's does at its next update, every frame)
+constexpr float kLineRetry = 0.1f;
 
 std::string lower(std::string s) { return Utils::string_to_lower(s); }
 
@@ -123,26 +126,37 @@ std::string trim(const std::string &s) {
 }
 
 // "fPlaySetProb(bIdle1,20,bHappy1,50)" -> fplaysetprob [bidle1, 20, ...]
+// zoo.exe 0x437d9b (the line parser, called by 0x435f0a as a line starts):
+// the name is what's before the '(' and the line must end with ')'; inside,
+// every space and '"' is taken out, then each piece up to a ',' is an
+// argument - an empty one too ("fDie()" has one, "a,,b" three) - and it
+// stops when nothing is left after a ',', so a trailing comma adds none
+// ("fPlaySetProb(bTense1,70,bAngry3,30,)" has four). (Ours: names and
+// arguments lower-cased, as everything we look up is - the .ai files spell
+// every function name as the original compares it.)
 bool parseStep(const std::string &text, Animals::Step &out) {
-  size_t open = text.find('('), close = text.rfind(')');
-  if (open == std::string::npos || close == std::string::npos || close < open)
+  std::string line = trim(text);
+  size_t open = line.find('(');
+  if (open == std::string::npos || line.empty() || line.back() != ')' || line.size() - 1 < open + 1)
     return false;
-  out.fn = lower(trim(text.substr(0, open)));
+  out.fn = lower(trim(line.substr(0, open)));
   out.args.clear();
-  std::string inner = text.substr(open + 1, close - open - 1);
-  size_t at = 0;
-  while (at <= inner.size()) {
-    size_t comma = inner.find(',', at);
-    std::string a = lower(trim(inner.substr(at, comma == std::string::npos ? std::string::npos : comma - at)));
-    if (!a.empty())
-      out.args.push_back(a);
-    if (comma == std::string::npos)
+  std::string inner;
+  for (char c : line.substr(open + 1, line.size() - open - 2))
+    if (c != ' ' && c != '"')
+      inner += c;
+  while (true) {
+    size_t comma = inner.find(',');
+    out.args.push_back(lower(inner.substr(0, comma)));
+    inner = comma == std::string::npos ? std::string() : inner.substr(comma + 1);
+    if (inner.empty())
       break;
-    at = comma + 1;
   }
   return !out.fn.empty();
 }
 } // namespace
+
+bool Animals::parseLine(const std::string &text, Step &out) { return parseStep(text, out); }
 
 // ----------------------------------------------------------------------------
 // Types
@@ -892,7 +906,7 @@ Animation *Animals::shadowArt(const Member &m, Animation *a) const {
   return sh;
 }
 
-Animation *Animals::art(const Member &m, const std::string &nameIn) const {
+Animation *Animals::art(const Member &m, const std::string &nameIn, bool orStand) const {
   const Type &t = this->typeList[m.type];
   int s = sub(m);
   // (a swimmer on a water tile: walking and running are its swim, standing
@@ -923,6 +937,8 @@ Animation *Animals::art(const Member &m, const std::string &nameIn) const {
     }
   }
   if (it == t.anims[s].end()) {
+    if (!orStand)
+      return nullptr;
     it = t.anims[s].find("stand");
     if (it == t.anims[s].end())
       it = t.anims[s].find("idle");
@@ -1356,6 +1372,14 @@ int Animals::nearestFood(const Member &m) const {
 // down, it goes to eat; worn out, it sleeps
 void Animals::chooseBehaviour(Member &m) {
   const Type &t = this->typeList[m.type];
+  // Loose and rampaging: bEscapedRampage, before anything else (zoo.exe
+  // 0x437102: an escaped animal's set is bEscapedRampage while it rampages,
+  // bEscaped otherwise - ahead of sleep and its moods)
+  if (m.escaped && m.rampaging && this->set(m, "bescapedrampage")) {
+    pushSet(m, "bescapedrampage");
+    ZT_STEP("0x437102", "Chooses: loose and rampaging", {"behaviour", "bescapedrampage"});
+    return;
+  }
   // Loose: its escaped behaviour (zoo.exe: no eating or sleeping)
   if (m.escaped && this->set(m, "bescaped")) {
     pushSet(m, "bescaped");
@@ -1389,6 +1413,17 @@ void Animals::chooseBehaviour(Member &m) {
             {"cEnergyThreshold", t.energyThreshold});
     return;
   }
+  // Sick: lies about (bSick) - and, as with a sleep, not rampaging while it
+  // does (zoo.exe 0x437102: while its set is bSleep, bSick or bHatch the
+  // rampage flag +0x3b0 is cleared and nothing else starts; the health
+  // check 0x4389aa starts bSick as it falls ill)
+  if (m.sick && this->set(m, "bsick")) {
+    m.rampaging = false;
+    m.rampageTicks = 0;
+    pushSet(m, "bsick");
+    ZT_STEP("0x437102", "Chooses: sick, lies about", {"behaviour", "bsick"});
+    return;
+  }
   // Rampaging: its bHabitatRampage, or bEscapedRampage when it's out
   // (zoo.exe 0x438514 sets it; which set, by the names it ends there)
   if (m.rampaging) {
@@ -1399,13 +1434,7 @@ void Animals::chooseBehaviour(Member &m) {
       return;
     }
   }
-  // Sick: lies about (bSick)
-  if (m.sick && this->set(m, "bsick")) {
-    pushSet(m, "bsick");
-    ZT_STEP("", "Chooses: sick, lies about", {"behaviour", "bsick"});
-    return;
-  }
-  int h = static_cast<int>(std::lround(m.happiness));
+  int h =static_cast<int>(std::lround(m.happiness));
   // (in a tank: its surface or underwater list, by where it swims)
   if (t.underwater && this->tankAt && this->tankAt(m.x, m.y) >= 0) {
     bool top = this->tankDepth && m.swimZ >= this->tankDepth(this->tankAt(m.x,m.y)) - 0.35f;
@@ -1508,6 +1537,16 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
     play(m, "surfidle", Member::Mode::Loop, 1.0f);
     return;
   }
+  // (an fPlay's next animation, while its step is still the one running)
+  if (!m.playQueue.empty()) {
+    if (!m.stack.empty() && m.playQueueAt == std::make_pair(m.stack.size(), m.stack.back().second)) {
+      std::string next = m.playQueue.front();
+      m.playQueue.erase(m.playQueue.begin());
+      play(m, next, Member::Mode::Once);
+      return;
+    }
+    m.playQueue.clear();
+  }
   if (m.stack.empty()) {
     m.drinkX = m.drinkY = -1;
     chooseBehaviour(m);
@@ -1525,6 +1564,20 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
     Step s = (*steps)[m.stack.back().second++];
     const Command command = behaviorCommand(s.fn);
     auto arg = [&](size_t i) { return i < s.args.size() ? s.args[i] : std::string(); };
+    // A line its handler can't run (zoo.exe: the handler returns false;
+    // 0x435f0a takes that as the set failing, 0x435e57 ends the set and each
+    // set it was played from in turn): every set it's in is over, its
+    // animation going on as it was till it picks again. measured
+    // 2026-11-15 in Play original (Lab, everything-ff02-units.zoo, the
+    // runner's line at unit +0x48 / runner +0x34): Mexican wolves in bCalm1
+    // left it as it reached fPlay(lie_paw) - an animation they haven't - and
+    // started a new mood set, never playing the lines after it
+    auto failLine = [&](const char *at) {
+      ZT_STEP(at, "A line that can't run: its sets end", {"line", s.fn}, {"arguments", static_cast<double>(s.args.size())});
+      m.stack.clear();
+      m.playQueue.clear();
+      play(m, m.anim, Member::Mode::Loop, kLineRetry);
+    };
     const bool moving=command==Command::Move || command==Command::MoveWithSound || command==Command::MoveReverse;
     const bool playing=command==Command::Play || command==Command::PlayWithSound || command==Command::PlayTime ||
       command==Command::PlayReverse || command==Command::PlayPingPong || command==Command::PlayStopAtEnd ||
@@ -1536,7 +1589,28 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       m.showDone = true; m.showTrick = false; m.stack.clear();
       play(m, "surfidle", Member::Mode::Loop, 1.0f);
       return;
-    } else if (command == Command::Play || command == Command::PlayWithSound || command == Command::PlayStopAtEnd) {
+    } else if (command == Command::Play) {
+      // zoo.exe 0x440b92: every animation the line names that the animal
+      // has, one after another ("fPlay(stamp,stamp)" stamps twice); names it
+      // hasn't are passed over - and with none it has, the set fails
+      std::vector<std::string> anims;
+      for (const std::string &a : s.args)
+        if (art(m, a, false))
+          anims.push_back(a);
+      if (anims.empty()) {
+        failLine("0x440b92");
+        return;
+      }
+      play(m, anims.front(), Member::Mode::Once);
+      m.playQueue.assign(anims.begin() + 1, anims.end());
+      m.playQueueAt = {m.stack.size(), m.stack.back().second};
+    } else if (command == Command::PlayWithSound || command == Command::PlayStopAtEnd) {
+      // (fPlayStopAtEnd 0x5a55a9 plays through fPlay 0x440b92: an animation
+      // it hasn't, the set fails)
+      if (command == Command::PlayStopAtEnd && !art(m, arg(0), false)) {
+        failLine("0x5a55a9");
+        return;
+      }
       play(m, arg(0), Member::Mode::Once);
       if (command == Command::PlayWithSound)
         playSound(m, arg(1));
@@ -1554,11 +1628,30 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       if (duration <= 0 && repeats > 1) m.playFor = repeats * animSeconds(m, arg(0));
       if (!arg(1).empty() && arg(1) != "0") playSound(m, arg(1));
     } else if (command == Command::PlayTime) {
-      play(m, arg(0), Member::Mode::Loop, std::max(0.5f, static_cast<float>(std::atof(arg(1).c_str()))));
-    } else if (command == Command::PlayPingPong) {
-      play(m, arg(0), Member::Mode::PingPong);
-    } else if (command == Command::PlayReverse) {
-      play(m, arg(0), Member::Mode::Reverse);
+      // zoo.exe 0x424e7f: exactly two arguments, the time a whole number of
+      // seconds (its number x 1000 ms); 0x424ee7 plays the animation whole
+      // times, once and again while what's left of the time is 1 ms or more
+      // - so the time rounded up to whole plays. Another count, or an
+      // animation it hasn't, the set fails. measured 2026-11-15 (Play
+      // original, a wild dog's bAngry1 fPlayTime(stand,15)): about 14-15 s
+      if (s.args.size() != 2 || !art(m, arg(0), false)) {
+        failLine("0x424e7f");
+        return;
+      }
+      const int wantMs = std::atoi(arg(1).c_str()) * 1000;
+      const int loopMs = static_cast<int>(std::lround(animSeconds(m, arg(0)) * 1000.0f));
+      int plays = 1;
+      for (int left = wantMs - loopMs; left >= 1 && loopMs > 0; left -= loopMs)
+        plays++;
+      play(m, arg(0), Member::Mode::Loop, plays * loopMs / 1000.0f);
+    } else if (command == Command::PlayPingPong || command == Command::PlayReverse) {
+      // (both through fPlay 0x440b92 - fPlayPingPong 0x42631a, fPlayReverse
+      // 0x440c82: an animation it hasn't, the set fails)
+      if (!art(m, arg(0), false)) {
+        failLine(command == Command::PlayPingPong ? "0x42631a" : "0x440c82");
+        return;
+      }
+      play(m, arg(0), command == Command::PlayPingPong ? Member::Mode::PingPong : Member::Mode::Reverse);
     } else if (command == Command::Halt) {
       // Stops where it is (zoo.exe 0x601da3: stopMoving)
       m.path.clear();
@@ -1585,6 +1678,12 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       // (its death is the set ending: dieAfter, as bDie's end on land)
       continue;
     } else if (command == Command::PlaySet) {
+      // zoo.exe 0x426dd4: one argument, a set it has (0x43ddc1 finds none
+      // to play otherwise: the set fails)
+      if (s.args.size() != 1 || !this->set(m, arg(0))) {
+        failLine("0x426dd4");
+        return;
+      }
       pushSet(m, arg(0));
       continue;
     } else if (command == Command::PlaySetTank) {
@@ -1593,23 +1692,42 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       pushSet(m, top ? arg(0) : arg(1));
       continue;
     } else if (command == Command::PlaySetProb) {
-      // Weighted: set, chance, set, chance ...
+      // Weighted: set, chance, set, chance ... (zoo.exe 0x43df67, its roll
+      // 0x43e0d3): an even number of arguments, at least two, whose chances
+      // add up to exactly 100 - otherwise nothing is picked and the set
+      // fails. A roll of 1..100 against the first chance; past it, the
+      // chance left is rolled again (1..what's left) against the next, and
+      // so on. A set picked that the animal doesn't have plays nothing
+      // (0x43ddc1) and the set fails too - its mood is picked again
+      std::vector<std::pair<std::string, int>> picks;
       int total = 0;
-      for (size_t i = 0; i + 1 < s.args.size(); i += 2)
-        if (this->set(m, s.args[i]))
-          total += std::max(0, std::atoi(s.args[i + 1].c_str()));
-      if (total <= 0)
-        continue;
-      int roll = std::uniform_int_distribution<int>(0, total - 1)(this->rng);
-      for (size_t i = 0; i + 1 < s.args.size(); i += 2) {
-        if (!this->set(m, s.args[i]))
-          continue;
-        roll -= std::max(0, std::atoi(s.args[i + 1].c_str()));
-        if (roll < 0) {
-          pushSet(m, s.args[i]);
+      if (s.args.size() >= 2 && s.args.size() % 2 == 0)
+        for (size_t i = 0; i + 1 < s.args.size(); i += 2) {
+          picks.push_back({s.args[i], std::atoi(s.args[i + 1].c_str())});
+          total += picks.back().second;
+        }
+      if (picks.empty() || total != 100) {
+        failLine("0x43df67");
+        return;
+      }
+      int left = 100;
+      int roll = std::uniform_int_distribution<int>(1, 100)(this->rng);
+      std::string picked;
+      for (size_t i = 0; i < picks.size(); i++) {
+        if (roll <= picks[i].second) {
+          picked = picks[i].first;
           break;
         }
+        left -= picks[i].second;
+        if (left > 0 && left < 101)
+          roll = std::uniform_int_distribution<int>(1, left)(this->rng);
       }
+      if (picked.empty() || !this->set(m, picked)) {
+        ZT_STEP("0x43e0d3", "fPlaySetProb picked a set it hasn't: the set fails", {"set", picked});
+        failLine("0x43e0d3");
+        return;
+      }
+      pushSet(m, picked);
       continue;
     } else if (command == Command::PlaySetTerrain) {
       // One of four sets by where it is: on land, in water, in a tank at the
@@ -1626,6 +1744,20 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
     } else if (command == Command::Walk || command == Command::Move || command == Command::Run || command == Command::Trot || command == Command::MoveWithSound ||
                command == Command::MoveReverse) {
       std::string target = arg(0);
+      // Its arguments (zoo.exe): fWalk/fSwim 0x436606, fTrot 0x4a31de and
+      // fRun 0x4a5310 exactly two; fMove 0x425533 (and fMoveReverse
+      // 0x4a75a7 through it) four or five; fMoveWithSound 0x4248fa five or
+      // six - and a first one that isn't empty. Otherwise the set fails
+      const size_t n = s.args.size();
+      const bool fits = command == Command::Move || command == Command::MoveReverse ? n == 4 || n == 5
+                        : command == Command::MoveWithSound                          ? n == 5 || n == 6
+                                                                                     : n == 2;
+      if (!fits || target.empty()) {
+        failLine(command == Command::Walk ? "0x436606" : command == Command::Trot ? "0x4a31de"
+                 : command == Command::Run ? "0x4a5310" : command == Command::MoveWithSound ? "0x4248fa"
+                                                                                            : "0x425533");
+        return;
+      }
       // fMove(where, n, animation, speed); fMoveWithSound the same and a
       // sound (a dolphin's jumps, a shark's frenzy); fMoveReverse (not yet
       // played backwards); fTrot at its medium rate, trotting
