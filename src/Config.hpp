@@ -31,6 +31,9 @@ public:
   // the original (freeform/unlock*.scn); 0 (default) = all of them from
   // the start
   bool getTimedUnlocks();
+  // [UI] minimumMessageInterval: seconds before the message bar takes the
+  // same message again (zoo.exe 0x520a08)
+  int getMinimumMessageInterval();
   std::string getMenuMusic();
   bool getPlayMenuMusic();
   int getScreenWidth();

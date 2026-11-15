@@ -6439,6 +6439,14 @@
    "provisional": false,
    "summary": "The default events (class slot 0x10): the list emptied (slot 8)"
   },
+  "0x435cfb": {
+   "by": "Claude",
+   "class": "ZTUnit",
+   "confidence": "likely",
+   "name": "unitBehaviourUpdate",
+   "provisional": false,
+   "summary": "A unit's behaviour update (every frame): a set running (+0x6d, +0x54 not empty) runs its runner (0x435e57); none: the asked-for set (+0xdc) started through 0x43c6c5(+0xdc, 0, 2) and '' asked for after (replaceable), or with none asked for startBehaviour (class slot 0x48). Ported: Animals::nextStep"
+  },
   "0x435d3f": {
    "by": "batty251 (the job class tables read from memory; each job's own status text)",
    "class": "Job2_PutDownFood",
@@ -6579,6 +6587,13 @@
    "name": "animalStartBehaviour",
    "provisional": false,
    "summary": "Starts a behaviour set by name: compares bSleep, bHatch... (the piece at 0x4375d3 ends a rampage on bSleep); ZTAnimal's table slot 0x48 / Confirmed: the animal's class slot 0x48 (startBehaviour): Sleep, bSick, bHatch, bEscaped..."
+  },
+  "0x4373eb": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "guestAtBuildingEntrance",
+   "provisional": false,
+   "summary": "True when the object in the guest's tile quarter (tile +4, by its +0x218/+0x21c in 64ths) is a building tagged at that spot (0x41239d with the 'Going to building' / 'Going to entrance' tags 0x63af90/0x63afd8): the guest is at the building's door"
   },
   "0x43750c": {
    "by": "Claude",
@@ -7067,6 +7082,14 @@
    "name": "habitatCountSpecies",
    "provisional": false,
    "summary": "A habitat's count of one species' adults (subtype 'm'/'f'), and its joined habitats' too when asked"
+  },
+  "0x43c6c5": {
+   "by": "Claude",
+   "class": "ZTUnit",
+   "confidence": "likely",
+   "name": "startSetNow",
+   "provisional": false,
+   "summary": "Starts a behaviour set at once: only with no set running (+0x6d), a running set that may be cut (+0x6c) or forced (6th argument); clears the old set and its runner, +0x6c = the 5th argument"
   },
   "0x43ca83": {
    "by": "zt1-engine (batty251, earlier sessions)",
@@ -7764,6 +7787,13 @@
    "provisional": false,
    "summary": "An object's broken look (class slot 0x130): its \"idledead\" animation"
   },
+  "0x44ac6e": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "tankWallSetHeight",
+   "provisional": false,
+   "summary": "A tank wall's height: +0x454 = the height given, +0x464 = (height != 0) - the 'height set' byte guestTapTank and sightEdgeBlocks test; then its art redone (0x44a8b1, 0x44aadb)"
+  },
   "0x44ba57": {
    "by": "Claude",
    "confidence": "sure",
@@ -8097,6 +8127,13 @@
    "name": "ui_mulstaff_457f81",
    "provisional": true,
    "summary": "Works on the staff list (ui/mulstaff.lyt): list"
+  },
+  "0x458b5f": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "undoListHolds",
+   "provisional": false,
+   "summary": "True when the undo list (+0x37c) holds an action of this kind about this thing (subject 0: any of that kind); kind 3 asks only while a new group hasn't started (+0x380 clear)"
   },
   "0x458c2b": {
    "by": "batty251",
@@ -9268,6 +9305,13 @@
    "name": "unlockSurface3",
    "provisional": true,
    "summary": "Named by its own debug text (\"GXCanvas::unlockSurface - ...\") - one of 4 functions with this text (overloads, or copies built in)"
+  },
+  "0x47e864": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "ZTTankFilter::reset",
+   "provisional": false,
+   "summary": "Class slot 0x134: costs cleared (+0x168..0x170), 1 month in operation (+0x188), built and serviced now (+0x178, +0x180)"
   },
   "0x47ebd4": {
    "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
@@ -10581,6 +10625,13 @@
    "provisional": false,
    "summary": "Job 0x1d's constructor (unitMakeJob case 0x1d)"
   },
+  "0x49bd60": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "tankAddPurity",
+   "provisional": false,
+   "summary": "A tank's purity (+0x1a8) up by the amount given, through tankMurkyWarning 0x49340d (a marine specialist's sweep: cCleanTankPct)"
+  },
   "0x49bd80": {
    "by": "batty251 (read its code, from the live steps: a month ending)",
    "class": "ZTGameMgr",
@@ -10588,6 +10639,20 @@
    "name": "bookExpense690",
    "provisional": false,
    "summary": "A cost booked in the month's +0x690 and year's +0xfe4 columns, taken off the net - the month's end"
+  },
+  "0x49c6d7": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "messageBarAdd",
+   "provisional": false,
+   "summary": "The message bar's add (its element: deque at +0x408 of 0x20-byte messages, text/+0xc/subject id +0x10/time +0x14 (timeGetTime)/kind +0x18): a kind 0-2 message whose text matches one kept from less than +0x444 seconds ago ([UI] minimumMessageInterval, 60) is dropped; at +0x440 (25) kept the oldest goes; the newest pushed in front, coloured by kind %% 3 (+0x430), the crosshair icon (mescros) when it's about something"
+  },
+  "0x49c96e": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "messageMake",
+   "provisional": false,
+   "summary": "A message bar entry made: its text, kind (+0x18), subject's id (+0x10, the unit's +0x124), flags +0x1c/+0x1d, and the time (+0x14, timeGetTime)"
   },
   "0x49ccc3": {
    "by": "batty251 (read its code, from the live steps)",
@@ -10609,6 +10674,13 @@
    "name": "postZooMessage",
    "provisional": false,
    "summary": "A zoo message by text number (kind 2 for advice): zooAdvisories' and others'"
+  },
+  "0x49cec0": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "messageBarShowUnit",
+   "provisional": false,
+   "summary": "messageBarShow for a unit's message (postUnitMessage 0x49d18e): the same checks, the text already filled in (0x49cf34, messageBarAdd)"
   },
   "0x49cfeb": {
    "by": "batty251 (read its code)",
@@ -10800,6 +10872,30 @@
    "provisional": false,
    "summary": "Task 0x72 (Task72_FindKeeperFood: an animal going to the keeper's food (\"Going to keeper food\", \"Keeper food was gone\"; bFindKeeperFood)): set up when the task starts; true if it can - class slot 4"
   },
+  "0x49fe15": {
+   "by": "Claude",
+   "class": "ZTHabitat",
+   "confidence": "likely",
+   "name": "habitatNearestFood",
+   "provisional": false,
+   "summary": "The nearest food object of a kind (food +0x168) on the habitat's tiles, by tile distance (first of equals); none and asked (3rd argument), the nearest in connected habitats - Task 0x72's pick 3 times in 4"
+  },
+  "0x4a0025": {
+   "by": "Claude",
+   "class": "ZTHabitat",
+   "confidence": "likely",
+   "name": "habitatLeastFood",
+   "provisional": false,
+   "summary": "The food object of a kind with the fewest units left (+0x154) on the habitat's tiles; none and asked, in connected habitats - Task 0x72's pick 3 in 16"
+  },
+  "0x4a01f9": {
+   "by": "Claude",
+   "class": "ZTHabitat",
+   "confidence": "likely",
+   "name": "habitatRandomFood",
+   "provisional": false,
+   "summary": "A food object of a kind at random (rand % its count, 0x4a01c8) on the habitat's tiles; none and asked, in connected habitats - Task 0x72's pick 1 in 16"
+  },
   "0x4a02f7": {
    "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
    "confidence": "sure",
@@ -10902,6 +10998,14 @@
    "name": "beginClear",
    "provisional": false,
    "summary": "Shared begin (slot 4): the unit's +0x24c, +0x3a4 and +0x22c cleared, its slot 0x258 called"
+  },
+  "0x4a0d77": {
+   "by": "Claude",
+   "class": "ZTHabitat",
+   "confidence": "likely",
+   "name": "habitatNearestWater",
+   "provisional": false,
+   "summary": "The habitat's nearest water tile (tile +0x83 & 3, terrain +0x80 not 10) by tile distance, first of equals - Task 0x7a's target"
   },
   "0x4a13a6": {
    "by": "batty251 (the job class tables read from memory; each job's own status text)",
@@ -11423,11 +11527,11 @@
    "summary": "Task 0x72's constructor (unitMakeTask case 0x72): the unit (+4), its task state (unit+0x15c, +8), the class table 0x632ccc - an animal going to the keeper's food (\"Going to keeper food\", \"Keeper food was gone\"; bFindKeeperFood)"
   },
   "0x4a8f89": {
-   "by": "batty251 (read its code, from the live steps)",
-   "confidence": "guess",
-   "name": "animalTankFoodCheck",
-   "provisional": true,
-   "summary": "animalCheckHunger's case for a tank tile (flag 0x20): the tank's food"
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "animalDropDung",
+   "provisional": false,
+   "summary": "An animal's dung drop (from animalCheckHunger once the dung meter +0x2c8 reaches cDirtyThreshold +0x32c): on a tank's water (tile +0x85 & 0x20) no pile - the tank's purity drops by cPooWaterImpact (+0x448, tankMurkyWarning); a tile with +0x83 & 3, nothing; else a pile of poo, or dinopoo when the type's +0x3cf (cDinoZoodoo), sized 1 by +0x3ce (cSmallZoodoo) or 2 by +0x3d0 (cGiantZoodoo, checked last), through 0x4fe07c -> setPooKind"
   },
   "0x4a945f": {
    "by": "batty251 (read the behaviour dispatchers 0x436065 and 0x437ccd)",
@@ -13283,11 +13387,11 @@
    "summary": "The zoo view's keys: Pause (0x13) toggles pauseGame / unpauseGame by the game's paused flag (+0x440), F1 (0x70, without Ctrl) opens help (openHelp(-1)), F10 (0x79) swallowed; others passed on"
   },
   "0x4f15c8": {
-   "by": "batty251 (read its code: the framework every recording runs)",
-   "confidence": "guess",
-   "name": "uiNotifyChildren",
-   "provisional": true,
-   "summary": "A UI list's entries of kind 2 told (their slot 0x18(1)) when asked"
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "undoListClear",
+   "provisional": false,
+   "summary": "The undo list emptied (with 1: each removal's thing told, its slot 0x18(1)); the new-group flag (+0xc) cleared - called by undoListAdd and undoLastAction's end (0x4f16f0)"
   },
   "0x4f16f0": {
    "by": "batty251 (the UI element numbers it asks uiFind for, from the game's layout files)",
@@ -13485,11 +13589,11 @@
    "summary": "zooViewMouse's check of where the thing would go (tankCheckPlacement first; the price kept, +0x14)"
   },
   "0x4f8a1f": {
-   "by": "batty251 (read its code)",
+   "by": "Claude",
    "confidence": "likely",
-   "name": "messageListAdd",
+   "name": "undoListAdd",
    "provisional": false,
-   "summary": "A message added to the message list (unless it's off, +4): its fields kept, the list's children told (uiNotifyChildren)"
+   "summary": "An action appended to the undo list (this = zoo view +0x374; nothing while undoing, +4, or for kind 0): when a new group was asked for (+0xc, set by a click on the map - removeSelected, 0x4d8411) the list's emptied first (undoListClear 0x4f15c8)"
   },
   "0x4f9329": {
    "by": "batty251 (read its code, from the recordings it alone ran in: deleting an object, hiring a zookeeper)",
@@ -13803,6 +13907,13 @@
    "name": "keeperDropFood",
    "provisional": true,
    "summary": "A keeper drops food when its animals need more than is there"
+  },
+  "0x5080ee": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "foodTypeByIndex",
+   "provisional": false,
+   "summary": "The food object type for a keeper food index: the name from the table at 0x64e6ec (herbchow, carnchow, ... chum) looked up among the loaded types"
   },
   "0x5082e5": {
    "by": "batty251 (read unitMakeJob)",
@@ -14722,6 +14833,13 @@
    "name": "uiSettingsLoad",
    "provisional": true,
    "summary": "zoo.ini's [UI] read into the UI manager: ... confirmSell (default 1) into +0x456, which sellConfirmDialog 0x50bf8d checks before asking"
+  },
+  "0x520a08": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "messageBarCtor",
+   "provisional": false,
+   "summary": "The message bar element's constructor: keeps 25 (+0x440 = 0x19), repeat interval +0x444 = zoo.ini [UI] minimumMessageInterval (60 when missing)"
   },
   "0x52196e": {
    "by": "Lab loader mapper",
@@ -17253,11 +17371,11 @@
    "summary": "An exhibit's mini icon (fence state; a tank's water)"
   },
   "0x5b32de": {
-   "by": "batty251 (read its code)",
+   "by": "Claude",
    "confidence": "likely",
-   "name": "postMessage",
+   "name": "undoRecord",
    "provisional": false,
-   "summary": "A message into the zoo's messages (not while a game's loading, 0x638589): its kind (1, 2...; a kind-2 repeat checked by 0x458b5f), what it's about, its text - the message bar told (its element's slot 0x68) and the list added to (messageListAdd). Selling, the tank filter and others post through it"
+   "summary": "Not a message: one action recorded for Undo (the zoo view's list at +0x37c; not while a game's loading, 0x638589). Kind 1 placed, 2 removed (dropped when the list already holds a removal of the same thing, 0x458b5f), 3 terrain, 4-8 tank changes, 9 a fence, 10-11 others; any kind but 0 lights the Undo button (1075, uiFind 0x433, slot 0x68); then undoListAdd 0x4f8a1f. undoLastAction 0x4de527 plays the list back"
   },
   "0x5b391c": {
    "by": "Claude",
@@ -17844,10 +17962,10 @@
   },
   "0x615d28": {
    "by": "Claude",
-   "confidence": "likely",
+   "confidence": "sure",
    "name": "filterPanelNumbers",
    "provisional": false,
-   "summary": "The tank filter's info: upkeep last month/this month/total (+0x168, +0x16c, +0x170 ints) through moneyToText without grouping; 'Broken Down' (4999) at health +0x15c <= 0 (0x4113c9), 'Minimum efficiency' (4914) at the type's decayed health (+0x16c) or less (0x499148), else 'Maximum efficiency' (4913); months since placed ('%s month(s) ago')"
+   "summary": "The tank filter panel's numbers: upkeep last/this month/total (+0x168/+0x16c/+0x170, 4921/4923/4925), state (4913: 4999 broken, 4914 decayed, else 4913), 'Last Filter Service: %s month(s) ago' (4916) from +0x180 - whole days + 29.9 cut / 30, no minimum - and months in operation (4918) from +0x188"
   },
   "0x616035": {
    "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
@@ -18265,6 +18383,13 @@
    "name": "debugText",
    "provisional": false,
    "summary": "The guest's debug overlay (class slot 0x64): \"Hap:%d Hun:%d Ths:%d Bth:%d Eng:%d NonPath:%d\""
+  },
+  "0x619245": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "guestPriceHappy",
+   "provisional": false,
+   "summary": "The guest's pending happiness += its type's +0x244 (cPriceHappy1Change), adult/child by slot 0x1fc; called for a bargain (0x42d1e2, 0x42d858)"
   },
   "0x619472": {
    "by": "batty251 (getters and setters in the class tables, read one by one)",
@@ -33512,6 +33637,351 @@
    "by": "Claude",
    "on": "2026-11-16",
    "what": "Note at 0x5317c5: Zoo Status' building list's months open: the same as buildingInfoNumbers 0x488446 - (zoo FILETIME 0x40e7e0 - the building's +0x180) / 864,000,000,000 (0x40674d), + 29.9 (0x6351a8) cut, / 30, at least 1"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x5b32de undoRecord"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x458b5f undoListHolds"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x4f8a1f undoListAdd"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x4f15c8 undoListClear"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x49c6d7 messageBarAdd"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x520a08 messageBarCtor"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x49c96e messageMake"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x49cec0 messageBarShowUnit"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTTankFilter+0x178 = builtTime"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTTankFilter+0x180 = servicedTime"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTTankFilter+0x188 = monthsRunning"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTTankFilter+0x18c = monthCheck"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x615d28 filterPanelNumbers"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x47e864 ZTTankFilter::reset"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x4a8f89 animalDropDung"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTAnimalType+0x3cf = dinoZoodoo"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTAnimalType+0x3ce = smallZoodoo"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTAnimalType+0x3d0 = giantZoodoo"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x4f429d: Read 2026-11-16: sets the object's +0x154 to its argument; for poo / dinopoo that's the pile's size: 1 plays the type's 'small' animation, 2 'giant', anything else 'idle' (dinopoo.ai: idle = mid, giant = full). Called by 0x4fe07c (the dung drop) and Job2 atTarget (food amount)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x4271a1: Corrected 2026-11-16: the route to the target tile (+0x234, the can's) first; it fails -> that tile onto +0x27c, then ONE of its four neighbours (tileNeighbours4, picked at random with the game's rand) is tried, onto +0x27c too when its route fails; both fail -> +0x2a4 = 1 and the job ends. Not all four. Ported in Staff::findWork"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x5084b3: Confirmed 2026-11-16: the keeper's +0x2a4 is its food type, the index into the food-name table 0x64e6ec (0 herbchow, 1 carnchow, 2 fruichow, 3 bambchow, 4 graschow, 5 fishchow, 6 inschow, 7 dinocarn, 8 dinogras, 9 krill, 10 fish, 11 chum) that 0x48f7ca -> 0x5080ee makes the dropped food from; so bFeedCarn is carnchow only. Ported"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x5080ee foodTypeByIndex"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x47002e: Read 2026-11-16: bHealEgg (scient.ai: healegg with heal_animal, then fPlayReverse(healegg)) for an egg, else bHeal; ZTKeeper::statusText 0x471399 says 'Visiting eggs' (10321) for one. The 'egg branch' at 0x5ecae9 in atTarget is something else: it runs only when the global byte 0x64e83a is set, 1 time in 10"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x5961e4: Read 2026-11-16: the specialist's +0x258 states match fPlaySetTank 0x5b2be5's (3 at the surface, 4 under the water); ours' m.water 2 and 3. Job25 is reached under the water (Task6e's live order: ClimbDownB first), so bCleanTankSub"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x61b4c6: Read 2026-11-16: an animal's job, not staff: the unit's +0x3a4 (cPreattack) plays bPreattack, else +0x24c plays bDefense; atTarget checks the unit is a ZTAnimal (0x638690)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x5aa24d: Read 2026-11-16: puts the unit in its habitat's tank at tankEntryPoint (0x499cfa, 0x4a746a), its habitat's id into +0x254. Seen only with a trainer at a show platform: the marine shows' work (Shows), not a freeform staff job"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x63244c: Read 2026-11-16: the base Job class's table, not a job of its own - begin returns true, the other slots are empty; every job's constructor (0x413a43) and destructor puts it back"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x4c32bd: Read 2026-11-16: +0x1f4 cFoodUnitsSecond 10, +0x1f8 cCleanTime 2, +0x1fc cHealUnitsSecond 10, +0x200 cFoodPerTile 100, global 0x6386f8 cSicklyAnimalPct 10, +0x204 cCleanTankPct 10, +0x208 cCleanTankThreshold 100 (loadConfig 0x4c34ae; +0x20c the cDirt list)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x47f61f: Read 2026-11-16: a tank sweep: 0x49bd60(habitat, type +0x204 cCleanTankPct) adds it to the tank's purity +0x1a8"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x49bd60 tankAddPurity"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x4c3ee2: Read 2026-11-16: +0x1f4 cInformGuestTime 5, +0x1f8 cTourGuideBonus 5; cCrowdCheck +0x1fc, cCrowdRadius +0x200, cFollowChance +0x204, cMaxGroupSize +0x208 not set here (loadConfig 0x4c406f)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x5a5395: Read 2026-11-16: an animal needs healing at (100 - cSicklyAnimalPct)% of its +0x234 or less: 85% with the shipped 15"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x4373eb guestAtBuildingEntrance"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x44ac6e tankWallSetHeight"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x619245 guestPriceHappy"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTFence+0x454 = tankWallHeight"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTFence+0x464 = tankWallHeightSet"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x4231c1: Read 2026-11-16: no repeat check - thoughtPush 0x42311a always pushes at the front and drops the oldest past +0xc. Egg rule ported (Guests::think); ours keeps its own no-repeat rule"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x425a85: Read 2026-11-16 (#163): +0x454 is the tank wall's height and +0x464 'height set' (0x44ac6e). The own tile's slot that way holding a fence that isn't a tank wall skips that way; the first tank wall with its height set decides (returns false on the ground tests, not the next way). The roll comes first. 0x4a7e94 with the set already playing returns true without restarting it - and whileGoing 0x42325d never matches bTapTank (it checks bTapWall), so each update while tapping it rolls mimic, fence, tap again (another tap passing: goes on), else bGawk replaces it. Ported: Guests::tapTank, viewNext"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x42c8af: Read 2026-11-16 (#164): [0x638048]+0x118 is economy.cfg's cItemExpensive (ZTGameMgr+0x108, loadConfig 0x591fc2; setDefaults 1.2, the file 2), +0x114 cItemCheap (0.8 / 0.5). Type +0x23d is cCommerce (ZTBuildingType loadConfig 0x4c1058: == 1). 0x4373eb: the guest stands on the building's entrance square (its tile's quarter +4 holds the building, tagged going-to-building). Ported: Guests::useBuilding"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x42d1e2: Read 2026-11-16: type +0x200 is the Sells list (loadConfig 0x4c1142). Sells empty: 0x42d74e then guestConsumeItem. Else a random sold item: price >= cItemExpensive x default: 10073, cPriceAngry1Change, no item; <= cItemCheap x default: 10072, cPriceHappy1Change; holdItem 0x42d54e; consumed now (item +0x1c, consumenow) -> guestConsumeItem 0x42d380"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x42d858: Read 2026-11-16 (#187): pays only for a cCommerce building (type +0x23d): price (+0x1ac) x cPriceFactor (type +0x188, doubled when DAT_0063aff0) onto the building's +0x1a0/+0x1a8 and, building +0x1c4 == 0, the zoo's books (0x42df22) and cash (0x40f018). A cCommerce building that sells nothing (type +0x200 Sells list empty) judges the price here (cItemExpensive: 10073 + 0x533480; cItemCheap: 10072 + 0x619245). Restrooms, shelters (cCommerce 0) are never charged; the shipped cCommerce buildings all have cDefaultCost; bounce/swing/dslide/aqbounce have a cDefaultCost but cCommerce 0 - free. Ported: Guests (State::Using exit)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x43b03a: Read 2026-11-16: the limits are the type's +0x1e4/+0x1ec (happiness 100/-100), +0x1f0..+0x20c (needs 100/0), set only by setDefaults 0x4c47dd (no .ai key). Ported: Guests::tick"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x43b8a2: Read 2026-11-16 (#163): slot 0x248 is habitatAt(tile); its +0x2c byte is set for zoo ground (not an exhibit) - no null check, every tile has a habitat. Ported: Guests::viewArea (exhibitAt < 0)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x52dd30: Read 2026-11-16: the held food (0x42d6aa) consumed (0x42d380), guest +0x2ac (pending happiness) += type +0x2ac cStandAndEatChange (guests.ai -5), plays bEatStanding. Not ported: ours eats a bought item on the way out (consumenow=0 items are held in the original)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x638048: Read live 2026-11-16 (a new Dinosaur Digs Basic Map freeform zoo, 12.04.00.0009): [0x638048]+0x114 = 0.5 (cItemCheap), +0x118 = 2.0 (cItemExpensive) - economy.cfg's; at the main menu, before a zoo, they're setDefaults' 0.8 and 1.2"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTAnimal+0xdc = nextSet"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTAnimal+0xe8 = nextSetReplaceable"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTAnimal+0x6d = setRunning"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Field ZTAnimal+0x6c = setInterruptible"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x435cfb unitBehaviourUpdate"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x43c6c5 startSetNow"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x4300f6: +0xdc is not the running set but the one asked for next; the running set is +0x54. So bSleep and bSick don't start mid-set: they wait for the running set's end (0x435cfb), ahead of startBehaviour. Ported: Animals::requestSet, nextSet (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x4384ba: Corrected 2026-11-16: bSleep is asked for with replaceable 0, forced 0 (0x42161a) and waits for the running set's end (0x435cfb); asked, +0x3a8 is set and 'Sleepy' posted; refused (another set asked for), nothing - no energy either. The energy goes up only where it can't sleep or under cEnergyThreshold. startBehaviour 0x437102 with no set, allowed and tired, starts nothing but calls this (its countdown one an update). Ported: Animals::tirednessCheck, chooseBehaviour (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x4389aa: Ported 2026-11-16: poorly and not loose or chasing, bSick asked for next (replaceable 0) where 0x440a37 allows; only if that took (not in bSick, nothing else asked for) cSickChange and 'Not feeling well'; not allowed, cSickChange anyway. startBehaviour never picks bSick itself (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x437102: With no set and nothing asked for: tired (energy +0x2c0 >= type +0x324) and allowed (0x440a37) -> no set at all, only the tiredness check 0x4384ba (its countdown runs one an update); else rampage or the mood set (0x43ca83). Ported: Animals::chooseBehaviour (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x420fed: Returns 1 when 0x420f65 (fleeing), its set (+0x54) is bSick, bSleep, bEat or bTestFence, flags +0x39f +0x3a0 +0x3a1 +0x3a5 +0x3a6 +0x3b1 +0x3a2, or task 0x7a 0x72 0x73 0x7c 0x85 0x86; else 0. chooseTask starts the in-exhibit hunt only when 0. Ported: Animals::occupied (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x43cb33: The first [AmbientAnims] range holding its happiness (slot 0x1bc) starts its set via 0x43c6c5; only with no set running and none asked for; an empty list asks the type's slot 0x14, a list with no fit starts nothing. Engine: Animals::chooseBehaviour (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x60cbc8: fDie: an animal (0x638690) and 0x6386b0: 0x4fa78e(1) and 10242 'has died of old age' at urgency 2 (0x4807c2); in a habitat, 0x605b8e(0). Every stock death set with an fDie has it last (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x613ca6: bHatch started through 0x4a7e94 (args 0,1,2), from the egg tick 0x437860 (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x50e4e8: Not a set chooser: returns 0 while the predator's running set (+0x54) is bCaughtGuest, bCaughtPrey or bCaughtEgg, or its prey (0x4a4b53, a ZTUnit 0x638700) answers 0 to slot 0x260; else 1 (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x43849c: With no route yet: rand%4 != 0 -> the nearest food of its kind (0x49fe15, tile distance, first of equals; connected habitats if slot 0xcc allows); else rand%4 != 0 -> the fewest units left (+0x154, 0x4a0025); else one at random (0x4a01f9). Found and routed: bFindKeeperFood (0x422072), +0x38c the food, 'Going to keeper food', +0x39f cleared; none: the task ends, 'Stopped Going to keeper food'. Ported: Animals::chooseFood, food kind not yet (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x4a0c55: Task 0x7a whileGoing with no route: the nearest water tile of its habitat (0x4a0d77: tile +0x83 & 3, terrain +0x80 != 10, tile distance), routed (0x49f6e8), then bFindOtherFood (every stock one fWalk(otherfood,0), most then fPlaySet(bEat)); +0x38c the tile, 'Going to drink water', +0x3a1 cleared. Ported: Animals::waterTick (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x4265a0: Task 0x7a atTarget: not loose, not on a water tile and not already in bEat -> bEat started (0x4a7e94, 0,1,2); else 'Stopped Drinking' and the unit's stop (slot 0x198) (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Note at 0x61ad83: Task 0x7b atTarget: +0x3b1 (targetBuilding) cleared, the task over (slot 0x5c) (Claude, 2026-11-16)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x49fe15 habitatNearestFood"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x4a0025 habitatLeastFood"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x4a01f9 habitatRandomFood"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "what": "Named 0x4a0d77 habitatNearestWater"
   }
  ],
  "notes": {
@@ -33550,6 +34020,16 @@
    "on": "2026-11-01",
    "text": "Each check is count > total x share (strict): 10009 sick > animals x cPctProtestors always; then only with more than 10 guests: 10008 sick > animals x cPctSick, 10011-10016 hungry/thirsty/restroom/gift/tired/litter > guests x their cPct; 10021 (kind 1) average guest happiness >= cHighAvgGuestHappyThreshold, 10022 <= cLow. Engine: zooAdvice in main.cpp"
   },
+  "0x420fed": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Returns 1 when 0x420f65 (fleeing), its set (+0x54) is bSick, bSleep, bEat or bTestFence, flags +0x39f +0x3a0 +0x3a1 +0x3a5 +0x3a6 +0x3b1 +0x3a2, or task 0x7a 0x72 0x73 0x7c 0x85 0x86; else 0. chooseTask starts the in-exhibit hunt only when 0. Ported: Animals::occupied (Claude, 2026-11-16)"
+  },
+  "0x4231c1": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16: no repeat check - thoughtPush 0x42311a always pushes at the front and drops the oldest past +0xc. Egg rule ported (Guests::think); ours keeps its own no-repeat rule"
+  },
   "0x42325d": {
    "by": "Claude",
    "on": "2026-11-16",
@@ -33570,15 +34050,25 @@
    "on": "2026-11-15",
    "text": "Its count is a constant name or number, times 1000 (ms) - then 0x424ee7 queues whole plays of the animation to cover it. Measured 2026-11-15: a tour guide's bSpeak (fPlaySet(bSpeak1) = fPlayTime(speak,cInformGuestTime 5), fPlaySet(bSpeak2)) lasts 6.8-6.9 s (20 talks timed): speak (40 frames, 83 ms) twice = 6.64 s; speak2 never plays. (Claude)"
   },
+  "0x425a85": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16 (#163): +0x454 is the tank wall's height and +0x464 'height set' (0x44ac6e). The own tile's slot that way holding a fence that isn't a tank wall skips that way; the first tank wall with its height set decides (returns false on the ground tests, not the next way). The roll comes first. 0x4a7e94 with the set already playing returns true without restarting it - and whileGoing 0x42325d never matches bTapTank (it checks bTapWall), so each update while tapping it rolls mimic, fence, tap again (another tap passing: goes on), else bGawk replaces it. Ported: Guests::tapTank, viewNext"
+  },
   "0x42612f": {
    "by": "Claude",
    "on": "2026-11-16",
    "text": "Task65_Guest is the walk to an exhibit's viewing tile: its atTarget makes task 0x70 (Task70_ViewAnimals); normal off-path cost"
   },
+  "0x4265a0": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Task 0x7a atTarget: not loose, not on a water tile and not already in bEat -> bEat started (0x4a7e94, 0,1,2); else 'Stopped Drinking' and the unit's stop (slot 0x198) (Claude, 2026-11-16)"
+  },
   "0x4271a1": {
    "by": "Claude",
    "on": "2026-11-16",
-   "text": "Read 2026-11-16: maintPickTrashCan 0x61b146; the can's tile and its 4 neighbours (tileNeighbours4) tried, each failing route onto +0x27c; all fail -> +0x2a4 = 1. Ours puts only the can's tile on the list"
+   "text": "Corrected 2026-11-16: the route to the target tile (+0x234, the can's) first; it fails -> that tile onto +0x27c, then ONE of its four neighbours (tileNeighbours4, picked at random with the game's rand) is tried, onto +0x27c too when its route fails; both fail -> +0x2a4 = 1 and the job ends. Not all four. Ported in Staff::findWork"
   },
   "0x4282e1": {
    "by": "Claude",
@@ -33588,17 +34078,22 @@
   "0x42c8af": {
    "by": "Claude",
    "on": "2026-11-16",
-   "text": "At the entrance: slot 0x2e8 looks for the building again (with room?); a selling building (class 0x638680, type +0x23d) whose price (+0x1ac) is at or over [0x638048]+0x118 x its type's default (+0x178): it faces it, thinks 10073 of the building, 0x533480 (cPriceAngry1Change, guest type +0x248, pending via slot 0x1fc), and doesn't go in or pay; else task 0x68. Full: thinks 10243 of it and faces it. Ours goes in, pays and only then judges (Guests.cpp 'too dear') - not ported, [0x638048]+0x118 not read yet"
+   "text": "Read 2026-11-16 (#164): [0x638048]+0x118 is economy.cfg's cItemExpensive (ZTGameMgr+0x108, loadConfig 0x591fc2; setDefaults 1.2, the file 2), +0x114 cItemCheap (0.8 / 0.5). Type +0x23d is cCommerce (ZTBuildingType loadConfig 0x4c1058: == 1). 0x4373eb: the guest stands on the building's entrance square (its tile's quarter +4 holds the building, tagged going-to-building). Ported: Guests::useBuilding"
+  },
+  "0x42d1e2": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16: type +0x200 is the Sells list (loadConfig 0x4c1142). Sells empty: 0x42d74e then guestConsumeItem. Else a random sold item: price >= cItemExpensive x default: 10073, cPriceAngry1Change, no item; <= cItemCheap x default: 10072, cPriceHappy1Change; holdItem 0x42d54e; consumed now (item +0x1c, consumenow) -> guestConsumeItem 0x42d380"
   },
   "0x42d858": {
    "by": "Claude",
-   "on": "2026-11-15",
-   "text": "Return buildings (+0x240 cReturnBuilding): not on a ride - +0x284 = type id, +0x288 = bReturn set (0x597028), cUserTracker (+0x19b) adds it to the users list (0x48cd9b), capacity +0x1c8 (0x59398a); on its ride - 0x42dd23 (effects) and +0x284/+0x288 cleared, out of water. Fields: ZTBuildingType +0x19b cUserTracker, +0x19c cIdler, +0x19d cExhibitViewer, +0x1a4 cDirectEntrance (read 0x4c0f1c..0x4c0f7f)"
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16 (#187): pays only for a cCommerce building (type +0x23d): price (+0x1ac) x cPriceFactor (type +0x188, doubled when DAT_0063aff0) onto the building's +0x1a0/+0x1a8 and, building +0x1c4 == 0, the zoo's books (0x42df22) and cash (0x40f018). A cCommerce building that sells nothing (type +0x200 Sells list empty) judges the price here (cItemExpensive: 10073 + 0x533480; cItemCheap: 10072 + 0x619245). Restrooms, shelters (cCommerce 0) are never charged; the shipped cCommerce buildings all have cDefaultCost; bounce/swing/dslide/aqbounce have a cDefaultCost but cCommerce 0 - free. Ported: Guests (State::Using exit)"
   },
   "0x4300f6": {
    "by": "Claude",
    "on": "2026-11-16",
-   "text": "Sets the next set by name only when the current is interruptible (+0xe8) or forced (6th arg); +0xe8 = the 5th arg (Claude, 2026-11-16)"
+   "text": "+0xdc is not the running set but the one asked for next; the running set is +0x54. So bSleep and bSick don't start mid-set: they wait for the running set's end (0x435cfb), ahead of startBehaviour. Ported: Animals::requestSet, nextSet (Claude, 2026-11-16)"
   },
   "0x4301b7": {
    "by": "Claude",
@@ -33648,7 +34143,7 @@
   "0x437102": {
    "by": "Claude",
    "on": "2026-11-16",
-   "text": "No set yet: rampaging (+0x3b0, habitat +0x2c clear) sets bHabitatRampage before the tiredness look; only with no set does it sleep (0x4384ba) when 0x440a37 allows and energy >= cEnergyThreshold (type +0x324), else the mood set (0x43ca83) and the water mode (0x4139c9). Ported (Claude, 2026-11-16)"
+   "text": "With no set and nothing asked for: tired (energy +0x2c0 >= type +0x324) and allowed (0x440a37) -> no set at all, only the tiredness check 0x4384ba (its countdown runs one an update); else rampage or the mood set (0x43ca83). Ported: Animals::chooseBehaviour (Claude, 2026-11-16)"
   },
   "0x4375d3": {
    "by": "batty251",
@@ -33665,10 +34160,15 @@
    "on": "2026-11-16",
    "text": "fPlayWithSound's work: the animation looked up by name (0x410ffe); none, false - the set fails, and its sound (0x4408b4, after) isn't played. Ported (Claude, 2026-11-16)"
   },
+  "0x43849c": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "With no route yet: rand%4 != 0 -> the nearest food of its kind (0x49fe15, tile distance, first of equals; connected habitats if slot 0xcc allows); else rand%4 != 0 -> the fewest units left (+0x154, 0x4a0025); else one at random (0x4a01f9). Found and routed: bFindKeeperFood (0x422072), +0x38c the food, 'Going to keeper food', +0x39f cleared; none: the task ends, 'Stopped Going to keeper food'. Ported: Animals::chooseFood, food kind not yet (Claude, 2026-11-16)"
+  },
   "0x4384ba": {
    "by": "Claude",
    "on": "2026-11-16",
-   "text": "Every cEnergyCheck while awake: not allowed to sleep (0x440a37), or escaped and not tranquilized (+0x393), or chasing -> pendingEnergy += cEnergyIncrement x +0x2d8; allowed and energy >= cEnergyThreshold -> setBehaviourSet bSleep (only replaces an interruptible set, +0xe8) and +0x3a8. The mid-set start isn't ported: ours sleeps when a set ends (Claude, 2026-11-16)"
+   "text": "Corrected 2026-11-16: bSleep is asked for with replaceable 0, forced 0 (0x42161a) and waits for the running set's end (0x435cfb); asked, +0x3a8 is set and 'Sleepy' posted; refused (another set asked for), nothing - no energy either. The energy goes up only where it can't sleep or under cEnergyThreshold. startBehaviour 0x437102 with no set, allowed and tired, starts nothing but calls this (its countdown one an update). Ported: Animals::tirednessCheck, chooseBehaviour (Claude, 2026-11-16)"
   },
   "0x4386a9": {
    "by": "Claude",
@@ -33678,7 +34178,7 @@
   "0x4389aa": {
    "by": "Claude",
    "on": "2026-11-16",
-   "text": "Poorly (health x100 <= cPctHits x cMaxHits), not escaped or chasing: 0x440a37 allowing, bSick through 0x4301b7 (nothing if it's already its set), and only if that took, cSickChange and 'Not feeling well'; not allowed, the change anyway. Not ported: ours plays bSick whenever a sick animal's set ends (Claude, 2026-11-16)"
+   "text": "Ported 2026-11-16: poorly and not loose or chasing, bSick asked for next (replaceable 0) where 0x440a37 allows; only if that took (not in bSick, nothing else asked for) cSickChange and 'Not feeling well'; not allowed, cSickChange anyway. startBehaviour never picks bSick itself (Claude, 2026-11-16)"
   },
   "0x4389f7": {
    "by": "Claude",
@@ -33719,6 +34219,21 @@
    "by": "Claude",
    "on": "2026-11-15",
    "text": "Bands on raw happiness (-100..100): 71..100 cBuySouvenirChanceHigh, 31..70 cBuySouvenirChanceMed"
+  },
+  "0x43b03a": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16: the limits are the type's +0x1e4/+0x1ec (happiness 100/-100), +0x1f0..+0x20c (needs 100/0), set only by setDefaults 0x4c47dd (no .ai key). Ported: Guests::tick"
+  },
+  "0x43b8a2": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16 (#163): slot 0x248 is habitatAt(tile); its +0x2c byte is set for zoo ground (not an exhibit) - no null check, every tile has a habitat. Ported: Guests::viewArea (exhibitAt < 0)"
+  },
+  "0x43cb33": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "The first [AmbientAnims] range holding its happiness (slot 0x1bc) starts its set via 0x43c6c5; only with no set running and none asked for; an empty list asks the type's slot 0x14, a list with no fit starts nothing. Engine: Animals::chooseBehaviour (Claude, 2026-11-16)"
   },
   "0x43e363": {
    "by": "Claude",
@@ -33763,7 +34278,7 @@
   "0x47002e": {
    "by": "Claude",
    "on": "2026-11-16",
-   "text": "Read 2026-11-16: faces the animal (faceToward); bHealEgg for an egg (+0x395), else bHeal; target gone -> job ends"
+   "text": "Read 2026-11-16: bHealEgg (scient.ai: healegg with heal_animal, then fPlayReverse(healegg)) for an egg, else bHeal; ZTKeeper::statusText 0x471399 says 'Visiting eggs' (10321) for one. The 'egg branch' at 0x5ecae9 in atTarget is something else: it runs only when the global byte 0x64e83a is set, 1 time in 10"
   },
   "0x470261": {
    "by": "Claude",
@@ -33774,6 +34289,11 @@
    "by": "Claude",
    "on": "2026-11-15",
    "text": "Assign on: zooView+0x3fc mode on (virtual +0 then +8), and the staff info's tab set to Job Assignment (3564) unless it's the one shown. Off (0x471ebd) turns the mode off; Remove/Remove All/assign list clicks uiTurnOff(3578) first"
+  },
+  "0x47f61f": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16: a tank sweep: 0x49bd60(habitat, type +0x204 cCleanTankPct) adds it to the tank's purity +0x1a8"
   },
   "0x483d34": {
    "by": "Claude",
@@ -33840,6 +34360,11 @@
    "on": "2026-11-01",
    "text": "The message's colour: kind % 3 into the bar's colours (+0x430): 0 white, 1 green, 2 red - tankModBuy's 10002 is kind 5, red. Text too long for the bar wraps onto two lines (seen: 'Only show toys and animals that can do tricks can be / placed in show tanks.')"
   },
+  "0x4a0c55": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Task 0x7a whileGoing with no route: the nearest water tile of its habitat (0x4a0d77: tile +0x83 & 3, terrain +0x80 != 10, tile distance), routed (0x49f6e8), then bFindOtherFood (every stock one fWalk(otherfood,0), most then fPlaySet(bEat)); +0x38c the tile, 'Going to drink water', +0x3a1 cleared. Ported: Animals::waterTick (Claude, 2026-11-16)"
+  },
   "0x4a830c": {
    "by": "Claude",
    "on": "2026-11-16",
@@ -33869,6 +34394,16 @@
    "by": "batty251 (checked StevenGann's findings against the shipped maps and zoo.exe)",
    "on": "2026-10-14",
    "text": "The path shape loader stores each [Shapes] shape= code's LIST POSITION into the record's +0x14: the bytes at 0x4c25cf are 89 78 14, i.e. 'mov dword ptr [eax+0x14], edi' - checked against the pinned build (2002 Complete Collection zoo.exe, sha256 61fcc6d1..., 2,449,432 bytes), so the value kept is the index in the repeated-key list, not the code itself. Found by StevenGann, address verified here 2026-10-14."
+  },
+  "0x4c32bd": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16: +0x1f4 cFoodUnitsSecond 10, +0x1f8 cCleanTime 2, +0x1fc cHealUnitsSecond 10, +0x200 cFoodPerTile 100, global 0x6386f8 cSicklyAnimalPct 10, +0x204 cCleanTankPct 10, +0x208 cCleanTankThreshold 100 (loadConfig 0x4c34ae; +0x20c the cDirt list)"
+  },
+  "0x4c3ee2": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16: +0x1f4 cInformGuestTime 5, +0x1f8 cTourGuideBonus 5; cCrowdCheck +0x1fc, cCrowdRadius +0x200, cFollowChance +0x204, cMaxGroupSize +0x208 not set here (loadConfig 0x4c406f)"
   },
   "0x4cacf3": {
    "by": "Claude",
@@ -33905,6 +34440,11 @@
    "on": "2026-11-16",
    "text": "Task7c atTarget: bBreathe started (0x43c6c5); if it took, breath (+0x360) = type +0x208 (0) (Claude, 2026-11-16)"
   },
+  "0x4f429d": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16: sets the object's +0x154 to its argument; for poo / dinopoo that's the pile's size: 1 plays the type's 'small' animation, 2 'giant', anything else 'idle' (dinopoo.ai: idle = mid, giant = full). Called by 0x4fe07c (the dung drop) and Job2 atTarget (food amount)"
+  },
   "0x4fa85d": {
    "by": "Claude",
    "on": "2026-11-15",
@@ -33918,7 +34458,7 @@
   "0x5084b3": {
    "by": "Claude",
    "on": "2026-11-16",
-   "text": "Read 2026-11-16: bFeedCarn only when +0x2a4 == 1 (carnchow); ours also uses it for dinocarn and chum - unverified which is right, +0x2a4's source not traced"
+   "text": "Confirmed 2026-11-16: the keeper's +0x2a4 is its food type, the index into the food-name table 0x64e6ec (0 herbchow, 1 carnchow, 2 fruichow, 3 bambchow, 4 graschow, 5 fishchow, 6 inschow, 7 dinocarn, 8 dinogras, 9 krill, 10 fish, 11 chum) that 0x48f7ca -> 0x5080ee makes the dropped food from; so bFeedCarn is carnchow only. Ported"
   },
   "0x508b3c": {
    "by": "Claude",
@@ -33955,6 +34495,11 @@
    "on": "2026-11-16",
    "text": "Read 2026-11-16 (Job12 begin, class slot 4): 'About to bag zoodoo'; the object on the target tile: dinopoo (0x41044c) -> bBagDino (cleanup/vac twice, idle), else bBag (sweep twice). Ours has no dinopoo, so always bBag"
   },
+  "0x50e4e8": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Not a set chooser: returns 0 while the predator's running set (+0x54) is bCaughtGuest, bCaughtPrey or bCaughtEgg, or its prey (0x4a4b53, a ZTUnit 0x638700) answers 0 to slot 0x260; else 1 (Claude, 2026-11-16)"
+  },
   "0x50e648": {
    "by": "Claude",
    "on": "2026-11-15",
@@ -33969,6 +34514,11 @@
    "by": "Claude",
    "on": "2026-11-16",
    "text": "Read 2026-11-16: maintCleanLitter; nothing cleaned -> maint +0x2a4 = 1; maintTakeEntry(0) (0x4a97e5); job ends"
+  },
+  "0x52dd30": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16: the held food (0x42d6aa) consumed (0x42d380), guest +0x2ac (pending happiness) += type +0x2ac cStandAndEatChange (guests.ai -5), plays bEatStanding. Not ported: ours eats a bought item on the way out (consumenow=0 items are held in the original)"
   },
   "0x5317c5": {
    "by": "Claude",
@@ -34038,7 +34588,7 @@
   "0x5961e4": {
    "by": "Claude",
    "on": "2026-11-16",
-   "text": "Read 2026-11-16: target habitatRandomTile; bCleanTankSurf when the unit's +0x258 is 3, bCleanTankSub when 4, else 'Stopped cleaning the tank'. Ours always sweeps under the water (state numbering differs; not ported)"
+   "text": "Read 2026-11-16: the specialist's +0x258 states match fPlaySetTank 0x5b2be5's (3 at the surface, 4 under the water); ours' m.water 2 and 3. Job25 is reached under the water (Task6e's live order: ClimbDownB first), so bCleanTankSub"
   },
   "0x59a596": {
    "by": "Claude",
@@ -34055,10 +34605,20 @@
    "on": "2026-10-28",
    "text": "The one message a player sees when a show starts, and the only place the show's animals are gathered and checked (the 0x6386b0 characteristics check)"
   },
+  "0x5a5395": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16: an animal needs healing at (100 - cSicklyAnimalPct)% of its +0x234 or less: 85% with the shipped 15"
+  },
   "0x5a6f96": {
    "by": "batty251",
    "on": "2026-10-28",
    "text": "OPEN LEAD: who fills animal+0x15c is still unknown. A text scan of .text finds no instruction naming 0x15c as a base with a small displacement in show code, so the fill is either through a pointer taken elsewhere or by the `set` insert helper reached with the address in a register. Chase it by breakpointing showTankSetHas (0x5a3585) in the original and reading animal+0x15c when a show animal first becomes a performer."
+  },
+  "0x5aa24d": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16: puts the unit in its habitat's tank at tankEntryPoint (0x499cfa, 0x4a746a), its habitat's id into +0x254. Seen only with a trainer at a show platform: the marine shows' work (Shows), not a freeform staff job"
   },
   "0x5ad1e8": {
    "by": "Claude",
@@ -34070,6 +34630,11 @@
    "on": "2026-11-15",
    "text": "Starts behaviour set bSick ([<kind>\\BehaviorSet\\bSick]: fPlayWithSound(puke, <kind>_puke)); if it started, thought 10285. checkArrived ends the task once its set isn't bSick; atTarget sets +0x33e"
   },
+  "0x60cbc8": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "fDie: an animal (0x638690) and 0x6386b0: 0x4fa78e(1) and 10242 'has died of old age' at urgency 2 (0x4807c2); in a habitat, 0x605b8e(0). Every stock death set with an fDie has it last (Claude, 2026-11-16)"
+  },
   "0x6115f2": {
    "by": "Claude",
    "on": "2026-11-15",
@@ -34079,6 +34644,11 @@
    "by": "Claude",
    "on": "2026-11-15",
    "text": "measured 2026-11-15 in the running original (memPeek): ZTGameMgr+0x1178 holds 30.0 = economy.cfg cBuildingUseCostMax. loadConfig 0x591c0f's offsets are relative to a sub-object at ZTGameMgr+0x10 (removeObject's lea ecx,[esi+0x10]), so its +0x1168 is absolute +0x1178; the FILETIME setDefaults writes is at absolute +0x1188, game date SYSTEMTIME +0x1194, admission absolute +0x1160"
+  },
+  "0x613ca6": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "bHatch started through 0x4a7e94 (args 0,1,2), from the egg tick 0x437860 (Claude, 2026-11-16)"
   },
   "0x613d24": {
    "by": "Claude",
@@ -34095,6 +34665,11 @@
    "on": "2026-11-15",
    "text": "Not a man (+0x320 female or +0x324 child set, ZTGuest::setup 0x4f6372 by kind: man 0/0, woman 1/0, boy 0/1): 0x61a93c rings out to 150 for land (0x61aaff: in the zoo, not water or tank, public) and puts it there, ride and in-water cleared"
   },
+  "0x61ad83": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Task 0x7b atTarget: +0x3b1 (targetBuilding) cleared, the task over (slot 0x5c) (Claude, 2026-11-16)"
+  },
   "0x61b146": {
    "by": "Claude",
    "on": "2026-11-15",
@@ -34103,7 +34678,7 @@
   "0x61b4c6": {
    "by": "Claude",
    "on": "2026-11-16",
-   "text": "Read 2026-11-16: bPreattack / bDefense - not modelled in ours"
+   "text": "Read 2026-11-16: an animal's job, not staff: the unit's +0x3a4 (cPreattack) plays bPreattack, else +0x24c plays bDefense; atTarget checks the unit is a ZTAnimal (0x638690)"
   },
   "0x62d6ec": {
    "by": "batty251",
@@ -34145,6 +34720,11 @@
    "on": "2026-10-12",
    "text": "Function table (vtable) of guests (boy, man, woman, girl): the Lab's census. Happiness at +0x2a8 (-100..100; a new guest's 50), as for animals; the first came as soon as an exhibit had an animal (guestArrivalCheck 0x424375)"
   },
+  "0x63244c": {
+   "by": "Claude",
+   "on": "2026-11-16",
+   "text": "Read 2026-11-16: the base Job class's table, not a job of its own - begin returns true, the other slots are empty; every job's constructor (0x413a43) and destructor puts it back"
+  },
   "0x638040": {
    "by": "batty251",
    "on": "2026-10-12",
@@ -34153,7 +34733,7 @@
   "0x638048": {
    "by": "Claude",
    "on": "2026-11-16",
-   "text": "Read live (12.04.00.0009, a new Dinosaur Digs freeform zoo): economy.cfg's block sits at [0x638048]+0x10 on: +0x1160 admission 22.0, +0x1164 min 0, +0x1168 max 100, +0x116c cPricingFactor 0.75, +0x1170 cDonationFactor, +0x1174 cBuildingUseCostDefault 3.0, +0x1178 cBuildingUseCostMax 30.0, +0x117c cZooDooRecyclingAmount 50. So ZTGameMgr::loadConfig 0x591c0f, setDefaults 0x4c2683, admissionPrice 0x4f6db4 and zooPeriodicTick 0x4351a9 (ZTGameMgr::update passes esi+0x10) run on [0x638048]+0x10 (their +0x1150.. are these); raisePrice 0x611b43 reads +0x1178 from [0x638048] itself (the max), ZTBuildingType::setDefaults 0x4c042c +0x1174 (cDefaultCost's default)"
+   "text": "Read live 2026-11-16 (a new Dinosaur Digs Basic Map freeform zoo, 12.04.00.0009): [0x638048]+0x114 = 0.5 (cItemCheap), +0x118 = 2.0 (cItemExpensive) - economy.cfg's; at the main menu, before a zoo, they're setDefaults' 0.8 and 1.2"
   },
   "0x638fa4": {
    "by": "Claude",
@@ -155454,6 +156034,34 @@
      "summary": "The set its behaviour runner is playing (std::string begin/end/cap at +0x54); the runner's line text at +0x48, its function name at +0x20, a nested set's runner at +0x60 (runner +0x40 set, +0x34 line, +0x4c its own nested one). Read live 2026-11-15",
      "type": "string"
     },
+    "0x06c": {
+     "by": "Claude",
+     "confidence": "likely",
+     "name": "setInterruptible",
+     "summary": "The running set may be cut short by 0x43c6c5 (its 5th argument): it starts another only with no set running, this set, or forced",
+     "type": "bool"
+    },
+    "0x06d": {
+     "by": "Claude",
+     "confidence": "likely",
+     "name": "setRunning",
+     "summary": "A behaviour set is running: cleared by 0x43c6c5 as it starts another; while clear the unit update 0x435cfb starts the asked-for set (+0xdc) or calls startBehaviour",
+     "type": "bool"
+    },
+    "0x0dc": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "nextSet",
+     "summary": "The set to start when the running one ends (std::string): written by setBehaviourSet 0x4300f6 only while +0xe8 allows; the unit update 0x435cfb, with no set running (+0x6d clear), starts it through 0x43c6c5 and puts '' (0x638084) back with +0xe8 = 1; empty, it calls startBehaviour (class slot 0x48)",
+     "type": "string"
+    },
+    "0x0e8": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "nextSetReplaceable",
+     "summary": "Whether a later setBehaviourSet may replace the asked-for set (+0xdc): the 5th argument of whoever asked; 1 for an empty slot (0x41281b, 0x4275bb, 0x427627, 0x430276); 0 for bSleep (0x4384ba) and bSick (0x4389aa)",
+     "type": "bool"
+    },
     "0x128": {
      "by": "zt1-engine (batty251, earlier sessions)",
      "confidence": "likely",
@@ -156405,6 +157013,27 @@
      "summary": "[Characteristics/Integers] cAttractiveness, read by the loader at 4b7361",
      "type": "int"
     },
+    "0x3ce": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "smallZoodoo",
+     "summary": "cSmallZoodoo: its dung pile's size 1, the small art (animalDropDung 0x4a8f89)",
+     "type": "bool"
+    },
+    "0x3cf": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "dinoZoodoo",
+     "summary": "cDinoZoodoo: its dung is dinopoo (animalDropDung 0x4a8f89)",
+     "type": "bool"
+    },
+    "0x3d0": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "giantZoodoo",
+     "summary": "cGiantZoodoo: its dung pile's size 2, the giant art (animalDropDung 0x4a8f89; wins over small)",
+     "type": "bool"
+    },
     "0x3d1": {
      "by": "Claude",
      "confidence": "sure",
@@ -156791,6 +157420,25 @@
      "name": "cHitThreshold",
      "summary": "Its config key cHitThreshold (read at 0x4b4c16)",
      "type": "int"
+    }
+   },
+   "summary": ""
+  },
+  "ZTFence": {
+   "fields": {
+    "0x454": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "tankWallHeight",
+     "summary": "A tank wall's height (set by 0x44ac6e; read by sightEdgeBlocks 0x4f2fa0 and guestTapTank 0x425a85)",
+     "type": "int"
+    },
+    "0x464": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "tankWallHeightSet",
+     "summary": "Set when the tank wall's height (+0x454) isn't 0 (0x44ac6e)",
+     "type": "byte"
     }
    },
    "summary": ""
@@ -158533,6 +159181,39 @@
      "confidence": "sure",
      "name": "cWeaponRange",
      "summary": "Its config key cWeaponRange (read at 0x4c3ad5)",
+     "type": "int"
+    }
+   },
+   "summary": ""
+  },
+  "ZTTankFilter": {
+   "fields": {
+    "0x178": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "builtTime",
+     "summary": "When it was built (constructor 0x45d55f, reset 0x47e864); months in operation are counted from it (0x497e0f)",
+     "type": "FILETIME"
+    },
+    "0x180": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "servicedTime",
+     "summary": "When it was last serviced: built time at first, then each service (serviceAndDate 0x595cad); the panel's 'Last Filter Service: %s month(s) ago' (4916) counts from it, 0x615d28",
+     "type": "FILETIME"
+    },
+    "0x188": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "monthsRunning",
+     "summary": "Months in operation (panel 4918): 1 when built; every 3 s (+0x18c) recounted as (whole days since +0x178 + 29.9) / 30, and when that's not 0 and changed, the upkeep rolls (+0x16c to +0x168, +0x16c = 0) - 0x497e0f at 0x498102",
+     "type": "int"
+    },
+    "0x18c": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "monthCheck",
+     "summary": "ms to the next months-in-operation count (3000, 0xbb8), not saved",
      "type": "int"
     }
    },

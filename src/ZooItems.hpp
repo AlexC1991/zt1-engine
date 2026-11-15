@@ -38,6 +38,12 @@ public:
   const Item *item(int id) const;
 
   int add(Kind kind, int exhibit, float x, float y);
+  // An animal's dung (zoo.exe 0x4a8f89): objects/other/poo, or dinopoo for a
+  // cDinoZoodoo animal (its food holds the object's name, "dinopoo"), its
+  // size in units as the original keeps it at +0x154 (setPooKind 0x4f429d:
+  // 1 small, 2 giant, else the idle art)
+  int addDung(int exhibit, float x, float y, bool dino, int size);
+  static bool dinoDung(const Item &i) { return i.kind == Kind::Dung && i.food == "dinopoo"; }
   // Food for an exhibit: enough for its animals for a day or so
   int addFood(int exhibit, float x, float y, int animals, const std::string &food);
   // A keeper food's .ai (scenery/other/herbchow.ai; Marine Mania's are under

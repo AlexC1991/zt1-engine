@@ -13,6 +13,7 @@
 #include "../Animals.hpp"
 #include "../Guests.hpp"
 #include "../PlacedObjects.hpp"
+#include "../OriginalConstants.hpp"
 
 class UiButton;
 class UiImage;
@@ -549,6 +550,13 @@ private:
     Uint32 at = 0;
   };
   std::vector<LoggedMessage> messageLog;
+public:
+  // zoo.ini [UI] minimumMessageInterval (zoo.exe 0x520a08), set at start
+  static inline int minimumMessageInterval = Original::minimumMessageInterval;
+  // ours: the Message List as kept, newest first (for the checks)
+  size_t messageCount() const { return this->messageLog.size(); }
+  const std::string &messageText(size_t i) const { return this->messageLog[i].text; }
+private:
   int messageSerial = 0, messagesListedSerial = -1;
   size_t messagesListed = static_cast<size_t>(-1);
   std::string messageListTop;

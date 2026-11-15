@@ -736,6 +736,130 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     std::filesystem::remove(file, ec);
   }
 
+  // A tank filter's months (#188): built (+0x178) and last serviced (+0x180)
+  // as days, its months in operation (+0x188) counted every 3 s from the
+  // built day - whole days + 29.9, cut, / 30 (ZTTankFilter::update
+  // 0x497e0f) - and when they move on its upkeep rolls; serviced, the day's
+  // today (serviceAndDate 0x595cad); kept in our save and in the original's
+  // part (ZTTankFilter::save 0x615b31)
+  {
+    using Original::monthsSince;
+    check("filter months: day 0 is 0, days 1 and 30 are 1, day 31 is 2 (" + std::to_string(monthsSince(0, 0)) + " " +
+              std::to_string(monthsSince(0, 1)) + " " + std::to_string(monthsSince(0, 30)) + " " +
+              std::to_string(monthsSince(0, 31)) + ")",
+          monthsSince(0, 0) == 0 && monthsSince(0, 1) == 1 && monthsSince(0, 30) == 1 && monthsSince(0, 30.9) == 1 &&
+              monthsSince(0, 31) == 2 && monthsSince(0, 61) == 3);
+    const double before = f.today;
+    f.today = 100.0;
+    f.selectFilter("scenery/other/filter1.ai");
+    bool placed = false;
+    for (int y = Y - 3; y < Y + 8 && !placed; ++y)
+      for (int x = X + 10; x < X + 22 && !placed; ++x)
+        if (f.filterFit(x, y, map) == Fences::Fit::Ok)
+          placed = f.placeFilter(x, y, map);
+    const int index = static_cast<int>(f.filters().size()) - 1;
+    Fences::Filter *pump = placed ? f.filter(index) : nullptr;
+    check("a filter put down on day 100: built and serviced that day, 1 month in operation",
+          pump && pump->builtDay == 100.0 && pump->servicedDay == 100.0 && pump->monthsRunning == 1);
+    if (pump) {
+      pump->filterClock = 0;
+      pump->upkeepCurrent = 40;
+      pump->upkeepLast = 0;
+      f.today = 130.9;
+      f.update(Original::filterMonthCheckSeconds + 0.1f);
+      pump = f.filter(index);
+      check("day 130.9 (30 whole days): still 1 month, its upkeep where it was ($" + money(pump->upkeepCurrent) + ")",
+            pump->monthsRunning == 1 && pump->upkeepCurrent == 40);
+      pump->filterClock = 0;
+      f.today = 131.0;
+      f.update(1.0f);
+      pump = f.filter(index);
+      check("day 131 a second later: not counted yet (every 3 s)", pump->monthsRunning == 1);
+      pump->filterClock = 0;
+      f.update(Original::filterMonthCheckSeconds);
+      pump = f.filter(index);
+      check("3 s on: 2 months, this month's $" + money(pump->upkeepLast) + " now last month's, this month's $" +
+                money(pump->upkeepCurrent),
+            pump->monthsRunning == 2 && pump->upkeepLast == 40 && pump->upkeepCurrent == 0);
+      f.today = 140.5;
+      f.serviceFilter(index);
+      pump = f.filter(index);
+      check("serviced on day 140.5: its last service that day (" + std::to_string(pump->servicedDay) + ")",
+            pump->servicedDay == 140.5);
+    }
+    f.today = before;
+    world.reindex();
+    const std::string file = out + "/filter-days.zoo";
+    const bool written = pump && SaveGame::save(file, world, sim, hud, "freeform/ff03.scn");
+    double builtInOriginal = -1, servicedInOriginal = -1;
+    uint32_t periodInOriginal = 0;
+    if (written) {
+      std::ifstream in(file, std::ios::binary);
+      std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      AssetBuffer buffer;
+      buffer.data = bytes.data();
+      buffer.size = bytes.size();
+      ZooReader z;
+      if (z.load(buffer))
+        for (const ZooReader::ZooObject &o : z.getObjects())
+          if (o.className == "filter") {
+            builtInOriginal = (double(o.filterBuilt) - double(Original::fileTime2001)) / double(Original::fileTimeDay);
+            servicedInOriginal = (double(o.filterServiced) - double(Original::fileTime2001)) / double(Original::fileTimeDay);
+            periodInOriginal = o.filterPeriod;
+          }
+      buffer.data = nullptr;
+    }
+    check("saved, the original's part holds built day " + std::to_string(builtInOriginal) + ", serviced " +
+              std::to_string(servicedInOriginal) + ", " + std::to_string(periodInOriginal) + " months in operation",
+          written && std::abs(builtInOriginal - 100.0) < 1e-6 && std::abs(servicedInOriginal - 140.5) < 1e-6 &&
+              periodInOriginal == 2);
+    if (pump) {
+      pump->builtDay = pump->servicedDay = 0;
+      pump->monthsRunning = 9;
+    }
+    const bool loaded = written && SaveGame::load(file, world, sim, hud);
+    const Fences::Filter *again = loaded && !world.getFences().filters().empty() ? &world.getFences().filters().back() : nullptr;
+    check("loaded, built day 100, serviced 140.5 and 2 months still (" +
+              (again ? std::to_string(again->builtDay) + ", " + std::to_string(again->servicedDay) + ", " +
+                           std::to_string(again->monthsRunning)
+                     : std::string("none")) + ")",
+          again && again->builtDay == 100.0 && again->servicedDay == 140.5 && again->monthsRunning == 2);
+    if (written && !loaded)
+      report << "LOAD ERROR " << SaveGame::lastError() << "\n";
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
+  }
+
+  // The message bar's repeats and its 25 (zoo.exe 0x49c6d7, the bar's
+  // constructor 0x520a08): a kind 0-2 message already kept from less than
+  // [UI] minimumMessageInterval seconds ago is dropped, kind 3 and up isn't,
+  // and only the newest 25 are kept
+  {
+    const size_t start = hud.messageCount();
+    hud.postMessage("finance check: advice", 2);
+    hud.postMessage("finance check: advice", 2);
+    check("a kind-2 message posted twice within " + std::to_string(UiGameScreen::minimumMessageInterval) + " s: kept once (" +
+              std::to_string(hud.messageCount() - start) + ")",
+          hud.messageCount() - start == 1);
+    hud.postMessage("finance check: news", 0);
+    hud.postMessage("finance check: news", 0);
+    check("a kind-0 one too (" + std::to_string(hud.messageCount() - start - 1) + ")", hud.messageCount() - start == 2);
+    hud.postMessage("finance check: kind 3", 3);
+    hud.postMessage("finance check: kind 3", 3);
+    check("a kind-3 message posted twice: kept twice (" + std::to_string(hud.messageCount() - start - 2) + ")",
+          hud.messageCount() - start == 4);
+    const int interval = UiGameScreen::minimumMessageInterval;
+    UiGameScreen::minimumMessageInterval = 0;
+    hud.postMessage("finance check: advice", 2);
+    UiGameScreen::minimumMessageInterval = interval;
+    check("with minimumMessageInterval 0 the kind-2 one is taken again", hud.messageCount() - start == 5);
+    for (int i = 0; i < 30; i++)
+      hud.postMessage("finance check: message " + std::to_string(i), 1);
+    check("30 more posted: " + std::to_string(hud.messageCount()) + " kept, the newest first (" + hud.messageText(0) + ")",
+          hud.messageCount() == static_cast<size_t>(Original::messagesKept) &&
+              hud.messageText(0) == "finance check: message 29");
+  }
+
   report << "\n" << (checks - failures) << "/" << checks << " pass\n";
   SDL_Log("[Finance] %d/%d pass", checks - failures, checks);
   return failures ? 1 : 0;

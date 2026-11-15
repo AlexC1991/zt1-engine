@@ -5,6 +5,8 @@
 #include "IniReader.hpp"
 #include "ZooSim.hpp"
 #include "SaveGame.hpp"
+#include <fstream>
+#include "ZooReader.hpp"
 #include "ui/UiGameScreen.hpp"
 #include <filesystem>
 #include "Features.hpp"
@@ -377,10 +379,14 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
   bool samePixels=probe!=nullptr,sawPixels=false;
   const int swimmer=animals.adopt(animals.typeOfFile("animals/whleshrk.ai"),false,37.5f,31.5f,map,fn,true);
   auto *fish=animals.member(swimmer);
+  // (an update first, as every frame of play has one: it gives the animals
+  // the tanks to clip to - without it there was no outline, and nothing
+  // here was clipped at all)
+  animals.update(0.0f,world.getClock(),map,fn);
   samePixels &= fish!=nullptr;
   const Camera oldCamera=world.getCamera();
-  // (its facing pinned as its place is - adopt's is random; the eight
-  // facings' results are logged below)
+  // (its facing pinned as its place is - adopt's is random; each of the
+  // eight facings' differences is logged)
   std::string facingsOff;
   for(int facing=-1;facing<8;++facing)
   if(probe && fish)for(float scale:{1.0f,1.5f,2.0f})for(int rotation=0;rotation<4;++rotation) {
@@ -392,6 +398,10 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
     const bool before=samePixels;
     std::vector<Uint8> reference;
     for(bool fast:{false,true}) {
+      // (each pass from fresh textures: SDL's software renderer, which this
+      // probe is, left a texture it had drawn scaled by 1.5 blank when drawn
+      // so again - a whale shark facing 3, its second pass blank. #179)
+      Animation::releaseAllTextures();
       tankAnimalFastPaths(fast);
       SDL_SetRenderScale(probe,1,1);SDL_SetRenderClipRect(probe,nullptr);
       SDL_SetRenderDrawColor(probe,0,0,0,0);SDL_RenderClear(probe);
@@ -403,17 +413,16 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
         sawPixels |= std::any_of(reference.begin(),reference.end(),[](Uint8 value){return value!=0;});
       } else samePixels &= std::equal(reference.begin(),reference.end(),bytes);
     }
-    if(facing>=0) {
-      if(before && !samePixels)
-        facingsOff+=" facing "+std::to_string(facing)+" scale "+std::to_string(scale).substr(0,3)+" turn "+
-                    std::to_string(rotation);
-      samePixels=before;
-    }
+    if(facing>=0 && before && !samePixels)
+      facingsOff+=" facing "+std::to_string(facing)+" scale "+std::to_string(scale).substr(0,3)+" turn "+
+                  std::to_string(rotation);
+    samePixels |= facing>=0 && before; // (each facing logged; all of them counted below)
     world.getRenderer().rotateView(1);
   }
   tankAnimalFastPaths(true);world.getCamera()=oldCamera;if(swimmer>=0)animals.remove(swimmer);
   report<<"WHALECLIP fast path differs at:"<<(facingsOff.empty()?" none":facingsOff)<<"\n";
-  check("optimized whale clipping matches exact pixel clips at three scales and four rotations",samePixels && sawPixels);
+  check("optimized whale clipping matches exact pixel clips at three scales, four rotations and eight facings (#179)",
+        samePixels && sawPixels && facingsOff.empty());
   // Compare sprite visibility pruning with unpruned drawing, including eaves,
   // animated buildings, clipped halves, custom passes, and all four view edges.
   extern void worldSpriteCulling(bool);
@@ -823,6 +832,19 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
           out<<"VIEW mimic: none "<<none<<", past a zebra "<<back<<", roar "<<roar<<", mimic "<<monkey<<", chance 0 "<<never<<"\n";
           check("a guest mimics the newest recent kind that has a mimic (0x425a15, 0x425b6d; cMimicChance)",
                 none&&back&&roar&&monkey&&never);
+          // The way's slot is only asked on zoo ground (0x43b8a2: the
+          // habitat of its tile, slot 0x248, has +0x2c - not an exhibit)
+          {
+            const int way=q.viewWay;const float ox=q.x,oy=q.y;
+            auto slots=g.areaInSlot;
+            g.areaInSlot=[](int,int,int,Guests::ViewArea &o){o.seen={{0,0}};return true;};
+            Guests::ViewArea ar;q.viewWay=0;
+            q.x=bx+3.5f;q.y=by+3.5f;const bool inPad=g.viewArea(q,ar);
+            q.x=bx-1.5f;q.y=by+4.5f;const bool onPath=g.viewArea(q,ar);
+            g.areaInSlot=slots;q.viewWay=way;q.x=ox;q.y=oy;
+            out<<"VIEW zoo ground: in the paddock "<<inPad<<", on the path "<<onPath<<"\n";
+            check("a viewing area only on zoo ground, not in an exhibit (0x43b8a2: habitat +0x2c)",!inPad&&onPath);
+          }
           // its time up: done (0x42ea14) - the time watched is game time
           q.viewStart=g.clock-12;const double before=g.takeExhibitBooks()[pad].viewed;(void)before;
           g.viewDone(q);
@@ -837,6 +859,63 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       f.updateExhibits(map,1,0,1);
       for(int yy=by-3;yy<=by+10;++yy)for(int xx=bx-3;xx<=bx+10;++xx)map.setPath(xx,yy,"");
       va.clear();world.reindex();
+    }
+  }
+  // Tapping a tank's glass while watching (zoo.exe 0x425a85): cTapWallChance
+  // in 100; a tank wall on a side of its tile whose height is set (ZTFence
+  // +0x464/+0x454: the tank's wall) - faces it and plays bTapTank (tap,
+  // peek, map); its whileGoing looks again each update (0x42325d: it checks
+  // 'bTapWall', not bTapTank) - the tap goes on only while it would tap again
+  {
+    int tx=-1,ty=-1;
+    for(int y=map.getHeight()-12;y>=4&&tx<0;--y)for(int x=map.getWidth()-12;x>=4&&tx<0;--x){
+      bool ok=true;
+      for(int yy=y-3;yy<=y+7&&ok;++yy)for(int xx=x-3;xx<=x+7&&ok;++xx)ok=f.exhibitAt(xx,yy)<0&&f.insideZoo(xx,yy);
+      if(ok){tx=x;ty=y;}
+    }
+    check("room for the glass-tapping tank",tx>=0);
+    if(tx>=0) {
+      const int chain=rectangle(tx+5,ty-2,1,1,f.typeIndex("chainlnk"),"Tap fence");
+      const int tank=rectangle(tx,ty,4,4,f.typeIndex("atltank"),"Tap tank");
+      for(int y=ty-1;y<=ty+4;++y)map.setPath(tx-1,y,"path");
+      world.reindex();
+      g.clear();g.setEntrance(tx-1,ty-1);g.admit(0);
+      const Fences::Exhibit *ex=f.exhibit(tank);
+      check("tank formed for the glass tapping ("+std::to_string(tank)+")",ex&&ex->tank&&ex->wallSub>0);
+      if(!g.list.empty()&&ex) {
+        auto &q=g.list.back();auto &t=g.typeList[q.type];
+        const int was=t.tapWallChance,mim=t.mimicChance,zap=t.testFenceChance;
+        t.mimicChance=0;t.testFenceChance=0;q.recentSpecies.clear();
+        q.x=tx-0.5f;q.y=ty+1.5f;q.target=tank;q.state=Guests::State::Gawking;q.viewEnd=g.clock+60;q.viewStart=g.clock;
+        q.fx=0;q.fy=1;
+        t.tapWallChance=100;
+        const bool taps=g.tapTank(q);
+        const std::string first=q.anim;const bool faces=q.fx==1&&q.fy==0;
+        q.animTime=0.03f;g.viewNext(q);
+        const bool goesOn=q.tapStep==0&&q.anim==first&&q.animTime==0.03f;
+        t.tapWallChance=0;g.viewNext(q);
+        const bool replaced=q.tapStep<0&&(q.anim=="gawk1"||q.anim=="camera"||q.anim=="stand");
+        t.tapWallChance=100;q.tapStep=-1;
+        auto *wx=f.exhibit(tank);const int sub=wx->wallSub;wx->wallSub=0;
+        const bool unset=!g.tapTank(q);wx->wallSub=sub;
+        t.tapWallChance=0;const bool never=!g.tapTank(q);t.tapWallChance=100;
+        q.x=tx+5.5f;q.y=ty-0.5f;const bool fence=!g.tapTank(q);
+        q.x=tx-0.5f;q.y=ty+1.5f;
+        const int ground=static_cast<int>(map.getTile(tx-1,ty+1)->height);
+        out<<"TAP tank "<<tank<<" wall "<<sub<<" ground "<<ground<<": taps "<<taps<<" ("<<first<<", faces "<<faces
+           <<"), goes on "<<goesOn<<", replaced "<<replaced<<", height unset "<<unset<<", chance 0 "<<never
+           <<", chain-link "<<fence<<"\n";
+        check("beside a tank's wall a guest taps the glass, facing it (0x425a85: bTapTank)",
+              taps&&first==(t.tapSet.empty()?std::string():t.tapSet.front())&&faces);
+        check("while it taps, each update looks again: tapping again goes on, else bGawk (0x42325d, 0x4a7e94)",goesOn&&replaced);
+        check("no tap: wall height unset, cTapWallChance 0, a fence that isn't a tank wall (0x425a85)",unset&&never&&fence);
+        t.tapWallChance=was;t.mimicChance=mim;t.testFenceChance=zap;
+      }
+      g.clear();
+      for(int y=ty-1;y<=ty+4;++y)map.setPath(tx-1,y,"");
+      for(int k=0;k<4;++k){f.remove({true,tx+k,ty},map);f.remove({true,tx+k,ty+4},map);f.remove({false,tx,ty+k},map);f.remove({false,tx+4,ty+k},map);}
+      f.remove({true,tx+5,ty-2},map);f.remove({true,tx+5,ty-1},map);f.remove({false,tx+5,ty-2},map);f.remove({false,tx+6,ty-2},map);
+      f.updateExhibits(map,1,0,1);world.reindex();(void)chain;
     }
   }
   const int land=rectangle(26,28,10,10,f.typeIndex("chainlnk"),"Parity paddock");
@@ -1011,35 +1090,72 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         out<<"FMOVE 30: "<<z->speed<<" tiles/s\n";
         check("fMove's speed by the units' step rule: 30 is 2 steps an update, 0.466 tiles/s (0x425533, 0x435c42)",
               std::abs(z->speed-Original::unitTilesPerSecond(30))<1e-5f&&std::abs(z->speed-2000.0f/67/64)<1e-4f);
-        // Sleep (0x437102 -> 0x440a37, 0x4384ba, 0x4378df): tired, it sleeps
-        // on land but not in water mode; a rampage comes first; asleep its
-        // energy doesn't rise, and woken it's back to 0; awake it rises to
-        // cMaxEnergy, past cEnergyThreshold
+        // Sleep (0x437102 -> 0x440a37, 0x4384ba, 0x4378df): tired at a set's
+        // end, no set till the tiredness check (its countdown one an update)
+        // asks for bSleep, which starts then - on land, not in water mode; a
+        // rampage comes first; asleep its energy doesn't rise, and woken it's
+        // back to 0; awake where it can't lie down it rises to cMaxEnergy
         auto fresh=[&](){z->stack.clear();z->playQueue.clear();z->path.clear();z->pathAt=0;z->stepping=false;
                          z->sleeping=false;z->rampaging=false;z->rampageTicks=0;z->sick=false;z->hunger=0;
-                         z->waterMode=false;z->showTank=-1;z->huntAnimal=-1;z->fleeFrom=-1;};
-        fresh();z->energy=float(zt.energyThreshold);a.chooseBehaviour(*z);
-        const bool slept=z->sleeping&&!z->stack.empty()&&z->stack.back().first=="bsleep";
+                         z->waterMode=false;z->showTank=-1;z->huntAnimal=-1;z->fleeFrom=-1;z->nextSet.clear();
+                         z->energyCheck=0;z->health=float(zt.maxHits);};
+        fresh();z->energy=float(zt.energyThreshold);a.nextStep(*z,map,f);
+        const bool slept=z->sleeping&&!z->stack.empty()&&z->stack.front().first=="bsleep"&&z->nextSet.empty();
         fresh();z->waterMode=true;z->energy=float(zt.energyThreshold);a.chooseBehaviour(*z);
         const bool notInWater=!z->sleeping&&!z->stack.empty()&&z->stack.back().first!="bsleep";
         check("tired: it sleeps on land, not in water mode (0x440a37)",slept&&notInWater);
+        fresh();z->energy=float(zt.energyThreshold);z->energyCheck=5;z->anim="parityheld";a.nextStep(*z,map,f);
+        const bool waited=z->stack.empty()&&!z->sleeping&&z->energyCheck==4&&z->anim=="parityheld";
+        z->energyCheck=0;a.nextStep(*z,map,f);
+        check("tired at a set's end: no set till the tiredness check's countdown is out, then bSleep (0x437102 -> 0x4384ba)",
+              waited&&z->sleeping&&!z->stack.empty()&&z->stack.front().first=="bsleep");
+        fresh();z->stack={{"bparitya",0}};z->energy=float(zt.energyThreshold);a.tick(*z,map,f);
+        const bool asked=z->sleeping&&z->nextSet=="bsleep"&&z->stack.front().first=="bparitya";
+        z->energyCheck=0;a.tick(*z,map,f);
+        const bool stillAsked=z->sleeping&&z->nextSet=="bsleep";
+        z->stack.clear();a.nextStep(*z,map,f);
+        check("bSleep asked for mid-set waits for the set's end, then starts (0x4384ba, 0x4300f6, 0x435cfb)",
+              asked&&stillAsked&&!z->stack.empty()&&z->stack.front().first=="bsleep"&&z->nextSet.empty());
         fresh();z->rampaging=true;z->energy=float(zt.energyThreshold);a.chooseBehaviour(*z);
         check("rampaging and tired: its rampage set, not a sleep (0x437102)",
               !z->sleeping&&!z->stack.empty()&&z->stack.back().first=="bhabitatrampage");
-        fresh();z->energy=float(zt.energyThreshold);a.chooseBehaviour(*z);
+        fresh();z->energy=float(zt.energyThreshold);a.nextStep(*z,map,f);
         const float asleepAt=z->energy;z->energyCheck=0;a.tick(*z,map,f);
         const bool held=z->sleeping&&z->energy==asleepAt;
         z->stack={{"bsleep",a.set(*z,"bsleep")?a.set(*z,"bsleep")->size():0}};z->playQueue.clear();z->stepping=false;
         a.nextStep(*z,map,f);
         const bool woke=!z->sleeping&&z->energy==0;
         // (a zebra's cEnergyThreshold is its cMaxEnergy, 100: halved here so
-        // the cap is told from the threshold)
+        // the cap is told from the threshold; in water mode, where it can't
+        // lie down, so it isn't asked to sleep)
         const int keepThreshold=zt.energyThreshold;zt.energyThreshold=zt.maxEnergy/2;
-        fresh();z->stack={{"bparitya",0}};z->energy=float(zt.maxEnergy-1);z->energyCheck=0;a.tick(*z,map,f);
+        fresh();z->waterMode=true;z->stack={{"bparitya",0}};z->energy=float(zt.maxEnergy-1);a.tick(*z,map,f);
         zt.energyThreshold=keepThreshold;
         out<<"ENERGY asleep "<<asleepAt<<" held "<<held<<" woke "<<woke<<" capped "<<z->energy<<" of "<<zt.maxEnergy<<"\n";
         check("asleep its energy holds, woken it's 0; awake it rises to cMaxEnergy, past the threshold (0x4384ba, 0x4378df)",
               held&&woke&&z->energy==float(zt.maxEnergy));
+        // Sick (0x4389aa): poorly, bSick asked for next and cSickChange once;
+        // not again while it's asked for or running, nor over a bSleep asked
+        // for; where it can't lie down, cSickChange every check, no bSick
+        auto healthTick=[&](){z->healthCheck=0;z->energyCheck=1000;z->hungerCheck=1000;z->habitatCheck=1000;
+                              z->captivityCheck=1000;z->socialCheck=1000;z->otherCheck=1000;
+                              a.tick(*z,map,f);return z->pending;}; // (a tick's checks' sum)
+        fresh();z->sick=true;z->health=0;z->stack={{"bparitya",0}};
+        const float sickOnce=healthTick();const bool sickAsked=z->nextSet=="bsick";
+        const float sickAgain=healthTick();
+        z->stack.clear();a.nextStep(*z,map,f);
+        const bool sickStarted=!z->stack.empty()&&z->stack.front().first=="bsick";
+        const float inSick=healthTick();
+        fresh();z->sick=true;z->health=0;z->stack={{"bparitya",0}};z->nextSet="bsleep";
+        const float overSleep=healthTick();
+        fresh();z->sick=true;z->health=0;z->waterMode=true;z->stack={{"bparitya",0}};
+        const float wet1=healthTick(),wet2=healthTick();
+        out<<"SICK first "<<sickOnce<<" second "<<sickAgain<<" in bSick "<<inSick<<" over bSleep "<<overSleep
+           <<" water "<<wet1<<" "<<wet2<<" (cSickChange "<<zt.sickChange<<")\n";
+        check("poorly: bSick next with cSickChange once, none while asked for, in it or over bSleep; can't lie down, every check (0x4389aa)",
+              sickAsked&&sickStarted&&sickOnce-sickAgain==float(zt.sickChange)&&inSick==sickAgain&&overSleep==sickAgain&&
+              wet1-sickAgain==float(zt.sickChange)&&wet2==wet1&&z->nextSet.empty());
+        fresh();
       }
       zt.sets[0]=keepSets;
       a.clear();
@@ -1157,7 +1273,7 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         !a.member(embryo)->egg&&a.member(embryo)->baby);
   a.clear();
   const int sleeper=a.adopt(a.typeOfFile("animals/zebra.ai"),false,30.5f,32.5f,map,f,true);
-  if(auto *m=a.member(sleeper)) {m->energy=float(a.typeList[m->type].energyThreshold);m->hunger=0;a.chooseBehaviour(*m);}
+  if(auto *m=a.member(sleeper)) {m->energy=float(a.typeList[m->type].energyThreshold);m->hunger=0;m->energyCheck=0;m->stack.clear();a.nextStep(*m,map,f);} // (the tiredness countdown's last: 0x437102 -> 0x4384ba)
   check("sleep save starts the real sleep behavior",a.member(sleeper)&&a.member(sleeper)->sleeping);
   fileRoundTrip("sleeping animal");
   for(int k=0;k<4000&&a.member(sleeper)&&a.member(sleeper)->sleeping;++k)a.update(0.05f,a.now+0.05,map,f);
@@ -1274,6 +1390,26 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
             ", food "+std::to_string(int(before-after))+" eaten)",
             z && z->hunger<=std::max(0,90-zt.foodEaten*zt.foodUnitValue*3) && before-after>=zt.foodEaten*3);
       items.remove(pile);a.clear();
+    }
+  }
+
+  // Keeper food chosen as Task 0x72's whileGoing 0x43849c chooses it: the
+  // nearest three times in four (0x49fe15), else three in four the one with
+  // the fewest units left (0x4a0025), else any at random (0x4a01f9)
+  {
+    const int zebra=a.typeOfFile("animals/zebra.ai");
+    if(zebra>=0) {
+      auto &items=world.getItems();
+      const int eater=a.adopt(zebra,false,30.5f,32.5f,map,f,true);
+      const int nearF=items.addFood(land,31.5f,32.5f,1,"herbchow"),fewF=items.addFood(land,33.5f,32.5f,1,"food"),
+                farF=items.addFood(land,35.5f,32.5f,1,"herbchow");
+      int nearest=0,fewest=0,other=0;
+      if(Animals::Member *z=a.member(eater))
+        for(int k=0;k<4800;++k){const int got=a.chooseFood(*z);nearest+=got==nearF;fewest+=got==fewF;other+=got==farF;}
+      out<<"FOODPICK nearest "<<nearest<<" fewest "<<fewest<<" other "<<other<<" of 4800 (3700, 1000, 100 expected)\n";
+      check("keeper food chosen by Task 0x72's odds: nearest 3/4, fewest units 3/16, at random 1/16 (0x49fe15, 0x4a0025, 0x4a01f9)",
+            std::abs(nearest-3700)<150&&std::abs(fewest-1000)<120&&std::abs(other-100)<60);
+      items.remove(nearF);items.remove(fewF);items.remove(farF);a.clear();
     }
   }
 
@@ -1408,6 +1544,73 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     }
     const auto *patron=g.guest(guestId);const auto *counter=objects.byId(shopId);
     check("guest replans, buys food and reduces hunger after reload",used&&savedUse&&patron&&patron->hunger<90&&counter&&counter->income>0);
+    // At the door (zoo.exe 0x42c8af): a cCommerce building priced at
+    // cItemExpensive x its default or more turns the guest away - 10073,
+    // cPriceAngry1Change, nothing paid; at its default it goes in, and pays
+    // its price x cPriceFactor coming out (guestBuy 0x42d858). The bounce
+    // house has a price but no cCommerce: nothing paid there
+    if(!g.list.empty()) {
+      auto &q=g.list.front();const Guests::Type &t=g.typeList[q.type];
+      int at=-1;
+      for(size_t i=0;i<objects.all().size();++i)if(objects.all()[i].id==shopId)at=static_cast<int>(i);
+      if(at>=0) {
+        PlacedObjects::Object &stand=objects.all()[static_cast<size_t>(at)];
+        const Guests::BuildingInfo &bi=g.infoOf(PlacedObjects::fileOf(stand));
+        const float was=stand.price;
+        auto reset=[&](int b,const char *need){q.state=Guests::State::Walking;q.building=b;q.need=need;q.ride=0;
+          q.dHappy=0;q.lastThought=0;q.thoughtArg.clear();q.hidden=false;};
+        const double before=stand.income;
+        stand.price=bi.price*Original::economy().itemExpensive;reset(at,"food");
+        g.useBuilding(q);
+        const bool turned=q.state!=Guests::State::Using&&q.building<0&&q.lastThought==10073&&
+                          q.dHappy==static_cast<float>(t.priceAngry)&&objects.all()[static_cast<size_t>(at)].income==before;
+        objects.all()[static_cast<size_t>(at)].price=bi.price;reset(at,"food");
+        g.useBuilding(q);
+        const bool inside=q.state==Guests::State::Using;
+        q.animTime=q.playFor;g.update(0.0f,0,1000);
+        const double paid=objects.all()[static_cast<size_t>(at)].income-before;
+        objects.all()[static_cast<size_t>(at)].price=was;
+        out<<"PRICE door: turned away "<<turned<<" (thought "<<q.lastThought<<"), at its default in "<<inside
+           <<", paid "<<paid<<" of "<<bi.price*bi.priceFactor<<" (cCommerce "<<bi.commerce<<")\n";
+        check("a shop at cItemExpensive x its price or more turns guests away at the door, unpaid (0x42c8af)",turned&&bi.commerce);
+        check("at its price a guest goes in and pays price x cPriceFactor coming out (guestBuy 0x42d858)",
+              inside&&std::abs(paid-bi.price*bi.priceFactor)<1e-3);
+        const size_t n=objects.objects().size();
+        if(objects.add("scenery/building/bounce.ai",30.5f,30.5f,4)&&objects.objects().size()>n) {
+          const int b=static_cast<int>(objects.objects().size())-1;
+          const Guests::BuildingInfo &bb=g.infoOf(PlacedObjects::fileOf(objects.all()[static_cast<size_t>(b)]));
+          reset(b,"fun");g.useBuilding(q);
+          const bool bin=q.state==Guests::State::Using;
+          q.animTime=q.playFor;g.update(0.0f,0,1000);
+          const double bounced=objects.all()[static_cast<size_t>(b)].income;
+          out<<"PRICE bounce house: price "<<bb.price<<", cCommerce "<<bb.commerce<<", in "<<bin<<", takings "<<bounced<<"\n";
+          check("a building with a price but no cCommerce (the bounce house) charges nothing (guestBuy 0x42d858)",
+                bb.price>0&&!bb.commerce&&bin&&bounced==0);
+          objects.remove(b);
+        }
+      }
+      // Its recent-species list (zoo.exe +0x278) kept by a save and a
+      // shared .zoo: the same kinds, oldest first, after loading
+      {
+        const int zebra=a.typeOfFile("animals/zebra.ai"),lion=a.typeOfFile("animals/lion.ai");
+        if(zebra>=0&&lion>=0&&!g.list.empty()) {
+          const std::vector<int> want={a.types()[lion].nameId,a.types()[zebra].nameId,a.types()[lion].nameId};
+          const int id=g.list.front().id;g.list.front().recentSpecies=want;
+          ZooSim books;books.start(1000000,50);UiGameScreen hud(rm,"","");
+          Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
+          for(const char *extension:{".zt1save",".zoo"}) {
+            const auto file=std::filesystem::temp_directory_path()/("zt1-parity-recent-"+std::to_string(SDL_GetTicks())+extension);
+            const bool ok=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn")&&SaveGame::load(file.string(),world,books,hud);
+            const Guests::Guest *back=g.guest(id);
+            out<<"RECENT "<<extension<<": "<<ok<<", "<<(back?static_cast<int>(back->recentSpecies.size()):-1)<<" kinds\n";
+            check(std::string("a guest's recent-species list is kept by a ")+extension+" save (+0x278)",ok&&back&&back->recentSpecies==want);
+            std::error_code ec;std::filesystem::remove(file,ec);
+            for(Guests::Guest &again:g.list)if(again.id==id)again.recentSpecies=want;
+          }
+          SaveGame::goals=priorGoals;
+        }
+      }
+    }
   }
   // A bank-level pool inside a fenced marine habitat: use the actual
   // animal routes across the shore in both directions.
@@ -1974,6 +2177,40 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       check("maintenance: its list is emptied every cClearInvalidListInterval ("+std::to_string(maintType>=0?st.typeList[maintType].clearInvalidMs:0)+
             " ms, 0x439c06)",cleared&&st.typeList[maintType].clearInvalidMs==10000);
       items.remove(shut);items.remove(open);
+      // Litter swept by someone else while it's on the way (Job7_GoToTrashPile's
+      // checkArrived, zoo.exe 0x52cef4, each tick): "Done with trash piles",
+      // the job over where it stands, not walked to the empty tile (#172)
+      m=st.member(w);
+      if(m) {
+        const int far=items.add(ZooItems::Kind::Litter,-1,22.5f,38.5f);
+        m->job=Staff::Job::None;m->path.clear();m->pathAt=0;m->x=22.5f;m->y=32.5f;m->invalid.clear();
+        m->anim="idle";m->playsLeft=0;m->idleLeft=0;
+        world.reindex();
+        const bool took=st.findWork(*m,map,f);
+        st.update(0.1f,map,f);m=st.member(w);
+        const bool going=m&&m->job==Staff::Job::Litter&&m->jobItem==far&&m->pathAt<m->path.size();
+        items.remove(far);
+        st.update(0.1f,map,f);m=st.member(w);
+        out<<"STAFF litter gone on the way: took "<<took<<" going "<<going<<" job "<<(m?static_cast<int>(m->job):-1)
+           <<" path "<<(m?m->path.size():0)<<" at "<<(m?m->y:0)<<"\n";
+        check("maintenance: litter swept before it gets there - the job ends on the way, not at the empty tile (0x52cef4)",
+              took&&going&&m&&m->job==Staff::Job::None&&m->path.empty()&&m->y<35);
+        // (dung on the grounds the same: keeperDoneZoodoo 0x4a25df)
+        m=st.member(w);
+        if(m) {
+          const int pile=items.add(ZooItems::Kind::Dung,-1,22.5f,38.5f);
+          m->job=Staff::Job::None;m->path.clear();m->pathAt=0;m->x=22.5f;m->y=32.5f;m->invalid.clear();
+          m->anim="idle";m->playsLeft=0;m->idleLeft=0;
+          world.reindex();
+          const bool tookDung=st.findWork(*m,map,f);
+          st.update(0.1f,map,f);m=st.member(w);
+          const bool goingDung=m&&m->job==Staff::Job::Dung&&m->jobItem==pile&&m->pathAt<m->path.size();
+          items.remove(pile);
+          st.update(0.1f,map,f);m=st.member(w);
+          check("maintenance: dung bagged by someone else before it gets there - the job ends on the way (0x4a25df)",
+                tookDung&&goingDung&&m&&m->job==Staff::Job::None&&m->path.empty()&&m->y<35);
+        }
+      }
       // A fence mended (Job17_FixFence 0x59a596 -> 0x59a51d): the piece
       // alone; with cFixFenceModifier over 0, the pieces either side too
       m=st.member(w);
@@ -2057,6 +2294,241 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       for(int id:rocks)for(size_t i=0;i<objects.objects().size();++i)
         if(objects.objects()[i].id==id){objects.remove(static_cast<int>(i));break;}
       if(k>=0)st.fire(k);
+      world.reindex();
+    }
+    // The food spot (keeperPickFoodSpot 0x4e7a7d, Job1_GoDropFood 0x4993b9):
+    // the keeper takes the one spot it's given; no way to it, and the tile
+    // goes on its +0x27c list and the food job ends (no other tile tried);
+    // the 20th tile on the list empties it, puts the animal on its +0x270
+    // list and says it can't get there (11004) (#169)
+    if(z>=0) {
+      std::vector<int> rocks;
+      auto rock=[&](int x,int y){if(objects.add("scenery/other/lrock1.ai",x+0.5f,y+0.5f,0)&&objects.last())rocks.push_back(objects.last()->id);};
+      for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)if(dx||dy)rock(33+dx,35+dy);
+      for(int id:items.ofKind(ZooItems::Kind::Food,land))items.remove(id);
+      for(int id:items.ofKind(ZooItems::Kind::Dung,land))items.remove(id);
+      if(auto *e=f.exhibit(land))e->animals=a.countIn(land);
+      world.reindex();
+      const int keeperType=st.typeOfFile("staff/keeper.ai");
+      const int k=keeperType>=0?st.hire(keeperType,22.5f,30.5f,map,f):-1;
+      // (the keeper at 33,37, the paddock's bottom row: every free tile
+      // within reach of the spot pick - squared distance under 10 - on its
+      // list already, but the walled-in 33,35)
+      std::vector<std::pair<int,int>> listed;
+      for(int y=34;y<=37;++y)for(int x=30;x<=35;++x){
+        const int dx=x-33,dy=y-37;
+        if(dx*dx+dy*dy>=10||(x==33&&y==35)||(std::abs(x-33)<=1&&std::abs(y-35)<=1))continue;
+        listed.push_back({x,y});
+      }
+      auto visit=[&](const std::vector<std::pair<int,int>> &pre){
+        Staff::Member *km=st.member(k);
+        if(!km)return;
+        km->x=33.5f;km->y=37.5f;km->path.clear();km->pathAt=0;
+        km->job=Staff::Job::Visit;km->visit=land;km->access=land;km->phase=1;km->inX=27.5f;km->inY=29.5f;
+        km->outX=27.5f;km->outY=27.5f;km->invalid=pre;km->unreachable.clear();
+        st.visitStep(*km,map,f);
+      };
+      st.takeNotices();
+      visit(listed);
+      Staff::Member *km=st.member(k);
+      const auto told=st.takeNotices();
+      const bool onList=km&&km->invalid.size()==listed.size()+1&&km->invalid.back()==std::make_pair(33,35);
+      out<<"STAFF food spot unreachable: list "<<(km?km->invalid.size():0)<<" (had "<<listed.size()<<") phase "
+         <<(km?km->phase:-1)<<" food "<<items.foodIn(land)<<" says "<<told.size()<<"\n";
+      check("the food spot it has no way to: on its list, the food job over, no other tile tried (0x4993b9)",
+            listed.size()==10&&onList&&km->phase!=9&&km->phase!=2&&items.foodIn(land)<=0&&told.empty());
+      // (19 on the list already: 9 more far tiles - the 20th empties it)
+      auto nineteen=listed;
+      for(int x=26;nineteen.size()<19;++x)nineteen.push_back({x,28});
+      visit(nineteen);
+      km=st.member(k);
+      const auto told2=st.takeNotices();
+      const Animals::Member *zm=a.member(z);
+      out<<"STAFF food spot 20th: list "<<(km?km->invalid.size():0)<<" animals "<<(km?km->unreachable.size():0)
+         <<" says "<<(told2.empty()?"(nothing)":told2[0].text)<<"\n";
+      check("the 20th food spot it has no way to: list emptied, the animal on its other list, "
+            "\"...having trouble getting to\" it (11004, 0x4993b9)",
+            km&&zm&&km->invalid.empty()&&km->unreachable.size()==1&&km->unreachable[0]==z&&told2.size()==1&&
+            told2[0].kind==2&&told2[0].text.find(zm->name)!=std::string::npos);
+      for(int id:items.ofKind(ZooItems::Kind::Food,land))items.remove(id);
+      for(int id:rocks)for(size_t i=0;i<objects.objects().size();++i)
+        if(objects.objects()[i].id==id){objects.remove(static_cast<int>(i));break;}
+      if(k>=0)st.fire(k);
+      world.reindex();
+    }
+    // Staff work by its behaviour sets (#174): each type's [BehaviorSet] read
+    // from its .ai - a scientist's bClean (the vac twice, then idle) and
+    // bHeal (heal, then backwards), a maintenance worker's bBagDino
+    {
+      auto sets=[&](const char *file,const char *set){
+        std::string s;const int k=st.typeOfFile(file);
+        if(k<0)return std::string("?");
+        auto it=st.typeList[k].sets.find(set);
+        if(it==st.typeList[k].sets.end())return std::string("-");
+        for(const auto &step:it->second)s+=(s.empty()?"":",")+step.anim+(step.reverse?"<":"")+(step.sound.empty()?"":"/"+step.sound);
+        return s;
+      };
+      const std::string sciClean=sets("staff/scient.ai","bclean"),sciHeal=sets("staff/scient.ai","bheal"),
+        sciEgg=sets("staff/scient.ai","bhealegg"),keepHeal=sets("staff/keeper.ai","bheal"),
+        keepClean=sets("staff/keeper.ai","bclean"),bagDino=sets("staff/maint.ai","bbagdino"),bag=sets("staff/maint.ai","bbag");
+      out<<"STAFF sets: scientist bClean "<<sciClean<<" bHeal "<<sciHeal<<" bHealEgg "<<sciEgg<<"; keeper bHeal "<<keepHeal
+         <<" bClean "<<keepClean<<"; maint bBag "<<bag<<" bBagDino "<<bagDino<<"\n";
+      check("behaviour sets read from each staff .ai: a scientist's bClean is the vac twice then idle, its bHeal heal then "
+            "backwards; a keeper's bClean the rake four times (#174)",
+            sciClean=="clean/vac,clean/vac,idle"&&sciHeal=="heal/heal_animal,heal<"&&sciEgg=="healegg/heal_animal,healegg<"&&
+            keepHeal=="heal/heal_animal"&&keepClean=="clean/rake,clean/rake,clean/rake,clean/rake"&&
+            bag=="sweep/sweep,sweep/sweep"&&bagDino=="cleanup/vac,cleanup/vac,idle");
+    }
+    // The food's animation (Job2_PutDownFood's begin, zoo.exe 0x5084b3):
+    // bFeedCarn only for carnchow, the keeper's food type +0x2a4 at 1 (the
+    // index 0x5080ee's table 0x64e6ec makes the food from); dinocarn and chum
+    // go down with bFeedHerb (#174)
+    if(z>=0) {
+      Animals::Member *zm=a.member(z);
+      const int lion=a.typeOfFile("animals/lion.ai"),allo=a.typeOfFile("animals/allo.ai");
+      std::string lionFood,alloFood;bool lionCarn=false,alloCarn=true;
+      if(zm&&lion>=0&&allo>=0) {
+        const int was=zm->type;
+        zm->type=lion;lionFood=st.foodFor(land,f,lionCarn);
+        zm->type=allo;alloFood=st.foodFor(land,f,alloCarn);
+        zm->type=was;
+      }
+      out<<"STAFF feeding: lion "<<lionFood<<" carn "<<lionCarn<<", allosaurus "<<alloFood<<" carn "<<alloCarn<<"\n";
+      check("bFeedCarn for carnchow only: a lion's keeper feeds with feedc, an allosaurus's dinocarn with feedh (0x5084b3)",
+            lionFood=="carnchow"&&lionCarn&&alloFood=="dinocarn"&&!alloCarn);
+    }
+    // Healing an egg (Job4_HealAnimal's begin, zoo.exe 0x47002e, by the
+    // animal's +0x395): bHealEgg - the scientist's healegg, then backwards
+    if(z>=0) {
+      const int sciType=st.typeOfFile("staff/scient.ai");
+      const int sci=sciType>=0?st.hire(sciType,22.5f,30.5f,map,f):-1;
+      std::string egg,animal;size_t eggSteps=0;bool eggBack=false;
+      if(st.member(sci)&&a.member(z)) {
+        auto heal=[&](bool isEgg){
+          Animals::Member *y=a.member(z);Staff::Member *x=st.member(sci);
+          y->egg=isEgg;
+          x->x=y->x-0.3f;x->y=y->y;x->job=Staff::Job::Visit;x->visit=land;x->access=land;x->phase=8;x->jobAnimal=z;
+          x->path.clear();x->pathAt=0;x->playsLeft=0;
+          st.visitStep(*x,map,f);
+          y->egg=false;
+          return st.member(sci)->anim;
+        };
+        animal=heal(false);
+        egg=heal(true);
+        Staff::Member *sm=st.member(sci);
+        eggSteps=sm->steps.size();eggBack=eggSteps==2&&sm->steps[1].reverse;
+        sm->playsLeft=0;sm->steps.clear();sm->job=Staff::Job::None;
+      }
+      out<<"STAFF heal: an animal "<<animal<<", an egg "<<egg<<" ("<<eggSteps<<" steps)\n";
+      check("a scientist heals an egg with bHealEgg (healegg, then backwards), an animal with bHeal (0x47002e)",
+            animal=="heal"&&egg=="healegg"&&eggBack);
+      if(sci>=0)st.fire(sci);
+    }
+    // A trash can it can't get to (Job9_GoToTrashCan's whileGoing, zoo.exe
+    // 0x4271a1): the can's tile on its list, then one of its four
+    // neighbours picked at random - on the list too when there's no way
+    // there either - and no job (#174)
+    {
+      std::vector<int> rocks;
+      auto rock=[&](int x,int y){if(objects.add("scenery/other/lrock1.ai",x+0.5f,y+0.5f,0)&&objects.last())rocks.push_back(objects.last()->id);};
+      const int cx=20,cy=41;
+      const bool canAdded=objects.add("scenery/other/trshcan.ai",cx+0.5f,cy+0.5f,0);
+      const int canId=canAdded&&objects.last()?objects.last()->id:-1;
+      if(auto *can=objects.byId(canId))can->fill=20;
+      for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)if(dx||dy)rock(cx+dx,cy+dy);
+      world.reindex();
+      const int maintType=st.typeOfFile("staff/maint.ai");
+      const int w=maintType>=0?st.hire(maintType,20.5f,34.5f,map,f):-1;
+      Staff::Member *m=st.member(w);
+      const PlacedObjects::Object *canObj=objects.byId(canId);
+      out<<"STAFF walled-in can "<<canId<<" "<<(canObj&&canObj->trashCan)<<" fill "<<(canObj?canObj->fill:-1)
+         <<" inside "<<f.insideZoo(cx,cy)<<" can tile blocked "<<world.getIndex().blocked(cx,cy)<<"\n";
+      const bool took=m&&st.findWork(*m,map,f);
+      m=st.member(w);
+      bool neighbour=false;
+      if(m&&m->invalid.size()==2)
+        neighbour=std::abs(m->invalid[1].first-cx)+std::abs(m->invalid[1].second-cy)==1;
+      out<<"STAFF trash can walled in: took "<<took<<" list "<<(m?m->invalid.size():0)<<"\n";
+      check("a trash can it can't reach: the can's tile and one neighbour on its list, no job (0x4271a1)",
+            canId>=0&&!took&&m&&m->invalid.size()==2&&m->invalid[0]==std::make_pair(cx,cy)&&neighbour);
+      if(w>=0)st.fire(w);
+      for(int id:rocks)for(size_t i=0;i<objects.objects().size();++i)
+        if(objects.objects()[i].id==id){objects.remove(static_cast<int>(i));break;}
+      for(size_t i=0;i<objects.objects().size();++i)if(objects.objects()[i].id==canId){objects.remove(static_cast<int>(i));break;}
+      world.reindex();
+    }
+    // Dung by its animal (zoo.exe 0x4a8f89): dinopoo for cDinoZoodoo, its
+    // size by cSmallZoodoo (1, the small art) and cGiantZoodoo (2, giant;
+    // a young apatosaurus's [y/...] takes it back to 0) - setPooKind
+    // 0x4f429d; its own art; a maintenance worker bags it with bBagDino
+    // (0x50e211); written to the original's part as objects/other/dinopoo
+    // with its size at +0x154 and kept by our own (#173)
+    {
+      auto type=[&](const char *file)->const Animals::Type*{const int k=a.typeOfFile(file);return k>=0?&a.types()[k]:nullptr;};
+      const Animals::Type *allo=type("animals/allo.ai"),*ant=type("animals/anteater.ai"),*zeb=type("animals/zebra.ai"),
+                          *apato=type("animals/apato.ai"),*raptor=type("animals/velocira.ai");
+      out<<"STAFF dung kinds: allo "<<(allo?allo->dinoDung:0)<<"/"<<(allo?allo->dungSize:-1)<<" anteater "<<(ant?ant->dinoDung:0)
+         <<"/"<<(ant?ant->dungSize:-1)<<" zebra "<<(zeb?zeb->dungSize:-1)<<" apato "<<(apato?apato->dungSize:-1)<<" young "
+         <<(apato?apato->youngDungSize:-1)<<" raptor "<<(raptor?raptor->dinoDung:0)<<"/"<<(raptor?raptor->dungSize:-1)<<"\n";
+      check("dung by kind: an allosaurus's giant dinopoo, a velociraptor's small dinopoo, an anteater's small poo, a zebra's "
+            "poo; a young apatosaurus's not giant (0x4a8f89)",
+            allo&&allo->dinoDung&&allo->dungSize==2&&raptor&&raptor->dinoDung&&raptor->dungSize==1&&ant&&!ant->dinoDung&&
+            ant->dungSize==1&&zeb&&!zeb->dinoDung&&zeb->dungSize==0&&apato&&apato->dungSize==2&&apato->youngDungSize==0);
+      const int poo=items.addDung(-1,20.5f,44.5f,false,0),small=items.addDung(-1,21.5f,44.5f,false,1),
+                dino=items.addDung(-1,22.5f,44.5f,true,0),giant=items.addDung(-1,23.5f,44.5f,true,2);
+      const Animation *aPoo=items.artOf(*items.item(poo)),*aSmall=items.artOf(*items.item(small)),
+                      *aDino=items.artOf(*items.item(dino)),*aGiant=items.artOf(*items.item(giant));
+      check("dinopoo and the small and giant piles have their own art (dinopoo.ai: mid, full; poo.ai: small)",
+            aPoo&&aSmall&&aDino&&aGiant&&aPoo!=aSmall&&aPoo!=aDino&&aDino!=aGiant&&aSmall!=aGiant);
+      // (bagged: a maintenance worker at the giant pile)
+      const int maintType=st.typeOfFile("staff/maint.ai");
+      const int w=maintType>=0?st.hire(maintType,23.5f,43.5f,map,f):-1;
+      world.reindex();
+      Staff::Member *m=st.member(w);
+      std::string bagging;
+      if(m) {
+        m->job=Staff::Job::Dung;m->jobItem=giant;m->path={{m->x,m->y}};m->pathAt=0;m->anim="walk";m->playsLeft=0;m->idleLeft=0;
+        m->workCheck=999;
+        st.update(0.01f,map,f);m=st.member(w);
+        bagging=m?m->anim+" x"+std::to_string(m->playsLeft):"";
+      }
+      out<<"STAFF bagging dinopoo: "<<bagging<<"\n";
+      check("a maintenance worker bags dinopoo with bBagDino: cleanup twice with the vac, then idle (0x50e211)",
+            bagging=="cleanup x3");
+      if(w>=0)st.fire(w);
+      // (saved: the original's part and ours)
+      ZooSim books;books.start(1000000,50);UiGameScreen hud(rm,"","");
+      Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
+      const auto file=std::filesystem::temp_directory_path()/("zt1-parity-dung-"+std::to_string(SDL_GetTicks())+".zoo");
+      const bool saved=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn");
+      int origDino=0,origGiant=0,origSmall=0;
+      if(saved) {
+        std::ifstream in(file,std::ios::binary);
+        std::vector<char> bytes((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+        AssetBuffer buffer;buffer.data=bytes.data();buffer.size=bytes.size();
+        ZooReader decoded;
+        if(decoded.load(buffer)&&decoded.hasGame())
+          for(const auto &o:decoded.getObjects()) {
+            origDino+=o.typeName=="dinopoo";
+            origGiant+=o.typeName=="dinopoo"&&o.food==2;
+            origSmall+=o.typeName=="poo"&&o.food==1;
+          }
+        buffer.data=nullptr;buffer.size=0;
+      }
+      const bool loaded=saved&&SaveGame::load(file.string(),world,books,hud);
+      int keptGiant=0,keptSmall=0;
+      for(const auto &it:items.items()) {
+        keptGiant+=ZooItems::dinoDung(it)&&it.units==2;
+        keptSmall+=it.kind==ZooItems::Kind::Dung&&!ZooItems::dinoDung(it)&&it.units==1;
+      }
+      SaveGame::goals=priorGoals;
+      std::error_code ec;std::filesystem::remove(file,ec);
+      out<<"STAFF dung saved: original dinopoo "<<origDino<<" giant "<<origGiant<<" small poo "<<origSmall
+         <<"; ours giant "<<keptGiant<<" small "<<keptSmall<<"\n";
+      check("dinopoo saved as objects/other/dinopoo with its size at +0x154 (2 dinopoo, one giant; the small poo 1), "
+            "and kept by our own save (0x44f625)",
+            saved&&origDino==2&&origGiant==1&&origSmall==1&&loaded&&keptGiant==1&&keptSmall==1);
+      for(int id:items.ofKind(ZooItems::Kind::Dung,-1))items.remove(id);
       world.reindex();
     }
     // A keeper with no way to its exhibit's gate (Task65 0x423f57 ->

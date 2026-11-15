@@ -188,6 +188,8 @@ public:
     int maxHits = 500, pctHits = 20, sickChange = -20, otherSickChange = -10, sickChance = 10;
     int hungryHealthChange = 5, sickTime = 5, keeperArrivesChange = 25;
     int dirtyIncrement = 15, dirtyThreshold = 70, energyThreshold = 70;
+    bool dinoDung = false; // cDinoZoodoo: its dung is dinopoo
+    int dungSize = 0, youngDungSize = 0; // cSmallZoodoo 1, cGiantZoodoo 2 (the pile's art: small, giant)
     int timeDeath = 5001, deathChance = 100;
     int reproductionChance = 0, reproductionInterval = 0, happyReproduceThreshold = 100,
         offspring = 1, babyToAdult = 0;
@@ -255,6 +257,13 @@ public:
     bool dying = false;
     int dieAfter = 0; // its bDie playing (gone when it's done)
     bool sick = false, noFoodSeen = false, sleeping = false;
+    // The set it's to start when the one it's in ends (zoo.exe unit +0xdc,
+    // set by setBehaviourSet 0x4300f6; "" none). Its flag +0xe8 - whether a
+    // later request may replace it - is 0 for the two that ask here (bSleep
+    // from 0x4384ba, bSick from 0x4389aa) and 1 for an empty slot, so ours:
+    // taken while not empty. Not saved: asleep with no bSleep running, a
+    // loaded animal starts its bSleep at once (chooseBehaviour)
+    std::string nextSet;
     int healthCheck = 0, energyCheck = 0, reproductionCheck = 0, starve = 0;
     int life = 5000, ready = 0, grow = 0, notHappyCheck = 0;
     // Its mate, mother and father (ids, -1: none - zoo.exe ZTAnimal +0x2e8,
@@ -279,6 +288,7 @@ public:
     // 0-7, -1: none) - countGuestCrowd, tick, walkSomewhere
     int guestCrowd = 0, guestCrowdX = 0, guestCrowdY = 0, crowdDir = -1;
     float drinkX = -1, drinkY = -1; // the water it's going to drink at
+    float drinkGoX = -1, drinkGoY = -1; // where it stands to drink (its bFindOtherFood's "otherfood")
     // In a tank: how high it swims over the floor (height units), and the
     // height it's swimming to (fWalk's surface, floor, dive, rise, level)
     float swimZ = 0, swimTo = 0;
@@ -697,6 +707,11 @@ private:
   const std::vector<Step> *set(const Member &m, const std::string &name) const;
   bool mayPerform(const Member &m) const;
   void pushSet(Member &m, const std::string &name);
+  // A set asked for next (zoo.exe 0x4301b7 -> setBehaviourSet 0x4300f6):
+  // not when it's the set it's in, nor over one asked for already
+  bool requestSet(Member &m, const std::string &name);
+  // The tiredness check's body (zoo.exe 0x4384ba, past its countdown)
+  void tirednessCheck(Member &m);
   void chooseBehaviour(Member &m);
   void nextStep(Member &m, const WorldMap &map, const Fences &fences);
   void play(Member &m, const std::string &anim, Member::Mode mode, float seconds = 0);
@@ -720,11 +735,14 @@ private:
   // Whether it may lie down - sleep, or be sick - where it is (zoo.exe
   // 0x440a37)
   bool mayRest(const Member &m) const;
+  // Busy with itself (zoo.exe class slot 0x288, 0x420fed): no hunt starts
+  bool occupied(const Member &m) const;
   // Under the water in a tank (the original's water state 4, unit +0x258)
   bool underwaterNow(const Member &m) const;
   void breathTick(Member &m);
   bool walkSomewhere(Member &m, const WorldMap &map, const Fences &fences);
   int nearestFood(const Member &m) const;
+  int chooseFood(Member &m);
   void faceToward(Member &m, float x, float y);
   float animSeconds(const Member &m, const std::string &anim) const;
   CompassDirection facing(const WorldRenderer &view, const Member &m) const;

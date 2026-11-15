@@ -1558,6 +1558,21 @@ void Fences::update(float seconds) {
   }
   for (Filter &f : this->filterList) {
     const FilterType &k = this->filterType(f.file);
+    // zoo.exe ZTTankFilter::update 0x497e0f (0x498102): every 3 s, broken
+    // or dry too, its months in operation counted from the day it was
+    // built; when that's not 0 and has moved on, it's kept, and its upkeep
+    // rolls: this month's becomes last month's (+0x16c to +0x168), this
+    // month's starts from 0. (The calendar's month end doesn't touch it.)
+    f.monthCheck -= seconds;
+    if (f.monthCheck <= 0) {
+      f.monthCheck = Original::filterMonthCheckSeconds;
+      const int months = f.builtDay > Filter::kUnknownDay ? Original::monthsSince(f.builtDay, this->today) : 0;
+      if (months != 0 && months != f.monthsRunning) {
+        f.monthsRunning = months;
+        f.upkeepLast = f.upkeepCurrent;
+        f.upkeepCurrent = 0;
+      }
+    }
     f.decayClock += seconds;
     while (f.decayClock >= k.decayTime) {
       f.decayClock -= k.decayTime;
@@ -1654,9 +1669,12 @@ std::pair<std::string, int> Fences::filterSound(const Filter &f) const {
 
 void Fences::serviceFilter(int index) {
   // (zoo.exe 0x595c8e: health back to cStartingHealth; its decay countdown
-  // runs on, not restarted)
-  if (Filter *f = this->filter(index))
+  // runs on, not restarted; serviceAndDate 0x595cad: and the day it was
+  // serviced, +0x180, is today)
+  if (Filter *f = this->filter(index)) {
     f->health = static_cast<float>(this->filterType(f->file).startHealth);
+    f->servicedDay = this->today;
+  }
 }
 
 int Fences::takeUpkeep() {
@@ -1740,6 +1758,10 @@ bool Fences::placeFilter(int x, int y, const WorldMap &map) {
   f.tank = tank;
   f.health = static_cast<float>(k.startHealth);
   f.placedMonth = this->monthNow;
+  // (zoo.exe 0x47e864: built and serviced now, 1 month in operation)
+  f.builtDay = f.servicedDay = this->today;
+  f.monthsRunning = 1;
+  f.monthCheck = Original::filterMonthCheckSeconds;
   const CatalogItem *item = ItemCatalog::get().find(k.file);
   f.name = (item ? item->name : "Filter") + " " + std::to_string(++this->filtersMade);
   // Toward the tank: from the footprint's middle to the tank's
@@ -1792,10 +1814,7 @@ int Fences::filterAt(float px, float py, const WorldRenderer &view, const WorldM
 }
 
 void Fences::newMonth() {
-  for (Filter &f : this->filterList) {
-    f.upkeepLast = f.upkeepCurrent;
-    f.upkeepCurrent = 0;
-  }
+  // (filters roll their upkeep on their own months: update above)
   for (Exhibit &ex : this->exhibitList) {
     ex.donationsLast = ex.donationsNow;
     ex.donationsNow = 0;

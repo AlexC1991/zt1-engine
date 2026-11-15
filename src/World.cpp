@@ -438,7 +438,7 @@ bool World::loadFreeform(const std::string &path) {
     }
     for (const ZooItems::Item &it : this->items.items()) {
       const std::string file = it.kind == ZooItems::Kind::Food ? ZooItems::foodFile(it.food)
-                               : it.kind == ZooItems::Kind::Dung ? std::string("scenery/other/poo.ai")
+                               : it.kind == ZooItems::Kind::Dung ? std::string(ZooItems::dinoDung(it) ? "scenery/other/dinopoo.ai" : "scenery/other/poo.ai")
                                                                  : std::string("scenery/other/trash.ai");
       const TankFlags &flags = this->tankFlagsOf(file);
       if (in(it.x, it.y) && !flags.underwater && !flags.surface)

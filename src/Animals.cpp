@@ -25,11 +25,12 @@ constexpr float kEnergyPerHalfDay = 1.0f;
 // From zoo.exe: animals' status ticks every second (zoo.ini [AI]
 // mStatusPeriod, 1000 ms); each check runs every so many ticks (ai.ztd
 // animals.ai: cHabitatCheck 20, cCaptivityCheck 20, cSocialCheck 30,
-// cOtherCheck 40, cHungerCheck 30, cZapCheck 5); an exhibit is rated again
+// cOtherCheck 40, cHungerCheck 30, cZapCheck 5, cEnergyCheck 30, cHealthCheck
+// 30); an exhibit is rated again
 // every 7 s
 constexpr float kTickMs = 1000.0f;
 constexpr int kHabitatCheck = 20, kCaptivityCheck = 20, kSocialCheck = 30, kOtherCheck = 40,
-              kHungerCheck = 30, kZapCheck = 5;
+              kHungerCheck = 30, kZapCheck = 5, kEnergyCheck = 30, kHealthCheck = 30;
 constexpr float kRateEveryMs = 7000.0f;
 // measured: cMurkyWaterCheck (zoo.exe 0x6393e4, read at 0x45fcde) is 5 in
 // the running original (Lab memPeek; animals.ai has no such key, every
@@ -231,6 +232,24 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.keeperArrivesChange = num("ckeeperarriveschange", 25);
     t.dirtyIncrement = num("cdirtyincrement", 15);
     t.dirtyThreshold = num("cdirtythreshold", 70);
+    // Its dung (zoo.exe 0x4a8f89, the type's +0x3cf, +0x3ce, +0x3d0):
+    // cDinoZoodoo, dinopoo rather than poo; cSmallZoodoo its small art,
+    // cGiantZoodoo its giant one, the giant winning (each key's last line
+    // counts: apato.ai has cGiantZoodoo 1, then 0)
+    {
+      auto last = [&](const char *key) {
+        std::vector<std::string> v = ai->getList(sectionOf(key), key);
+        return !v.empty() && std::atoi(v.back().c_str()) == 1;
+      };
+      t.dinoDung = last("cdinozoodoo");
+      t.dungSize = last("cgiantzoodoo") ? 2 : last("csmallzoodoo") ? 1 : 0;
+      // (the young's type: its [y/...] keys over the grown one's)
+      auto young = [&](const char *key, bool grown) {
+        std::vector<std::string> v = ai->getList("y/characteristics/integers", key);
+        return v.empty() ? grown : std::atoi(v.back().c_str()) == 1;
+      };
+      t.youngDungSize = young("cgiantzoodoo", t.dungSize == 2) ? 2 : young("csmallzoodoo", t.dungSize == 1) ? 1 : 0;
+    }
     // (cTimeDeath appears twice in some files: the last one counts)
     {
       std::vector<std::string> td = ai->getList(sectionOf("ctimedeath"), "ctimedeath"),
@@ -732,6 +751,24 @@ bool Animals::mayRest(const Member &m) const {
   if (!t.onlyUnderwater && (m.waterMode || onWater(m) || (this->tankAt && this->tankAt(m.x, m.y) >= 0)))
     return false;
   return !m.egg && m.showTank < 0;
+}
+
+// zoo.exe 0x420fed (ZTAnimal's class slot 0x288, which chooseTask 0x436f5c
+// asks before the in-exhibit hunt): true while fleeing (ZTUnit's 0x420f65,
+// +0x25c - ours: fleeFrom); while the set it plays (+0x54) is bSick, bSleep,
+// bEat or bTestFence; while it's after keeper food (+0x39f, Task 0x72 - ours:
+// its bFindKeeperFood), water (+0x3a1, Task 0x7a - ours: drinkX), air (Task
+// 0x7c - ours: surfacing) or a building (+0x3b1 - ours: rampageBuilding); on
+// a show (Tasks 0x85, 0x86 - ours: showTank, busy too)
+bool Animals::occupied(const Member &m) const {
+  if (m.fleeFrom >= 0 || m.drinkX >= 0 || m.surfacing || m.rampageBuilding >= 0 || m.showTank >= 0)
+    return true;
+  if (!m.stack.empty()) {
+    const std::string &set = m.stack.front().first;
+    if (set == "bsick" || set == "bsleep" || set == "beat" || set == "btestfence")
+      return true;
+  }
+  return std::any_of(m.stack.begin(), m.stack.end(), [](const auto &f) { return f.first == "bfindkeeperfood"; });
 }
 
 // The nearest adult in its exhibit that hunts it within the radius (zoo.exe
@@ -1369,6 +1406,40 @@ void Animals::pushSet(Member &m, const std::string &name) {
   }
 }
 
+// zoo.exe 0x4301b7: false when the set it's in (+0x54) is that one; else
+// setBehaviourSet 0x4300f6, which writes the next set (+0xdc) only over one
+// that may be replaced (+0xe8 - ours: none asked for yet)
+bool Animals::requestSet(Member &m, const std::string &name) {
+  if (!m.stack.empty() && m.stack.front().first == name)
+    return false;
+  if (!m.nextSet.empty())
+    return false;
+  m.nextSet = name;
+  return true;
+}
+
+// zoo.exe 0x4384ba past its countdown (cEnergyCheck), awake: where it may
+// lie down (0x440a37), not loose unless darted (+0x3a3, +0x393) and not
+// chasing (+0x3a4 - ours: a guest or an animal it's after), and at
+// cEnergyThreshold (type +0x324): bSleep asked for next, and if that took,
+// asleep (+0x3a8) and "Sleepy"; else cEnergyIncrement x +0x2d8 more (+0x2c4,
+// which 0x4378df adds, capped at cMaxEnergy) - none while it waits to sleep
+void Animals::tirednessCheck(Member &m) {
+  const Type &t = this->typeList[m.type];
+  const bool chasing = m.prey >= 0 || m.huntAnimal >= 0;
+  if (mayRest(m) && !(m.escaped && !m.tranquilised) && !chasing && m.energy >= t.energyThreshold) {
+    if (requestSet(m, "bsleep")) {
+      m.sleeping = true;
+      ZT_STEP("0x4384ba", "Tired: bSleep next", {"energy", m.energy}, {"cEnergyThreshold", t.energyThreshold});
+    }
+    return;
+  }
+  float was = m.energy;
+  m.energy = std::min(m.energy + t.energyIncrement, static_cast<float>(t.maxEnergy));
+  ZT_STEP("0x4384ba", "Tiredness (every 30)", {"energy", was, m.energy}, {"cEnergyIncrement", t.energyIncrement},
+          {"cEnergyThreshold", t.energyThreshold});
+}
+
 void Animals::play(Member &m, const std::string &anim, Member::Mode mode, float seconds) {
   m.anim = anim;
   m.mode = mode;
@@ -1406,6 +1477,50 @@ int Animals::nearestFood(const Member &m) const {
   return found;
 }
 
+// The food it goes to (zoo.exe Task 0x72's whileGoing 0x43849c, as it sets
+// off): three times in four the nearest (0x49fe15 - tile to tile, the first
+// of equals), else three in four of the rest the one with the fewest units
+// left (0x4a0025), else any one of them at random (0x4a01f9). Each takes only
+// food of its own kind (the food's +0x168 against the species' +0x3c8) -
+// ours not yet: our keeper drops one exhibit's food, the first animal's
+// (Staff::foodFor), where the original's drops each species' own
+int Animals::chooseFood(Member &m) {
+  if (!this->items)
+    return -1;
+  std::vector<const ZooItems::Item *> foods;
+  for (const ZooItems::Item &i : this->items->items())
+    if (i.kind == ZooItems::Kind::Food && i.exhibit == m.exhibit && i.units > 0)
+      foods.push_back(&i);
+  if (foods.empty())
+    return -1;
+  std::uniform_int_distribution<int> four(0, 3);
+  const int tx = static_cast<int>(std::floor(m.x)), ty = static_cast<int>(std::floor(m.y));
+  const ZooItems::Item *pick = nullptr;
+  if (four(this->rng) != 0) {
+    long best = 0x7fffffff;
+    for (const ZooItems::Item *f : foods) {
+      const long dx = static_cast<int>(std::floor(f->x)) - tx, dy = static_cast<int>(std::floor(f->y)) - ty;
+      if (dx * dx + dy * dy < best) {
+        best = dx * dx + dy * dy;
+        pick = f;
+      }
+    }
+    ZT_STEP("0x49fe15", "Picks the nearest food", {"food", static_cast<double>(pick->id)});
+  } else if (four(this->rng) != 0) {
+    float least = 1e30f;
+    for (const ZooItems::Item *f : foods)
+      if (f->units < least) {
+        least = f->units;
+        pick = f;
+      }
+    ZT_STEP("0x4a0025", "Picks the food with the fewest units left", {"food", static_cast<double>(pick->id)});
+  } else {
+    pick = foods[std::uniform_int_distribution<size_t>(0, foods.size() - 1)(this->rng)];
+    ZT_STEP("0x4a01f9", "Picks a food at random", {"food", static_cast<double>(pick->id)});
+  }
+  return pick->id;
+}
+
 // How happy it is picks what it does ([AmbientAnims]); hungry with food
 // down, it goes to eat; worn out, it sleeps
 void Animals::chooseBehaviour(Member &m) {
@@ -1433,6 +1548,7 @@ void Animals::chooseBehaviour(Member &m) {
         eats = eats || a == "beat";
     if (!eats && this->set(m, "beat"))
       pushSet(m, "beat");
+    m.foodItem = -1; // (chosen afresh as it sets off: chooseFood)
     pushSet(m, "bfindkeeperfood");
     ZT_STEP("", "Chooses: hungry with food down, goes to eat", {"behaviour", "bfindkeeperfood"}, {"hunger", m.hunger},
             {"cHungerThreshold", t.hungerThreshold});
@@ -1448,17 +1564,8 @@ void Animals::chooseBehaviour(Member &m) {
             {"cBreathThreshold", t.breathThreshold});
     return;
   }
-  // Sick: lies about (bSick) - and, as with a sleep, not rampaging while it
-  // does (zoo.exe 0x437102: while its set is bSleep, bSick or bHatch the
-  // rampage flag +0x3b0 is cleared and nothing else starts; the health
-  // check 0x4389aa starts bSick as it falls ill)
-  if (m.sick && this->set(m, "bsick")) {
-    m.rampaging = false;
-    m.rampageTicks = 0;
-    pushSet(m, "bsick");
-    ZT_STEP("0x437102", "Chooses: sick, lies about", {"behaviour", "bsick"});
-    return;
-  }
+  // (sick: no set of its own here - the health check 0x4389aa asks for
+  // bSick next, nextStep starts it)
   // Rampaging: its bHabitatRampage, or bEscapedRampage when it's out
   // (zoo.exe 0x438514 sets it; which set, by the names it ends there) -
   // before a sleep (zoo.exe 0x437102: the rampage set is set first, and
@@ -1471,16 +1578,30 @@ void Animals::chooseBehaviour(Member &m) {
       return;
     }
   }
-  // Tired (cEnergyThreshold): to sleep, where it may (zoo.exe 0x437102 ->
-  // 0x440a37: not in the water or a tank, unless it lives only underwater);
-  // rested when it wakes (0x4384ba)
-  if ((m.sleeping || m.energy >= t.energyThreshold) && !m.escaped && mayRest(m) && this->set(m, "bsleep")) {
-    m.sleeping = true;
+  // Asleep with no bSleep running or asked for (a loaded zoo - ours: the
+  // asked-for set isn't saved): its bSleep
+  if (m.sleeping && !m.escaped && mayRest(m) && this->set(m, "bsleep")) {
     m.rampaging = false; // (a sleep ends a rampage: zoo.exe 0x4375d3, as bSleep - or bHatch - starts)
     m.rampageTicks = 0;
     pushSet(m, "bsleep");
-    ZT_STEP("0x437102", "Chooses: tired, to sleep", {"behaviour", "bsleep"}, {"energy", m.energy},
-            {"cEnergyThreshold", t.energyThreshold});
+    ZT_STEP("0x437102", "Chooses: asleep, its bSleep", {"behaviour", "bsleep"});
+    return;
+  }
+  // Tired (cEnergyThreshold) where it may lie down (0x440a37: not in the
+  // water or a tank, unless it lives only underwater): zoo.exe 0x437102
+  // starts no set but runs the tiredness check 0x4384ba - its countdown one
+  // an update - till that asks for bSleep, which starts next (nextStep)
+  if (!m.sleeping && mayRest(m) && m.energy >= t.energyThreshold && this->set(m, "bsleep")) {
+    if (--m.energyCheck < 0) {
+      m.energyCheck = kEnergyCheck - 1;
+      tirednessCheck(m);
+    }
+    if (!m.nextSet.empty())
+      return; // (nextStep starts it)
+    // (nothing yet: as it was, till its next update - ours: kLineRetry)
+    play(m, m.anim, Member::Mode::Loop, kLineRetry);
+    ZT_STEP("0x437102", "Tired: waits for the tiredness check", {"energy", m.energy},
+            {"countdown", static_cast<double>(m.energyCheck)});
     return;
   }
   int h =static_cast<int>(std::lround(m.happiness));
@@ -1505,13 +1626,17 @@ void Animals::chooseBehaviour(Member &m) {
                 {"from", a.lo}, {"to", a.hi});
         return;
       }
+  // (zoo.exe 0x43cb33, only with no set running or asked for: the first
+  // [AmbientAnims] entry whose range holds its happiness)
   for (const Ambient &a : t.ambient)
     if (h >= a.lo && h <= a.hi) {
       pushSet(m, a.set);
-      ZT_STEP("", "Chooses: by its happiness ([AmbientAnims])", {"behaviour", a.set}, {"happiness", h},
+      ZT_STEP("0x43cb33", "Chooses: by its happiness ([AmbientAnims])", {"behaviour", a.set}, {"happiness", h},
               {"from", a.lo}, {"to", a.hi});
       return;
     }
+  // ours: none fits - its bIdle1 (0x43cb33 starts nothing, and with an
+  // empty list asks its type's slot 0x14)
   pushSet(m, "bidle1");
   ZT_STEP("", "Chooses: nothing fits, idles", {"behaviour", "bidle1"}, {"happiness", h});
 }
@@ -1598,7 +1723,23 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
   }
   if (m.stack.empty()) {
     m.drinkX = m.drinkY = -1;
-    chooseBehaviour(m);
+    // Its set over: the one asked for next first, else it chooses (zoo.exe
+    // unit update 0x435cfb: no set running, +0xdc empty -> startBehaviour,
+    // class slot 0x48; else 0x43c6c5 starts +0xdc and setBehaviourSet puts
+    // "" back, replaceable)
+    if (m.nextSet.empty())
+      chooseBehaviour(m);
+    if (m.stack.empty() && !m.nextSet.empty()) {
+      const std::string next = m.nextSet;
+      m.nextSet.clear();
+      // (bSleep, bSick: no rampage while it lies there - zoo.exe 0x4375e2)
+      if (next == "bsleep" || next == "bsick") {
+        m.rampaging = false;
+        m.rampageTicks = 0;
+      }
+      pushSet(m, next);
+      ZT_STEP("0x435cfb", "Starts the set asked for next", {"behaviour", next});
+    }
   }
   for (int guard = 0; guard < 32 && !m.stack.empty(); guard++) {
     const std::vector<Step> *steps = this->set(m, m.stack.back().first);
@@ -1755,7 +1896,8 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       }
       continue;
     } else if (command == Command::Die) {
-      // (its death is the set ending: dieAfter, as bDie's end on land)
+      // (its death is the set ending: dieAfter, as bDie's end on land - fDie
+      // 0x60cbb3 is each stock death set's last line)
       continue;
     } else if (command == Command::PlaySet) {
       // zoo.exe 0x426dd4: one argument, a set it has (0x43ddc1 finds none
@@ -1856,8 +1998,14 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       if (command == Command::MoveWithSound && !arg(4).empty())
         playSound(m, arg(4));
       bool walking = false;
-      if (target == "keeperfood" || target == "otherfood") {
-        m.foodItem = nearestFood(m);
+      if (target == "otherfood" && m.drinkX >= 0) {
+        // (a drink: to the water - Task 0x7a's target)
+        walking = walkTo(m, m.drinkGoX, m.drinkGoY, map, fences);
+      } else if (target == "keeperfood" || target == "otherfood") {
+        // (the food chosen as it sets off; on its way, kept while it lasts)
+        const ZooItems::Item *kept = m.foodItem >= 0 && this->items ? this->items->item(m.foodItem) : nullptr;
+        if (!kept || kept->units <= 0 || kept->exhibit != m.exhibit)
+          m.foodItem = chooseFood(m);
         const ZooItems::Item *food = m.foodItem >= 0 && this->items ? this->items->item(m.foodItem) : nullptr;
         if (!food) {
           // Nothing to eat: the rest of the set is for eating it
@@ -1953,7 +2101,7 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
             faceToward(m, ox, oy);
             if (rubbleAt) rubbleAt(static_cast<int>(std::floor(std::clamp(m.x, ox-hx+0.01f, ox+hx-0.01f))),
                                    static_cast<int>(std::floor(std::clamp(m.y, oy-hy+0.01f, oy+hy-0.01f))), m);
-            m.rampageBuilding = -1;
+            m.rampageBuilding = -1; // (there: Task 0x7b's atTarget 0x61ad83 clears +0x3b1, the task over)
             routed = true;
             break;
           }
@@ -1968,9 +2116,9 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       m.rampageBuilding = -1;
       continue;
     } else if (command == Command::Hatch) {
-      // Out of the egg: a baby (zoo.exe bHatch's last step, fHatch ->
-      // 0x613d24: 10322 "Congratulations! %s has hatched", priority 4 as a
-      // birth's - good news)
+      // Out of the egg: a baby (zoo.exe bHatch's last step, fHatch 0x60cacb ->
+      // 0x60cae0 -> 0x613d24, done at once: 10322 "Congratulations! %s has
+      // hatched", priority 4 as a birth's - good news)
       m.egg = false;
       this->markDirty(m.exhibit);
       if (this->rm) {
@@ -2287,16 +2435,31 @@ void Animals::waterTick(Member &m, const WorldMap &map, const Fences &fences) {
             gy = y + 0.5f + (by - y) * 0.4f;
           }
         }
-        if (gx >= 0 && this->set(m, "beat")) {
+        // (zoo.exe Task 0x7a, whileGoing 0x4a0c55: the nearest water tile of
+        // its habitat that isn't terrain 10 (0x4a0d77), then its
+        // bFindOtherFood - every stock one fWalk(otherfood,0), most then
+        // fPlaySet(bEat) - "Going to drink water"; with no such set, no
+        // drink. At the water, atTarget 0x4265a0 starts its bEat if the set
+        // didn't. ours: "otherfood" is the land beside the water, as near it
+        // as it stands)
+        if (gx >= 0 && this->set(m, "bfindotherfood")) {
           m.stack.clear();
+          m.path.clear();
+          m.pathAt = 0;
           m.foodItem = -1;
-          m.moveAnim = "walk";
-          m.speed = t.forAge(m.baby).slow;
-          if (walkTo(m, gx, gy, map, fences)) {
+          m.drinkX = bx + 0.5f;
+          m.drinkY = by + 0.5f;
+          m.drinkGoX = gx;
+          m.drinkGoY = gy;
+          bool eats = false;
+          for (const Step &st : *this->set(m, "bfindotherfood"))
+            for (const std::string &a : st.args)
+              eats = eats || a == "beat";
+          if (!eats && this->set(m, "beat"))
             pushSet(m, "beat");
-            m.drinkX = bx + 0.5f;
-            m.drinkY = by + 0.5f;
-          }
+          pushSet(m, "bfindotherfood");
+          m.stepping = false;
+          ZT_STEP("0x4a0c55", "Going to drink water", {"x", m.drinkX}, {"y", m.drinkY});
         }
       }
     }
@@ -3139,20 +3302,35 @@ std::vector<SDL_Rect> strips;
     }
     return;
   }
-  // A sprite wholly inside the same convex mask needs no per-pixel redraw.
-  // At the boundary retain the exact pixel-wide clips, but visit only its bounds.
-  auto inside=[&](float x,float y) {
-    for(size_t i=0;i<hullTank.size();++i) {
-      const auto &a=hullTank[i],&b=hullTank[(i+1)%hullTank.size()];
-      if((b.first-a.first)*(y-a.second)-(b.second-a.second)*(x-a.first)<-0.001f)return false;
+  // A sprite wholly inside the strips needs no per-strip redraw: one draw
+  // inside the parent clip paints the same pixels. ours (#179): asked of the
+  // strips themselves, in device pixels with a pixel's margin round its box -
+  // asked of the water's outline instead, a whale shark facing 3 at 1.5x was
+  // "inside" where the strips (each column's span taken at its middle, then
+  // rounded to whole pixels) cut a few of its edge pixels
+  auto covered=[&](const SDL_FRect &box) {
+    if(box.w>1e8f || box.h>1e8f)return false;
+    int l=static_cast<int>(std::floor(box.x*sxScale))-1,t=static_cast<int>(std::floor(box.y*syScale))-1;
+    int r=static_cast<int>(std::ceil((box.x+box.w)*sxScale))+1,b=static_cast<int>(std::ceil((box.y+box.h)*syScale))+1;
+    if(hadClip) {
+      l=std::max(l,oldClip.x);t=std::max(t,oldClip.y);
+      r=std::min(r,oldClip.x+oldClip.w);b=std::min(b,oldClip.y+oldClip.h);
     }
-    return true;
+    if(l>=r || t>=b)return true; // (none of it shows either way)
+    int x=l;
+    for(const auto &rc:strips) {
+      if(rc.x+rc.w<=x)continue;
+      if(rc.x>x || rc.y>t || rc.y+rc.h<b)return false; // (a gap, or cut above or below)
+      x=rc.x+rc.w;
+      if(x>=r)return true;
+    }
+    return false;
   };
   for(size_t i=0;i<out.size();++i) {
     auto &d=out[i];const auto &box=bounds[i];
     const float right=box.x+box.w,bottom=box.y+box.h;
     SDL_SetRenderScale(renderer,1,1);
-    if(d.airborne || (fastTankSprites && inside(box.x,box.y) && inside(right,box.y) && inside(right,bottom) && inside(box.x,bottom))) {
+    if(d.airborne || (fastTankSprites && covered(box))) {
       SDL_SetRenderClipRect(renderer,hadClip?&oldClip:nullptr);
       SDL_SetRenderScale(renderer,sxScale,syScale);
       d.art->drawAnchored(renderer,d.sx,d.sy,d.side,d.tinted?&d.tint:nullptr,d.frame);
@@ -3660,12 +3838,13 @@ void Animals::eggTick(Member &m) {
     return;
   ZT_FN("0x437860", "The egg hatches");
   ZT_STEP("0x437860", "Time to hatch", {"health", m.health}, {"it needs", need});
-  // (its egg_idle ended: bHatch starts at once)
+  // (its egg_idle ended: bHatch starts at once - zoo.exe 0x613ca6 starts it
+  // through 0x4a7e94, forced)
   m.stepping = false;
   if (this->set(m, "bhatch"))
     pushSet(m, "bhatch");
   else
-    m.egg = false;
+    m.egg = false; // ours: no bHatch to play, it's out at once
 }
 
 // Testing a live electric fence (zoo.exe 0x438ebc, every cZapCheck): while it has
@@ -3987,7 +4166,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
             {"cDirtyThreshold", t.dirtyThreshold});
     // (loose too: on the zoo's grounds, for the maintenance workers)
     if (m.dirty >= t.dirtyThreshold && this->items && (m.exhibit >= 0 || (m.escaped && !m.boxed))) {
-      this->items->add(ZooItems::Kind::Dung, m.exhibit, m.x, m.y);
+      this->items->addDung(m.exhibit, m.x, m.y, t.dinoDung, m.baby ? t.youngDungSize : t.dungSize);
       m.dirty = 0;
       if (m.exhibit >= 0)
         this->markDirty(m.exhibit);
@@ -4000,7 +4179,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   // others sick, unhappier and maybe caught it; now and then ill anyway
   if (--m.healthCheck < 0) {
     ZT_FN("0x4389aa", "Health check (every 30)");
-    m.healthCheck = 29;
+    m.healthCheck = kHealthCheck - 1;
     ZT_STEP("0x4389aa", "Its health", {"health", m.health}, {"cMaxHits", t.maxHits}, {"cPctHits", t.pctHits},
             {"sick", m.sick ? 1.0 : 0.0});
     if (m.health <= 0) {
@@ -4010,10 +4189,16 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
     } else {
       m.starve = 0;
     }
-    if (m.health * 100 <= t.pctHits * t.maxHits) {
+    // Poorly (health x 100 <= cPctHits x cMaxHits), not loose (+0x3a3) or
+    // chasing (+0x3a4): where it may lie down (0x440a37), bSick asked for
+    // next (0x4301b7 - not taken while it's in its bSick or another set is
+    // asked for, and then nothing more); "Not feeling well" and cSickChange
+    if (m.health * 100 <= t.pctHits * t.maxHits && !m.escaped && m.prey < 0 && m.huntAnimal < 0 &&
+        (!mayRest(m) || requestSet(m, "bsick"))) {
       float was = m.pending;
       m.pending += t.sickChange;
-      ZT_STEP("0x4389aa", "Poorly: unhappy", {"pending", was, m.pending}, {"cSickChange", t.sickChange});
+      ZT_STEP("0x4389aa", "Poorly: unhappy", {"pending", was, m.pending}, {"cSickChange", t.sickChange},
+              {"next", m.nextSet});
     }
     bool othersSick = false;
     for (const Member &o : this->list)
@@ -4052,8 +4237,8 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   // (asleep, its countdown waits and each tick it asks whether it's still
   // in its bSleep - cut short, it's refreshed as if it had woken)
   if (m.sleeping) {
-    m.energyCheck = 29;
-    if (!m.stack.empty() &&
+    m.energyCheck = kEnergyCheck - 1;
+    if (!m.stack.empty() && m.nextSet != "bsleep" &&
         std::none_of(m.stack.begin(), m.stack.end(), [](const auto &f) { return f.first == "bsleep"; })) {
       m.sleeping = false;
       m.energy = 0;
@@ -4061,11 +4246,8 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       ZT_STEP("0x4384ba", "Refreshed after sleeping (its bSleep cut short)", {"energy", 0.0});
     }
   } else if (--m.energyCheck < 0) {
-    m.energyCheck = 29;
-    float was = m.energy;
-    m.energy = std::min(m.energy + t.energyIncrement, static_cast<float>(t.maxEnergy));
-    ZT_STEP("0x4384ba", "Tiredness (every 30)", {"energy", was, m.energy}, {"cEnergyIncrement", t.energyIncrement},
-            {"cEnergyThreshold", t.energyThreshold});
+    m.energyCheck = kEnergyCheck - 1;
+    tirednessCheck(m);
   }
   // Old age and babies (0x4385e5), every 20 ticks
   m.ready = std::min(m.ready + 1, std::max(1, t.reproductionInterval));
@@ -4165,7 +4347,8 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   // In its exhibit (zoo.exe 0x438514, every cEscapedCheck 2 ticks): prey run
   // from an adult that hunts them within 7 (or from one chasing them at
   // play); an adult hunter goes after the nearest animal it lists within 5
-  // (cPreyRadius) - no chance, no hunger - unless one that hunts it is near
+  // (cPreyRadius) - no chance, no hunger - unless one that hunts it is near,
+  // or it's busy with itself (0x420fed: sick, asleep, eating...)
   if (!busy(m)) {
     if (--m.huntCheck <= 0) {
       m.huntCheck = 2;
@@ -4182,7 +4365,8 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       } else {
         m.fleeFrom = -1;
       }
-      if (m.fleeFrom < 0 && (m.huntAnimal < 0 || m.tag) && !m.baby && (!t.preyIds[sub(m)].empty() || t.eatsEggs)) {
+      if (m.fleeFrom < 0 && (m.huntAnimal < 0 || m.tag) && !m.baby && !occupied(m) &&
+          (!t.preyIds[sub(m)].empty() || t.eatsEggs)) {
         const Member *best = nullptr;
         float bestD = 1e30f;
         for (const Member &o : this->list) {
@@ -4402,7 +4586,10 @@ void Animals::lifeEvents(const WorldMap &map, const Fences &fences) {
     this->markDirty(b->exhibit);
   }
   // Died of old age ("%s has died of old age."); the others in its exhibit
-  // grieve (cDeathChange -20)
+  // grieve (cDeathChange -20). (zoo.exe fDie 0x60cbb3 -> 0x60cbc8 posts 10242,
+  // urgency 2, as its line runs: the last line of every stock death set that
+  // has one - ours: at the set's end. The bDie sets without one play a death
+  // set that has it through fPlaySetTank/Terrain)
   for (size_t i = 0; i < this->list.size();) {
     Member &m = this->list[i];
     if (!m.dying || (m.dieAfter && !m.stack.empty())) {

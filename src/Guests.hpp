@@ -64,6 +64,15 @@ public:
     // Touching a live electric fence instead of watching (zoo.exe
     // 0x425af4): cTestFenceChance in 100, cZapHappinessHit when zapped
     int testFenceChance = 0, zapHit = 0;
+    // Tapping a tank's glass while watching (zoo.exe 0x425a85: cTapWallChance,
+    // ZTGuestType +0x2c8, 0 by default - 0x4c49dc)
+    int tapWallChance = 0;
+    // A price judged (zoo.exe 0x619245 / 0x533480: guest type +0x244
+    // cPriceHappy1Change, +0x248 cPriceAngry1Change - guestTypeLoad 0x4c5102)
+    int priceHappy = 0, priceAngry = 0;
+    // Its bTapTank set: [<kind>\BehaviorSet\bTapTank] f = fPlay(<anim>), in
+    // order (guests.ai: tap, peek, map; the children no map)
+    std::vector<std::string> tapSet;
     // Its [<kind>/Characteristics/Integers] (zoo.exe ZTGuestType::guestTypeLoad
     // 0x4c4cb9; a kind's missing keys are the DefaultSubtype man's): each
     // check's period in status ticks, the needs' increments, thresholds and
@@ -165,6 +174,12 @@ public:
     int viewWay = -1;
     double viewStart = 0, viewEnd = 0;
     std::vector<int> recentSpecies;
+    // Playing its bTapTank (zoo.exe 0x425a85): which of the set's fPlays
+    // (tap, peek, map), -1 not tapping; the game time towards the next
+    // update (the original's whileGoing looks again each update while it
+    // taps: 0x42325d)
+    int tapStep = -1;
+    float tapUpdateMs = 0;
     int lastThought = 0;      // lang string
     std::string thoughtArg;
     std::vector<std::string> thoughts; // newest first (Guest Information)
@@ -389,12 +404,15 @@ private:
     std::set<std::string> satisfies;
     std::string item;          // the first thing it sells
     float price = 0, priceFactor = 1, low = 0, high = 30;
+    // cCommerce (ZTBuildingType +0x23d, loadConfig 0x4c1058): its users pay
+    // (guestBuy 0x42d858) and its price is judged at the door (0x42c8af)
+    bool commerce = false;
     int capacity = 1;
     float timeInside = 3;
     bool hideUser = false;
     float adultChange = 0, childChange = 0, hunger = 0, thirst = 0, bathroom = 0, energy = 0;
     // its item's
-    float itemAdult = 0, itemChild = 0, itemHunger = 0, itemThirst = 0, itemBathroom = 0;
+    float itemAdult = 0, itemChild = 0, itemHunger = 0, itemThirst = 0, itemBathroom = 0, itemEnergy = 0;
     bool itemTrash = false;
     int usedThought = 0, consumedThought = 0;
     // scenery guests come to look at: cEstheticWeight (over 0: one of them),
@@ -464,6 +482,12 @@ private:
   void gawkScenery(Guest &g);
   bool seekBuilding(Guest &g, const std::string &need, int radius);
   void useBuilding(Guest &g);
+  // A building's name as a thought gives it (its own, else its kind's
+  // cNameID text)
+  std::string buildingName(const PlacedObjects::Object &o) const;
+  // The price it charges a guest (its +0x1ac: its own, else the type's
+  // default) and the default it's judged against (cDefaultCost, +0x178)
+  float priceOf(const PlacedObjects::Object &o, const BuildingInfo &b) const;
   bool positionShowSeat(Guest &g, const PlacedObjects::Object &stand, int seat) const;
   std::vector<Type> typeList;
   std::vector<Guest> list;
@@ -544,6 +568,12 @@ private:
   void viewDone(Guest &g);
   void playGawk(Guest &g);
   bool mimic(Guest &g);
+  // zoo.exe 0x425a85: maybe tap a tank's glass on a side of its tile (true
+  // when it taps, or goes on tapping)
+  bool tapTank(Guest &g);
+  // The bTapTank set's next fPlay (tap, peek, map - those its art has);
+  // false when the set is done
+  bool tapPlay(Guest &g, int step);
   // One of an exhibit's animals whose happiness is lo..hi, at random
   // (zoo.exe 0x426049; -1 none)
   int pickAnimal(int exhibit, int lo, int hi);

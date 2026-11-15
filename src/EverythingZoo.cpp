@@ -406,11 +406,14 @@ int runEverythingZoo(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       if (put) items.addFood(fencePens[feedPen].id, x + 0.5f, y + 0.5f, 1, lower(item.registryKey));
       else didNotFit.push_back(item.file);
     }
-    for (int k = 0; k < 3; ++k) {
+    // (dung of each kind and size the animals drop - zoo.exe 0x4a8f89: poo,
+    // small poo, dinopoo, giant dinopoo)
+    const std::pair<bool, int> dungs[4] = {{false, 0}, {false, 1}, {true, 0}, {true, 2}};
+    for (int k = 0; k < 4; ++k) {
       int x = 0, y = 0;
       if (fencePens.size() > feedPen + 1 && fencePens[feedPen + 1].take(1, 1, x, y))
-        items.add(ZooItems::Kind::Dung, fencePens[feedPen + 1].id, x + 0.5f, y + 0.5f);
-      if (lot.take(1, 1, x, y)) items.add(ZooItems::Kind::Litter, -1, x + 0.5f, y + 0.5f);
+        items.addDung(fencePens[feedPen + 1].id, x + 0.5f, y + 0.5f, dungs[k].first, dungs[k].second);
+      if (k < 3 && lot.take(1, 1, x, y)) items.add(ZooItems::Kind::Litter, -1, x + 0.5f, y + 0.5f);
     }
     if (!tanks.empty()) {
       bool filter = false;

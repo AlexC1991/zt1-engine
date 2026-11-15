@@ -357,6 +357,11 @@ private:
     };
     std::vector<UndoStep> undoSteps;
     bool undoFresh = false; // a click on the map: the next thing done starts a new list
+    // zoo.exe undoRecord 0x5b32de -> undoListAdd 0x4f8a1f: a step goes on the
+    // end of the list, which is emptied first (undoListClear 0x4f15c8) when
+    // a click on the map asked for a new one (+0x380: removeSelected
+    // 0x48d065, 0x4d8411); a removal is kept once per thing (undoListHolds
+    // 0x458b5f - removeObject 0x50a0b0 records each with the thing itself)
     void recordUndo(UndoStep step) {
       if (this->undoFresh) {
         this->undoSteps.clear();

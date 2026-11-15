@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 #include <cstdlib>
 
+#include "OriginalConstants.hpp"
 #include "Utils.hpp"
 
 Config::Config(const std::string &filename) {
@@ -98,6 +99,11 @@ int Config::getArtUpscaleFactor() {
 
 bool Config::getTimedUnlocks() {
   return reader->getInt("user", "timedunlocks", 0) != 0;
+}
+
+int Config::getMinimumMessageInterval() {
+  // zoo.exe 0x520a08: [UI] minimumMessageInterval, 60 when it's missing
+  return reader->getInt("UI", "minimumMessageInterval", Original::minimumMessageInterval);
 }
 
 bool Config::getWidescreen() {

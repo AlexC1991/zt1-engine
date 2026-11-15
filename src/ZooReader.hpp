@@ -71,8 +71,8 @@ public:
     uint32_t direction = 0;          // 0-7 (loadUnitCommon +0x12c)
     int32_t filterHealth = -1;       // ZTTankFilter +0x15c; -1 when not a filter
     std::array<uint32_t, 3> filterCosts{}; // last/current/lifetime, +0x168..170
-    uint64_t filterBuilt = 0, filterViewed = 0;
-    uint32_t filterPeriod = 1;
+    uint64_t filterBuilt = 0, filterServiced = 0; // +0x178, +0x180 (FILETIMEs)
+    uint32_t filterPeriod = 1;                     // +0x188: months in operation
     int32_t food = 0;                // scenery's food counter (food, poo)
     std::vector<uint8_t> colours;    // colour choices, from version 67
     bool hasCondition = false;       // fences and tank walls, from 55

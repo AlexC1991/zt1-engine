@@ -467,7 +467,7 @@ bool body(Cursor &r, const std::string &cls, ZooReader::ZooObject &o) {
     if (v >= 95) {
       for (auto &value : o.filterCosts) value = r.u32();
       o.filterBuilt = r.u32(); o.filterBuilt |= uint64_t(r.u32()) << 32;
-      o.filterViewed = r.u32(); o.filterViewed |= uint64_t(r.u32()) << 32;
+      o.filterServiced = r.u32(); o.filterServiced |= uint64_t(r.u32()) << 32;
       o.filterPeriod = r.u32();
     }
   } else if (cls == "rubble") {
@@ -934,6 +934,13 @@ void zooGuestOut(ZooOut &w, const ZooReader::ZooObject &o, uint32_t v) {
   if(v>=65)f.field(uint32_t(g.guide));
   w.ok=w.ok&&f.out.ok&&(!f.kept||(f.in.ok&&f.in.left==0));w.bytes(f.out.b);
 }
+// A staff record as the original writes it: its kind's own part - ZTKeeper::save
+// 0x4796d9 (+0x2a0, +0x294, +0x298, +0x29c, +0x2a4 its food type, +0x2a8: 21
+// bytes), ZTMaintenanceWorker::save 0x4794be (+0x2a0, +0x298, +0x294, then its
+// duties from +0x2bc), ZTTourGuide::save 0x47987f (+0x298, +0x29c, two lists,
+// +0x2a0), ZTHelicopter::save 0x61a0af (+0x294, +0x298, +0x29c) - then
+// ZTStaff::save 0x4795f9's: +0x288 (work), +0x28c (chase), its exhibits as
+// tiles, +0x290
 void zooStaffOut(ZooOut &w, const ZooReader::ZooObject &o, uint32_t v) {
   const auto &s=o.staff; ZooFields f(o,v);const auto &cls=o.className;
   if(cls=="keeper") {f.keep(21);if(v>=52&&v<=74)f.keep(4);}
@@ -985,7 +992,7 @@ bool zooBodyOut(ZooOut &w,const ZooReader::ZooObject &o,uint32_t v) {
     w.put(int32_t(o.filterHealth));
     if(v>=95) {
       for (auto value : o.filterCosts) w.put(value);
-      w.put(o.filterBuilt); w.put(o.filterViewed); w.put(o.filterPeriod);
+      w.put(o.filterBuilt); w.put(o.filterServiced); w.put(o.filterPeriod);
     }
   }
   else if(c=="rubble")w.zeros(8);

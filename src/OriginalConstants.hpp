@@ -42,12 +42,31 @@ inline int monthsOpen(double openedDay, double today) {
   const long long months = static_cast<long long>(static_cast<double>(days) + monthsOpenRound) / monthsOpenDays;
   return months < 1 ? 1 : static_cast<int>(months);
 }
+// A tank filter's months (filterPanelNumbers 0x615d28, ZTTankFilter::update
+// 0x497e0f at 0x498102): the whole days since then, plus 29.9 cut, over 30 -
+// as monthsOpen but with no minimum, so 0 for its first 30 days
+inline int monthsSince(double fromDay, double today) {
+  const long long days = static_cast<long long>(today - fromDay);
+  return static_cast<int>(static_cast<long long>(static_cast<double>(days) + monthsOpenRound) / monthsOpenDays);
+}
+// ZTTankFilter::update 0x497e0f: its months in operation counted again every
+// 3000 ms (+0x18c, reset to 0xbb8 when it runs out)
+inline constexpr float filterMonthCheckSeconds = 3.0f;
 // A FILETIME (100 ns since 1601) for January 1 2001, the zoo calendar's
 // day 0 (400 years, 146097 days, after 1601), and a day in FILETIME units
 // (0x40674d's divisor above): ours: how a day count becomes the original's
 // opening time and back
 inline constexpr unsigned long long fileTime2001 = 126227808000000000ULL;
 inline constexpr unsigned long long fileTimeDay = 864000000000ULL;
+
+// The message bar (its element's constructor 0x520a08, its add 0x49c6d7):
+// it keeps the newest 25 messages (+0x440), the oldest dropped, and a
+// message of kind 0-2 is dropped when the same text is already kept from
+// less than zoo.ini [UI] minimumMessageInterval seconds ago (+0x444, 60
+// when the key's missing), timed by the clock (timeGetTime), not the game
+inline constexpr int messagesKept = 25;
+inline constexpr int minimumMessageInterval = 60;
+inline constexpr int messageRepeatKinds = 3;
 
 // Research and Conservation's funding line shows a level's cost (a month)
 // times this, a day's (0x635040, researchFundingText 0x470d0f)
@@ -78,6 +97,12 @@ struct Economy {
   float buildingUseCostMax = 100.0f;   // cBuildingUseCostMax (+0x1168)
   float zooDooRecycling = 50.0f;       // cZooDooRecyclingAmount (+0x116c)
   float admissionMultiple = 1.0f;      // cAdmissionMultiple (+0x1170)
+  // A price against its building's default (cDefaultCost): a bargain at or
+  // under cItemCheap times it, too dear at or over cItemExpensive times it
+  // (+0x104, +0x108 - [0x638048]+0x114/+0x118 as guestBuy 0x42d858 reads
+  // them; setDefaults 0x4c2683: 0.8 and 1.2; economy.cfg: 0.5 and 2.
+  // measured: 0.5 and 2.0 live in a new freeform zoo, 2026-11-16)
+  float itemCheap = 0.8f, itemExpensive = 1.2f;
   float adviceEveryMs = 10000.0f;      // [checks] message: the advice messages' timer (zoo.exe 0x4351a9)
   // The advisor's shares (zooAdvisories 0x420347): a message when more than
   // this share of the animals or guests are so
@@ -162,6 +187,13 @@ inline float clampAdmission(float price) {
   float p = price < e.maxAdmission ? price : e.maxAdmission;
   return p <= e.minAdmission ? e.minAdmission : p;
 }
+
+// The limits a guest's happiness and needs are held to (ZTGuestType::
+// setDefaults 0x4c47dd: happiness +0x1e4 / +0x1ec, hunger, thirst, energy
+// and the restroom +0x1f0 to +0x20c - no .ai key sets them), as
+// guestApplyPending 0x43b03a clamps them
+inline constexpr float guestHappinessMax = 100.0f, guestHappinessMin = -100.0f;
+inline constexpr float guestNeedMax = 100.0f, guestNeedMin = 0.0f;
 
 // The game's updates a second: zoo.ini [user] UpdateRate=15. measured: in
 // the running original (2026-11-15) the ms each update moves on by

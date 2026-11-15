@@ -1151,7 +1151,10 @@ void UiGameScreen::refreshResearch() {
     progress(statusIds[i][2], p);
   }
 
-  // The category page: the branch of the chosen tab
+  // The category page: the branch of the chosen tab (zoo.exe 0x4eb21b: the
+  // TabRadioSet's choice - Program Status none, the next tab the first
+  // branch, the one after the second; shown again whenever the panel is,
+  // 0x41a3ba)
   int shown = r.researchTab && r.researchTab->isToggledOn()           ? 0
               : r.conservationTab && r.conservationTab->isToggledOn() ? 1
                                                                       : -1;
@@ -2712,17 +2715,24 @@ void UiGameScreen::drawTooltip(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   }
 }
 
+// zoo.exe 0x49c6d7 (the message bar's add, from messageBarShow 0x49ccc3 -
+// postZooMessage 0x49ce6b's way in - and 0x49cec0, postUnitMessage
+// 0x49d18e's; the message made by 0x49c96e with its kind, what it's about
+// and the time): a kind 0-2 message whose text matches one kept from less than
+// minimumMessageInterval seconds ago (by the clock, timeGetTime) is dropped;
+// kind 3 and up always goes in; the newest goes first and the oldest is let
+// go past 25 (+0x440, the bar's constructor 0x520a08)
 void UiGameScreen::postMessage(const std::string &text, int kind, Subject subject, int id) {
   Uint32 now = SDL_GetTicks();
-  if (kind <= 2)
+  if (kind < Original::messageRepeatKinds)
     for (const LoggedMessage &m : this->messageLog)
-      if (m.text == text && now - m.at < 60000)
+      if (m.text == text && now - m.at < static_cast<Uint32>(minimumMessageInterval) * 1000u)
         return;
   static const SDL_Color colours[3] = {{255, 255, 255, 255}, {0, 255, 0, 255}, {255, 0, 0, 255}};
   this->showMessage(text, colours[kind % 3]);
   this->messageLog.insert(this->messageLog.begin(), {text, kind, subject, id, now});
-  if (this->messageLog.size() > 25)
-    this->messageLog.resize(25);
+  if (this->messageLog.size() > static_cast<size_t>(Original::messagesKept))
+    this->messageLog.resize(Original::messagesKept);
   this->messageSerial++;
 }
 
@@ -3562,13 +3572,19 @@ void UiGameScreen::refreshFilterPanel() {
     pic->setImage("objects/filter/off/off");
   const int health = static_cast<int>(f->health);
   text(4913, this->resource_manager->getString(health <= 0 ? 4999 : health <= k.decayedHealth ? 4914 : 4913));
-  int months = std::max(0, this->fences->month() - f->placedMonth);
+  // (filterPanelNumbers 0x615d28: "Last Filter Service: %s month(s) ago"
+  // from the day it was last serviced, +0x180 - whole days + 29.9, cut,
+  // / 30, no minimum; "Months in operation:" its +0x188)
+  const double today = this->sim ? this->sim->today() : this->fences->today;
+  const int monthCount = this->fences->month();
+  const double serviced = this->sim ? this->sim->openedDayOf(f->servicedDay, f->placedMonth, monthCount) : f->servicedDay;
+  int months = std::max(0, Original::monthsSince(serviced, today));
   std::string ago = this->resource_manager->getString(4916);
   size_t at = ago.find("%s");
   if (at != std::string::npos)
     ago.replace(at, 2, std::to_string(months));
   text(4916, ago);
-  text(4918, std::to_string(months));
+  text(4918, std::to_string(f->monthsRunning));
   text(4921, money(f->upkeepLast));
   text(4923, money(f->upkeepCurrent));
   text(4925, money(f->upkeepTotal));
@@ -3906,7 +3922,8 @@ void UiGameScreen::setupLists() {
       }
   };
   // The Messages button (a toggle with no target) shows the Message List
-  // (zoo.exe main_Messages_click 0x4a0399: uiFind(29), shown or hidden)
+  // (zoo.exe main_Messages_click 0x4a0399: uiFind(29), shown or hidden;
+  // let go, main_Messages_off 0x4a0463 hides it)
   // (its list and scrollbar hidden in the layout, state=1)
   for (Entry &e : this->entries)
     if (e.panel && e.id == 29)
@@ -4656,11 +4673,19 @@ void UiGameScreen::refreshGuest() {
       e->setValue(static_cast<int>(std::lround(v)));
   };
   text(3402, g->name);
-  bar(3404, (g->happiness + 100) / 2);
-  bar(3406, 100 - g->thirst);
-  bar(3408, 100 - g->hunger);
-  bar(3410, 100 - g->bathroom);
-  bar(3412, 100 - g->tired);
+  // zoo.exe guestInfoRefresh 0x46a144: each a level 0-100 against the
+  // type's limits, in whole numbers (guestHappinessLevel 0x46a606,
+  // guestThirstLevel 0x46a655, guestHungerLevel 0x46a6a4, guestEnergyLevel
+  // 0x46a6f3, guestBathroomLevel 0x46a742: (value - least) x 100 / (most -
+  // least)); the needs shown as 100 less it
+  auto level = [](float v, float lo, float hi) {
+    return (static_cast<int>(v) - static_cast<int>(lo)) * 100 / (static_cast<int>(hi) - static_cast<int>(lo));
+  };
+  bar(3404, static_cast<float>(level(g->happiness, Original::guestHappinessMin, Original::guestHappinessMax)));
+  bar(3406, static_cast<float>(100 - level(g->thirst, Original::guestNeedMin, Original::guestNeedMax)));
+  bar(3408, static_cast<float>(100 - level(g->hunger, Original::guestNeedMin, Original::guestNeedMax)));
+  bar(3410, static_cast<float>(100 - level(g->bathroom, Original::guestNeedMin, Original::guestNeedMax)));
+  bar(3412, static_cast<float>(100 - level(g->tired, Original::guestNeedMin, Original::guestNeedMax)));
   text(3475, this->resource_manager->getString(this->guests->timeInParkText(*g)));
   text(3476, this->animalName && g->favourite >= 0 ? this->animalName(g->favourite) : "");
   if (UiListBox *l = dynamic_cast<UiListBox *>(z->getElementById(3469)))

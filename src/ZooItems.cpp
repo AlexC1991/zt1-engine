@@ -43,6 +43,14 @@ int ZooItems::add(Kind kind, int exhibit, float x, float y) {
   return i.id;
 }
 
+int ZooItems::addDung(int exhibit, float x, float y, bool dino, int size) {
+  int id = add(Kind::Dung, exhibit, x, y);
+  Item &i = this->list.back();
+  i.food = dino ? "dinopoo" : "";
+  i.units = i.full = static_cast<float>(std::clamp(size, 0, 2));
+  return id;
+}
+
 static bool marineFood(const std::string &food) {
   return food == "krill" || food == "fish" || food == "chum" || food == "seagrass" || food == "urchin";
 }
@@ -213,9 +221,29 @@ Animation *ZooItems::artOf(const Item &i)const {
         a = this->art("food/" + i.food + "/med/med");
       break;
     }
-    case Kind::Dung:
-      a = this->art("objects/poo/idle/idle");
+    case Kind::Dung: {
+      // (its size picks the art, as setPooKind 0x4f429d does: 1 small, 2
+      // giant, else idle - each named in its .ai's [Animations]:
+      // dinopoo.ai's idle is mid, its giant full)
+      const std::string type = dinoDung(i) ? "dinopoo" : "poo";
+      const int size = static_cast<int>(i.units);
+      const std::string anim = size == 1 ? "small" : size == 2 ? "giant" : "idle";
+      const std::string cacheKey = "dung/" + type + "/" + anim;
+      auto slot = this->foodSlots.find(cacheKey);
+      if (slot == this->foodSlots.end()) {
+        std::string v;
+        if (this->rm && this->rm->hasResource("scenery/other/" + type + ".ai"))
+          if (IniReader *ai = this->rm->getIniReader("scenery/other/" + type + ".ai")) {
+            v = ai->get("animations", anim, ai->get("animations", "idle"));
+            delete ai;
+          }
+        slot = this->foodSlots.emplace(cacheKey, v.empty() ? std::string() : "objects/" + type + "/" + v + "/" + v).first;
+      }
+      a = slot->second.empty() ? nullptr : this->art(slot->second);
+      if (!a)
+        a = this->art("objects/poo/idle/idle");
       break;
+    }
     case Kind::Litter:
       // A pile of litter is the object objects/other/trash (zoo.exe 0x52cfbe,
       // made where the guest stood by guestDropLitter 0x52da40):

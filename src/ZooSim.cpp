@@ -77,6 +77,8 @@ void Original::loadEconomy(ResourceManager *rm, const std::string &scenario) {
     num("cBuildingUseCostMax", e.buildingUseCostMax);
     num("cZooDooRecyclingAmount", e.zooDooRecycling);
     num("cAdmissionMultiple", e.admissionMultiple);
+    num("cItemCheap", e.itemCheap);
+    num("cItemExpensive", e.itemExpensive);
     num("cPctSick", e.pctSick);
     num("cPctProtestors", e.pctProtestors);
     num("cPctHungry", e.pctHungry);

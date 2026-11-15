@@ -73,7 +73,7 @@ public:
     // and the viewing area's donation bonus), cFollowChance, cMaxGroupSize,
     // cCrowdCheck (ticks between looks for followers), cCrowdRadius (tiles),
     // cInformGuestTime (seconds of each of its two talks)
-    int tourBonus = 30, followChance = 60, maxGroup = 15, crowdCheck = 5, crowdRadius = 1, informTime = 5;
+    int tourBonus = 5, followChance = 60, maxGroup = 15, crowdCheck = 5, crowdRadius = 1, informTime = 5;
     // cSlowRate (walking; keeper training raises it) and cFastRate (running
     // after an escaped animal): 64ths of a tile, whole ones an update
     // (Original::unitTilesPerSecond), cCleanTrashRadius (maintenance: over
@@ -84,6 +84,17 @@ public:
     // cClearInvalidListInterval (ZTMaintType +0x1fc, 10000 by setDefaults
     // 0x4c3bb3; the shipped maint.ai doesn't set it)
     int clearInvalidMs = 10000;
+    // A marine specialist's tank sweep: cCleanTankPct cleaner each, until
+    // cCleanTankThreshold (ZTKeeperType +0x204, +0x208; setDefaults 0x4c32bd)
+    int cleanTankPct = 10, cleanTankThreshold = 100;
+    // Its work's behaviour sets from its .ai ([BehaviorSet\bHeal] and the
+    // rest, by lower-case name): the animations played in turn - fPlay,
+    // fPlayWithSound with its [Sounds] key, fPlayReverse backwards
+    struct Step {
+      std::string anim, sound;
+      bool reverse = false;
+    };
+    std::map<std::string, std::vector<Step>> sets;
   };
   // What a staff member is doing. The original gives each unit a job object
   // made by its number (unitMakeJob, zoo.exe 0x413a23), each its own class:
@@ -151,6 +162,10 @@ public:
     std::string anim = "idle";
     float animTime = 0;
     int playsLeft = 0;        // a work animation played this many times
+    // (a behaviour set being played: its steps, playsLeft of them to go, the
+    // one playing backwards when reverse)
+    std::vector<Type::Step> steps;
+    bool reverse = false;
     std::vector<std::pair<float, float>> path;
     std::vector<int> pathLayers; // each point's layer: 0 ground, 1 a walkway deck
     int layer = 0;               // where it is now
@@ -348,7 +363,7 @@ private:
   void helicopterStep(Member &m, float seconds, const WorldMap &map);
   void releaseCatch(Member &m);
   // What an exhibit's animals eat: the chow its keeper puts down, and
-  // whether they're carnivores (feedc, else feedh)
+  // whether it's carnchow (feedc, else feedh: zoo.exe 0x5084b3)
   std::map<std::string, int> chowPrice;
   std::map<int, double> lastVisit; // exhibit -> when a keeper last finished there
   double clock = 0;
@@ -383,6 +398,9 @@ private:
   void wander(Member &m, const WorldMap &map, const Fences &fences);
   bool findWork(Member &m, const WorldMap &map, Fences &fences);
   void play(Member &m, const std::string &anim, int times);
+  void playSet(Member &m, const std::string &set, const std::string &anim, int times);
+  void startStep(Member &m);
+  void soundAt(const Member &m, const std::string &key) const;
   // A climb to (x, y, z: height over the ground there), down or up, inside
   // the tank or over its wall; its water state after
   void climb(Member &m, float x, float y, float z, bool down, bool inside, int water, const WorldMap &map);

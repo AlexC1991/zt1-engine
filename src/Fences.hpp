@@ -427,7 +427,16 @@ public:
     float decayClock = 0, filterClock = 0;
     float dx = 0, dy = 0; // toward its tank (world)
     std::string name;     // "Filter 1" (cUseNumbersInName)
-    int placedMonth = 0;  // the game month it went in (for its panel)
+    int placedMonth = 0;  // the game month it went in (what saves before 17 kept)
+    // zoo.exe ZTTankFilter (constructor 0x45d55f, reset 0x47e864): the day
+    // it was built (+0x178) and last serviced (+0x180, serviceAndDate
+    // 0x595cad), on the zoo's calendar (ZooSim::today; kUnknownDay: a save
+    // before 17, its placedMonth's first day); its months in operation
+    // (+0x188, from 1) and the 3 s countdown to counting them (+0x18c)
+    static constexpr double kUnknownDay = -1e300;
+    double builtDay = kUnknownDay, servicedDay = kUnknownDay;
+    int monthsRunning = 1;
+    float monthCheck = 3.0f;
     double upkeepLast = 0, upkeepCurrent = 0, upkeepTotal = 0;
   };
   const FilterType &filterType(const std::string &file = "") const {
@@ -469,6 +478,9 @@ public:
   // The game's month count (filters note when they went in) and a new
   // month (this month's upkeep becomes last month's)
   void setMonth(int month) { this->monthNow = month; }
+  // ours: the zoo's date now (ZooSim::today), kept up by the game loop: what
+  // a new filter's built day is, and what its months count to
+  double today = 0;
   int month() const { return this->monthNow; }
   void newMonth();
   // Upkeep billed since last asked (whole dollars)

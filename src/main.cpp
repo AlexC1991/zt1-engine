@@ -1045,7 +1045,8 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
     for (const Fences::Exhibit &e : g_world->getFences().exhibits())
       exhibits += e.named ? 1 : 0;
     int guests = static_cast<int>(gs.guests().size());
-    // Attractions: objects that satisfy "fun"
+    // Zoo Status' counts (zooStatusRefresh 0x53002b): attractions are the
+    // things whose type's [Satisfies] list holds "fun"
     static std::map<std::string, bool> funOf;
     int attractions = 0;
     for (const PlacedObjects::Object &o : g_world->getObjects().objects()) {
@@ -10721,6 +10722,7 @@ int main(int argc, char *argv[]) {
   RenderSettings::uiScaleSetting = config.getUiScale();
   g_widescreen = config.getWidescreen();
   g_timedUnlocks = config.getTimedUnlocks();
+  UiGameScreen::minimumMessageInterval = config.getMinimumMessageInterval();
   Features::allUnlocked = !g_timedUnlocks;
   // The extras switched on or off in the Game Options (zoo.ini [Extras]),
   // and its volumes and scrolling at work
@@ -11456,6 +11458,8 @@ int main(int argc, char *argv[]) {
       auto advanceGame=[&](float simulationSeconds,float inputSeconds) {
       // (the date a building put down now opens on: ZTBuilding +0x180)
       g_world->objectsMutable().today = g_sim.today();
+      // (and a tank filter's: ZTTankFilter +0x178, +0x180)
+      g_world->getFences().today = g_sim.today();
       g_world->update(controlsSent?noKeys:frameKeys,simulationSeconds,inputSeconds);
       controlsSent=true;
       // The clock runs while the game isn't paused

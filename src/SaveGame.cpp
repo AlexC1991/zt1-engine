@@ -34,7 +34,7 @@
 namespace {
 constexpr uint32_t kMagic = 0x5A543153; // "S1TZ"
 constexpr uint32_t kMapMagic = 0x504D3153; // "S1MP": a map design (saveMap)
-constexpr uint32_t kVersion = 16; // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
+constexpr uint32_t kVersion = 18; // 18: guests' recent-species lists. // 17: tank filters' built and serviced days and months in operation. // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
 
 // A little binary writer and reader: numbers as they are, strings with
 // their length, vectors with their count
@@ -286,12 +286,19 @@ static int restoreOriginalFilters(const ZooReader &reader, Fences &fences, const
       filter->upkeepLast = obj.filterCosts[0];
       filter->upkeepCurrent = obj.filterCosts[1];
       filter->upkeepTotal = obj.filterCosts[2];
-#ifdef _WIN32
-      FILETIME built{uint32_t(obj.filterBuilt), uint32_t(obj.filterBuilt >> 32)};
-      SYSTEMTIME placed{};
-      if (obj.filterBuilt && FileTimeToSystemTime(&built, &placed) && placed.wYear >= 2001)
-        filter->placedMonth = (placed.wYear - 2001) * 12 + placed.wMonth - 1;
-#endif
+      // (ZTTankFilter::save 0x615b31: built +0x178 and last serviced +0x180,
+      // FILETIMEs; months in operation +0x188)
+      auto day = [](uint64_t ft) {
+        return (double(ft) - double(Original::fileTime2001)) / double(Original::fileTimeDay);
+      };
+      if (obj.filterBuilt >= Original::fileTime2001)
+        filter->builtDay = day(obj.filterBuilt);
+      if (obj.filterServiced >= Original::fileTime2001)
+        filter->servicedDay = day(obj.filterServiced);
+      else
+        filter->servicedDay = filter->builtDay;
+      if (obj.filterPeriod > 0)
+        filter->monthsRunning = static_cast<int>(obj.filterPeriod);
     } else {
       SDL_Log("[Save] original filter %s could not be restored at %d,%d", obj.name.c_str(), x, y);
       ++missed;
@@ -605,6 +612,10 @@ bool SaveGame::loadOriginalWorld(World &world) {
     if (!dung && !litter) {
       it.food = o.subClass == "food" ? o.typeName : o.subClass;
       it.units = it.full = static_cast<float>(std::max(0, o.food));
+    } else if (dung) {
+      // (dinopoo kept as its own kind; its size, +0x154: 1 small, 2 giant)
+      it.food = o.typeName == "dinopoo" ? "dinopoo" : "";
+      it.units = it.full = static_cast<float>(o.food == 1 || o.food == 2 ? o.food : 0);
     }
     piles++;
   }
@@ -781,6 +792,10 @@ bool SaveGame::loadOriginalWorld(World &world) {
         g.favourite = static_cast<int>(k);
     // The recent-species list holds cNameIDs (0x42e527/0x425b6d),
     // while the separate visit list holds grid coordinates (0x42281c).
+    for(uint32_t id:o.guest.seen)
+      for(size_t k=0;k<an.typeList.size();++k)
+        if(stockSpecies[k]>0&&uint32_t(stockSpecies[k])==id) {g.recentSpecies.push_back(an.typeList[k].nameId);break;}
+    if(g.recentSpecies.size()>5)g.recentSpecies.erase(g.recentSpecies.begin(),g.recentSpecies.end()-5);
     for(auto [x,y]:o.guest.visited) {
       bool building=false;
       for(const auto &record:z.getObjects())if(record.tileX()==x&&record.tileY()==y&&
@@ -901,6 +916,12 @@ std::string SaveGame::checkOriginalImport(World &world) {
       if(!building) {const int ex=world.fences.exhibitAt(x,y);if(ex>=0)seenExhibits.insert(ex);}
     }
     check(o.name+" recent visit coordinates map to existing targets",g->visited==visited&&g->seen==seenExhibits);
+    std::vector<int> recent;
+    for(uint32_t id:o.guest.seen)
+      for(const auto &type:world.animals.typeList)
+        if(originalSpeciesName(world.resourceManager,type)>0&&uint32_t(originalSpeciesName(world.resourceManager,type))==id) {recent.push_back(type.nameId);break;}
+    if(recent.size()>5)recent.erase(recent.begin(),recent.end()-5);
+    check(o.name+" recent species restore oldest first",g->recentSpecies==recent);
     check(o.name + " saved need/check timers", g->hungerCheck == o.guest.checks[0] &&
           g->thirstCheck == o.guest.checks[1] && g->bathroomCheck == o.guest.checks[2] &&
           g->leaveCheck == o.guest.checks[3] && g->viewCheck == o.guest.checks[8]);
@@ -1222,7 +1243,8 @@ std::string SaveGame::checkOriginalImport(World &world) {
               copy->arrived == g.arrived && copy->favourite == g.favourite &&
               copy->leaving == g.leaving && copy->sick == g.sick &&
               std::equal(std::begin(g.inventory), std::end(g.inventory), copy->inventory) &&
-              copy->hungerCheck == g.hungerCheck && copy->visited == g.visited && copy->seen==g.seen && copy->thoughts==g.thoughts);
+              copy->hungerCheck == g.hungerCheck && copy->visited == g.visited && copy->seen==g.seen && copy->thoughts==g.thoughts &&
+              copy->recentSpecies==g.recentSpecies);
       }
       if(!world.guests.list.empty()&&world.animals.typeList.size()>1) {
         World shifted(world.resourceManager);shifted.loadBlank(32,32);
@@ -1542,6 +1564,9 @@ void SaveGame::putWorld(void *out, World &world) {
     o.raw(x.upkeepCurrent);
     o.raw(x.upkeepTotal);
     o.str(x.file);
+    o.raw(x.builtDay);
+    o.raw(x.servicedDay);
+    o.raw(x.monthsRunning);
   }
   // Objects (the map's and those bought)
   PlacedObjects &po = world.placedObjects;
@@ -1729,6 +1754,11 @@ bool SaveGame::getWorld(void *in, World &world, uint32_t version) {
     i.get(x.upkeepCurrent);
     i.get(x.upkeepTotal);
     if (version >= 9) x.file = i.str();
+    if (version >= 17) {
+      i.get(x.builtDay);
+      i.get(x.servicedDay);
+      i.get(x.monthsRunning);
+    }
     requireContent(i, world.resourceManager, x.file);
     f.filterList.push_back(x);
   }
@@ -1965,6 +1995,9 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
     o.str(g.favourite>=0&&g.favourite<int(an.typeList.size())?an.typeList[g.favourite].file:std::string());
     o.raw(static_cast<uint32_t>(g.seen.size()));
     for(int exhibit:g.seen)o.raw(exhibit);
+    // Its recent-species list (zoo.exe +0x278: cNameIDs, oldest first)
+    o.raw(static_cast<uint32_t>(g.recentSpecies.size()));
+    for(int id:g.recentSpecies)o.raw(id);
   }
   o.raw(gs.nextId);
   o.raw(gs.clock);
@@ -2108,6 +2141,14 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
   if (!getWorld(&i, world, version))
     return false;
   Fences &f = world.fences;
+  // (a save before 17 kept only a filter's month: built and last serviced
+  // on its first day, its months in operation counted from there)
+  for (Fences::Filter &x : f.filterList)
+    if (x.builtDay <= Fences::Filter::kUnknownDay) {
+      x.builtDay = x.servicedDay =
+          sim.openedDayOf(PlacedObjects::Object::kUnknownDay, x.placedMonth, static_cast<int>(sim.history().size()));
+      x.monthsRunning = std::max(1, Original::monthsSince(x.builtDay, sim.today()));
+    }
   // Items
   world.items.list.clear();
   for (uint32_t n = i.count(); n > 0 && !i.bad; n--) {
@@ -2250,6 +2291,8 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
       g.favourite=favourite.empty()?-1:an.typeOfFile(favourite);
       for(uint32_t n=i.count(10000,4);n>0&&!i.bad;--n)g.seen.insert(i.raw<int>());
     }
+    if(version>=18)
+      for(uint32_t n=i.count(5,4);n>0&&!i.bad;--n)g.recentSpecies.push_back(i.raw<int>());
     g.playFor = 0.5f;
     if (g.type >= 0 && g.type < static_cast<int>(gs.typeList.size()))
       gs.list.push_back(g);
@@ -2549,14 +2592,18 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
     o.filterHealth=int32_t(filter.health);
     auto cost=[](double value) { return uint32_t(std::clamp(value, 0.0, double(UINT32_MAX))); };
     o.filterCosts = {cost(filter.upkeepLast), cost(filter.upkeepCurrent), cost(filter.upkeepTotal)};
-    o.filterPeriod = uint32_t(std::max(1, (sim.year()-1)*12 + sim.month()+1));
-#ifdef _WIN32
-    SYSTEMTIME placed{}; FILETIME built{};
-    const int month = std::max(0, filter.placedMonth);
-    placed.wYear = WORD(2001 + month/12); placed.wMonth = WORD(month%12+1); placed.wDay = 1;
-    if (SystemTimeToFileTime(&placed, &built))
-      o.filterBuilt = uint64_t(built.dwLowDateTime) | (uint64_t(built.dwHighDateTime)<<32);
-#endif
+    // (ZTTankFilter::save 0x615b31: built +0x178 and last serviced +0x180 as
+    // the zoo's FILETIMEs, the panel's months counted from them, 0x615d28;
+    // its months in operation +0x188)
+    o.filterPeriod = uint32_t(std::max(1, filter.monthsRunning));
+    {
+      const int monthCount = static_cast<int>(sim.history().size());
+      auto fileTime = [](double day) {
+        return uint64_t(std::max(0.0, double(Original::fileTime2001) + day * double(Original::fileTimeDay)));
+      };
+      o.filterBuilt = fileTime(sim.openedDayOf(filter.builtDay, filter.placedMonth, monthCount));
+      o.filterServiced = fileTime(sim.openedDayOf(filter.servicedDay, filter.placedMonth, monthCount));
+    }
     z.objects.push_back(std::move(o));
   }
   for(const auto &item:world.items.list) {
@@ -2577,8 +2624,12 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
     if(dung && habitat && habitat->tank && habitat->water>0 &&
        ground(item.x,item.y)<habitat->floorHeight+world.fences.waterSubtiles(*habitat)*0.5f)continue;
     const bool litter=item.kind==ZooItems::Kind::Litter;
+    // (a dinosaur's dung is its own object, objects/other/dinopoo - zoo.exe
+    // 0x4a8f89; its size is the record's +0x154, as for poo: setPooKind
+    // 0x4f429d, read back by foodSceneryLoad 0x44f625)
+    const char *pile=dung&&ZooItems::dinoDung(item)&&originalAsset("scenery/other/dinopoo.ai")?"dinopoo":"poo";
     auto o=make(dung||litter?"objects":"food",dung||litter?"other":"food",
-                dung?"poo":litter?"trash":type,item.x,item.y,ground(item.x,item.y));
+                dung?pile:litter?"trash":type,item.x,item.y,ground(item.x,item.y));
     o.food=int32_t(item.units);z.objects.push_back(std::move(o));
   }
   z.mapWidth=map.width;z.mapHeight=map.height;z.tiles.clear();
@@ -2660,20 +2711,17 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
         stockSpecies[world.animals.typeList[g.favourite].file]:-1;
     if(a.favourite==0)a.favourite=-1;
     std::copy(std::begin(g.inventory),std::end(g.inventory),a.items.begin());
-    // Retain recent original species ids, then add species in exhibits
-    // viewed in this engine. Never write building ids into this list.
-    a.seen.erase(std::remove_if(a.seen.begin(),a.seen.end(),[&](uint32_t species) {
-      return std::none_of(world.animals.typeList.begin(),world.animals.typeList.end(),
-        [&](const auto &type){return stockSpecies[type.file]>0&&uint32_t(stockSpecies[type.file])==species;});
-    }),a.seen.end());
+    // Its recent-species list (zoo.exe +0x278, 0x42e909): the cNameIDs its
+    // viewing areas showed it, oldest first - each as the original's own
+    // (a replaced stock species: its stock cNameID); kinds the original
+    // hasn't are left out. Never building ids.
+    a.seen.clear();
+    for(int id:g.recentSpecies)
+      for(const auto &type:world.animals.typeList)
+        if(type.nameId==id&&stockSpecies[type.file]>0) {a.seen.push_back(uint32_t(stockSpecies[type.file]));break;}
     a.visited.clear();
-    for(int id:g.seen)if(const auto *ex=world.fences.exhibit(id);ex&&!ex->tiles.empty()) {
+    for(int id:g.seen)if(const auto *ex=world.fences.exhibit(id);ex&&!ex->tiles.empty())
       a.visited.push_back(*ex->tiles.begin());
-      for(const auto &animal:world.animals.list)if(animal.exhibit==id&&originalAsset(world.animals.typeList[animal.type].file)) {
-        const uint32_t species=stockSpecies[world.animals.typeList[animal.type].file];
-        if(std::find(a.seen.begin(),a.seen.end(),species)==a.seen.end())a.seen.push_back(species);
-      }
-    }
     for(int id:g.visited)if(objectIds.count(id))if(const auto *object=world.placedObjects.byId(id))
       a.visited.emplace_back(int(std::floor(object->x)),int(std::floor(object->y)));
     if(a.seen.size()>5)a.seen.erase(a.seen.begin(),a.seen.end()-5);
