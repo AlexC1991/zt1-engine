@@ -66,6 +66,10 @@ public:
     double admission = 22.0; // adult; children pay half
     long cash = 0;
     long placedValue = 0;    // purchase cost of everything on the map
+    // The zoo's value as the rating counts it (cash and every object's and
+    // animal's price, zoo.exe zooRatingUpdate 0x41f881, kept in the books'
+    // row 15), what Finances shows as Zoo Value (0x52fa39); -1 not yet
+    long value = -1;
     int rating = 0;          // zoo rating, 0-100
     std::string month;       // the current month ("Jan")
     int staffCount = 0;
@@ -90,6 +94,9 @@ public:
   // ui/mulstaff.lyt) and what their buttons ask of the world
   enum class StaffRequest { PickUp, Fire, Assign, Track, Select };
   void setStaff(Staff *staff, std::function<void(StaffRequest, int)> request);
+  // ours: whether the zoo view is still picking exhibits for a keeper (the
+  // Assign toggle goes off once it isn't)
+  std::function<bool()> staffAssigning;
   void showStaff(int id);
   int shownStaffId() const { return this->shownStaff; }
   void refreshStaff();
@@ -97,7 +104,7 @@ public:
   bool bulldozerOn() const;
   void bulldozerOff();
   // Q / E with something to put down: it turns (as the rotate buttons)
-  void rotateHeld(int step) { this->rotateItems(step); }
+  void rotateHeld(int step);
   // The HUD's view toggles (main.lyt, ZUPDATE): 1066 foliage, 1067
   // buildings, 1068 guests; on (shown) to start, a click hides them
   bool viewShown(int id) const;
@@ -354,16 +361,22 @@ private:
     UiLayout *layout = nullptr;
     std::string category;
     std::vector<const CatalogItem *> items;
+    // which of its items' icons (0 SE, 1 SW, 2 NW, 3 NE): each panel its
+    // own, as the original keeps one a panel (Adopt 0x63bb50, Objects
+    // 0x63bba8, Build Exhibit 0x63bab8)
+    int facing = 0;
+    // each tab's last pick (category -> item file), picked again when the
+    // tab comes back, as the original's 0x63bb18 (adoptListFill 0x4e334b)
+    std::map<std::string, std::string> picked;
   };
   std::vector<BuyPanel> buyPanels;
   void setupBuyPanels();
   void refreshBuyPanel(BuyPanel &panel);
   void showItem(BuyPanel &panel, int index);
-  // The rotate buttons: every item in the grids turns a quarter, all
-  // facing the same way (as in the original)
-  int facing = 0; // which of the items' icons (0 SE, 1 SW, 2 NW, 3 NE)
-  void rotateItems(int step);
-  const std::string &facingIcon(const CatalogItem *item) const;
+  // The rotate buttons: every item in that panel's grid turns a quarter,
+  // all facing the same way (as in the original)
+  void rotateItems(BuyPanel &panel, int step);
+  const std::string &facingIcon(const BuyPanel &panel, const CatalogItem *item) const;
   // Which details the chosen tab shows, as the original does
   void showDetails(BuyPanel &panel, const CatalogItem *item);
   std::map<int, std::string> infoImages; // ui/infoimg.cfg: id -> image
@@ -509,6 +522,7 @@ private:
   bool showSelection(UiAction action);
   // The Game Options panel's settings pages, and the Extras tab
   void setupGameOptions();
+  int extrasShownPage = 0; // ours: the Extras tab's page shown (more switches than fit)
   Uint32 tooltipDurationMs = 3000; // [UI] tooltipDuration (zoo.exe 0x539a66: 3000)
   int tooltipDelayMs = 1;          // [UI] tooltipDelay (drawTooltip)
   void drawAnimalPortrait(SDL_Renderer *renderer);

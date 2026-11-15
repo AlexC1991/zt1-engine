@@ -124,6 +124,10 @@ public:
     // point of its wear takes (0: not drawn yet)
     float period = 0;
     float open = 0;  // a gate: how far open (its art's frames, 0 shut)
+    // Its own animation's clock, ms since it was put up (zoo.exe: each
+    // piece's animation, entity +0x74, moved on by the game time its update
+    // is given - 0x434b1d -> 0x434ad7 -> 0x434899; still while paused)
+    double animMs = 0; // (a double: a float lost whole ms after hours of play)
   };
   // What the original saves for a piece's decay time, in seconds: its own,
   // or one not drawn yet the least there is
@@ -339,7 +343,15 @@ public:
   // Drains a tank (its Drain button): the water runs out, the tank stays
   void drainExhibit(int id);
   // A tank drained fills again, with salt or fresh water (Fill Tank)
-  void fillExhibit(int id, bool salt = true);
+  // Filled (false: refused - something in it can't be under water, see
+  // fillBlocker)
+  bool fillExhibit(int id, bool salt = true);
+  // The first thing in a tank that can't be under water, by its kind's name
+  // ("" none) - zoo.exe 0x459e09; the world fills it in
+  std::function<std::string(int exhibit)> fillBlocker;
+  // Tanks refused their water: what was in each (for 10550, "The %s must be
+  // removed from the tank before it can be filled with water.")
+  std::vector<std::string> takeFillRefusals() { return std::move(this->fillRefusals); }
   // Tank Adjustment (tanks.cfg; prices measured in the original): a step
   // of the wall costs each wall piece's price / wallHeightPriceDivisor and
   // the water a tile deeper takes (2 x 2 Concrete Edge and Glass, salt:
@@ -361,6 +373,10 @@ public:
   // Tanks taken apart since last asked (their tiles): the sea animals in
   // each go into crates (zoo.exe 0x50c3d8 -> 0x458c2b(tank, 0) -> 0x505941)
   std::vector<std::set<std::pair<int, int>>> takeLostTanks() { return std::move(this->lostTanks); }
+  // Tanks whose water just became too murky to see into, since last asked
+  // (zoo.exe 0x49340d: 10549 "Guests can not see the animals inside %s
+  // because the water is too murky.")
+  std::vector<int> takeMurkyTanks() { return std::move(this->murkyTanks); }
   // The (named) exhibit a tile is in, or a piece walls (-1: none)
   int exhibitAt(int x, int y) const;
   int exhibitOf(const Edge &e) const;
@@ -579,6 +595,8 @@ private:
   float filterGround(const Filter &f, const WorldMap &map) const;
   std::vector<Exhibit> exhibitList;
   std::vector<std::set<std::pair<int, int>>> lostTanks;
+  std::vector<int> murkyTanks;
+  std::vector<std::string> fillRefusals;
   int lastRemovedGateOf = -1, lastRemovedOwner = -1;
   long placed = 0;
   int made = 0; // exhibits ever made (for "Exhibit N")

@@ -70,6 +70,7 @@ public:
   };
 
   void setHooks(Hooks hooks) { this->hooks = std::move(hooks); }
+  const Hooks &getHooks() const { return this->hooks; } // (checks)
   // A map's goals (and its [start] triggers= fired once)
   void load(ResourceManager *rm, const std::string &scnPath);
   void clear();

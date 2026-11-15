@@ -5,11 +5,12 @@
 
 #include "Fences.hpp"
 #include "IniReader.hpp"
+#include "OriginalConstants.hpp"
 #include "ResourceManager.hpp"
 #include "WorldMap.hpp"
 
 namespace {
-constexpr float kElevationCost = 8.0f; // [Map] elevationCost
+constexpr float kElevationCost = Original::elevationCost; // zoo.exe 0x4625af
 constexpr int kMinHeight = -12, kMaxHeight = 12;
 // A corner's vertex offset in its tile, and the corners beside it along
 // the tile's edges and across it

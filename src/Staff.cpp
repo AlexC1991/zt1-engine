@@ -40,6 +40,7 @@ constexpr float kCleanTankPct = 30.0f; // cCleanTankPct
 constexpr float kCleanTankThreshold = 100.0f; // cCleanTankThreshold: sweeps until this clean
 constexpr float kMurkyPurity = 60.0f; // tanks.cfg murkyWaterPurity: cleaned below it
 
+// ours: an .ani path without its extension
 std::string stripAni(std::string p) {
   p = Utils::string_to_lower(p);
   size_t dot = p.rfind(".ani");
@@ -50,8 +51,11 @@ std::string stripAni(std::string p) {
 // ----------------------------------------------------------------------------
 // Types
 // ----------------------------------------------------------------------------
+// ours: reads each staff type's .ai (its cKeys, animations, sounds, the DRT
+// base's slot) into our tables
 void Staff::loadTypes(ResourceManager *rm) {
   this->rm = rm;
+  this->viewing.setResources(rm);
   if (!this->typeList.empty() || !rm)
     return;
   if (rm->hasResource("ui/select/selsmall/selsmall.ani"))
@@ -165,6 +169,7 @@ void Staff::loadTypes(ResourceManager *rm) {
   SDL_Log("[Staff] %zu staff types", this->typeList.size());
 }
 
+// ours: a type by its .ai file
 int Staff::typeOfFile(const std::string &file) const {
   std::string f = Utils::string_to_lower(file);
   for (size_t i = 0; i < this->typeList.size(); i++)
@@ -174,6 +179,7 @@ int Staff::typeOfFile(const std::string &file) const {
   return -1;
 }
 
+// ours: everyone gone (a new zoo)
 void Staff::clear() {
   for (auto &m : this->list) { releaseCatch(m); Sound::get().stop(m.rotorChannel); }
   this->list.clear();
@@ -184,6 +190,7 @@ void Staff::clear() {
   this->selected = this->hovered = this->carried = -1;
 }
 
+// ours: one by its id
 Staff::Member *Staff::member(int id) {
   for (Member &m : this->list)
     if (m.id == id)
@@ -223,6 +230,7 @@ std::string Staff::inWater(const Member &m, const std::string &name) const {
   return name;
 }
 
+// ours: the art an animation draws with, its colours swapped in (cached)
 Animation *Staff::art(const Member &m, const std::string &asked) const {
   const std::string name = inWater(m, asked);
   const Type &t = this->typeList[m.type];
@@ -272,6 +280,7 @@ Animation *Staff::art(const Member &m, const std::string &asked) const {
   return a;
 }
 
+// ours: the art shown at the cursor while hiring
 Animation *Staff::preview(int type) const {
   if (type < 0 || type >= static_cast<int>(this->typeList.size()))
     return nullptr;
@@ -280,6 +289,7 @@ Animation *Staff::preview(int type) const {
   return this->art(m, "idle");
 }
 
+// ours: how long one play of an animation takes
 float Staff::animSeconds(const Member &m, const std::string &anim) const {
   Animation *a = this->art(m, anim);
   if (!a)
@@ -291,6 +301,7 @@ float Staff::animSeconds(const Member &m, const std::string &anim) const {
 // ----------------------------------------------------------------------------
 // Ground: where staff can walk
 // ----------------------------------------------------------------------------
+// ours: the ground's height under a point
 float Staff::groundAt(const WorldMap &map, float x, float y) const {
   const MapTile *t = map.getTile(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
   if (!t)
@@ -516,6 +527,7 @@ bool Staff::testRoute(int sx, int sy, int gx, int gy, const WorldMap &map, const
   return Pathfinder::find(map.getWidth(), map.getHeight(), sx, sy, gx, gy, pass, step, out, 40000, cost);
 }
 
+// ours: the ZT1 Lab plays one of its animations
 void Staff::labPlay(int id, const std::string &anim, int times) {
   if (Member *m = this->member(id)) {
     m->path.clear();
@@ -524,6 +536,7 @@ void Staff::labPlay(int id, const std::string &anim, int times) {
   }
 }
 
+// ours: the ZT1 Lab lists its animations
 std::vector<std::string> Staff::labAnims(int id) const {
   std::vector<std::string> out;
   if (const Member *m = this->member(id))
@@ -532,6 +545,7 @@ std::vector<std::string> Staff::labAnims(int id) const {
   return out;
 }
 
+// ours: the height it stands at (a deck, the ground)
 float Staff::heightOf(const Member &m, const WorldMap &map) const {
   if (m.layer == 1 && this->walkways) {
     int tx = static_cast<int>(std::floor(m.x)), ty = static_cast<int>(std::floor(m.y));
@@ -680,6 +694,7 @@ bool Staff::findLayeredPath(Member &m, int gx, int gy, const WorldMap &map, cons
   return true;
 }
 
+// ours: everyone into the world index each frame
 void Staff::addToIndex(WorldIndex &index) const {
   for (const Member &m : this->list) {
     const Type &t = this->typeList[m.type];
@@ -763,6 +778,7 @@ void Staff::workSound(const Member &m, const std::string &anim) const {
     Sound::get().playAt(s->second.first, dx, dy, s->second.second);
 }
 
+// ours: a work animation queued so many times
 void Staff::play(Member &m, const std::string &anim, int times) {
   workSound(m, anim);
   m.anim = anim;
@@ -810,170 +826,197 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
     return tourWork(m, map, fences);
   if (t.kind != Kind::Maint)
     return false;
-  struct Spot {
-    float dist;
+  // The zoo's work list (zoo.exe 0x638fa0, built from the messages posted to
+  // maintenance, 0x434e30): 10030 a bin over 12 full (job 9, 0x593fd3),
+  // 10031 litter (7), 10032 dung on the grounds (0xb), 10033 / 10034 a worn
+  // fence's tile (0x10), 10035 a filter decayed past cFilterDecayedHealth /
+  // 10036 one broken, its health 0 (0x1a, 0x615c29). 10034 and 10036 are
+  // flagged (+0xc) and go to the list's front, the rest to its back.
+  // Task78_MaintFindWork (0x439cd0, the loop at 0x4a1c8d) takes, among the
+  // entries whose duty is ticked (9 trash, 7/0xb sweep, 0x10 fences, 0x1a
+  // filters), the nearest by squared tile distance from the worker's tile to
+  // the entry's (0x4a1d98), the first on a tie; once the best is flagged the
+  // look stops at the first unflagged one, so urgent work comes before all
+  // other. An entry another worker holds (+8) is taken over only by one
+  // strictly nearer to it than its holder (0x4a1ee2), and the holder drops
+  // its job (0x49e56b: slot 0x174)
+  // (ours: ties keep the order the work is gathered here, not the order the
+  // messages were posted)
+  struct Entry {
+    bool flagged;
     Job job;
     Fences::Edge edge;
-    int filter;
-    int tx, ty;
+    int item;   // the filter, bin, litter or dung
+    int ex, ey; // the entry's tile
+    long long dist;
+    Member *holder;
   };
-  std::vector<Spot> spots;
-  auto near = [&](int tx, int ty) {
-    return std::hypot(tx + 0.5f - m.x, ty + 0.5f - m.y);
+  const int mx = static_cast<int>(std::floor(m.x)), my = static_cast<int>(std::floor(m.y));
+  auto tileDist = [](int ax, int ay, int bx, int by) {
+    return static_cast<long long>(ax - bx) * (ax - bx) + static_cast<long long>(ay - by) * (ay - by);
   };
-  // Fences: a tile beside the piece it can stand on. The piece's own tile
-  // comes first, before any other work (zoo.exe Task78_MaintFindWork
-  // 0x439cd0 over the work list [0x638fa4]: a worn piece is listed for both
-  // its tiles, its own tile's entry flagged (+0xc) and at the list's front;
-  // once the best is a flagged one the look stops at the first that isn't -
-  // read in the running game 2026-11-11: pairs a tile apart, the owner's
-  // flagged). The other side is a job like any other, by distance
-  std::vector<Spot> ownSide;
+  auto holderOf = [&](Job job, const Fences::Edge *edge, int item) -> Member * {
+    for (Member &o : this->list)
+      if (o.id != m.id && o.job == job &&
+          (edge ? o.jobEdge == *edge : job == Job::Filter ? o.jobFilter == item : o.jobItem == item))
+        return &o;
+    return nullptr;
+  };
+  std::vector<Entry> entries;
+  auto add = [&](bool flagged, Job job, Fences::Edge edge, int item, int ex, int ey) {
+    Member *h = holderOf(job, job == Job::Fence ? &edge : nullptr, item);
+    entries.push_back({flagged, job, edge, item, ex, ey, tileDist(mx, my, ex, ey), h});
+  };
+  // Fences: each tile beside a worn piece that it can stand on, the piece's
+  // own tile flagged (read in the running game 2026-11-11: pairs a tile
+  // apart, the owner's flagged)
   if (m.duties[2])
     for (const auto &kv : fences.pieces()) {
       if (!fences.worn(kv.first))
         continue;
-      bool taken = false;
-      for (const Member &o : this->list)
-        taken = taken || (o.id != m.id && o.job == Job::Fence && o.jobEdge == kv.first);
-      if (taken)
-        continue;
       const Fences::Edge &e = kv.first;
       int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
       for (auto [tx, ty] : {std::make_pair(ax, ay), std::make_pair(e.x, e.y)})
-        if (walkable(tx, ty, map, fences)) {
-          const bool own = tx == kv.second.ownerX && ty == kv.second.ownerY;
-          (own ? ownSide : spots).push_back({near(tx, ty), Job::Fence, e, -1, tx, ty});
-        }
+        if (walkable(tx, ty, map, fences))
+          add(tx == kv.second.ownerX && ty == kv.second.ownerY, Job::Fence, e, -1, tx, ty);
     }
-  std::sort(ownSide.begin(), ownSide.end(), [](const Spot &a, const Spot &b) { return a.dist < b.dist; });
-  for (const Spot &s : ownSide) {
-    float mx = s.edge.alongX ? s.edge.x + 0.5f : static_cast<float>(s.edge.x);
-    float my = s.edge.alongX ? static_cast<float>(s.edge.y) : s.edge.y + 0.5f;
-    float ex = s.tx + 0.5f + (mx - s.tx - 0.5f) * 0.5f, ey = s.ty + 0.5f + (my - s.ty - 0.5f) * 0.5f;
-    if (findPath(m, s.tx, s.ty, map, fences, ex, ey)) {
-      ZT_STEP("0x439cd0", "A worn fence's own side: before any other work", {"distance", s.dist});
-      m.job = Job::Fence;
-      m.jobEdge = s.edge;
-      m.jobFilter = -1;
-      m.dutyId = kGoingToFix;
-      return true;
-    }
-  }
-  // Tank filters: a tile beside its footprint
-  if (m.duties[3]) {
+  // Tank filters: decayed (10035), or broken - health 0 - flagged (10036)
+  if (m.duties[3])
     for (size_t i = 0; i < fences.filters().size(); i++) {
       const Fences::Filter &f = fences.filters()[i];
       const Fences::FilterType &k = fences.filterType(f.file);
       if (f.health > k.decayedHealth)
         continue;
-      bool taken = false;
-      for (const Member &o : this->list)
-        taken = taken || (o.id != m.id && o.job == Job::Filter && o.jobFilter == static_cast<int>(i));
-      if (taken)
-        continue;
-      for (int ty = f.y - 1; ty <= f.y + k.footprintY; ty++)
-        for (int tx = f.x - 1; tx <= f.x + k.footprintX; tx++) {
-          bool edge = tx == f.x - 1 || ty == f.y - 1 || tx == f.x + k.footprintX || ty == f.y + k.footprintY;
-          bool corner = (tx == f.x - 1 || tx == f.x + k.footprintX) && (ty == f.y - 1 || ty == f.y + k.footprintY);
-          if (edge && !corner && walkable(tx, ty, map, fences))
-            spots.push_back({near(tx, ty), Job::Filter, {false, -1, -1}, static_cast<int>(i), tx, ty});
-        }
+      add(f.health <= 0, Job::Filter, {false, -1, -1}, static_cast<int>(i), f.x, f.y);
     }
-  }
-  // Trash cans over half full (Empty trash): the nearest, give or take
-  // (zoo.exe 0x61b146: dx^2 + dy^2 + rand(60) - fill, lowest)
+  // Trash cans over 12 full (0x593fd3: the can's +0x19c over 0xc)
   if (m.duties[0] && this->objects) {
     const auto &objs = this->objects->objects();
-    int bestCan = -1;
-    float bestScore = 1e30f;
-    for (size_t i = 0; i < objs.size(); i++) {
-      const PlacedObjects::Object &o = objs[i];
-      if (!o.trashCan || o.fill <= 12)
-        continue;
-      bool taken = false;
-      for (const Member &w : this->list)
-        taken = taken || (w.id != m.id && w.job == Job::Trash && w.jobItem == o.id);
-      if (taken)
-        continue;
-      float dx = o.x - m.x, dy = o.y - m.y;
-      float score = dx * dx + dy * dy + std::uniform_int_distribution<int>(0, 59)(this->rng) - o.fill;
-      if (score < bestScore) {
-        bestScore = score;
-        bestCan = static_cast<int>(i);
-      }
-    }
-    if (bestCan >= 0)
-      ZT_STEP("0x61b146", "A bin over half full: the nearest, give or take (dx2+dy2+rand(60)-fill)",
-              {"bin fill", objs[bestCan].fill}, {"score", bestScore});
-    if (bestCan >= 0) {
-      const PlacedObjects::Object &o = objs[bestCan];
-      int cx = static_cast<int>(std::floor(o.x)), cy = static_cast<int>(std::floor(o.y));
-      const int d[5][2] = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-      for (auto &dd : d)
-        if (walkable(cx + dd[0], cy + dd[1], map, fences) &&
-            findPath(m, cx + dd[0], cy + dd[1], map, fences, cx + dd[0] + 0.5f, cy + dd[1] + 0.5f)) {
-          m.job = Job::Trash;
-          m.jobItem = o.id;
-          m.dutyId = kGoingToCan;
-          return true;
-        }
-    }
+    for (const PlacedObjects::Object &o : objs)
+      if (o.trashCan && o.fill > 12)
+        add(false, Job::Trash, {false, -1, -1}, o.id, static_cast<int>(std::floor(o.x)),
+            static_cast<int>(std::floor(o.y)));
   }
-  // Dung on the grounds (a loose animal's), bagged up: "Going to clean up"
-  if (m.duties[1] && this->items)
+  // Dung on the grounds (a loose animal's) and litter
+  if (m.duties[1] && this->items) {
     for (int id : this->items->ofKind(ZooItems::Kind::Dung, -1)) {
       const ZooItems::Item *it = this->items->item(id);
-      if (it->exhibit >= 0)
-        continue;
-      bool taken = false;
-      for (const Member &o : this->list)
-        taken = taken || (o.id != m.id && o.job == Job::Dung && o.jobItem == id);
-      int tx = static_cast<int>(std::floor(it->x)), ty = static_cast<int>(std::floor(it->y));
-      if (!taken && walkable(tx, ty, map, fences))
-        spots.push_back({near(tx, ty), Job::Dung, {false, -1, -1}, id, tx, ty});
+      if (it->exhibit < 0)
+        add(false, Job::Dung, {false, -1, -1}, id, static_cast<int>(std::floor(it->x)),
+            static_cast<int>(std::floor(it->y)));
     }
-  // Litter on the grounds (Sweep and clean zoo)
-  if (m.duties[1] && this->items)
     for (int id : this->items->ofKind(ZooItems::Kind::Litter, -1)) {
       const ZooItems::Item *it = this->items->item(id);
-      bool taken = false;
-      for (const Member &o : this->list)
-        taken = taken || (o.id != m.id && o.job == Job::Litter && o.jobItem == id);
-      int tx = static_cast<int>(std::floor(it->x)), ty = static_cast<int>(std::floor(it->y));
-      if (!taken && walkable(tx, ty, map, fences)) {
-        Spot s{near(tx, ty), Job::Litter, {false, -1, -1}, id, tx, ty};
-        spots.push_back(s);
-      }
+      add(false, Job::Litter, {false, -1, -1}, id, static_cast<int>(std::floor(it->x)),
+          static_cast<int>(std::floor(it->y)));
     }
-  std::sort(spots.begin(), spots.end(), [](const Spot &a, const Spot &b) { return a.dist < b.dist; });
-  ZT_STEP("", "Maintenance: jobs within reach, nearest first", {"jobs", static_cast<int>(spots.size())},
-          {"nearest", spots.empty() ? "none" : kJobNames[std::clamp(static_cast<int>(spots.front().job), 0, 8)]},
-          {"distance", spots.empty() ? 0.0f : spots.front().dist});
-  for (const Spot &s : spots) {
+  }
+  // Flagged first (the list's front), then nearest; a held entry only when
+  // this worker is strictly nearer than its holder
+  // (ours: a holder already at its work isn't taken from - its distance is
+  // the least there can be)
+  entries.erase(std::remove_if(entries.begin(), entries.end(),
+                               [&](const Entry &e) {
+                                 if (!e.holder)
+                                   return false;
+                                 if (e.holder->pathAt >= e.holder->path.size())
+                                   return true;
+                                 const int hx = static_cast<int>(std::floor(e.holder->x)),
+                                           hy = static_cast<int>(std::floor(e.holder->y));
+                                 return !(e.dist < tileDist(hx, hy, e.ex, e.ey));
+                               }),
+                entries.end());
+  std::stable_sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
+    if (a.flagged != b.flagged) return a.flagged;
+    return a.dist < b.dist;
+  });
+  ZT_STEP("0x439cd0", "Maintenance: the work list, urgent first, then the nearest (squared tiles)",
+          {"jobs", static_cast<int>(entries.size())},
+          {"nearest", entries.empty() ? "none" : kJobNames[std::clamp(static_cast<int>(entries.front().job), 0, 8)]},
+          {"urgent", entries.empty() ? 0 : entries.front().flagged ? 1 : 0},
+          {"distance", entries.empty() ? 0.0f : std::sqrt(static_cast<float>(entries.front().dist))});
+  auto takeOver = [&](Member *h) {
+    if (!h)
+      return;
+    ZT_STEP("0x4a1ee2", "Nearer than the worker that had it: taken over, the other drops its job");
+    h->job = Job::None;
+    h->path.clear();
+    h->pathAt = 0;
+    h->jobItem = h->jobFilter = -1;
+    h->jobEdge = {false, -1, -1};
+    h->anim = "idle";
+    h->animTime = 0;
+    h->idleLeft = 0;
+    h->workCheck = 0;
+    h->dutyId = kMaintMonitoring;
+    h->dutyArg.clear();
+  };
+  for (const Entry &s : entries) {
     if (s.job == Job::Litter || s.job == Job::Dung) {
-      const ZooItems::Item *it = this->items->item(s.filter);
-      if (it && findPath(m, s.tx, s.ty, map, fences, it->x, it->y)) {
+      const ZooItems::Item *it = this->items->item(s.item);
+      if (it && findPath(m, s.ex, s.ey, map, fences, it->x, it->y)) {
+        takeOver(s.holder);
         m.job = s.job;
-        m.jobItem = s.filter;
+        m.jobItem = s.item;
         m.dutyId = s.job == Job::Dung ? kGoingToCleanUp : kGoingToSweep;
         return true;
       }
       continue;
     }
-    // Stand at the tile's side nearest the work
-    float ex = s.tx + 0.5f, ey = s.ty + 0.5f;
-    if (s.job == Job::Fence) {
-      float mx = s.edge.alongX ? s.edge.x + 0.5f : static_cast<float>(s.edge.x);
-      float my = s.edge.alongX ? static_cast<float>(s.edge.y) : s.edge.y + 0.5f;
-      ex += (mx - ex) * 0.5f;
-      ey += (my - ey) * 0.5f;
+    if (s.job == Job::Trash) {
+      // (beside the can: its tile or one of the four round it)
+      const int d[5][2] = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+      for (auto &dd : d)
+        if (walkable(s.ex + dd[0], s.ey + dd[1], map, fences) &&
+            findPath(m, s.ex + dd[0], s.ey + dd[1], map, fences, s.ex + dd[0] + 0.5f, s.ey + dd[1] + 0.5f)) {
+          takeOver(s.holder);
+          m.job = Job::Trash;
+          m.jobItem = s.item;
+          m.dutyId = kGoingToCan;
+          return true;
+        }
+      continue;
     }
-    if (findPath(m, s.tx, s.ty, map, fences, ex, ey)) {
-      m.job = s.job;
+    if (s.job == Job::Filter) {
+      // A tile beside its footprint, the nearest first
+      const Fences::Filter &f = fences.filters()[s.item];
+      const Fences::FilterType &k = fences.filterType(f.file);
+      std::vector<std::pair<long long, std::pair<int, int>>> sides;
+      for (int ty = f.y - 1; ty <= f.y + k.footprintY; ty++)
+        for (int tx = f.x - 1; tx <= f.x + k.footprintX; tx++) {
+          bool edge = tx == f.x - 1 || ty == f.y - 1 || tx == f.x + k.footprintX || ty == f.y + k.footprintY;
+          bool corner = (tx == f.x - 1 || tx == f.x + k.footprintX) && (ty == f.y - 1 || ty == f.y + k.footprintY);
+          if (edge && !corner && walkable(tx, ty, map, fences))
+            sides.push_back({tileDist(mx, my, tx, ty), {tx, ty}});
+        }
+      std::stable_sort(sides.begin(), sides.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+      for (const auto &sd : sides) {
+        auto [tx, ty] = sd.second;
+        if (findPath(m, tx, ty, map, fences, tx + 0.5f, ty + 0.5f)) {
+          takeOver(s.holder);
+          m.job = Job::Filter;
+          m.jobFilter = s.item;
+          m.jobEdge = {false, -1, -1};
+          m.dutyId = kGoingToFilter;
+          return true;
+        }
+      }
+      continue;
+    }
+    // A fence: stand at the tile's side nearest the piece
+    float ex = s.ex + 0.5f, ey = s.ey + 0.5f;
+    float fx = s.edge.alongX ? s.edge.x + 0.5f : static_cast<float>(s.edge.x);
+    float fy = s.edge.alongX ? static_cast<float>(s.edge.y) : s.edge.y + 0.5f;
+    ex += (fx - ex) * 0.5f;
+    ey += (fy - ey) * 0.5f;
+    if (findPath(m, s.ex, s.ey, map, fences, ex, ey)) {
+      if (s.flagged)
+        ZT_STEP("0x439cd0", "A worn fence's own side: before any other work", {"distance", std::sqrt(static_cast<float>(s.dist))});
+      takeOver(s.holder);
+      m.job = Job::Fence;
       m.jobEdge = s.edge;
-      m.jobFilter = s.filter;
-      m.dutyId = s.job == Job::Fence ? kGoingToFix : kGoingToFilter;
+      m.jobFilter = -1;
+      m.dutyId = kGoingToFix;
       return true;
     }
   }
@@ -990,6 +1033,7 @@ bool Staff::findWork(Member &m, const WorldMap &map, Fences &fences) {
 // Marine specialists work from the gate's platform: food in, then the
 // water cleaned (cCleanTankPct a go, "Cleaning the tank").
 // ----------------------------------------------------------------------------
+// ours: turns it toward a point
 void Staff::face(Member &m, float x, float y) {
   float d = std::hypot(x - m.x, y - m.y);
   if (d > 0.001f) {
@@ -1565,7 +1609,7 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
 // cCrowdRadius may follow (0x58d349: cFollowChance, raised 15 by each man
 // near a woman guide and 10 by each woman near a man as the guests are
 // looked at - never put back within one look; cMaxGroupSize at most); there
-// with a group, the talk (task 0x77: speak, speak2, cInformGuestTime each)
+// with a group, the talk (task 0x77: speak, looped to cover cInformGuestTime)
 // and its followers' happiness up cTourGuideBonus; with none, the trip ends
 // (0x58ad88)
 // ----------------------------------------------------------------------------
@@ -1577,8 +1621,12 @@ bool Staff::tourWork(Member &m, const WorldMap &map, Fences &fences) {
   if (!m.exhibits.empty()) {
     choices = m.exhibits;
   } else {
+    // Unassigned: every habitat with animals, tanks too (0x58af73 ->
+    // 0x440d9a: the habitat list's entries whose +0x94 - its animal count,
+    // zeroed and counted up animal by animal in the rating 0x444827 - isn't
+    // 0)
     for (const Fences::Exhibit &ex : fences.exhibits())
-      if (ex.named && !ex.tank)
+      if (ex.named && ex.animals > 0)
         choices.push_back(ex.id);
   }
   if (choices.empty())
@@ -1588,11 +1636,44 @@ bool Staff::tourWork(Member &m, const WorldMap &map, Fences &fences) {
   const Fences::Exhibit *picked = fences.exhibit(pick);
   if (!picked || picked->animals <= 0)
     return false;
-  std::vector<std::pair<int, int>> view = this->guests->viewingTiles(pick);
-  if (view.empty())
+  // Its viewing areas with guests at them (0x58ae2c: +0x54 over 0) that see
+  // some of it (0x43aac6); none, no trip. Then, 50/50 (0x58b0a3), one of them
+  // at random (0x428741) or the one whose viewing tile, one picked at random
+  // in each, is nearest the guide (0x58b46e: squared tiles, the first on a
+  // tie)
+  this->viewing.refresh(map, fences);
+  this->viewing.countGuests(*this->guests);
+  const auto &areas = this->viewing.areas();
+  std::vector<int> looked;
+  for (int a : this->viewing.of(pick))
+    if (areas[a].guests > 0 && !areas[a].seen.empty() && !areas[a].viewing.empty())
+      looked.push_back(a);
+  ZT_STEP("0x58ae2c", "Its viewing areas with guests at them", {"areas", static_cast<int>(this->viewing.of(pick).size())},
+          {"with guests", static_cast<int>(looked.size())});
+  if (looked.empty())
     return false;
-  // (a viewing area at random - zoo.exe 0x58cf31)
-  std::pair<int, int> spot = view[std::uniform_int_distribution<size_t>(0, view.size() - 1)(this->rng)];
+  int area = -1;
+  if (std::uniform_int_distribution<int>(0, 1)(this->rng) == 0) {
+    area = looked[std::uniform_int_distribution<size_t>(0, looked.size() - 1)(this->rng)];
+    ZT_STEP("0x428741", "One of them at random");
+  } else {
+    const int gx = static_cast<int>(std::floor(m.x)), gy = static_cast<int>(std::floor(m.y));
+    long long best = 0;
+    for (int a : looked) {
+      const auto &v = areas[a].viewing;
+      const auto t = v[std::uniform_int_distribution<size_t>(0, v.size() - 1)(this->rng)];
+      const long long d = static_cast<long long>(t.first - gx) * (t.first - gx) +
+                          static_cast<long long>(t.second - gy) * (t.second - gy);
+      if (area < 0 || d < best) {
+        area = a;
+        best = d;
+      }
+    }
+    ZT_STEP("0x58b46e", "The nearest of them", {"squared tiles", static_cast<float>(best)});
+  }
+  // (a tile of it at random - zoo.exe 0x58cf31: rand % count)
+  const auto &tiles = areas[area].viewing;
+  std::pair<int, int> spot = tiles[std::uniform_int_distribution<size_t>(0, tiles.size() - 1)(this->rng)];
   if (!findPath(m, spot.first, spot.second, map, fences, spot.first + 0.5f, spot.second + 0.5f))
     return false;
   // A new trip: the last group goes, a new one gathers
@@ -1623,13 +1704,27 @@ void Staff::gatherFollowers(Member &m) {
   int gx = static_cast<int>(std::floor(m.x)), gy = static_cast<int>(std::floor(m.y));
   // (zoo.exe 0x58d349: the chance is raised by each guest that matches and
   // kept for the rest of the look - one chance for the whole scan)
+  // The tiles within cCrowdRadius in the original's order: x from the
+  // guide's minus the radius up, and down each column y (0x58d349's two
+  // loops). (A second way in there - a guest not on a tour, +0x337 0, whose
+  // +0x2e4 is this guide - never comes up: the guest's clearGoal 0x422763
+  // and its setup 0x4f65e5 clear both together; read 2026-11-15)
   int chance = t.followChance;
+  std::vector<const Guests::Guest *> near;
   for (const Guests::Guest &g : this->guests->guests()) {
+    int x = static_cast<int>(std::floor(g.x)), y = static_cast<int>(std::floor(g.y));
+    if (std::abs(x - gx) <= t.crowdRadius && std::abs(y - gy) <= t.crowdRadius)
+      near.push_back(&g);
+  }
+  std::stable_sort(near.begin(), near.end(), [](const Guests::Guest *a, const Guests::Guest *b) {
+    int ax = static_cast<int>(std::floor(a->x)), bx = static_cast<int>(std::floor(b->x));
+    if (ax != bx) return ax < bx;
+    return static_cast<int>(std::floor(a->y)) < static_cast<int>(std::floor(b->y));
+  });
+  for (const Guests::Guest *gp : near) {
+    const Guests::Guest &g = *gp;
     if (static_cast<int>(m.followers.size()) >= t.maxGroup)
       break;
-    int x = static_cast<int>(std::floor(g.x)), y = static_cast<int>(std::floor(g.y));
-    if (std::abs(x - gx) > t.crowdRadius || std::abs(y - gy) > t.crowdRadius)
-      continue;
     bool woman = this->guests->types()[g.type].female;
     chance += (m.female && !woman ? 15 : 0) + (!m.female && woman ? 10 : 0);
     if (std::uniform_int_distribution<int>(0, 99)(this->rng) >= chance)
@@ -1641,6 +1736,7 @@ void Staff::gatherFollowers(Member &m) {
 
 // Dung taken away: paid for (Recycling) if there's a compost anywhere, and
 // the nearest compost's takings (its Building Information) up its price
+// zoo.exe 0x4a2c98 (Recycling: cZooDooRecyclingAmount a pile with a compost)
 void Staff::dungRecycled(float x, float y) {
   if (!this->objects)
     return;
@@ -1720,6 +1816,7 @@ int Staff::assign(int id, int exhibit, const Fences &fences) {
   return 0;
 }
 
+// ours: the dev console sends one to a tile
 bool Staff::walkTo(int id, int x, int y, const WorldMap &map, const Fences &fences) {
   Member *m = this->member(id);
   if (!m)
@@ -1827,6 +1924,7 @@ void Staff::catchStep(Member &m, float seconds, const WorldMap &map, const Fence
   }
 }
 
+// ours: its status line from the lang string it's set (dutyId, %s)
 std::string Staff::dutyText(const Member &m) const {
   std::string s = this->rm ? this->rm->getString(m.dutyId) : "";
   size_t at = s.find("%s");
@@ -1884,6 +1982,7 @@ void Staff::fire(int id) {
     this->carried = -1;
 }
 
+// ours: put down again after Move Staff Member, its work dropped
 void Staff::moveTo(int id, float x, float y) {
   if (Member *m = this->member(id)) {
     releaseCatch(*m);
@@ -1907,6 +2006,7 @@ void Staff::moveTo(int id, float x, float y) {
   }
 }
 
+// ours: lets go of the animal it was after
 void Staff::releaseCatch(Member &m) {
   if (auto *a = animals ? animals->member(m.jobAnimal) : nullptr)
     if (a->claimedBy == m.id) a->claimedBy = -1;
@@ -2133,7 +2233,7 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
       continue;
     }
     // A tour guide: a look for followers every cCrowdCheck ticks (on the way
-    // and while talking); the talk (speak, then speak2)
+    // and while talking); the talk (speak, looped - see where it starts)
     if (m.job == Job::Tour) {
       m.crowdClock -= seconds;
       if (m.crowdClock <= 0 && (m.pathAt < m.path.size() || m.speaking)) {
@@ -2142,7 +2242,7 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
       }
       if (m.speaking) {
         m.speakLeft -= seconds;
-        const char *talk = m.speakLeft > t.informTime ? "speak" : "speak2";
+        const char *talk = "speak";
         if (m.anim != talk) {
           m.anim = talk;
           m.animTime = 0;
@@ -2230,7 +2330,18 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
             ZT_STEP("0x58ce7e", "There with a group: the talk (cTourGuideBonus)", {"followers", static_cast<int>(m.followers.size())},
                     {"cTourGuideBonus", t.tourBonus}, {"cInformGuestTime", t.informTime});
             m.speaking = true;
-            m.speakLeft = 2.0f * t.informTime;
+            // The talk, bSpeak (tour.ai: fPlaySet(bSpeak1), fPlaySet(bSpeak2),
+            // each fPlayTime(speak / speak2, cInformGuestTime)): fPlayTime
+            // queues whole plays of its animation until cInformGuestTime * 1000
+            // ms is covered (zoo.exe 0x424e7f -> 0x424ee7); measured:
+            // 2026-11-15, the original's guides stay in bSpeak (task 0x77)
+            // 6.8-6.9 s a talk, 20 talks timed - speak (40 frames at 83 ms)
+            // played twice, 6.64 s; speak2 never comes (speak + speak2 would be
+            // 7.57 s at the least)
+            {
+              const float once = std::max(0.1f, animSeconds(m, "speak"));
+              m.speakLeft = once * std::max(1.0f, std::ceil(t.informTime / once));
+            }
             m.dutyId = kSpeaking;
             m.dutyArg.clear();
             // (facing the exhibit)
@@ -2325,6 +2436,7 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
 // ----------------------------------------------------------------------------
 // Drawing
 // ----------------------------------------------------------------------------
+// ours: the view direction it faces on screen
 CompassDirection Staff::facing(const WorldRenderer &view, const Member &m) const {
   float x0, y0, x1, y1, d;
   view.worldToScreenF(m.x, m.y, 0, x0, y0, d);
@@ -2338,6 +2450,7 @@ CompassDirection Staff::facing(const WorldRenderer &view, const Member &m) const
   return dirs[octant];
 }
 
+// ours: the DRT base's art (used while its helicopter's out)
 Animation *Staff::baseArt(const Member &m) const {
   const auto &t = this->typeList[m.type];
   const bool onPad = m.heliStage == HeliStage::Parked || m.heliStage == HeliStage::SpinUp || m.heliStage == HeliStage::SpinDown;
@@ -2349,6 +2462,7 @@ Animation *Staff::baseArt(const Member &m) const {
 int Staff::baseFrame(const Member &m,Animation *a)const {
   if(!a)a=baseArt(m);return a?int(std::fmod(m.baseAnimTime*1000/std::max(1u,a->frameTimeMs()),std::max(1,a->frameCount()))):0;
 }
+// ours: the helicopter's frame
 int Staff::helicopterFrame(const Member &m,Animation *a)const {
   if(!a)return 0;int f=int(m.animTime*1000/std::max(1u,a->frameTimeMs()));
   if(m.heliStage==HeliStage::SpinUp || m.heliStage==HeliStage::SpinDown || m.heliStage==HeliStage::Fire)f=std::min(f,std::max(0,a->frameCount()-1));
@@ -2520,6 +2634,7 @@ void Staff::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view, const 
       d.art->drawAnchored(renderer, d.sx, d.sy, d.side, d.tinted ? &d.tint : nullptr, d.frame);
 }
 
+// ours: which one is drawn at a screen point
 int Staff::pick(float px, float py, const WorldRenderer &view, const WorldMap &map) const {
   int found = -1;
   float best = 1e9f;

@@ -85,6 +85,15 @@ public:
     // cDepthMin, cDepthMax (+0x35c, +0x360): the water depth it likes
     bool onlyUnderwater = false;
     int depthMin = 0, depthMax = 0;
+    // The tank water's effects (zoo.exe 0x438a37; defaults setDefaults
+    // 0x4b659e): cDepthChange (+0x364) out of cDepthMin..Max; the wrong
+    // water, cSalinityChange / cSalinityHealthChange (+0x368, +0x36c);
+    // purity under cMurky / cVeryMurky / cExtremelyMurkyWaterThreshold
+    // (+0x424..+0x42c: 60, 20, 1), that band's happiness (+0x430..) and
+    // health (+0x43c..) change
+    int depthChange = -5, salinityChange = -5, salinityHealthChange = -5;
+    int murkyThreshold[3] = {60, 20, 1};
+    int murkyChange[3] = {-5, -10, -15}, murkyHealthChange[3] = {-5, -10, -15};
     // cKeeper (type +0x2f0): who cares for it - 9500 a zookeeper (unset),
     // 9551 a scientist (dinosaurs), 9552 a marine specialist (tank animals)
     int keeper = 9500;
@@ -101,6 +110,7 @@ public:
     // what it thinks of objects and of the other animals, its trees, rocks
     // and hills
     int genus = 0, family = 0;
+    int era = 0; // cEra (Dinosaur Digs: 9621 Jurassic, 9623 Ice Age) - goal rule 6/5
     int compatTerrain[18] = {};
     std::map<int, int> suitable, compatible;
     int treePref = 0, rockPref = 0, elevationPref = 0;
@@ -109,6 +119,10 @@ public:
     int captivity = 0;
     int numberMin = 1, numberMax = 100, numberMinChange = 0, numberMaxChange = 0;
     int habitatSize = 100, animalDensity = 0, allCrowdedChange = 0, otherAnimalAngryChange = 0;
+    // cCrowd, cCrowdHappinessChange: the watchers it bears and what more
+    // costs it (zoo.exe animal type +0x268, +0x26c; setDefaults 0x4b659e: 40,
+    // -1)
+    int crowd = 40, crowdHappinessChange = -1;
     bool needShelter = false, needToys = false;
     // [Sounds]: name -> its file and attenuation (placesound, pickupsound,
     // and those fPlayWithSound plays)
@@ -242,6 +256,11 @@ public:
     // In the water (swimmers: where it wanders), the water and drink checks
     bool waterMode = false;
     int waterCheck = -1, boredCheck = -1;
+    int murkyCheck = 0; // (zoo.exe animal +0x2fc: the tank water check's countdown)
+    // The guests watching it (zoo.exe animal +0x368) and the side they're on
+    // (+0x36c, +0x370); the way away from them its next walk takes (+0x37c,
+    // 0-7, -1: none) - countGuestCrowd, tick, walkSomewhere
+    int guestCrowd = 0, guestCrowdX = 0, guestCrowdY = 0, crowdDir = -1;
     float drinkX = -1, drinkY = -1; // the water it's going to drink at
     // In a tank: how high it swims over the floor (height units), and the
     // height it's swimming to (fWalk's surface, floor, dive, rise, level)
@@ -426,6 +445,9 @@ public:
   // An exhibit's suitability (zoo.exe hab+0xe8): its animals' average, as
   // last worked out (0 when it hasn't been)
   int exhibitSuitability(int exhibit) const;
+  // The same over only the animals keep accepts; -1 when there are none
+  // (zoo.exe 0x41da81, goal rule 6: one family's or era's animals)
+  int exhibitSuitability(int exhibit, const std::function<bool(const Member &)> &keep) const;
   // Happiness as the panel shows it (0-100)
   static int shownHappiness(const Member &m) {
     return static_cast<int>((std::lround(m.happiness) + 100) * 100 / 200);
@@ -510,6 +532,16 @@ public:
   std::function<int(float x, float y, float radius)> findPrey;
   std::function<bool(int guest, float &x, float &y)> preyAt;
   std::function<void(int guest, const Member &by)> caughtPrey;
+  // (a guest's name, for "%1s has been eaten by %2s.")
+  std::function<std::string(int guest)> preyName;
+  // An exhibit's viewing areas (zoo.exe: the habitat's list at +0x34): each
+  // one's path tiles (+0x40), the exhibit's tiles seen from it (+4) and the
+  // guests standing on it (+0x54)
+  struct ViewArea {
+    std::vector<std::pair<int, int>> viewing, seen;
+    int guests = 0;
+  };
+  std::function<std::vector<ViewArea>(int exhibit)> viewAreas;
   // A rampaging animal onto a tile (zoo.exe 0x437572): what stands on it
   // that can be (cRubbleable) turned to rubble; how many were
   std::function<int(int tileX, int tileY, const Member &by)> rubbleAt;
@@ -585,6 +617,9 @@ private:
   // How many share its exhibit: its own kind (young too), its kind's
   // adults, all adults
   void company(const Member &m, int &kind, int &kindAdults, int &adults) const;
+  // (and the tiles of its habitat with the ones joined to it)
+  void company(const Member &m, int &kind, int &kindAdults, int &adults, int &tiles) const;
+  static bool crowdedBySpecies(const Type &t, int kindAdults, int tiles);
   // Its go at a live electric fence this tick, if it has one (zoo.exe
   // 0x438ebc, 0x4a3383, 0x59c4ba)
   void testFence(Member &m, const Fences &fences);
@@ -593,6 +628,10 @@ private:
   void becomeEgg(Member &m);
   void eggTick(Member &m);
   void tick(Member &m, const WorldMap &map, const Fences &fences);
+  void murkyWaterTick(Member &m, const WorldMap &map, const Fences &fences);
+  void countGuestCrowd(Member &m, const Fences &fences);
+  static int direction8(int dx, int dy);
+  static bool nearDirection(int want, int dir);
   WorldIndex *index = nullptr;
   std::vector<Type> typeList;
   std::vector<Member> list;

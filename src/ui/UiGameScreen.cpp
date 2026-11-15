@@ -40,6 +40,11 @@
 // (ui/zt1extras.lyt, made below), each switched on or off. Off, each does
 // what the original does (Features.hpp)
 static const int kExtrasPage = 904, kExtrasTab = 1509, kExtrasFirst = 9050;
+// ours: the switches a page of the tab shows (more than fit the panel go on
+// further pages, turned with the game's up and down arrows under them), and
+// the labels' own ids (8900 on: never a tick box's)
+static const int kExtrasRows = 12, kExtrasLabelFirst = 8900;
+static const int kExtrasPrev = 8890, kExtrasNext = 8891, kExtrasPageText = 8892;
 static std::string extrasLabel(const std::string &name) {
   static const std::map<std::string, std::string> labels = {
       {"allunlocked", "All unlocked"},   {"fencemodes", "Fence modes"},
@@ -50,7 +55,11 @@ static std::string extrasLabel(const std::string &name) {
       {"updatechecks", "Update checks"}, {"misnamedart", "Misnamed art"},
       {"optionswindow", "New Options"},   {"smartstack", "Windows aside"},
       {"fastforward", "Game speed"},
-      {"dragwindows", "Drag windows"},   {"infocloseslists", "Info closes lists"}};
+      {"dragwindows", "Drag windows"},   {"infocloseslists", "Info closes lists"},
+      // (as the Options window names them, shortened to the panel's 100 px)
+      {"tankgroundback", "Tank ground back"}, {"nofenceonpath", "No path fences"},
+      {"modfilter", "Mods buy filter"},  {"custommaps", "Custom maps"},
+      {"suitabilityadvice", "Exhibit advice"}, {"tankclip", "Tank edge clip"}};
   auto it = labels.find(name);
   return it == labels.end() ? name : it->second;
 }
@@ -149,21 +158,36 @@ static std::string extrasPage() {
   t += "[Title]\r\ntype=UIText\r\nid=9040\r\nx=29\r\ny=29\r\ndx=127\r\ndy=fitfont\r\nfont=3270\r\nfontsize=3271\r\n"
        "border=2\r\nforecolor=206\r\nforecolor=206\r\nforecolor=206\r\nbackcolor=68\r\nbackcolor=36\r\n"
        "backcolor=20\r\ntransparent=1\r\nlayer=1\r\njustify=center\r\n\r\n";
-  int i = 0;
-  for (size_t n = extrasOrder().size(); i < static_cast<int>(n); i++) {
+  int n = static_cast<int>(extrasOrder().size());
+  int rows = std::min(n, kExtrasRows);
+  for (int i = 0; i < n; i++) {
     // (below the panel's logo, 19 apart - the original's pages use 22, but
-    // 13 switches and the note must fit inside the panel - each the game's
-    // own tick box, its name in the panel's 100 px beside it)
-    int y = 148 + i * 19, id = kExtrasFirst + i;
+    // a page of switches and the note must fit inside the panel - each the
+    // game's own tick box, its name in the panel's 100 px beside it; a page
+    // after the first in the same rows, hidden until it's turned to)
+    int y = 148 + (i % kExtrasRows) * 19, id = kExtrasFirst + i;
     t += "[Toggle" + std::to_string(i) + "]\r\ntype=UIButton\r\nid=" + std::to_string(id) +
          "\r\nanimation=ui/sharedui/checkbx/checkbx\r\nx=33\r\ny=" + std::to_string(y) +
          "\r\nlayer=1\r\ntransparent=1\r\nstate=2048\r\n\r\n";
-    t += "[Label" + std::to_string(i) + "]\r\ntype=UIText\r\nid=" + std::to_string(id + 20) +
+    t += "[Label" + std::to_string(i) + "]\r\ntype=UIText\r\nid=" + std::to_string(kExtrasLabelFirst + i) +
          "\r\nx=57\r\ny=" + std::to_string(y + 2) + "\r\ndx=100\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\n"
          "border=0\r\nalias=" + std::to_string(id) + "\r\n" + gold + "\r\n";
   }
-  t += "[Note]\r\ntype=UIText\r\nid=9049\r\nx=33\r\ny=" + std::to_string(152 + i * 19) +
-       "\r\ndx=124\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\nborder=0\r\njustify=center\r\n" + gold;
+  t += "[Note]\r\ntype=UIText\r\nid=9049\r\nx=33\r\ny=" + std::to_string(152 + rows * 19) +
+       "\r\ndx=124\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\nborder=0\r\njustify=center\r\n" + gold + "\r\n";
+  if (n > kExtrasRows) {
+    // (the pages: the game's 12 x 17 list arrows either side of "1 / 2")
+    int y = 172 + rows * 19;
+    t += "[PagePrev]\r\ntype=UIButton\r\nid=" + std::to_string(kExtrasPrev) +
+         "\r\nanimation=ui/sharedui/arowup/arowup\r\nx=40\r\ny=" + std::to_string(y) +
+         "\r\nlayer=1\r\ntransparent=1\r\n\r\n";
+    t += "[PageNext]\r\ntype=UIButton\r\nid=" + std::to_string(kExtrasNext) +
+         "\r\nanimation=ui/sharedui/arowdn/arowdn\r\nx=138\r\ny=" + std::to_string(y) +
+         "\r\nlayer=1\r\ntransparent=1\r\n\r\n";
+    t += "[PageText]\r\ntype=UIText\r\nid=" + std::to_string(kExtrasPageText) + "\r\nx=56\r\ny=" +
+         std::to_string(y + 2) +
+         "\r\ndx=78\r\ndy=fitfont\r\nfont=3452\r\nfontsize=3453\r\nborder=0\r\njustify=center\r\n" + gold;
+  }
   return t;
 }
 
@@ -443,6 +467,17 @@ static std::string formatPrice(int amount) {
     digits.insert(i, ",");
   return "$" + digits;
 }
+// A cost shown in a panel as the original sets it (zoo.exe 0x40ed88 with its
+// grouping flag false, through 0x40eca1: GetCurrencyFormatA with
+// initLocale's 0 decimals 0x5358b7 and the grouping turned off): whole
+// dollars, cut toward zero (the callers' fistp with the chop rounding mode),
+// no thousands commas - "$1000". The buy panels' costs (2014 0x4e3285, 3016
+// 0x4e42b8, 3207 0x4dacb1, the hire cost 3611 0x4e6a92), a keeper's salary
+// (3503 0x47108a) and the tank panel's (0x5ae509: 4871, 4872, 4877, 4882)
+// all are; only the HUD's cash groups its digits (0x40ee3d)
+static std::string formatCost(int amount) {
+  return "$" + std::to_string(amount);
+}
 
 void UiGameScreen::setupBuyPanels() {
   // Panel id, and its title, name and price texts (from the layouts)
@@ -528,6 +563,8 @@ void UiGameScreen::setupBuyPanels() {
   for (BuyPanel &p : this->buyPanels) {
     BuyPanel *self = &p;
     p.region->onSelect = [this, self](int index) {
+      if (index >= 0 && index < (int)self->items.size())
+        self->picked[self->category] = self->items[index]->file;
       // An animal picked: ready to put down at once, the gender last chosen
       // (male to start; the gender buttons change it)
       if (self->id == 3) {
@@ -555,6 +592,8 @@ void UiGameScreen::setupBuyPanels() {
         g->onClick = [this, g] { this->setGateMode(g->isToggledOn()); };
       }
     // Adopt Animals: the male or female button takes the animal picked
+    // (zoo.exe buya_Buttons_click 0x4e3ec3: the choice kept, adoptListFill
+    // 0x4e334b, which ends handing the picked animal to the zoo view)
     for (int sex = 0; sex < 2; sex++)
       if (UiButton *b = dynamic_cast<UiButton *>(
               (sex ? p.female : p.male) ? p.layout->getElementById(sex ? p.female : p.male) : nullptr))
@@ -578,7 +617,7 @@ void UiGameScreen::setupBuyPanels() {
         if (self->category == "paths" && this->walkwayHeight)
           this->walkwayHeight(-1);
         else
-          this->rotateItems(-1);
+          this->rotateItems(*self, -1);
       };
     if (UiButton *right = dynamic_cast<UiButton *>(
             p.rotateRight ? p.layout->getElementById(p.rotateRight) : nullptr))
@@ -586,13 +625,13 @@ void UiGameScreen::setupBuyPanels() {
         if (self->category == "paths" && this->walkwayHeight)
           this->walkwayHeight(+1);
         else
-          this->rotateItems(+1);
+          this->rotateItems(*self, +1);
       };
     this->refreshBuyPanel(p);
   }
 }
 
-// The chosen tab's category fills the grid (the first item picked)
+// The chosen tab's category fills the grid (its last pick picked again)
 void UiGameScreen::refreshBuyPanel(BuyPanel &p) {
   std::string category = p.fixedCategory;
   for (UiButton *tab : p.tabs)
@@ -613,10 +652,19 @@ void UiGameScreen::refreshBuyPanel(BuyPanel &p) {
       p.items.push_back(item);
   std::vector<UiScrollingRegion::Item> cells;
   for (const CatalogItem *item : p.items)
-    cells.push_back({this->facingIcon(item), item->file});
+    cells.push_back({this->facingIcon(p, item), item->file});
   p.region->setItems(cells);
-  p.region->setSelected(p.items.empty() ? -1 : 0);
-  this->showItem(p, p.items.empty() ? -1 : 0);
+  // (the item last picked on this tab, else the first: zoo.exe
+  // adoptListFill 0x4e334b looks the tab up in its picks, 0x63bb18, finds
+  // that type in the new list and selects it, 0x4e9fea)
+  int pick = p.items.empty() ? -1 : 0;
+  auto had = p.picked.find(category);
+  if (had != p.picked.end())
+    for (int i = 0; i < (int)p.items.size(); i++)
+      if (p.items[i]->file == had->second)
+        pick = i;
+  p.region->setSelected(pick);
+  this->showItem(p, pick);
   // "No items to display." (ZUPDATE's NoItemText) over an empty list
   for (int id : {2009, 3009, 3609})
     if (UiElement *none = p.layout ? p.layout->getElementById(id) : nullptr)
@@ -625,10 +673,10 @@ void UiGameScreen::refreshBuyPanel(BuyPanel &p) {
 
 // An item's icon for the current facing (items with fewer icons than
 // facings, like the animals, keep theirs)
-const std::string &UiGameScreen::facingIcon(const CatalogItem *item) const {
+const std::string &UiGameScreen::facingIcon(const BuyPanel &panel, const CatalogItem *item) const {
   if (item->icons.empty())
     return item->icon;
-  return item->icons[this->facing % item->icons.size()];
+  return item->icons[panel.facing % item->icons.size()];
 }
 
 bool UiGameScreen::selectBuyItem(int panel, const std::string &file) {
@@ -638,6 +686,7 @@ bool UiGameScreen::selectBuyItem(int panel, const std::string &file) {
     for (int i = 0; i < (int)p.items.size(); i++)
       if (p.items[i]->file == file) {
         p.region->setSelected(i);
+        p.picked[p.category] = file;
         this->showItem(p, i);
         return true;
       }
@@ -656,11 +705,29 @@ void UiGameScreen::setWalkwayLabel(const std::string &text) {
           t->setText(text);
 }
 
-void UiGameScreen::rotateItems(int step) {
-  this->facing = ((this->facing + step) % 4 + 4) % 4;
+// A panel's rotate buttons (zoo.exe buya_RotateRightButton_click 0x48e40f,
+// buya_RotateLeftButton_click 0x618c9c; buyobj 0x4e5134, 0x589cf4; buldhab
+// 0x5a60d2, 0x610913): that panel's facing one on (or back), 3 to 0 and 0
+// to 3, and its list's icons drawn facing that way - the other panels'
+// left as they are
+void UiGameScreen::rotateItems(BuyPanel &p, int step) {
+  p.facing = ((p.facing + step) % 4 + 4) % 4;
+  for (int i = 0; i < (int)p.items.size(); i++)
+    p.region->setItemIcon(i, this->facingIcon(p, p.items[i]));
+}
+
+// ours (the hotkeys extra): Q / E turn the thing held - its panel's facing
+void UiGameScreen::rotateHeld(int step) {
+  int cost = 0, facing = 0;
+  if (this->objectToolFile(cost, facing).empty())
+    return;
   for (BuyPanel &p : this->buyPanels)
-    for (int i = 0; i < (int)p.items.size(); i++)
-      p.region->setItemIcon(i, this->facingIcon(p.items[i]));
+    if (this->isPanelOpen(p.id) && p.region && p.region->getSelected() >= 0 &&
+        p.region->getSelected() < (int)p.items.size() &&
+        this->objectToolFile(cost, facing) == p.items[p.region->getSelected()]->file) {
+      this->rotateItems(p, step);
+      return;
+    }
 }
 
 void UiGameScreen::showItem(BuyPanel &p, int index) {
@@ -669,7 +736,7 @@ void UiGameScreen::showItem(BuyPanel &p, int index) {
   if (p.name)
     p.name->setText(item ? item->name : "");
   if (p.cost)
-    p.cost->setText(item && item->cost ? formatPrice(item->cost) : "");
+    p.cost->setText(item && item->cost ? formatCost(item->cost) : "");
   if (p.duties)
     p.duties->setText(item && item->dutiesTextId
                           ? this->resource_manager->getString(item->dutiesTextId)
@@ -766,7 +833,13 @@ bool UiGameScreen::gateMode() const {
   return false;
 }
 
+// The Build Exhibit panel's gate button (zoo.exe buldhab_GateButton_click
+// 0x47b9f3 -> 0x4e1064): gate mode on puts the bulldozer away
+// (bulldozeToolOff 0x443b60) and lets the held thing go (setPlaceItem
+// 0x4f189a with none)
 void UiGameScreen::setGateMode(bool on) {
+  if (on)
+    this->bulldozerOff();
   for (BuyPanel &p : this->buyPanels)
     if (p.id == 8 && p.gate)
       if (UiButton *b = dynamic_cast<UiButton *>(p.layout->getElementById(p.gate))) {
@@ -815,6 +888,10 @@ void UiGameScreen::setupTerraform() {
     b->choose();
   // (the original opens on the 2 x 2 brush)
   t.brushIndex = t.brushes.size() > 1 ? 1 : 0;
+  // (Save 3302 accepts the changes, zoo.exe teraform_SaveButton_click
+  // 0x489253 -> 0x4da19c; Cancel 3303 undoes them, 0x618a22 -> 0x6097ef;
+  // + and - a brush size up or down, 0x4e5ddd / 0x4e5e04, then
+  // terraformSizeButtons 0x4da59e greys the end one)
   if (UiButton *b = dynamic_cast<UiButton *>(t.panel->getElementById(3302)))
     b->onClick = [this] {
       if (this->terraformCommand)
@@ -883,6 +960,11 @@ UiGameScreen::TerraformState UiGameScreen::terraformState() const {
   if (t.selected >= 0 && t.selected < (int)t.terrains.size())
     s.type = t.terrains[t.selected].type;
   s.size = t.brushIndex + 1;
+  // (the height tools, zoo.exe teraform_modecontig_click 0x4dd643 - hills
+  // and valleys, text 3315; modenoncontig 0x4dd44e - cliffs and moats,
+  // 3316; modecontig_stamp 0x48e4c4 - level hills, 3317; and
+  // modenoncontig_stamp 0x5ac48d - level cliffs, 3318: each sets its help
+  // line 3319 to its own text and the view's stamp and contiguous modes)
   const int modes[4] = {3315, 3316, 3317, 3318};
   for (int i = 0; i < 4; i++)
     if (UiButton *b = dynamic_cast<UiButton *>(t.panel->getElementById(modes[i])))
@@ -1102,10 +1184,14 @@ void UiGameScreen::refreshResearch() {
 
   if (!b->funding.empty()) {
     const ResearchFunding &f = b->funding[b->fundingLevel];
+    // ("%s normal" with the cost a day, zoo.exe 0x470d0f: the level's cost a
+    // month - its file's cost, which researchTick 0x41f1ba pays over 43200
+    // minutes - times 1/30 (0x635040), cut toward zero, through moneyToText
+    // 0x40eca1 without grouping: $33 for 1000)
     std::string name = f.name;
     size_t at = name.find("%s");
     if (at != std::string::npos)
-      name.replace(at, 2, formatPrice(f.cost));
+      name.replace(at, 2, formatCost(static_cast<int>(static_cast<float>(f.cost) * Original::fundingShownPerDay)));
     text(4006, name);
     if (UiElement *less = element(4003))
       less->setDisabled(b->fundingLevel <= 0);
@@ -1272,8 +1358,8 @@ void UiGameScreen::refreshZooStatus() {
     const MarketingLevel &m = this->marketing[this->marketingLevel];
     std::string s = m.name;
     size_t at = s.find("%s");
-    if (at != std::string::npos)
-      s.replace(at, 2, formatPrice(m.cost));
+    if (at != std::string::npos) // (zoo.exe 0x52f586: the level's cost, cut, not grouped)
+      s.replace(at, 2, formatCost(m.cost));
     text(4054, s);
     if (UiElement *less = z->getElementById(4052))
       less->setDisabled(this->marketingLevel <= 0);
@@ -1333,7 +1419,8 @@ void UiGameScreen::refreshZooStatus() {
                    : 0;
   money(3926, std::lround(cash));                                   // total cash
   signedMoney(3991, net, false);                                    // net income
-  money(3928, std::lround(cash) + this->zoo.placedValue);           // zoo value
+  money(3928, this->zoo.value >= 0 ? this->zoo.value                // zoo value (0x52fa39: the
+                                   : std::lround(cash) + this->zoo.placedValue); // rating's, row 15)
 
   // The graphs: a point a month
   if (history) {
@@ -1355,7 +1442,10 @@ void UiGameScreen::refreshZooStatus() {
     points(13965, attendance);
   }
 
-  // Graphs: the page's Line / Bar buttons
+  // Graphs: the page's Line / Bar buttons (zoo.exe zooinfo3_Line_click
+  // 0x61705e / _Bar_click 0x61707b on 4150, zoofin2 0x617098 / 0x6170b5 on
+  // 13978, zoofin3 0x6170d2 on 13967: the graph drawn as lines, 1, or bars,
+  // 2 - 0x51a5ef)
   const int graphs[][3] = {{4150, 4151, 4152},
                            {13978, 13991, 13992},
                            {13967, 13994, 13995},
@@ -1646,9 +1736,9 @@ void UiGameScreen::setupGameOptions() {
   int i = 0;
   for (Features::Switch *fp : extrasOrder()) {
     Features::Switch &f = *fp;
-    int id = kExtrasFirst + i++;
-    if (UiText *label = dynamic_cast<UiText *>(this->getElementById(id + 20)))
+    if (UiText *label = dynamic_cast<UiText *>(this->getElementById(kExtrasLabelFirst + i)))
       label->setText(extrasLabel(f.name));
+    int id = kExtrasFirst + i++;
     if (UiButton *b = dynamic_cast<UiButton *>(this->getElementById(id))) {
       b->setToggledOn(*f.value);
       bool *value = f.value;
@@ -1659,6 +1749,26 @@ void UiGameScreen::setupGameOptions() {
       };
     }
   }
+  // (the pages, when there are more switches than rows: the first shown)
+  int pages = (i + kExtrasRows - 1) / kExtrasRows;
+  auto turnTo = [this, i, pages](int page) {
+    this->extrasShownPage = std::clamp(page, 0, std::max(0, pages - 1));
+    for (int k = 0; k < i; k++)
+      for (int id : {kExtrasFirst + k, kExtrasLabelFirst + k})
+        if (UiElement *e = this->getElementById(id))
+          e->setHidden(k / kExtrasRows != this->extrasShownPage);
+    if (UiText *text = dynamic_cast<UiText *>(this->getElementById(kExtrasPageText)))
+      text->setText(std::to_string(this->extrasShownPage + 1) + " / " + std::to_string(pages));
+    if (UiElement *e = this->getElementById(kExtrasPrev))
+      e->setDisabled(this->extrasShownPage == 0);
+    if (UiElement *e = this->getElementById(kExtrasNext))
+      e->setDisabled(this->extrasShownPage >= pages - 1);
+  };
+  turnTo(0);
+  if (UiButton *b = dynamic_cast<UiButton *>(this->getElementById(kExtrasPrev)))
+    b->onClick = [this, turnTo] { turnTo(this->extrasShownPage - 1); };
+  if (UiButton *b = dynamic_cast<UiButton *>(this->getElementById(kExtrasNext)))
+    b->onClick = [this, turnTo] { turnTo(this->extrasShownPage + 1); };
 }
 
 void UiGameScreen::showTab(int panelId, int buttonId) {
@@ -1677,6 +1787,13 @@ void UiGameScreen::showTab(int panelId, int buttonId) {
 }
 
 void UiGameScreen::setPanelOpen(int id, bool open) {
+  // Opening Adopt (3), Objects (4), Build Exhibit (8), Hire Staff (10),
+  // Research (15) or Game Options (5) puts the bulldozer away (zoo.exe
+  // buya_Panel_show 0x4e3917, buyobj_Panel_show 0x4e49f5, buldhab_Panel_show
+  // 0x4da843, personel_Panel_show 0x4e6fc2, research_Panel_show 0x4a031a:
+  // bulldozeToolOff 0x443b60)
+  if (open && !this->isPanelOpen(id) && (id == 3 || id == 4 || id == 8 || id == 10 || id == 15 || id == 5))
+    this->bulldozerOff();
   // The Game Options (5): the Options window in its place (the optionswindow
   // extra), the disk button left off
   if (id == 5 && open && Features::optionsWindow && this->options) {
@@ -2962,7 +3079,7 @@ void UiGameScreen::dropPicks() {
 
 std::string UiGameScreen::objectToolFile(int &cost, int &facing) const {
   cost = 0;
-  facing = this->facing;
+  facing = 0;
   static const char *placed[] = {"shelters", "toys", "showtoys", "structures", "scenery", "foliage", "rocks"};
   for (const BuyPanel &p : this->buyPanels) {
     if (!this->isPanelOpen(p.id) || !p.region)
@@ -2975,6 +3092,7 @@ std::string UiGameScreen::objectToolFile(int &cost, int &facing) const {
     int i = p.region->getSelected();
     if (i >= 0 && i < (int)p.items.size()) {
       cost = p.items[i]->cost;
+      facing = p.facing;
       return p.items[i]->file;
     }
   }
@@ -3002,6 +3120,8 @@ void UiGameScreen::bulldozerOff() {
     b->setToggledOn(false);
 }
 
+// The bulldozer button (Clear_Objects 1028, a toggle) on: the zoo view
+// bulldozes (zoo.exe main_ClearObjects_click 0x509722 -> 0x5096e8(on))
 bool UiGameScreen::bulldozerOn() const {
   UiButton *b = this->hud ? dynamic_cast<UiButton *>(this->hud->getElementById(1028)) : nullptr;
   return b && b->isToggledOn();
@@ -3249,8 +3369,14 @@ void UiGameScreen::setupExhibits() {
     };
   if (UiButton *drain = dynamic_cast<UiButton *>(z->getElementById(4885)))
     drain->onClick = [this] {
-      if (this->fences)
-        this->fences->drainExhibit(this->shownExhibit);
+      if (!this->fences)
+        return;
+      // (animals in it: 10551, nothing done - zoo.exe 0x6064ed)
+      if (const Fences::Exhibit *ex = this->fences->exhibit(this->shownExhibit); ex && ex->animals > 0) {
+        this->showMessage(this->resource_manager->getString(10551));
+        return;
+      }
+      this->fences->drainExhibit(this->shownExhibit);
     };
   for (int id : {4869, 4870}) // salt, fresh: fill it again, for the water
     if (UiButton *fill = dynamic_cast<UiButton *>(z->getElementById(id)))
@@ -3391,15 +3517,17 @@ void UiGameScreen::refreshFilterPanel() {
       if (!t->isBeingEdited())
         t->setText(s);
   };
-  auto money = [](double v) {
-    char b[32];
-    std::snprintf(b, sizeof b, "$%.2f", v);
-    return std::string(b);
-  };
+  // (zoo.exe filter_Panel_show 0x615cce -> 0x615d28: the upkeep lines its
+  // whole-dollar counters, +0x168 on, through moneyToText 0x40eca1 without
+  // grouping or cents; the state "Broken Down" (4999) at no health,
+  // 0x4113c9, "Minimum efficiency" (4914) at its decayed health or less,
+  // 0x499148, else "Maximum efficiency" (4913))
+  auto money = [](double v) { return formatCost(static_cast<int>(v)); };
   text(4904, f->name);
   if (UiImage *pic = dynamic_cast<UiImage *>(z->getElementById(4903)))
     pic->setImage("objects/filter/off/off");
-  text(4913, this->resource_manager->getString(f->health > k.decayedHealth ? 4913 : 4914));
+  const int health = static_cast<int>(f->health);
+  text(4913, this->resource_manager->getString(health <= 0 ? 4999 : health <= k.decayedHealth ? 4914 : 4913));
   int months = std::max(0, this->fences->month() - f->placedMonth);
   std::string ago = this->resource_manager->getString(4916);
   size_t at = ago.find("%s");
@@ -3470,8 +3598,33 @@ void UiGameScreen::setupStaffPanels() {
           this->staffListCount = -1;
         });
       };
+    // Assign, a toggle (zoo.exe infostf_AssigntoListStaff_click 0x471c30):
+    // on, the zoo view picks exhibits for the keeper and the Job Assignment
+    // tab (3564) is brought up; off (0x471ebd), it stops picking
     if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3578)))
-      b->onClick = ask(StaffRequest::Assign);
+      b->onClick = [this, b, z] {
+        if (!this->staffRequest || this->shownStaff < 0)
+          return;
+        if (!b->isToggledOn()) {
+          this->staffRequest(StaffRequest::Assign, -1);
+          return;
+        }
+        this->staffRequest(StaffRequest::Assign, this->shownStaff);
+        if (UiButton *tab = dynamic_cast<UiButton *>(z->getElementById(3564))) {
+          tab->choose();
+          z->syncTabs();
+        }
+      };
+    // (Remove and Remove All turn Assign off first, uiTurnOff 3578: 0x618573,
+    // 0x6185d6)
+    auto assignOff = [this, z] {
+      UiButton *a = dynamic_cast<UiButton *>(z->getElementById(3578));
+      if (a && a->isToggledOn()) {
+        a->setToggledOn(false);
+        if (this->staffRequest)
+          this->staffRequest(StaffRequest::Assign, -1);
+      }
+    };
     if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3515)))
       b->onClick = [this] {
         this->tracking = !this->tracking;
@@ -3494,14 +3647,16 @@ void UiGameScreen::setupStaffPanels() {
     }
     // A keeper's exhibits: clear the picked one, or all
     if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3579)))
-      b->onClick = [this] {
+      b->onClick = [this, assignOff] {
+        assignOff();
         UiListBox *l = this->staffPanel ? dynamic_cast<UiListBox *>(this->staffPanel->getElementById(3569)) : nullptr;
         Staff::Member *m = this->staff ? this->staff->member(this->shownStaff) : nullptr;
         if (l && m && l->getSelectedIndex() >= 0 && l->getSelectedIndex() < (int)m->exhibits.size())
           m->exhibits.erase(m->exhibits.begin() + l->getSelectedIndex());
       };
     if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3580)))
-      b->onClick = [this] {
+      b->onClick = [this, assignOff] {
+        assignOff();
         if (Staff::Member *m = this->staff ? this->staff->member(this->shownStaff) : nullptr)
           m->exhibits.clear();
       };
@@ -3585,7 +3740,10 @@ void UiGameScreen::refreshStaff() {
             e->setText(s);
       };
       text(3502, m->name);
-      text(3503, formatPrice(t.salary));
+      if (UiButton *a = dynamic_cast<UiButton *>(z->getElementById(3578)))
+        if (a->isToggledOn() && this->staffAssigning && !this->staffAssigning())
+          a->setToggledOn(false);
+      text(3503, formatCost(t.salary));
       text(3505, this->staff->dutyText(*m));
       if (UiListBox *duties = dynamic_cast<UiListBox *>(z->getElementById(3587)))
         for (int i = 0; i < 4; i++)
@@ -3606,10 +3764,21 @@ void UiGameScreen::refreshStaff() {
     const auto &all = this->staff->members();
     auto kindOf = [&](const Staff::Member &m) { return this->staff->types()[m.type].kind; };
     auto assigned = [&](const Staff::Member &m) { return !m.exhibits.empty(); };
+    // (Assigned and Unassigned count every staff member but maintenance
+    // workers and the DRT - tour guides too: zoo.exe 0x457d70, staff
+    // 0x638710 and not maint 0x638780 nor helicopter 0x638790)
     auto keeperLike = [&](const Staff::Member &m) {
       Staff::Kind k = kindOf(m);
-      return k == Staff::Kind::Keeper || k == Staff::Kind::Scientist || k == Staff::Kind::Trainer;
+      return k == Staff::Kind::Keeper || k == Staff::Kind::Scientist || k == Staff::Kind::Trainer ||
+             k == Staff::Kind::Guide;
     };
+    // The filters as the original's buttons pass them to the list refresh
+    // (zoo.exe 0x469f0b, matched by 0x457d70): all (mulstaff_FilterAll_click
+    // 0x469fbb), keepers (0x469798), scientists (0x1090_click 0x4697a1),
+    // marine specialists (0x1094_click 0x469753), maintenance (FilterMman
+    // 0x46975c), DRT (0x1092_click 0x46978f), guides (FilterTguide
+    // 0x469786), assigned (0x46977d), unassigned (0x469765) - here in the
+    // panel's button order
     auto passes = [&](const Staff::Member &m, int f) {
       switch (f) {
       case 1: return kindOf(m) == Staff::Kind::Keeper;
@@ -3703,6 +3872,7 @@ void UiGameScreen::setupLists() {
       }
   };
   // The Messages button (a toggle with no target) shows the Message List
+  // (zoo.exe main_Messages_click 0x4a0399: uiFind(29), shown or hidden)
   // (its list and scrollbar hidden in the layout, state=1)
   for (Entry &e : this->entries)
     if (e.panel && e.id == 29)
@@ -3729,6 +3899,10 @@ void UiGameScreen::setupLists() {
 // its species' cHabitatPreference (outside an exhibit: 0, so unhappy)
 static constexpr int kUiThreshold = 75;
 
+// The Animal List's filters by number, as the original's buttons pass them to
+// animalListRefresh (zoo.exe 0x46956e): All 0 (0x46961e), Angry 1 (0x4697fa),
+// Sick 2 (0x4697f1), Hungry 3 (0x46972c), unhappy with its exhibit 4
+// (0x618448), Escaped 5 (0x4697e8)
 bool UiGameScreen::animalPasses(const Animals::Member &m, int filter) const {
   const Animals::Type &t = this->animals->types()[m.type];
   switch (filter) {
@@ -3746,6 +3920,10 @@ bool UiGameScreen::animalPasses(const Animals::Member &m, int filter) const {
   }
 }
 
+// The Guest List's, as its buttons pass them to the list refresh (zoo.exe
+// 0x469c0f, guestFilterMatches 0x4f5d7f): All 0 (0x469cbf), Angry 1
+// (0x4696dd), Thirsty 2 (0x469803), Hungry 3 (0x4696c5), Restroom 4
+// (0x46980c), Tired 5 (0x469815)
 bool UiGameScreen::guestPasses(const Guests::Guest &g, int filter) const {
   switch (filter) {
   case 1: return g.happiness <= 2 * kUiThreshold - 201;
@@ -4245,11 +4423,6 @@ void UiGameScreen::refreshBuilding() {
       if (!e->isBeingEdited())
         e->setText(v);
   };
-  auto money = [](double v) {
-    char b[32];
-    std::snprintf(b, sizeof b, v < 0 ? "-$%.0f" : "$%.0f", std::fabs(v));
-    return std::string(b);
-  };
   if(auto *linked=dynamic_cast<UiText*>(z->getElementById(71110))) {
     const bool stand=this->shows && this->shows->isStand(o->id);linked->setHidden(!stand);
     if(stand) {
@@ -4264,12 +4437,18 @@ void UiGameScreen::refreshBuilding() {
     char p[32];
     std::snprintf(p, sizeof p, "$%.2f", o->price);
     text(4555, p);
-    text(4531, money(o->income));
-    text(4533, money(o->upkeep));
-    text(4535, money(o->income - o->upkeep));
-    text(4559, money(o->income / months));
-    text(4561, money(o->upkeep / months));
-    text(4591, money((o->income - o->upkeep) / months));
+    // (zoo.exe buildingInfoNumbers 0x488446: income and upkeep each cut to
+    // whole dollars, the profit the one less the other, a month's each of
+    // them divided as whole numbers, all through moneyToText 0x40eca1 with
+    // the thousands grouped - "$1,234")
+    const long in = static_cast<long>(o->income), up = static_cast<long>(o->upkeep);
+    auto grouped = [](long v) { return v < 0 ? "-" + formatPrice(static_cast<int>(-v)) : formatPrice(static_cast<int>(v)); };
+    text(4531, grouped(in));
+    text(4533, grouped(up));
+    text(4535, grouped(in - up));
+    text(4559, grouped(in / months));
+    text(4561, grouped(up / months));
+    text(4591, grouped((in - up) / months));
     text(4573, std::to_string(months));
     // Items Sold: each thing it sold, its icon
     int slot = 0;
@@ -4894,14 +5073,14 @@ void UiGameScreen::refreshExhibits() {
   grey(4879, !this->fences->canAdjustBase(id, -1));
   grey(4880, !this->fences->canAdjustBase(id, +1));
   // (the amounts alone, as the original shows them)
-  text(4877, formatPrice(static_cast<int>(this->fences->wallStepCost(id))));
-  text(4882, formatPrice(this->fences->baseStepCost(id)));
+  text(4877, formatCost(static_cast<int>(this->fences->wallStepCost(id))));
+  text(4882, formatCost(this->fences->baseStepCost(id)));
   for (int eid : {4867, 4868, 4883, 4885})
     show(eid, full);
   for (int eid : {4881, 4869, 4870, 4891, 4893, 4871, 4872})
     show(eid, tank && !full);
   grey(4885, false);
   text(4868, this->resource_manager->getString(ex->salt ? 4888 : 4889));
-  text(4871, formatPrice(this->fences->fillCost(id, true)));
-  text(4872, formatPrice(this->fences->fillCost(id, false)));
+  text(4871, formatCost(this->fences->fillCost(id, true)));
+  text(4872, formatCost(this->fences->fillCost(id, false)));
 }

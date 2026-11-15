@@ -36,6 +36,11 @@ void UiGameScreen::setupShows() {
       int selected=l->getSelectedIndex()+by;showListSignature.clear();refreshShow();l->setSelectedIndex(selected);
     }
   });
+  // (the admission's arrows, zoo.exe show_UpSpinner_click 0x4758aa /
+  // show_DownSpinner_click 0x615576: a showAdmissionIncrement step, kept
+  // to min/maxShowAdmission - shows.cfg's 0 and 12, read into 0x642c6c and
+  // 0x642c68 at load, 0x5167ca; the moves, show1_MoveUpButton_click
+  // 0x615662 / MoveDown 0x61569e: the picked trick a place up or down)
   for(auto [id,by]:{std::pair<int,int>{11105,1},{11106,-1}})button(id,[this,by]{
     if(shows)if(auto *s=shows->show(shownShow))shows->setAdmission(shownShow,s->admission+by*shows->settings.admissionStep);
   });

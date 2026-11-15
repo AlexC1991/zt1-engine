@@ -14,6 +14,7 @@
 #include "ShaderMods.hpp"
 #include "MemoryManager.hpp"
 #include "MemoryTracker.hpp"
+#include "OriginalConstants.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
@@ -329,7 +330,116 @@ bool World::loadFreeform(const std::string &path) {
     key = key.substr(0, key.find('.'));
     this->guests.caught(g, key, by.female, by.name);
   };
+  animals.preyName = [this](int g) {
+    const Guests::Guest *guest = this->guests.guest(g);
+    return guest ? guest->name : std::string();
+  };
   animals.rubbleAt = [this](int tx, int ty, const Animals::Member &) { return this->rubbleTile(tx, ty); };
+  // An exhibit's viewing areas (zoo.exe habitat +0x34) and the guests on
+  // each (0x447957), for the animals' watchers (0x4479fd). ours: brought up
+  // to date and counted at most once a second of game time - the animals'
+  // status ticks (the original keeps them up to date as things change)
+  animals.viewAreas = [this, at = -1.0](int exhibit) mutable {
+    ViewingAreas &va = this->staff.viewingAreas();
+    if (this->animals.clock() < at || this->animals.clock() - at >= 1.0) {
+      at = this->animals.clock();
+      va.refresh(this->worldMap, this->fences);
+      va.countGuests(this->guests);
+    }
+    std::vector<Animals::ViewArea> out;
+    for (int i : va.of(exhibit)) {
+      const ViewingAreas::Area &a = va.areas()[static_cast<size_t>(i)];
+      out.push_back({a.viewing, a.seen, a.guests});
+    }
+    return out;
+  };
+  // ...and for the guests' picks and crowding (0x428741, 0x425f6a): the
+  // same areas, brought up to date at most once a second of game time
+  guests.viewAreas = [this, at = -1.0](int exhibit) mutable {
+    ViewingAreas &va = this->staff.viewingAreas();
+    if (this->guests.clock < at || this->guests.clock - at >= 1.0) {
+      at = this->guests.clock;
+      va.refresh(this->worldMap, this->fences);
+      va.countGuests(this->guests);
+    }
+    std::vector<Guests::ViewArea> out;
+    for (int i : va.of(exhibit)) {
+      const ViewingAreas::Area &a = va.areas()[static_cast<size_t>(i)];
+      out.push_back({a.viewing, a.seen, a.guests});
+    }
+    return out;
+  };
+  // zoo.exe 0x459e09 (by 0x4599a0 and 0x459f52): what's on a tank's tiles
+  // that can't be under water - not a passing water effect (cIsTransient,
+  // type +0x6d) - by its kind's name: a unit (animal, staff, guest) whose
+  // kind hasn't cUnderwater 1 (type +0x17e), an egg, or an object whose kind
+  // has neither cUnderwater nor cSurface (scenery type +0x130, +0x131).
+  // ours: the first found - objects, dung, litter and food, then animals,
+  // staff and guests (the original goes through them in memory order)
+  fences.fillBlocker = [this](int exhibit) -> std::string {
+    const Fences::Exhibit *ex = this->fences.exhibit(exhibit);
+    if (!ex)
+      return {};
+    auto in = [ex](float x, float y) {
+      return ex->tiles.count({static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y))}) > 0;
+    };
+    auto nameOf = [this](const std::string &file) {
+      int id = 0;
+      if (IniReader *ai = this->resourceManager->getIniReader(file)) {
+        id = ai->getInt("characteristics/integers", "cnameid", 0);
+        delete ai;
+      }
+      return id ? this->resourceManager->getString(id) : file;
+    };
+    auto transient = [this](const std::string &file) {
+      int v = 0;
+      if (IniReader *ai = this->resourceManager->getIniReader(file)) {
+        v = ai->getInt("characteristics/integers", "cistransient", 0);
+        delete ai;
+      }
+      return v != 0;
+    };
+    for (const PlacedObjects::Object &o : this->placedObjects.objects()) {
+      if (o.fence || o.className == "fences")
+        continue;
+      const std::string file = PlacedObjects::fileOf(o);
+      auto [fx, fy] = this->footprintOf(file);
+      fx = std::max(1, fx);
+      fy = std::max(1, fy);
+      if ((o.facing & 6) == 2 || (o.facing & 6) == 6)
+        std::swap(fx, fy);
+      const float hx = fx / 4.0f, hy = fy / 4.0f;
+      bool covers = false;
+      for (auto [tx, ty] : ex->tiles)
+        if (o.x + hx > tx + 0.01f && o.x - hx < tx + 1 - 0.01f && o.y + hy > ty + 0.01f && o.y - hy < ty + 1 - 0.01f) {
+          covers = true;
+          break;
+        }
+      const TankFlags &flags = this->tankFlagsOf(file);
+      if (covers && !flags.underwater && !flags.surface && !transient(file))
+        return nameOf(file);
+    }
+    for (const ZooItems::Item &it : this->items.items()) {
+      const std::string file = it.kind == ZooItems::Kind::Food ? ZooItems::foodFile(it.food)
+                               : it.kind == ZooItems::Kind::Dung ? std::string("scenery/other/poo.ai")
+                                                                 : std::string("scenery/other/trash.ai");
+      const TankFlags &flags = this->tankFlagsOf(file);
+      if (in(it.x, it.y) && !flags.underwater && !flags.surface)
+        return nameOf(file);
+    }
+    for (const Animals::Member &m : this->animals.members()) {
+      const Animals::Type &t = this->animals.types()[m.type];
+      if (in(m.x, m.y) && (m.egg || !t.underwater))
+        return t.displayName;
+    }
+    for (const Staff::Member &m : this->staff.members())
+      if (in(m.x, m.y))
+        return nameOf(this->staff.types()[m.type].file);
+    for (const Guests::Guest &g : this->guests.guests())
+      if (!g.hidden && in(g.x, g.y))
+        return this->resourceManager->getString(this->guests.types()[g.type].nameId);
+    return {};
+  };
   staff.setObjects(&placedObjects);
   guests.guideSpeaking = [this](int id) { return this->staff.guideSpeaking(id); };
   guests.guideBonusOf = [this](int id) {
@@ -1320,7 +1430,8 @@ void World::rotateView(int steps) {
 void World::zoomStep(int direction) {
   Camera &cam = worldRenderer.getCamera();
   float zoom = direction > 0 ? cam.zoom * 2.0f : cam.zoom * 0.5f;
-  cam.zoom = std::clamp(zoom, 0.5f, 1.0f);
+  // (the HUD's half, normal and double: zoom.exe 0x4b081b, 0x4b0779)
+  cam.zoom = std::clamp(zoom, 0.5f, 2.0f);
   g_ZoomLevel = cam.zoom;
 }
 
@@ -3149,7 +3260,7 @@ void World::mouseMove(int x, int y) {
       c.zoom = saved;
       if (f >= 0) {
         this->fences.highlightFilter = f;
-        this->hoverPrice = static_cast<int>(std::lround(this->fences.filterType(this->fences.filters()[f].file).cost * 0.8));
+        this->hoverPrice = static_cast<int>(std::lround(this->fences.filterType(this->fences.filters()[f].file).cost * Original::sellFactor));
         if (const CatalogItem *it = item(this->fences.filters()[f].file))
           this->bulldozeTip = it->name;
         return;
@@ -3170,7 +3281,7 @@ void World::mouseMove(int x, int y) {
         const PlacedObjects::Object &obj = this->placedObjects.objects()[o];
         const CatalogItem *it = item(PlacedObjects::fileOf(obj));
         this->placedObjects.highlight = o;
-        this->hoverPrice = it ? static_cast<int>(std::lround(it->cost * 0.8)) : 0;
+        this->hoverPrice = it ? static_cast<int>(std::lround(it->cost * Original::sellFactor)) : 0;
         this->bulldozeTip = it ? it->name : obj.name;
         return;
       }
@@ -3179,7 +3290,7 @@ void World::mouseMove(int x, int y) {
     if (this->deckAt(x, y, dtx, dty)) {
       this->bulldozeDeck = {dtx, dty};
       const CatalogItem *it = item("paths/" + this->walkways.at(dtx, dty)->type + ".ai");
-      this->hoverPrice = it ? static_cast<int>(std::lround(it->cost * 2 * 0.8)) : 0;
+      this->hoverPrice = it ? static_cast<int>(std::lround(it->cost * 2 * Original::sellFactor)) : 0;
       if (it)
         this->bulldozeTip = it->name;
       return;
@@ -3200,7 +3311,7 @@ void World::mouseMove(int x, int y) {
         this->bulldozePath = {tx, ty};
         const CatalogItem *it =
             item("paths/" + this->worldMap.getPathTypes()[this->worldMap.getPathType(tx, ty)] + ".ai");
-        this->hoverPrice = it ? static_cast<int>(std::lround(it->cost * 0.8)) : 0;
+        this->hoverPrice = it ? static_cast<int>(std::lround(it->cost * Original::sellFactor)) : 0;
         if (it)
           this->bulldozeTip = it->name;
       }
@@ -3597,7 +3708,7 @@ void World::gatherBulldozeRect() {
             x1 = std::max(this->bulldozeDrag.tx0, this->bulldozeDrag.tx1),
             y0 = std::min(this->bulldozeDrag.ty0, this->bulldozeDrag.ty1),
             y1 = std::max(this->bulldozeDrag.ty0, this->bulldozeDrag.ty1);
-  int price = 0;
+  float price = 0;
   for (int ty = y0; ty <= y1; ty++)
     for (int tx = x0; tx <= x1; tx++) {
       if (!this->worldMap.getTile(tx, ty) || !this->fences.insideZoo(tx, ty))
@@ -3606,12 +3717,12 @@ void World::gatherBulldozeRect() {
         this->dragPaths.push_back({tx, ty});
         if (const CatalogItem *it =
                 item("paths/" + this->worldMap.getPathTypes()[this->worldMap.getPathType(tx, ty)] + ".ai"))
-          price += static_cast<int>(std::lround(it->cost * 0.8));
+          price += it->cost * Original::sellFactor;
       }
       if (this->walkways.at(tx, ty)) {
         this->dragDecks.push_back({tx, ty});
         if (const CatalogItem *it = item("paths/" + this->walkways.at(tx, ty)->type + ".ai"))
-          price += static_cast<int>(std::lround(it->cost * 2 * 0.8));
+          price += it->cost * 2 * Original::sellFactor;
       }
       for (const Fences::Edge &e : {Fences::Edge{true, tx, ty}, Fences::Edge{true, tx, ty + 1}, Fences::Edge{false, tx, ty},
                                     Fences::Edge{false, tx + 1, ty}}) {
@@ -3637,10 +3748,10 @@ void World::gatherBulldozeRect() {
       continue; // (a building: left as it is, as the original)
     this->dragObjects.push_back(static_cast<int>(i));
     if (it)
-      price += static_cast<int>(std::lround(it->cost * 0.8));
+      price += it->cost * Original::sellFactor;
   }
   this->placedObjects.highlights = this->dragObjects;
-  this->hoverPrice = price;
+  this->hoverPrice = static_cast<int>(std::lround(price));
 }
 
 // The drag let go: the rectangle's paths, decks, scenery and fences taken,
@@ -3666,7 +3777,7 @@ World::ToolResult World::bulldozeRectRelease() {
     u.y = ty;
     u.pathType = this->pathTypeAt(tx, ty);
     this->worldMap.setPath(tx, ty, "");
-    u.money = static_cast<int>(std::lround(price * 0.8));
+    u.money = price * Original::sellFactor;
     r.refund += u.money;
     this->recordUndo(u);
   }
@@ -3676,7 +3787,7 @@ World::ToolResult World::bulldozeRectRelease() {
       if (const CatalogItem *it = item("paths/" + this->walkways.at(tx, ty)->type + ".ai"))
         price = it->cost;
       this->walkways.remove(tx, ty);
-      r.refund += static_cast<int>(std::lround(price * 2 * 0.8));
+      r.refund += price * 2 * Original::sellFactor;
     }
   // (scenery: from the end of the list, so the others' places hold)
   std::vector<int> objects = this->dragObjects;
@@ -3686,9 +3797,9 @@ World::ToolResult World::bulldozeRectRelease() {
       continue;
     const PlacedObjects::Object gone = this->placedObjects.objects()[o];
     const std::string file = PlacedObjects::fileOf(gone);
-    int refund = 0;
+    float refund = 0;
     if (const CatalogItem *it = item(file))
-      refund = static_cast<int>(std::lround(it->cost * 0.8));
+      refund = it->cost * Original::sellFactor;
     UndoStep u{UndoStep::Kind::RemovedObject};
     u.object = gone;
     u.money = refund;
@@ -3743,7 +3854,7 @@ World::ToolResult World::bulldozeClick(int x, int y) {
     {
       int f = this->fences.highlightFilter;
       if (f >= 0) {
-        r.refund = static_cast<int>(std::lround(this->fences.filterType(this->fences.filters()[f].file).cost * 0.8));
+        r.refund = this->fences.filterType(this->fences.filters()[f].file).cost * Original::sellFactor;
         this->fences.removeFilter(f);
         return r;
       }
@@ -3755,7 +3866,7 @@ World::ToolResult World::bulldozeClick(int x, int y) {
         std::string file = PlacedObjects::fileOf(this->placedObjects.objects()[o]);
         for (const CatalogItem &item : ItemCatalog::get().all())
           if (item.file == file)
-            r.refund = static_cast<int>(std::lround(item.cost * 0.8));
+            r.refund = item.cost * Original::sellFactor;
         const PlacedObjects::Object &gone = this->placedObjects.objects()[o];
         {
           UndoStep u{UndoStep::Kind::RemovedObject};
@@ -3785,7 +3896,7 @@ World::ToolResult World::bulldozeClick(int x, int y) {
           if (item.file == file)
             price = item.cost;
         this->walkways.remove(dtx, dty);
-        r.refund = static_cast<int>(std::lround(price * 2 * 0.8));
+        r.refund = price * 2 * Original::sellFactor;
         return r;
       }
     }
@@ -3806,7 +3917,7 @@ World::ToolResult World::bulldozeClick(int x, int y) {
           u.y = ty;
           u.pathType = this->pathTypeAt(tx, ty);
           this->worldMap.setPath(tx, ty, "");
-          r.refund = static_cast<int>(std::lround(price * 0.8));
+          r.refund = price * Original::sellFactor;
           u.money = r.refund;
           this->recordUndo(u);
         }

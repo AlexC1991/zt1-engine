@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "Features.hpp"
 #include "IniReader.hpp"
@@ -30,6 +31,10 @@ constexpr float kTickMs = 1000.0f;
 constexpr int kHabitatCheck = 20, kCaptivityCheck = 20, kSocialCheck = 30, kOtherCheck = 40,
               kHungerCheck = 30, kZapCheck = 5;
 constexpr float kRateEveryMs = 7000.0f;
+// measured: cMurkyWaterCheck (zoo.exe 0x6393e4, read at 0x45fcde) is 5 in
+// the running original (Lab memPeek; animals.ai has no such key, every
+// other check's global matched animals.ai)
+constexpr int kMurkyWaterCheck = 5;
 // (ai.ztd animals.ai cMatePickDelay 3, zoo.exe 0x639454: reproduction checks
 // before a cMatingType 1 animal takes a new mate)
 constexpr int kMatePickDelay = 3;
@@ -226,6 +231,18 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.onlyUnderwater = num("conlyunderwater", 0) == 1; // (0x4b939f: "== 1", +0x17f)
     t.depthMin = num("cdepthmin", 0);                   // (0x4b7edd: +0x35c)
     t.depthMax = num("cdepthmax", 0);                   // (+0x360)
+    t.depthChange = num("cdepthchange", -5);            // (+0x364)
+    t.salinityChange = num("csalinitychange", -5);      // (+0x368)
+    t.salinityHealthChange = num("csalinityhealthchange", -5); // (+0x36c)
+    t.murkyThreshold[0] = num("cmurkywaterthreshold", 60);           // (+0x424)
+    t.murkyThreshold[1] = num("cverymurkywaterthreshold", 20);       // (+0x428)
+    t.murkyThreshold[2] = num("cextremelymurkywaterthreshold", 1);   // (+0x42c)
+    t.murkyChange[0] = num("cmurkywaterchange", -5);                 // (+0x430)
+    t.murkyChange[1] = num("cverymurkywaterchange", -10);            // (+0x434)
+    t.murkyChange[2] = num("cextremelymurkywaterchange", -15);       // (+0x438)
+    t.murkyHealthChange[0] = num("cmurkywaterhealthchange", -5);     // (+0x43c)
+    t.murkyHealthChange[1] = num("cverymurkywaterhealthchange", -10); // (+0x440)
+    t.murkyHealthChange[2] = num("cextremelymurkywaterhealthchange", -15); // (+0x444)
     t.keeper = num("ckeeper", 9500); // (+0x2f0: 9552 the porpoise's, 9551 the allosaurus')
     t.waterNeeded = num("cwaterneeded", 0);
     t.landNeeded = num("clandneeded", 0);
@@ -244,6 +261,7 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.rampageTimeMax = num("crampagetimemax", 0);
     t.genus = num("cgenus", 0);
     t.family = num("cfamily", 0);
+    t.era = num("cera", 0);
     t.treePref = num("ctreepref", 0);
     t.rockPref = num("crockpref", 0);
     t.elevationPref = num("celevationpref", 0);
@@ -261,6 +279,8 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.animalDensity = num("canimaldensity", 0);
     t.allCrowdedChange = num("callcrowdedchange", 0);
     t.otherAnimalAngryChange = num("cotheranimalangrychange", 0);
+    t.crowd = num("ccrowd", 40);
+    t.crowdHappinessChange = num("ccrowdhappinesschange", -1);
     t.needShelter = num("cneedshelter", 0) != 0;
     t.needToys = num("cneedtoys", 0) != 0;
     // Its lists: v = key, v = value in turn
@@ -1052,6 +1072,16 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
     this->placeMessage = 10554;
     return Fences::Fit::Outside;
   }
+  // On water that isn't a tank (zoo.exe 0x4e1564: the tile's water flags,
+  // +0x83 & 3), one that doesn't swim (slot 0xbc): a sea animal 10554
+  // ("...a tank with water in it."), an egg 10570 ("Eggs must be placed on
+  // land."), any other 10569 ("This animal cannot swim and must be placed
+  // on land.")
+  if (!(e && e->tank) && !t.swims && isWater(map, tx, ty)) {
+    const Member *held = this->carried >= 0 ? this->member(this->carried) : nullptr;
+    this->placeMessage = t.underwater ? 10554 : held && held->egg ? 10570 : 10569;
+    return Fences::Fit::Outside;
+  }
   // A zoo animal: a land exhibit
   if (!e || !standable(tx, ty, t, ex, map, fences))
     return Fences::Fit::Outside;
@@ -1140,6 +1170,7 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   m.otherCheck = start(kOtherCheck);
   m.hungerCheck = start(kHungerCheck);
   m.zapCheck = start(kZapCheck);
+  m.murkyCheck = start(kMurkyWaterCheck);
   m.healthCheck = start(30);
   m.energyCheck = start(30);
   m.reproductionCheck = start(20);
@@ -1723,9 +1754,17 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       m.rampageBuilding = -1;
       continue;
     } else if (command == Command::Hatch) {
-      // Out of the egg: a baby (zoo.exe bHatch's last step)
+      // Out of the egg: a baby (zoo.exe bHatch's last step, fHatch ->
+      // 0x613d24: 10322 "Congratulations! %s has hatched", priority 4 as a
+      // birth's - good news)
       m.egg = false;
       this->markDirty(m.exhibit);
+      if (this->rm) {
+        std::string s = this->rm->getString(10322);
+        if (size_t at = s.find("%s"); at != std::string::npos)
+          s.replace(at, 2, m.name);
+        this->notices.push_back({s, 1, m.id});
+      }
       ZT_STEP("0x437860", "Hatched: a baby", {"name", m.name});
       continue;
     } else if (command == Command::Dustball) {
@@ -1877,6 +1916,28 @@ bool Animals::walkSomewhere(Member &m, const WorldMap &map, const Fences &fences
   // A way out it can take: it takes it (zoo.exe: no chance roll)
   if (breakOut(m, map, fences))
     return true;
+  // Away from the guests crowding it (zoo.exe 0x43e363 -> 0x42f6a9): one of
+  // its exhibit's tiles that way, or either way next to it (0x43e511), at
+  // random - none, anywhere in it (0x44149f, as below) - and the way's
+  // forgotten
+  if (m.crowdDir >= 0) {
+    int dir = m.crowdDir;
+    m.crowdDir = -1;
+    if (const Fences::Exhibit *here = fences.exhibit(m.exhibit)) {
+      int ax = static_cast<int>(std::floor(m.x)), ay = static_cast<int>(std::floor(m.y));
+      std::vector<std::pair<int, int>> way;
+      for (auto [x, y] : here->tiles)
+        if (nearDirection(dir, direction8(x - ax, y - ay)))
+          way.push_back({x, y});
+      if (!way.empty()) {
+        auto [x, y] = way[std::uniform_int_distribution<size_t>(0, way.size() - 1)(this->rng)];
+        std::uniform_real_distribution<float> in(0.15f, 0.85f);
+        // ours: a tile it can't stand on or get to - an ordinary walk
+        if (standable(x, y, t, m.exhibit, map, fences) && walkTo(m, x + in(this->rng), y + in(this->rng), map, fences))
+          return true;
+      }
+    }
+  }
   const Fences::Exhibit *ex = fences.exhibit(m.exhibit);
   if (!ex || ex->tiles.empty())
     return false;
@@ -2249,6 +2310,20 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
     if (m.prey >= 0 && this->preyAt && !m.tranquilised && !m.boxed) {
       float px = 0, py = 0;
       if (this->preyAt(m.prey, px, py) && std::hypot(px - m.x, py - m.y) < 0.6f) {
+        // zoo.exe 0x50e648 (from fCaughtPrey 0x588c2d, its bCaughtGuest):
+        // a guest caught, 11002 "%1s has been eaten by %2s." (0x49cec0
+        // priority 2, as an old-age death: urgent)
+        if (this->rm && this->preyName) {
+          std::string s = this->rm->getString(11002);
+          const std::string who = this->preyName(m.prey);
+          for (const std::string *arg : std::initializer_list<const std::string *>{&who, &m.name})
+            for (const char *tok : {"%1s", "%2s", "%s"})
+              if (size_t at = s.find(tok); at != std::string::npos) {
+                s.replace(at, std::strlen(tok), *arg);
+                break;
+              }
+          this->notices.push_back({s, 2, m.id});
+        }
         if (this->caughtPrey)
           this->caughtPrey(m.prey, m);
         m.prey = -1;
@@ -3275,25 +3350,45 @@ int Animals::suitability(int id, const WorldMap &map, const Fences &fences) {
 }
 
 int Animals::exhibitSuitability(int exhibit) const {
+  return std::max(0, this->exhibitSuitability(exhibit, nullptr));
+}
+
+int Animals::exhibitSuitability(int exhibit, const std::function<bool(const Member &)> &keep) const {
   auto ev = this->evaluations.find(exhibit);
   if (ev == this->evaluations.end())
-    return 0;
+    return keep ? -1 : 0;
   float sum = 0;
   int n = 0;
   for (const Member &m : this->list) {
-    if (m.exhibit != exhibit)
+    if (m.exhibit != exhibit || (keep && !keep(m)))
       continue;
     auto k = ev->second.kinds.find(m.type);
     sum += k == ev->second.kinds.end() ? 0.0f : std::ceil(std::max(0.0f, k->second.score));
     n++;
   }
-  return n ? static_cast<int>(sum / n) : 0;
+  return n ? static_cast<int>(sum / n) : keep ? -1 : 0;
 }
 
+// zoo.exe 0x4386a9 (animalCheckCrowding) counts with its habitat's joined
+// ones too (0x4388d7, 0x43c376, 0x438e14 called with 1: a land exhibit and
+// the tanks it shores on), and measures the room as their tiles together
+// (0x44097c(1))
 void Animals::company(const Member &m, int &kind, int &kindAdults, int &adults) const {
-  kind = kindAdults = adults = 0;
+  int tiles = 0;
+  company(m, kind, kindAdults, adults, tiles);
+}
+
+void Animals::company(const Member &m, int &kind, int &kindAdults, int &adults, int &tiles) const {
+  kind = kindAdults = adults = tiles = 0;
+  std::set<int> group{m.exhibit};
+  if (m.exhibit >= 0 && this->mapRef && this->fencesRef)
+    group = this->fencesRef->habitatGroup(m.exhibit, *this->mapRef);
+  if (this->fencesRef)
+    for (int id : group)
+      if (const Fences::Exhibit *ex = this->fencesRef->exhibit(id))
+        tiles += static_cast<int>(ex->tiles.size());
   for (const Member &o : this->list) {
-    if (o.exhibit != m.exhibit || o.id == this->carried)
+    if (!group.count(o.exhibit) || o.id == this->carried)
       continue;
     if (o.type == m.type) {
       kind++;
@@ -3301,6 +3396,15 @@ void Animals::company(const Member &m, int &kind, int &kindAdults, int &adults) 
     }
     adults += o.baby ? 0 : 1;
   }
+}
+
+// Too many of its own kind's adults for the room (zoo.exe 0x4386a9 with
+// animalSpaceRatio 0x43c1be): more than cNumberAnimalsMax for every
+// cHabitatSize tiles, the tiles over cHabitatSize as a fraction, never under
+// 1 (0x635490 = 1.0)
+bool Animals::crowdedBySpecies(const Type &t, int kindAdults, int tiles) {
+  const float room = std::max(1.0f, static_cast<float>(tiles) / static_cast<float>(t.habitatSize));
+  return static_cast<float>(kindAdults) > room * static_cast<float>(t.numberMax);
 }
 
 // Made an egg (zoo.exe 0x5a5283): young, still, its egg art; cTimeToHatch
@@ -3406,6 +3510,102 @@ void Animals::testFence(Member &m, const Fences &fences) {
   }
 }
 
+// The guests watching it (zoo.exe 0x4479fd, each viewing area counted in
+// turn; its three totals zeroed first, in the rating 0x444827 at 0x446dd7):
+// from each of its exhibit's viewing areas that sees the tile it's on, the
+// area's guests (0x447957: any guest on its viewing tiles, whatever it's
+// doing), a tenth less (truncated) for every tile to one of the area's
+// viewing tiles picked at random ((int) of the straight distance,
+// 0x41180a), at least 1 if there are any; and the same added to the side
+// they're on (0x411654), +0x36c if that way is 1-3 (else taken off) and
+// +0x370 if 7, 0 or 1 (else taken off).
+// measured: the original counts each exhibit's again every 2-4 s of play
+// (ExavatorZoo.zoo in Play original, the animals' +0x368 polled); ours
+// every status tick (1 s)
+void Animals::countGuestCrowd(Member &m, const Fences &fences) {
+  m.guestCrowd = m.guestCrowdX = m.guestCrowdY = 0;
+  if (!this->viewAreas || m.egg)
+    return;
+  int x = static_cast<int>(std::floor(m.x)), y = static_cast<int>(std::floor(m.y));
+  int ex = fences.exhibitAt(x, y);
+  if (ex < 0)
+    return;
+  for (const ViewArea &area : this->viewAreas(ex)) {
+    if (area.viewing.empty() || std::find(area.seen.begin(), area.seen.end(), std::make_pair(x, y)) == area.seen.end())
+      continue;
+    auto [vx, vy] = area.viewing[std::uniform_int_distribution<size_t>(0, area.viewing.size() - 1)(this->rng)];
+    int dx = vx - x, dy = vy - y;
+    int tiles = static_cast<int>(std::sqrt(static_cast<double>(dx * dx + dy * dy)));
+    int w = area.guests;
+    for (int i = 0; i < tiles; i++)
+      w = static_cast<int>(w * Original::guestCrowdFalloff);
+    if (area.guests != 0 && w == 0)
+      w = 1;
+    m.guestCrowd += w;
+    int dir = direction8(dx, dy);
+    m.guestCrowdX += dir >= 1 && dir <= 3 ? w : -w;
+    m.guestCrowdY += dir == 7 || dir == 0 || dir == 1 ? w : -w;
+  }
+}
+
+// zoo.exe 0x4116a9: the way from one tile to another by their difference,
+// 0 to 7 round from -y (-1: the same tile)
+int Animals::direction8(int dx, int dy) {
+  if (dx == 0)
+    return dy < 0 ? 0 : dy > 0 ? 4 : -1;
+  if (dx > 0)
+    return dy < 0 ? 1 : dy == 0 ? 2 : 3;
+  return dy > 0 ? 5 : dy == 0 ? 6 : 7;
+}
+
+// zoo.exe 0x43e511: that way, or either way next to it
+bool Animals::nearDirection(int want, int dir) {
+  int diff = (dir - want + 8) % 8;
+  return dir >= 0 && want >= 0 && want < 8 && (diff == 0 || diff == 1 || diff == 7);
+}
+
+// The tank water check (zoo.exe 0x438a37, every cMurkyWaterCheck ticks, its
+// countdown at animal +0x2fc): in a tank, the water's purity (tank +0x1a8)
+// under its cExtremelyMurky / cVeryMurky / cMurkyWaterThreshold, that
+// band's happiness and health change; then, for one not at its show (slot
+// 0x22c), the water's level (tank +0x188) outside cDepthMin..cDepthMax (when
+// they differ), cDepthChange; and the wrong water (0x4936df, as the rating's
+// saltWrong), cSalinityChange and cSalinityHealthChange. The depth one is
+// also skipped by the original when the tank's +4 is set - not worked out;
+// not asked here
+void Animals::murkyWaterTick(Member &m, const WorldMap &map, const Fences &fences) {
+  (void)map;
+  if (m.murkyCheck-- != 0)
+    return;
+  m.murkyCheck = kMurkyWaterCheck - 1;
+  const Fences::Exhibit *ex = m.exhibit >= 0 ? fences.exhibit(m.exhibit) : nullptr;
+  if (!ex || !ex->tank)
+    return;
+  ZT_FN("0x438a37", "The tank water check");
+  const Type &t = this->typeList[m.type];
+  const float pending = m.pending, health = m.health;
+  const int purity = static_cast<int>(ex->purity);
+  for (int band = 2; band >= 0; band--)
+    if (purity < t.murkyThreshold[band]) {
+      m.pending += t.murkyChange[band];
+      m.health += t.murkyHealthChange[band];
+      break;
+    }
+  if (m.showTank < 0 && t.depthMin != t.depthMax) {
+    const int level = fences.waterLevel(*ex);
+    if (level < t.depthMin || t.depthMax < level)
+      m.pending += t.depthChange;
+  }
+  const bool salty = t.compatTerrain[10] >= t.compatTerrain[9];
+  if (ex->salt ? !salty : salty) {
+    m.pending += t.salinityChange;
+    m.health += t.salinityHealthChange;
+  }
+  m.health = std::clamp(m.health, 0.0f, static_cast<float>(t.maxHits));
+  ZT_STEP("0x438a37", "The tank's water", {"purity", purity}, {"water level", fences.waterLevel(*ex)},
+          {"pending", pending, m.pending}, {"health", health, m.health});
+}
+
 // ----------------------------------------------------------------------------
 // Happiness (zoo.exe 0x4378df, 0x437620): every tick what the last checks
 // found is added (kept to -100..100), then the checks that are due add to
@@ -3417,7 +3617,8 @@ void Animals::testFence(Member &m, const Fences &fences) {
 // - captivity (every 20): less cCaptivity;
 // - company (every 30): too few of its kind, cNumberMinChange; else too
 //   many for the space, cNumberMaxChange; too little room for all the
-//   adults, cAllCrowdedChange;
+//   adults, cAllCrowdedChange; more guests watching it than its cCrowd,
+//   cCrowdHappinessChange;
 // - the others (every 40): one of them very angry, cOtherAnimalAngryChange;
 // - an electric fence (every 5): its test, cZapHappinessChange;
 // - hunger (every 30): cHungerIncrement hungrier; hungry with no food,
@@ -3464,21 +3665,43 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
     m.pending -= t.captivity;
     ZT_STEP("0x4378df", "Captivity (every 20)", {"cCaptivity", t.captivity}, {"pending", was, m.pending});
   }
+  countGuestCrowd(m, fences);
   if (--m.socialCheck < 0) {
     m.socialCheck = kSocialCheck - 1;
     float was = m.pending;
-    int kind, kindAdults, adults;
-    company(m, kind, kindAdults, adults);
-    int tiles = fences.exhibit(m.exhibit) ? static_cast<int>(fences.exhibit(m.exhibit)->tiles.size()) : 0;
+    int kind, kindAdults, adults, tiles;
+    company(m, kind, kindAdults, adults, tiles);
     if (kind < t.numberMin)
       m.pending += t.numberMinChange;
-    else if (kindAdults > t.numberMax * std::max(1, tiles / t.habitatSize))
+    else if (crowdedBySpecies(t, kindAdults, tiles))
       m.pending += t.numberMaxChange;
     if (adults > 0 && tiles / adults < t.animalDensity)
       m.pending += t.allCrowdedChange;
     ZT_STEP("0x4378df", "Company (every 30)", {"its kind here", kind}, {"cNumberMin", t.numberMin},
             {"cNumberMax", t.numberMax}, {"tiles", tiles}, {"cHabitatSize", t.habitatSize}, {"adults", adults},
             {"cAnimalDensity", t.animalDensity}, {"pending", was, m.pending});
+    // Crowded by guests (zoo.exe 0x43885b, applied at 0x421ce8; not at its
+    // show, slot 0x22c): more watching it than its cCrowd,
+    // cCrowdHappinessChange ("Feeling crowded by guests"), and its next walk
+    // goes away from them (0x421d9c: from the signs of their side; both 0,
+    // the way it had)
+    if (m.showTank < 0 && m.guestCrowd > t.crowd) {
+      float before = m.pending;
+      m.pending += t.crowdHappinessChange;
+      int a = m.guestCrowdX, b = m.guestCrowdY;
+      if (a == 0) {
+        if (b != 0)
+          m.crowdDir = b > 0 ? 4 : 0;
+      } else if (b == 0) {
+        m.crowdDir = a > 0 ? 6 : 2;
+      } else if (a > 0) {
+        m.crowdDir = b > 0 ? 5 : 7;
+      } else {
+        m.crowdDir = b > 0 ? 3 : 1;
+      }
+      ZT_STEP("0x4386a9", "Feeling crowded by guests (cCrowd)", {"watching", m.guestCrowd}, {"cCrowd", t.crowd},
+              {"away", m.crowdDir}, {"pending", before, m.pending});
+    }
   }
   if (--m.otherCheck < 0) {
     m.otherCheck = kOtherCheck - 1;
@@ -3536,6 +3759,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       ZT_STEP("0x438a79", "Drops a dung pile", {"x", m.x}, {"y", m.y}, {"dirty", 0.0});
     }
   }
+  murkyWaterTick(m, map, fences);
   // Health (0x4389aa): at 20% (cPctHits) or less, unhappy (cSickChange);
   // others sick, unhappier and maybe caught it; now and then ill anyway
   if (--m.healthCheck < 0) {
@@ -4062,12 +4286,11 @@ std::vector<std::pair<std::string, bool>> Animals::advice(int id, const WorldMap
       bits.push_back({bit, red});
   };
   flag(0, m->hunger >= t.hungerThreshold && nearestFood(*m) < 0, true);
-  int kind, kindAdults, adults;
-  company(*m, kind, kindAdults, adults);
-  int tiles = fences.exhibit(m->exhibit) ? static_cast<int>(fences.exhibit(m->exhibit)->tiles.size()) : 0;
+  int kind, kindAdults, adults, tiles;
+  company(*m, kind, kindAdults, adults, tiles);
   bool few = kind < t.numberMin;
   flag(4, few, t.numberMinChange < -5);
-  flag(5, !few && kindAdults > t.numberMax * std::max(1, tiles / t.habitatSize), t.numberMaxChange < -5);
+  flag(5, !few && crowdedBySpecies(t, kindAdults, tiles), t.numberMaxChange < -5);
   float compat = r->compat / 10.0f;
   flag(10, compat < 0, compat <= -10);
   // Trees and rocks: 4 points either way, 8 for red; hills 10 and 20
@@ -4110,6 +4333,9 @@ std::vector<std::pair<std::string, bool>> Animals::advice(int id, const WorldMap
   flag(59, r->noToy == 0 && r->unusedToys >= 2, r->unusedToys > 2);
   flag(60, r->noToy > 0, false);
   flag(61, r->poo > 0.05f, r->poo > 0.10f);
+  // Crowded by guests (zoo.exe 0x43885b sets it, 0x42c400: red when its
+  // cCrowdHappinessChange is under -5)
+  flag(56, m->showTank < 0 && m->guestCrowd > t.crowd, t.crowdHappinessChange < -5);
   // addition (Features::suitabilityAdvice): the habitat check (zoo.exe
   // 0x438c47) makes an animal unhappier whenever its exhibit's suitability
   // is under its cHabitatPreference, but the original's flags (0x447164)

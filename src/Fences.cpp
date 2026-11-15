@@ -137,6 +137,7 @@ constexpr int kBaseStepPerTile = 8;    // measured: a 2 x 2 tank's base step $32
 constexpr double kSaltWaterPrice = 1.5;  // saltWater
 constexpr double kFreshWaterPrice = 1.0; // freshWater
 constexpr float kPurityDecaySeconds = 30.0f; // waterPurityDecayTime 30000 ms
+constexpr float kSeeThroughPurity = 1.0f; // (zoo.exe 0x6390b0, read live: the "can not see" line)
 
 std::string fileStem(const std::string &file) {
   size_t slash = file.find_last_of('/'), dot = file.find_last_of('.');
@@ -741,6 +742,7 @@ void Fences::place(const Edge &e, int type, int drag, const WorldMap &map) {
     have->second.order = this->placed++;
     have->second.drag = drag;
     have->second.open = 0;
+    have->second.animMs = 0; // (a new piece: its animation from the start)
     return;
   }
   if (!this->canPlace(e, map))
@@ -1307,6 +1309,13 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
   ex.water = 0;
   ex.wallSub = kTankHeight; // a unit above the ground
   ex.salt = true;                            // initialSalinity 100
+  // (something in it that can't be under water: left empty, 10550 - zoo.exe
+  // 0x45b92f -> 0x459d94)
+  if (std::string what = this->fillBlocker ? this->fillBlocker(ex.id) : std::string(); !what.empty()) {
+    ex.filling = false;
+    this->fillRefusals.push_back(what);
+    return;
+  }
   ex.filling = true;                         // initialFillState 1
   ex.water = 1;                              // full at once, as the original
   ex.level = -1e9f;
@@ -1359,12 +1368,21 @@ void Fences::drainExhibit(int id) {
   }
 }
 
-void Fences::fillExhibit(int id, bool salt) {
+bool Fences::fillExhibit(int id, bool salt) {
   Exhibit *ex = this->exhibit(id);
   // (a tank's plot: its floor moved off the ground - or, raised level with
   // it on Tank Adjustment, still a tank)
   if (!ex || (!ex->tank && ex->groundHeight == ex->floorHeight))
-    return;
+    return false;
+  // zoo.exe 0x459d94: something in it that can't be under water (0x459e09)
+  // - 10550 naming it, and no water; its water's kind is still the one
+  // asked for (0x60644b sets it first)
+  if (std::string what = this->fillBlocker ? this->fillBlocker(id) : std::string(); !what.empty()) {
+    if (ex->tank)
+      ex->salt = salt;
+    this->fillRefusals.push_back(what);
+    return false;
+  }
   ex->tank = true;
   ex->salt = salt;
   ex->filling = true;
@@ -1382,6 +1400,7 @@ void Fences::fillExhibit(int id, bool salt) {
     else if (it->second.tank2 != ex->id)
       it->second.tank = ex->id;
   }
+  return true;
 }
 
 double Fences::wallStepCost(int id) const {
@@ -1466,6 +1485,7 @@ void Fences::update(float seconds) {
   // is cDecayDelta off its strength (passable)
   for (auto &kv : this->edges) {
     Piece &p = kv.second;
+    p.animMs += seconds * 1000.0;
     const FenceType &t = this->typeList[p.type];
     // (one that never wears is whole - also one an earlier build wore down)
     if (p.life < 0 || t.indestructible)
@@ -1522,7 +1542,13 @@ void Fences::update(float seconds) {
     ex.purityClock += seconds;
     while (ex.purityClock >= kPurityDecaySeconds) {
       ex.purityClock -= kPurityDecaySeconds;
+      // zoo.exe 0x49340d (the purity set): from over tanks.cfg's lowest
+      // band (0x6390b0, 1 - measured in the running original) to at or
+      // under it, the "too murky" message (10549, priority 0)
+      const bool was = ex.purity > kSeeThroughPurity;
       ex.purity = std::max(0.0f, ex.purity - 1.0f);
+      if (was && ex.purity <= kSeeThroughPurity)
+        this->murkyTanks.push_back(ex.id);
     }
   }
   for (Filter &f : this->filterList) {
@@ -2007,9 +2033,12 @@ void Fences::tankPieces(const Edge &e, const Piece &p, const Exhibit &ex, const 
   // (each a unit under the one above it from the top, the top one a unit
   // under the walls' height: its rail reaches it; a 1-high wall is the low
   // pieces alone - tankwall.ai's "1-height tank")
-  // (the back walls' art, seen from inside, sits a subtile lower than the
-  // front walls' seen from outside)
-  const float drop = front ? 0.0f : 0.5f;
+  // (the back walls' art at the same height as the front walls' - measured:
+  // the original against ours, the same tanks at the same ground heights
+  // (ZT_TANK_LAB=atltank,tankwall ZT_TANK_LAB_PATH, saved and loaded in
+  // Play original, #101): their posts and rails line up to the pixel with
+  // no drop, half a unit low with the 0.5 drop kept from the subtile walls)
+  const float drop = 0.0f;
   for (int k = 0; k < rows; k++) {
     int level = rows == 1 ? -1 : k == 0 ? 0 : k == rows - 1 ? 2 : 1;
     Animation *a = level < 0 ? (t.tankLow[column] ? t.tankLow[column] : t.tankLow[1])
@@ -2167,13 +2196,9 @@ int Fences::platformAt(float px, float py, const WorldRenderer &view) const {
     const Edge &e = kv.first;
     float mx = e.alongX ? e.x + 0.5f : static_cast<float>(e.x);
     float my = e.alongX ? static_cast<float>(e.y) : e.y + 0.5f;
-    TankSide ts;
-    if (this->mapEdit && tankSide(*ex, e, *this->mapEdit, view, ts) && ts.front) {
-      mx -= ts.dx * 0.5f;
-      my -= ts.dy * 0.5f;
-    }
+    // (where it's drawn: the gate's middle at the walls' top, #156)
     float sx, sy, d;
-    view.worldToScreenF(mx, my, ex->wallTop() - 1.0f, sx, sy, d);
+    view.worldToScreenF(mx, my, ex->wallTop(), sx, sy, d);
     // (the platform stands about 20 px over its anchor, the ladder under)
     if (std::fabs(px - sx) <= 16.0f && py >= sy - 34.0f && py <= sy + 6.0f)
       return ex->id;
@@ -2331,34 +2356,18 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           // (its art lines up with a wall facing its way: the wall's own)
           CompassDirection in = tankSide(view, ts);
           float sx, sy, depth;
-          // With the top rail's piece, two units under the rim. On a front
-          // wall, inside the tank behind its rail (as the original: only
-          // the handles show over it); on a back one its art already sits
-          // inside.
+          // At the walls' top, on every side - measured: the original's
+          // against ours on the same tanks, all four ways round (the tank
+          // lab's zoo in Play original, #156): its platforms lie a height
+          // unit over where a back wall's was drawn here (two units under the
+          // rim), half a unit over a front wall's, and the same on a back wall
+          // facing up-right, whose art had been lifted 8 px as if it sat lower.
+          // On a front wall that's inside the tank behind its rail, the
+          // handles over it.
           float px = mx, py = my;
-          const float sh = 0.0f, lf = 0.5f;
-          float lift = 0.0f;
-          // (its NE art - on a back wall facing up-right - sits 8 px lower
-          // than the other three: lifted onto the rim as they are; swapped
-          // for the SE art instead, it lay along the wall)
-          const float neLift = in == CompassDirection::NE ? 8.0f : 0.0f;
-          if (ts.front) {
-            // On a front wall: just inside it, up at its rim, behind its
-            // rail (as the original: its floor hidden, the handles over the
-            // rim)
-            px -= ts.dx * sh;
-            py -= ts.dy * sh;
-            lift = lf;
-          }
-          view.worldToScreenF(px, py, top - 1.0f + lift, sx, sy, depth);
-          sy -= neLift;
-          // (its handles over the ladder's rails: on a front wall they stood
-          // 7 px along from them, the ladder not meeting them)
-          if (ts.front) {
-            const float nudge = 7.0f;
-            sx += view.screenSide(static_cast<float>(ts.dx), static_cast<float>(ts.dy)) == CompassDirection::SW ? -nudge
-                                                                                                                : nudge;
-          }
+          view.worldToScreenF(px, py, top, sx, sy, depth);
+          // (no nudge along a front wall: measured, the original's lies right
+          // at the wall's middle there too - 7 px along, ours stood off it)
           float wx, wy, wallDepth;
           view.worldToScreenF(mx, my, static_cast<float>(top - 2), wx, wy, wallDepth);
           bool lit = !tinted && this->hoverPlatform == ex->id;
@@ -2367,6 +2376,39 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           // the wall's middle, the strips beside it covered half its board)
           Drawable plat{ts.front ? wallDepth - 0.05f : wallDepth + 0.6f, sx, sy, t.platform, in,
                         lit ? yellow : tint, tinted || lit};
+          // (and after the tank's inside under its board: that's drawn in
+          // strips a tile wide, each sorted at the deepest point of the back
+          // walls in its columns - by a side corner that's deeper than the
+          // wall's middle, and on a two-tile wall the strips there covered the
+          // whole platform, where the original shows it; #156. The front walls
+          // in those columns stand deeper still, and stay over it)
+          if (!ts.front) {
+            float L, T, R, B;
+            if (t.platform->anchoredBounds(sx, sy, in, L, T, R, B)) {
+              const float step = view.getTileWidth();
+              float deepest = -1e30f;
+              for (const Edge &be : boundaryOf(*ex)) {
+                TankSide bs;
+                if (!tankSide(*ex, be, map, view, bs) || bs.front)
+                  continue;
+                float x0, y0, d0, x1, y1, d1;
+                view.worldToScreenF(static_cast<float>(be.x), static_cast<float>(be.y), 0, x0, y0, d0);
+                view.worldToScreenF(static_cast<float>(be.x + (be.alongX ? 1 : 0)),
+                                    static_cast<float>(be.y + (be.alongX ? 0 : 1)), 0, x1, y1, d1);
+                if (std::fabs(x1 - x0) < 0.01f)
+                  continue;
+                // (the deepest of it over the strips that reach under the
+                // board, a tile either side: it runs straight, so at one end
+                // of that stretch)
+                const float lo = std::max(std::min(x0, x1), L - step), hi = std::min(std::max(x0, x1), R + step);
+                for (float at : {lo, hi})
+                  if (lo <= hi)
+                    deepest = std::max(deepest, d0 + (d1 - d0) * (at - x0) / (x1 - x0));
+              }
+              if (deepest > -1e29f)
+                plat.depth = std::max(plat.depth, deepest + 0.005f);
+            }
+          }
           // (on a front wall down by the ground: the ground in front hides
           // it, only what's over the ground shows - the handles' tips)
           if (ts.front && (top < ts.outside + 1.0f || underTop(plat)))
@@ -2453,11 +2495,11 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     } else if (art->frameCount() > 1) {
       // A fence whose art is an animation - the electrified fences' current,
       // the bars' warning beacons (fences/dzbar, dzchn: 12 frames of 83 ms) -
-      // plays it on the game's clock, as a filter's (art with frame -1 here
-      // stayed on its first frame: dzbar's beacons dark). ours: the art's own
-      // frames at its own speed; its phase not compared with the original's
+      // plays it on the piece's own clock (zoo.exe 0x434899: each piece's
+      // animation moved on by the game time passed), so pieces put up at
+      // different times blink out of step, and a drag's together
       const uint32_t ms = art->frameTimeMs() ? art->frameTimeMs() : 83;
-      d.frame = static_cast<int>(static_cast<uint64_t>(this->rippleClock / ms) % art->frameCount());
+      d.frame = static_cast<int>(static_cast<uint64_t>(p.animMs / ms) % art->frameCount());
     }
     if (placed && hasLights(t.key))
       this->lit.push_back({art, d.frame < 0 ? 0 : d.frame, side, sx, sy, depth, mx, my, (h0 + h1) * 0.5f, t.key});

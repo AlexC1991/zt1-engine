@@ -574,8 +574,11 @@ static void updateHudClock(ResourceManager *rm) {
 }
 
 // Zoom buttons: both are shown, and the one that cannot zoom any further is
-// greyed out (at the default zoom the original greys out zoom in)
-static const float HUD_ZOOM_MAX = 1.0f;
+// greyed out. The original's three levels (zoo.exe main_ZoomIn_click
+// 0x4b081b, main_ZoomOut_click 0x4b0779: -2, 0, 2 - half, normal, double):
+// Zoom Out greys at half, Zoom In at double (at normal too only on an
+// 800-wide screen with its video flag set, not a size this engine has)
+static const float HUD_ZOOM_MAX = 2.0f;
 static const float HUD_ZOOM_MIN = 0.5f;
 
 static void updateZoomButtons(World *world) {
@@ -628,13 +631,16 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
 
   // Undo starts visible but greyed out (nothing to undo yet); the Scenario
   // button is greyed out in freeform games
+  // (Snap Shot, zoo.exe main_SnapShot_click 0x532df9 -> saveScreenshot
+  // 0x532c75: Shift held, the screen as it is; else the map alone)
   if (UiButton *snap = dynamic_cast<UiButton *>(g_hud->getElementById(1099)))
     snap->onClick = [] { g_snapshot = (SDL_GetModState() & SDL_KMOD_SHIFT) ? 2 : 1; };
   if (UiButton *undo = dynamic_cast<UiButton *>(g_hud->getElementById(1075))) {
     undo->setHidden(false);
     undo->setDisabled(true);
     // Undo: the last thing done (since the last click on the map) undone,
-    // its money back (or a bulldozing's refund taken back)
+    // its money back (or a bulldozing's refund taken back) - zoo.exe
+    // main_SingleUndo_click 0x4de9ce -> undoLastAction 0x4de527
     undo->onClick = [] {
       if (!g_world || !g_world->canUndo())
         return;
@@ -714,6 +720,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
     case UiGameScreen::StaffRequest::Select: world->centreOnStaff(id); break;
     }
   });
+  g_hud->staffAssigning = [world] { return world->isAssigning(); };
   g_hud->exhibitsExist = [world] {
     for (const Fences::Exhibit &e : world->getFences().exhibits())
       if (e.named)
@@ -732,7 +739,9 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
     }
     world->getAnimals().markDirty();
   };
-  // Buildings bought: their panel; sold for 80% of their price back
+  // Buildings bought: their panel; sold for 80% of their price back, as it
+  // is (ZTEntity::objectSellValue 0x41ec7f; removeObject 0x50a0b0 books the
+  // float on the refunds row, bookRefund 0x48d2da)
   g_hud->setObjects(&world->objectsMutable(), [world, rm](int id) {
     PlacedObjects &po = world->objectsMutable();
     int i = po.indexOf(id);
@@ -741,7 +750,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
     std::string file = PlacedObjects::fileOf(po.objects()[i]);
     for (const CatalogItem &item : ItemCatalog::get().all())
       if (item.file == file)
-        g_sim.earn(ZooSim::Recycling, std::lround(item.cost * 0.8));
+        g_sim.earn(ZooSim::Recycling, item.cost * Original::sellFactor);
     po.remove(i);
     world->reindex();
     world->getAnimals().markDirty();
@@ -1015,6 +1024,9 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
     }
     for (int id : gs.takeMessages())
       g_hud->postMessage(rm->getString(id), id == 10021 || id == 10017 ? 1 : 0); // (good news: guests very happy, a good value)
+    // A guest's own news ("%s is drowning!", "%s has drowned!": zoo.exe 0x4807c2)
+    for (const Guests::Notice &n : gs.takeNotices())
+      g_hud->postMessage(n.text, n.kind, UiGameScreen::Subject::Guest, n.guest);
     UiGameScreen::ZooInfo info = g_hud->zooInfo();
     int animals = static_cast<int>(g_world->getAnimals().members().size()), exhibits = 0;
     for (const Fences::Exhibit &e : g_world->getFences().exhibits())
@@ -1059,7 +1071,8 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
   }
   // The zoo rating, every 4 s (zoo.exe 0x41f881 / 0x41fcc1), each term in
   // whole numbers: 15 x the healthy share of its animals; 10 x its kinds in
-  // exhibits out of 44; (avg happiness + 100) x 25 / 200 for
+  // exhibits out of cSpeciesAvailable (economy.cfg: 20; no more than that
+  // many count); (avg happiness + 100) x 25 / 200 for
   // animals and for guests; its value (cash + animals', objects', fences'
   // and path tiles' prices, 0-30000) / 3000; 5% of the research done
   // (cost-0 programs count; all of it with none to do); esthetics (0-10:
@@ -1090,11 +1103,12 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
         animalValue += an.types()[m.type].cost;
       }
       int r = 0;
+      long zooValue = 0; // (the value term before it's kept to 0-30000)
       if (n > 0)
         r += 15 * (n - sick) / n;
       int s = static_cast<int>(kinds.size());
-      if (s > 0)
-        r += 10 * s / std::max(s, 44);
+      if (const int avail = Original::economy().speciesAvailable; s > 0 && avail > 0)
+        r += 10 * std::min(s, avail) / avail;
       int avgA = n ? static_cast<int>(sumH / n) : 0;
       r += (avgA + 100) * 25 / 200;
       const Guests &gs = g_world->getGuests();
@@ -1117,7 +1131,8 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
         if (priceOf.empty())
           for (const CatalogItem &item : ItemCatalog::get().all())
             priceOf[item.file] = item.cost;
-        long v = static_cast<long>(g_sim.cash()) + animalValue;
+        // (the cash rounded, 0x41f881's fistp, not cut down)
+        long v = std::lrint(g_sim.cash()) + animalValue;
         for (const PlacedObjects::Object &o : g_world->getObjects().objects()) {
           if (o.fence)
             continue;
@@ -1140,6 +1155,7 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
             if (it != priceOf.end())
               v += it->second;
           }
+        zooValue = v;
         v = std::clamp(v, 0L, 30000L);
         r += static_cast<int>((v * 10 / 300) / 100);
       }
@@ -1238,7 +1254,13 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
             }
         }
         double e = tiles.empty() ? 0 : bonus / tiles.size();
-        g_esthetic = static_cast<int>(std::floor(std::clamp(e, 0.0, 10.0)));
+        {
+          // (zooRatingTerms 0x41fcc1: x 10, kept to 0-100, x -0.1 rounded
+          // to the nearest - halves to even - and taken off)
+          const float x = std::clamp(static_cast<float>(e) * Original::ratingEstheticScale, 0.0f,
+                                     Original::ratingEstheticMax);
+          g_esthetic = -static_cast<int>(std::nearbyint(double(x) * double(Original::ratingEstheticBack)));
+        }
         r += g_esthetic;
       }
       // Escaped: -50, 2 less each game day since one was last loose
@@ -1256,8 +1278,9 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
       if (auto *bar = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1011)))
         bar->setValue(n ? static_cast<int>((sumH / n + 100) / 2) : 0);
       UiGameScreen::ZooInfo info = g_hud->zooInfo();
-      if (info.rating != rating) {
+      if (info.rating != rating || info.value != zooValue) {
         info.rating = rating;
+        info.value = zooValue; // (Finances' Zoo Value: zoo.exe 0x52fa39, row 15)
         g_hud->setZooInfo(info);
       }
     }
@@ -1265,6 +1288,22 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
   for (const Animals::Notice &n : g_world->getAnimals().takeNotices())
     g_hud->postMessage(n.text, n.kind, n.animal >= 0 ? UiGameScreen::Subject::Animal : UiGameScreen::Subject::None,
                        n.animal);
+  // zoo.exe 0x49340d: a tank too murky to see into (10549, priority 0)
+  for (int id : g_world->getFences().takeMurkyTanks())
+    if (const Fences::Exhibit *tank = g_world->getFences().exhibit(id)) {
+      std::string s = rm->getString(10549);
+      if (size_t at = s.find("%s"); at != std::string::npos)
+        s.replace(at, 2, tank->name);
+      g_hud->postMessage(s, 0);
+    }
+  // zoo.exe 0x459d94: a tank left without its water by what's in it (10550,
+  // on the message bar as a warning - 0x49cec0 with 5, as 10002)
+  for (const std::string &what : g_world->getFences().takeFillRefusals()) {
+    std::string s = rm->getString(10550);
+    if (size_t at = s.find("%s"); at != std::string::npos)
+      s.replace(at, 2, what);
+    g_hud->showMessage(s);
+  }
   // Dung recycled through a compost (Recycling Benefit)
   if (double recycled = g_world->getStaff().takeRecycling(); recycled > 0) {
     g_sim.earn(ZooSim::Recycling, recycled);
@@ -2868,12 +2907,21 @@ static void setupGoals(ResourceManager *rm) {
       }
       return n;
     }
-    if (g.rulea == 6 && g.ruleb == 0) { // at least arga exhibits whose animals average value or more
+    // At least arga exhibits whose animals average value or more (zoo.exe
+    // 0x41da81): ruleb 0 every animal, 1 those whose type's cFamily (+0x1e4)
+    // is argb, 5 those whose cEra (+0x1f8) is - an exhibit with none of them
+    // doesn't count; none counted, not met
+    if (g.rulea == 6 && (g.ruleb == 0 || g.ruleb == 1 || g.ruleb == 5)) {
+      auto keep = [&](const Animals::Member &m) {
+        const Animals::Type &t = an.types()[m.type];
+        return g.ruleb == 1 ? t.family == g.argb : g.ruleb == 5 ? t.era == g.argb : true;
+      };
       int count = 0;
       for (const Fences::Exhibit &ex : g_world->getFences().exhibits()) {
         if (ex.animals <= 0)
           continue;
-        count += an.exhibitSuitability(ex.id) >= g.value ? 1 : 0;
+        const int s = an.exhibitSuitability(ex.id, keep);
+        count += s >= 0 && s >= g.value ? 1 : 0;
       }
       return count >= std::max(1, g.arga) ? g.value : 0;
     }
@@ -2888,7 +2936,8 @@ static void setupGoals(ResourceManager *rm) {
   h.measures = [](const Goals::Goal &g) {
     if (g.rulea == 1)
       return (g.ruleb >= 0 && g.ruleb <= 7) || g.ruleb == 11;
-    return (g.rulea == 2 && g.ruleb == 2) || (g.rulea == 6 && g.ruleb == 0) || (g.rulea == 7 && g.ruleb >= 0 && g.ruleb <= 2) ||
+    return (g.rulea == 2 && g.ruleb == 2) || (g.rulea == 6 && (g.ruleb == 0 || g.ruleb == 1 || g.ruleb == 5)) ||
+           (g.rulea == 7 && g.ruleb >= 0 && g.ruleb <= 2) ||
            (g.rulea == 3 && g.ruleb == 0) || g.rulea == 99;
   };
   h.popup = [](const std::string &image, const std::string &text, bool pause) {
@@ -4623,6 +4672,8 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       g_hud->showMessage(rm->getString(10002));
       capture("finance_message_bar");
     }
+    setupGoals(rm);
+    {extern Goals::Hooks g_financeGoalHooks;g_financeGoalHooks=g_goals.getHooks();}
     int result=runFinanceChecks(*world,*g_hud,g_sim,rm,outDir);
     if(timings)std::fclose(timings);return result;
   }
@@ -4668,6 +4719,22 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   if (std::getenv("ZT_SHOW_ALL")) {
     int result=runShowAllChecks(*world,*g_hud,g_sim,rm,outDir);
     if(timings)std::fclose(timings);return result;
+  }
+  // ours: ZT_TOUR_ZOO=<file.zoo>: the tour guides' side by side zoo (#129),
+  // src/ActivityPolishChecks.cpp buildTourZoo
+  if (const char *tourZoo = std::getenv("ZT_TOUR_ZOO")) {
+    extern std::string buildTourZoo(World &, ZooSim &, UiGameScreen &, ResourceManager *, const std::string &, const std::string &);
+    const std::string r = buildTourZoo(*world, g_sim, *g_hud, rm, g_currentMapPath, tourZoo);
+    SDL_Log("[TourZoo] %s", r.c_str());
+    if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
+  }
+  // ours: ZT_ACCESS_ZOO=<file.zoo>: exhibits with their gates reachable or
+  // not, for 11000 / 11001 in the original (#145)
+  if (const char *accessZoo = std::getenv("ZT_ACCESS_ZOO")) {
+    extern std::string buildAccessZoo(World &, ZooSim &, UiGameScreen &, const std::string &, const std::string &);
+    const std::string r = buildAccessZoo(*world, g_sim, *g_hud, g_currentMapPath, accessZoo);
+    SDL_Log("[AccessZoo] %s", r.c_str());
+    if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
   }
   if (std::getenv("ZT_EVERYTHING_ZOO")) {
     int result=runEverythingZoo(*world,*g_hud,g_sim,rm,outDir,g_currentMapPath);
@@ -4783,6 +4850,17 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     SDL_Log("[ViewSave] after one check: cash %.0f", g_sim.cash());
     for (const ZooSim::Month &m : g_sim.history())
       SDL_Log("[ViewSave] month %d/%d donations %.0f total %.0f", m.month + 1, m.year, m.lines[ZooSim::Donations], m.total());
+    // ours: ZT_VIEW_GUIDES=<seconds>: the zoo run that long (unpaused, not
+    // drawn) and its tour guides followed - each trip, its group and talk -
+    // for the side by side with the original (#129); <out>/guides.txt
+    if (const char *guides = std::getenv("ZT_VIEW_GUIDES")) {
+      extern std::string watchGuides(World &, int);
+      world->edgeScroll = false;
+      world->setPaused(false);
+      world->setView(gameViewRect(renderer), getUiTransform(renderer).scale);
+      std::ofstream(outDir + "/guides.txt") << watchGuides(*world, std::max(1, std::atoi(guides)));
+      return 0;
+    }
     // ZT_VIEW_TERRAIN=<type>: a 2 x 2 patch inside the zoo painted with that
     // ground, Accept pressed, and what it cost and kept
     if (const char *paint = std::getenv("ZT_VIEW_TERRAIN")) {
@@ -5048,6 +5126,38 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           static_cast<int>(g_sim.rating()) == 37);
   }
 
+  // The zoom buttons' three levels (zoo.exe 0x4b081b, 0x4b0779): from
+  // normal, Zoom In goes to double and greys; Zoom Out back down to half,
+  // and it greys there
+  {
+    Camera &cam = world->getRenderer().getCamera();
+    const float saved = cam.zoom;
+    cam.zoom = 1.0f;
+    updateZoomButtons(world);
+    UiElement *in = g_hud->getElementById(1007), *out = g_hud->getElementById(1023);
+    const bool normal = in && out && !in->isDisabled() && !out->isDisabled();
+    world->zoomStep(+1);
+    updateZoomButtons(world);
+    const bool twice = cam.zoom == 2.0f && in->isDisabled() && !out->isDisabled();
+    world->zoomStep(-1);
+    world->zoomStep(-1);
+    updateZoomButtons(world);
+    const bool half = cam.zoom == 0.5f && !in->isDisabled() && out->isDisabled();
+    check("zoom buttons: normal, double (Zoom In greys), half (Zoom Out greys)", normal && twice && half);
+    cam.zoom = saved;
+    g_ZoomLevel = saved;
+    updateZoomButtons(world);
+  }
+  // Opening Research puts the bulldozer away (zoo.exe research_Panel_show
+  // 0x4a031a: bulldozeToolOff 0x443b60)
+  if (UiButton *dozer = dynamic_cast<UiButton *>(g_hud->getElementById(1028))) {
+    g_hud->showPanel(0, "");
+    dozer->setToggledOn(true);
+    g_hud->showPanel(15, "");
+    check("opening Research puts the bulldozer away", !g_hud->bulldozerOn());
+    g_hud->showPanel(0, "");
+  }
+
   // The rotate buttons turn the picked shelter (right twice, left once)
   g_hud->showPanel(3, "shelters");
   capture("rotate0");
@@ -5057,6 +5167,17 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   capture("rotate2");
   click(2054);
   capture("rotate3");
+  // (each panel keeps its own facing, as the original - zoo.exe 0x48e40f,
+  // 0x4e5134: Adopt turned once on, Objects still as it was)
+  {
+    int cost = 0, adoptFacing = -1, objectsFacing = -1;
+    const bool adoptHeld = !g_hud->objectToolFile(cost, adoptFacing).empty();
+    g_hud->showPanel(4, "structures");
+    const bool objectsHeld = !g_hud->objectToolFile(cost, objectsFacing).empty();
+    check(("each buy panel turns its own items (Adopt " + std::to_string(adoptFacing) + ", Objects " +
+           std::to_string(objectsFacing) + ")").c_str(),
+          adoptHeld && objectsHeld && adoptFacing == 1 && objectsFacing == 0);
+  }
 
   // The habitat panel's tabs clicked down to terraform and back up: each
   // shows its own page again
@@ -5158,6 +5279,42 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     click(9050 + at);
     check("Extras: a switch flips its extra and is kept in zoo.ini",
           flipped && Features::hotkeys == was && Settings::get("Extras", "hotkeys") == (was ? "1" : "0"));
+    // (#104: more switches than the panel holds go on a second page, turned
+    // by the arrows under them; each inside the panel, its label's id its
+    // own - the last switch, on the last page, flips its own extra)
+    std::vector<const Features::Switch *> listed;
+    for (const Features::Switch &f : Features::all()) {
+      const std::string name = f.name;
+      if (name == "optionswindow")
+        listed.insert(listed.begin(), &f);
+      else if (name != "infinitemoney" && name != "daynight" && name != "gametime")
+        listed.push_back(&f);
+    }
+    int last = static_cast<int>(listed.size()) - 1;
+    UiElement *first = g_hud->getElementById(9050), *lastTick = g_hud->getElementById(9050 + last);
+    UiElement *sameRow = g_hud->getElementById(9050 + last % 12); // (on the first page)
+    UiElement *note = g_hud->getElementById(9049);
+    bool paged = listed.size() <= 12 || (g_hud->getElementById(8891) && first && lastTick && lastTick->isHidden());
+    if (listed.size() > 12 && paged) {
+      int rowY = sameRow->getLastRect().y, noteY = note ? note->getLastRect().y : 0;
+      click(8891);
+      capture("gameopts_extras_page2");
+      bool turned = first->isHidden() && !lastTick->isHidden();
+      // (in the first page's rows, above the note: inside the panel)
+      bool inside = lastTick->getLastRect().y == rowY && lastTick->getLastRect().y < noteY;
+      bool lastWas = *listed[last]->value;
+      click(9050 + last);
+      bool lastFlipped = *listed[last]->value != lastWas;
+      click(9050 + last);
+      click(8890);
+      paged = paged && turned && inside && lastFlipped && *listed[last]->value == lastWas && !first->isHidden();
+    }
+    bool ownIds = true;
+    for (int k = 0; k <= last; k++)
+      ownIds = ownIds && dynamic_cast<UiText *>(g_hud->getElementById(8900 + k)) &&
+               dynamic_cast<UiButton *>(g_hud->getElementById(9050 + k));
+    check("Extras: every switch on a page inside the panel, the arrows turn it, labels on their own ids",
+          paged && ownIds);
     g_hud->showTab(5, 1506); // (back on File Options, for the game menu's tests)
     g_hud->showPanel(0, "");
   }
@@ -5582,9 +5739,14 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           int h = map.getTile(lx, ly)->cornerHeight[0];
           for (int y = ly - 1; y <= ly + 5; y++)
             for (int x = lx - 1; x <= lx + 9; x++)
-              if (MapTile *t = map.getTileMutable(x, y))
+              if (MapTile *t = map.getTileMutable(x, y)) {
                 for (int c = 0; c < 4; c++)
                   t->cornerHeight[c] = h;
+                // (its own height too: a saved zoo gives the original this,
+                // and a tile left a unit off stood the tanks a unit taller
+                // in zoo.exe than here)
+                t->height = h;
+              }
           map.touch();
           auto &objs = world->objectsMutable();
           for (int i = static_cast<int>(world->getObjects().objects().size()) - 1; i >= 0; i--) {
@@ -5750,6 +5912,29 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           check(("a rock column in front of a sunk tank's corner hides its wall (" + std::to_string(changed) + " of " +
                  std::to_string(columnBefore.size()) + " pixels changed)").c_str(),
                 changed == 0);
+        }
+        // ours: a check. ZT_TANK_LAB_PATH: path tiles all round the outside
+        // of the tanks (issue #101: a path tile behind a back wall was drawn
+        // inside the tank below its rail), shot from all four sides
+        if (std::getenv("ZT_TANK_LAB_PATH")) {
+          WorldMap &wm = world->getMap();
+          for (int x = lx - 1; x <= lx + 8; x++)
+            for (int y : {ly - 1, ly + 4})
+              wm.setPath(x, y, "path");
+          for (int y = ly; y <= ly + 3; y++)
+            for (int x : {lx - 1, lx + 8})
+              wm.setPath(x, y, "path");
+          wm.touch();
+          world->centreOn(lx + 4.0f, ly + 2.0f);
+          for (int r = 0; r < 4; r++) {
+            capture(("tanklab_path" + std::to_string(r)).c_str());
+            world->rotateView(1);
+          }
+          // (ZT_TANK_LAB_SAVE=<file.zoo>: saved, shared, for the original to
+          // load in the Lab - the same tanks and paths seen in zoo.exe)
+          if (const char *save = std::getenv("ZT_TANK_LAB_SAVE"); save && g_hud)
+            SDL_Log("[TankLab] saved %s: %d", save,
+                    static_cast<int>(SaveGame::save(save, *world, g_sim, *g_hud, g_currentMapPath)));
         }
         world->centreOn(lx + 2.0f, ly + 2.0f);
         for (int r = 0; r < 4; r++) {
@@ -6349,6 +6534,25 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         g_hud->showFilter(0);
         capture("filter_panel");
         check("filter panel open", g_hud->isPanelOpen(46));
+        // (its state and upkeep as zoo.exe 0x615d28 writes them: "Broken
+        // Down" at no health; whole dollars, no cents)
+        {
+          Fences::Filter &ff = const_cast<Fences::Filter &>(fences.filters().front());
+          const float health = ff.health;
+          const double upkeep = ff.upkeepTotal;
+          ff.health = 0;
+          ff.upkeepTotal = 1234.56;
+          std::vector<Input> none;
+          g_hud->handleInputs(none);
+          UiText *state = dynamic_cast<UiText *>(g_hud->getElementById(4913));
+          UiText *total = dynamic_cast<UiText *>(g_hud->getElementById(4925));
+          const std::string shownState = state ? state->getText() : "", shownTotal = total ? total->getText() : "";
+          ff.health = health;
+          ff.upkeepTotal = upkeep;
+          g_hud->handleInputs(none);
+          check(("filter panel: broken shows " + shownState + ", upkeep " + shownTotal).c_str(),
+                shownState == rm->getString(4999) && shownTotal == "$1234");
+        }
         click(4910);
         capture("filter_panel_finance");
         {
@@ -6663,6 +6867,23 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       g_hud->showPanel(0, "");
       g_hud->showStaff(ids[1]);
       capture("staff_panel_keeper");
+      // Assign, a toggle (zoo.exe 0x471c30, 0x471ebd): on, the map picks the
+      // keeper's exhibits and Job Assignment comes up; off, it stops; Remove
+      // All turns it off first (0x6185d6)
+      {
+        UiButton *assign = dynamic_cast<UiButton *>(g_hud->getElementById(3578));
+        click(3578);
+        UiButton *job = dynamic_cast<UiButton *>(g_hud->getElementById(3564));
+        const bool on = world->isAssigning() && assign && assign->isToggledOn() && job && job->isToggledOn();
+        click(3578);
+        const bool off = !world->isAssigning() && assign && !assign->isToggledOn();
+        click(3578);
+        capture("staff_assign_on");
+        click(3580);
+        const bool cleared = !world->isAssigning() && assign && !assign->isToggledOn();
+        check("Assign toggles picking exhibits, brings up Job Assignment; Remove All ends it",
+              on && off && cleared);
+      }
       g_hud->showPanel(0, "");
       // A worn fence: the maintenance worker comes and fixes it
       Fences::Edge worn{false, -1, -1};
@@ -7621,6 +7842,10 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   g_hud->showPanel(15, "");
   g_hud->showTab(15, 4009);
   click(4004);
+  // (the funding a day, as zoo.exe 0x470d0f shows it: min's 400 a month /
+  // 30, cut - "$13 min")
+  check(("research funding shown a day, as the original (" + textOf(4006) + ")").c_str(),
+        textOf(4006) == "$13 min");
   g_sim.update(26.0);
   click(4003);
   if (g_sim.changed()) {
@@ -7676,6 +7901,31 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       bool female = true;
       std::string pickedFile = g_hud->animalToolFile(female);
       check("the male button takes the zebra", pickedFile == "animals/zebra.ai" && !female);
+      // The panel's cost as the original's (zoo.exe 0x4e3285 -> 0x40ed88,
+      // its grouping off): whole dollars without a thousands comma, "$1000"
+      {
+        const CatalogItem *dear = nullptr;
+        for (const CatalogItem &it : ItemCatalog::get().all())
+          if (!dear && it.file.rfind("animals/", 0) == 0 && it.cost >= 1000 &&
+              g_hud->selectBuyItem(3, it.file))
+            dear = &it;
+        UiText *cost = dynamic_cast<UiText *>(g_hud->getElementById(2014));
+        std::string shown = cost ? cost->getText() : "";
+        check(("an animal's cost shown without a thousands comma (" + shown + ")").c_str(),
+              dear && shown == "$" + std::to_string(dear->cost));
+        g_hud->selectBuyItem(3, "animals/zebra.ai");
+        click(2000);
+        // (a tab keeps its pick: Shelters and back to Animals, the zebra
+        // still picked - zoo.exe adoptListFill 0x4e334b)
+        g_hud->showPanel(3, "shelters");
+        g_hud->showPanel(3, "animals");
+        const CatalogItem *zebraItem = ItemCatalog::get().find("animals/zebra.ai");
+        UiText *picked = dynamic_cast<UiText *>(g_hud->getElementById(2043));
+        check(("a tab picks its last pick again (" + (picked ? picked->getText() : std::string("?")) + ")").c_str(),
+              zebraItem && picked && picked->getText() == zebraItem->name);
+        g_hud->selectBuyItem(3, "animals/zebra.ai");
+        click(2000);
+      }
       world->setAnimalTool(zebra, false);
       // Off the exhibit: red, $0; on it: green, -$800
       int px, py;
@@ -8469,6 +8719,20 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
 
           check(("Building Information: " + o.label + ", income $" + std::to_string(static_cast<int>(o.income))).c_str(),
                 g_hud->isPanelOpen(21) && o.label.rfind("Hot Dog Stand", 0) == 0 && o.income >= 6.0);
+          // (its money as the original writes it, zoo.exe 0x488446: cut to
+          // whole dollars, thousands grouped - $1,234.90 shows "$1,234")
+          {
+            PlacedObjects::Object &w = const_cast<PlacedObjects::Object &>(o);
+            const double was = w.income;
+            w.income = 1234.9;
+            std::vector<Input> none;
+            g_hud->handleInputs(none);
+            capture("building_panel_money");
+            UiText *in = dynamic_cast<UiText *>(g_hud->getElementById(4531));
+            const std::string shown = in ? in->getText() : "";
+            w.income = was;
+            check(("Building Information's income cut and grouped (" + shown + ")").c_str(), shown == "$1,234");
+          }
           click(4557);
           check("its price up a step ($2.25)", std::fabs(world->getObjects().objects().back().price - 2.25f) < 0.001f);
           click(4556);
@@ -11074,12 +11338,16 @@ int main(int argc, char *argv[]) {
       g_world->zoomStep(-1);
       updateZoomButtons(g_world);
       break;
+    // (zoo.exe main_RotateCW_click 0x4b071a, main_RotateCCW_click 0x416cb7:
+    // the view's turn + 1, or + 3, of four - 0x4b06be)
     case UiAction::HUD_ROTATE_CW:
       g_world->rotateView(+1);
       break;
     case UiAction::HUD_ROTATE_CCW:
       g_world->rotateView(-1);
       break;
+    // (zoo.exe main_PauseButton_click 0x59c7a4 -> pauseGame 0x59c6b8: Pause hidden,
+    // Play shown in its place, the game paused; Play the other way round)
     case UiAction::HUD_PAUSE:
     case UiAction::HUD_PLAY:
       if (g_hud)
@@ -11221,16 +11489,22 @@ int main(int argc, char *argv[]) {
             // Staff are paid every month
             if (int wages = g_world->getStaff().monthlyWages())
               g_sim.spend(ZooSim::Wages, wages);
-            // Members: each may lapse (rand 0-100 less 10 above the zoo
-            // rating); the rest give $100-$300 each (Private Donations)
+            // Members: each may lapse (rand 0-100 less cMembershipJoinFactor
+            // above the zoo rating); the rest give cEndowmentGiftLow to
+            // cEndowmentGiftHigh each (Private Donations): zoo.exe monthlyUpkeep
+            // 0x483f11 - the lapses booked first (0x5ad160), then one roll for
+            // them all, (rand % 101 x (high - low) x 0.01 (0x635048) + low) x
+            // members, on the Donations row (0x48442b, row 20)
             {
+              const Original::Economy &e = Original::economy();
               Guests &gs = g_world->getGuests();
               int stay = 0;
               for (int m = 0; m < gs.members; m++)
-                stay += std::rand() % 101 - 10 > static_cast<int>(g_sim.rating()) ? 0 : 1;
+                stay += std::rand() % 101 - e.membershipJoinFactor > static_cast<int>(g_sim.rating()) ? 0 : 1;
               gs.members = stay;
               if (stay > 0)
-                g_sim.earn(ZooSim::Donations, stay * (100 + (std::rand() % 101) * 200 * 0.01));
+                g_sim.earn(ZooSim::Donations, stay * (e.endowmentGiftLow + (std::rand() % 101) *
+                                                      (e.endowmentGiftHigh - e.endowmentGiftLow) * 0.01));
             }
             // And every building's upkeep (its cUpkeep, Zoo Upkeep Cost)
             for (PlacedObjects::Object &o : g_world->objectsMutable().all()) {

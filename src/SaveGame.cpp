@@ -2696,8 +2696,27 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
     for(const auto &oldHab:originalHabitats)if(ex.tiles.count({oldHab.x,oldHab.y})){h=oldHab;break;}
     auto [x,y]=*ex.tiles.begin();h.x=x;h.y=y;h.name=ex.name;h.tank=ex.tank;h.show=ex.show;
     h.gateX=h.gateY=h.gateSide=-1;
-    for(const auto &[edge,p]:world.fences.edges)if(p.gate&&ex.tiles.count({p.ownerX,p.ownerY})) {
-      h.gateX=p.ownerX;h.gateY=p.ownerY;h.gateSide=p.facing;break;
+    // (its gate: the tile and facing its gate's fence record has - written
+    // below in the same way: a tank wall's by the tank's own tile beside it,
+    // facing the wall, another fence's by the piece's own tile and facing.
+    // measured: the original's own saves hold a tank's gate on its inside
+    // tile facing the wall (lab-sweep-marine: Tank 1 30,92 side 6) and a
+    // paddock's on the piece's tile, outside it as often as in. Matching the
+    // piece's own tile to the exhibit left most exhibits made in our engine
+    // with no gate, and the original put up one of its own, #155)
+    for(const auto &[edge,p]:world.fences.edges) {
+      if(!p.gate)continue;
+      const int ax=edge.alongX?edge.x:edge.x-1,ay=edge.alongX?edge.y-1:edge.y;
+      const bool inA=ex.tiles.count({ax,ay})>0,inB=ex.tiles.count({edge.x,edge.y})>0;
+      if(!inA&&!inB)continue;
+      const bool tankWall=p.type>=0&&p.type<int(world.fences.typeList.size())&&world.fences.typeList[p.type].tank;
+      if(ex.tank&&tankWall) {
+        h.gateX=inA?ax:edge.x;h.gateY=inA?ay:edge.y;
+        h.gateSide=edge.alongX?(inA?4:0):(inA?2:6);
+      } else {
+        h.gateX=p.ownerX;h.gateY=p.ownerY;h.gateSide=p.facing;
+      }
+      break;
     }
     h.tankHeight=ex.wallSub;h.waterLevel=int(std::lround(ex.water*std::max(0,ex.wallSub-1)));
     h.salt=ex.salt;h.filling=ex.filling;h.purity=int(ex.purity);

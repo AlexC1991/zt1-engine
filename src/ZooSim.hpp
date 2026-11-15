@@ -17,11 +17,10 @@
 //   "Jun, Year 1" (22012 "MMM',' 'Year' y"), months from 22101-22112.
 // - Funding (research, conservation, marketing) is a monthly cost paid by
 //   the tick: every 3 s of play a 120th of it (zoo.exe researchTick
-//   0x41f1ba, the marketing tick 0x41f2ae), charged here in whole dollars as
-//   it adds up (research at $400 a month for 26 seconds in April cost $28,
-//   marketing at $200 for 2 seconds in February $1). A tick's paid only if
-//   the zoo has it - with no money nothing's paid, so funding never takes
-//   the cash below zero.
+//   0x41f1ba, the marketing tick 0x41f2ae), each tick's share spent as it
+//   is, cents and all (the original's cash is a float; only its display is
+//   rounded, 0x40ee3d). A tick's paid only if the zoo has it - with no
+//   money nothing's paid, so funding never takes the cash below zero.
 // - The Income / Expenses page shows the last four months, oldest on the
 //   left, this month on the right; money spent shows in red with a minus.
 //   Net income is this month's total. The graphs show one point a month.
@@ -121,7 +120,7 @@ private:
     Line line;
     int key;
     double perMonth;
-    double owed = 0; // charged in whole dollars as it adds up
+    double owed = 0; // (unused: the original pays each tick as it is)
   };
   std::vector<Monthly> monthly;
   double fundingClock = 0; // seconds to the next funding tick (every 3 s)

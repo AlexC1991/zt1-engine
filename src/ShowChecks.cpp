@@ -103,8 +103,11 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   run(5);shows.refresh();check("show fence classified separately",shows.show(tank) && !shows.show(home));
   int ports=0;for(const auto &[edge,p]:f.pieces()){int show=-1,h=-1;if(f.showPortal(edge,show,h) && show==tank && h==home)++ports;}
   check("one portal in shared tank wall",ports==1);
+  // (two males: a pair can breed, and a calf born in the show tank part
+  // way through these checks is a stranded animal - Shows::refresh sends
+  // it home and the next show waits)
   int one=a.adopt(a.typeOfFile("animals/orca.ai"),false,34.5f,31.5f,map,f);
-  int two=a.adopt(a.typeOfFile("animals/orca.ai"),true,36.5f,31.5f,map,f);
+  int two=a.adopt(a.typeOfFile("animals/orca.ai"),false,36.5f,31.5f,map,f);
   check("orca pair adopted",one>=0 && two>=0);run(1);
   check("linked species listed",shows.selectSpecies(tank,"animals/orca.ai"));
   std::string why;

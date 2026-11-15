@@ -27,6 +27,9 @@
 #include <string>
 #include <vector>
 
+// The game's own goal hooks (main.cpp's setupGoals), set before the checks run
+Goals::Hooks g_financeGoalHooks;
+
 int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManager *rm, const std::string &out) {
   (void)hud;
   (void)rm;
@@ -74,6 +77,17 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     check("a tick's paid only if it's no more than the cash", !books.payTick(ZooSim::Marketing, 0, books.cash() + 1) &&
                                                                   books.payTick(ZooSim::Marketing, 0, 1));
   }
+  // A tick's share is spent as it is, cents and all (zoo.exe 0x41f2ae,
+  // 0x41f1ba: a float to spendCash; only the cash shown is rounded)
+  {
+    ZooSim books;
+    books.start(1000, 50);
+    books.setMonthlyCost(ZooSim::Marketing, 0, 1000);
+    books.update(3.0);
+    const double spent = 1000 - books.cash();
+    check("one tick of $1,000 a month: $" + std::to_string(spent) + " (a 120th, not rounded to whole dollars)",
+          std::abs(spent - 1000.0 / 120.0) < 1e-6);
+  }
 
   // The infinite money cheat: booked, but the cash never goes down
   {
@@ -94,6 +108,20 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     check("infinite money: anything can be bought", books.canAfford(1e9));
     books.unlimited = false;
     check("cheat off: $1,000,000,000 can't be", !books.canAfford(1e9));
+  }
+
+  // economy.cfg's numbers for the zoo rating's kinds (zooRatingTerms
+  // 0x41fcc1: cSpeciesAvailable) and the members (monthlyUpkeep 0x483f11,
+  // 0x4fa85d), read as ZTGameMgr::loadConfig 0x591c0f reads them
+  {
+    Original::loadEconomy(rm);
+    const Original::Economy &e = Original::economy();
+    check("economy.cfg: species available " + std::to_string(e.speciesAvailable) + "; members join over " +
+              std::to_string(e.membershipJoinHappiness) + " happy, " + std::to_string(e.membershipJoinChance) +
+              "%, lapse factor " + std::to_string(e.membershipJoinFactor) + ", give $" +
+              std::to_string(e.endowmentGiftLow) + "-$" + std::to_string(e.endowmentGiftHigh),
+          e.speciesAvailable == 20 && e.membershipJoinHappiness == 80 && e.membershipJoinChance == 15 &&
+              e.membershipJoinFactor == 10 && e.endowmentGiftLow == 100 && e.endowmentGiftHigh == 300);
   }
 
   // A private foundation (zoo.exe 0x4351a9, 0x613e4a): only Tutorial 2's
@@ -416,8 +444,25 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
           dragging && lit == 5 && shown > 0);
     check("let go: the paths and scenery taken, the snack stand left, the money shown paid back ($" +
               std::to_string(r.refund) + ")",
-          pathsLeft == 0 && world.getObjects().objects().size() == objects - 2 && r.refund == shown);
+          pathsLeft == 0 && world.getObjects().objects().size() == objects - 2 && std::lround(r.refund) == shown);
     world.setBulldozer(false);
+  }
+
+  // Money back is 80% of the price as it is (ZTEntity::objectSellValue
+  // 0x41ec7f; removeObject 0x50a0b0 pays the float): an $18 African path
+  // tile gives $14.40 back, not $14
+  {
+    const int tx = X + 8, ty = Y + 2;
+    map.setPath(tx, ty, "afpath");
+    world.setBulldozer(true);
+    int qx, qy;
+    centre(tx, ty, qx, qy);
+    world.mouseMove(qx, qy);
+    world.mouseDown(qx, qy);
+    World::ToolResult r = world.mouseUp(qx, qy);
+    world.setBulldozer(false);
+    check("an $18 path tile bulldozed: $" + std::to_string(r.refund) + " back (80% as it is)",
+          !map.isPath(tx, ty) && std::abs(r.refund - 18 * Original::sellFactor) < 1e-4f);
   }
 
   // A keeper
@@ -461,6 +506,28 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     world.setPathTool("", 0);
   }
   world.cash = 1e300;
+
+  // Freeform's awards, donations and unlocks (awards.scn, donation.scn,
+  // unlock.scn, as extragoals): every rule they use is one the game measures
+  // (zoo.exe goalRuleMeasure 0x41d665) - Dinosaur Digs' dinosaur awards
+  // (13, 14, 15, 18) are rule 6/1 and 6/5, by cFamily and cEra (0x41da81)
+  if (g_financeGoalHooks.measures) {
+    for (const char *file : {"freeform/awards.scn", "freeform/donation.scn", "freeform/unlock.scn"}) {
+      Goals f;
+      f.load(rm, file);
+      std::set<std::string> unknown;
+      for (const Goals::Goal &g : f.all())
+        if (!g_financeGoalHooks.measures(g))
+          unknown.insert(std::to_string(g.rulea) + "/" + std::to_string(g.ruleb));
+      std::string list;
+      for (const std::string &u : unknown)
+        list += " " + u;
+      check(std::string(file) + ": " + std::to_string(f.all().size()) + " goals, every rule measured" +
+                (list.empty() ? "" : " - not:" + list),
+            !f.all().empty() && unknown.empty());
+    }
+  } else
+    check("the game's goal hooks were handed to the checks", false);
 
   // The goal tree (zoo.exe makeGoal 0x58e066), on scripted measures: Marine
   // Mania's shark award is goals in order (rtype 2: the rule, the award, its

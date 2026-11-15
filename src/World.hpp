@@ -125,7 +125,7 @@ public:
         int messageId = 0;             // a message to show (lang string)
         int filter = -1;               // no tool: the tank filter clicked
         int wage = 0;                  // staff hired: the first month's pay
-        int refund = 0;                // bulldozed: money back (Recycling)
+        float refund = 0;              // bulldozed: money back (Recycling), cents and all (zoo.exe removeObject 0x50a0b0 takes a float)
         int staff = -1;                // a staff member clicked (or hired)
         int animal = -1;               // an animal clicked
         int guest = -1;                // a guest clicked
@@ -297,7 +297,7 @@ public:
     // everything done since the last click on the map, undone newest
     // first, with exactly the money it took or gave back
     struct UndoMoney {
-      int construction = 0, animals = 0, wages = 0, recycling = 0;
+      float construction = 0, animals = 0, wages = 0, recycling = 0;
     };
     bool canUndo() const { return !this->undoSteps.empty(); }
     UndoMoney undo();
@@ -349,7 +349,7 @@ private:
       int fenceType = -1;            // (RemovedFence; Fence: the kind it replaced)
       float fenceLife = -1;          // (Fence: the replaced one's wear)
       PlacedObjects::Object object;  // (RemovedObject)
-      int money = 0;
+      float money = 0;
     };
     std::vector<UndoStep> undoSteps;
     bool undoFresh = false; // a click on the map: the next thing done starts a new list

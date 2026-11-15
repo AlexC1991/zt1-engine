@@ -36,6 +36,12 @@ void Original::loadEconomy(ResourceManager *rm, const std::string &scenario) {
     whole("cDonationLow", e.donationLow);
     whole("cDonationHigh", e.donationHigh);
     whole("cDonationChance", e.donationChance);
+    whole("cMembershipJoinHappiness", e.membershipJoinHappiness);
+    whole("cMembershipJoinFactor", e.membershipJoinFactor);
+    whole("cEndowmentGiftLow", e.endowmentGiftLow);
+    whole("cEndowmentGiftHigh", e.endowmentGiftHigh);
+    whole("cMembershipJoinChance", e.membershipJoinChance);
+    whole("cSpeciesAvailable", e.speciesAvailable);
     num("cMinAdultAdmissionPrice", e.minAdmission);
     num("cMaxAdultAdmissionPrice", e.maxAdmission);
     num("cPricingFactor", e.pricingFactor);
@@ -147,28 +153,20 @@ void ZooSim::setMonthlyCost(Line line, int key, double perMonth) {
   this->monthly.push_back({line, key, perMonth, 0});
 }
 
+// zoo.exe researchTick 0x41f1ba, marketingTick 0x41f2ae: the tick's share
+// (a float: the month's cost x the minutes passed / 43200) booked and spent
+// (spendCash 0x41ef68) as it is, cents and all - the cash is a float and
+// only its display is rounded (0x40ee3d) - when it's no more than the cash
 bool ZooSim::payTick(Line line, int key, double amount) {
+  (void)key;
   if (amount <= 0)
     return true;
   if (this->months.empty() || !this->canAfford(amount))
     return false;
-  Monthly *m = nullptr;
-  for (Monthly &each : this->monthly)
-    if (each.line == line && each.key == key)
-      m = &each;
-  if (!m) {
-    this->monthly.push_back({line, key, 0, 0});
-    m = &this->monthly.back();
-  }
-  m->owed += amount;
-  double whole = std::floor(m->owed);
-  if (whole >= 1) {
-    m->owed -= whole;
-    this->months.back().lines[line] -= whole;
-    if (!this->unlimited)
-      this->money -= whole;
-    this->dirty = true;
-  }
+  this->months.back().lines[line] -= amount;
+  if (!this->unlimited)
+    this->money -= amount;
+  this->dirty = true;
   return true;
 }
 

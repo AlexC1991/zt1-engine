@@ -29,6 +29,23 @@ inline constexpr float sellHalf = 0.5f;
 // and 0x5a5c28 for ZTBuilding::raisePrice 0x611b43, lowerPrice 0x5a5bbc)
 inline constexpr float priceStep = 0.25f;
 
+// Research and Conservation's funding line shows a level's cost (a month)
+// times this, a day's (0x635040, researchFundingText 0x470d0f)
+inline constexpr float fundingShownPerDay = 1.0f / 30.0f;
+
+// Terraforming's price a height unit: zoo.ini [Map] elevationCost, 8.0 when
+// it's not there (zoo.exe 0x4625af: 0x41000000; the shipped zoo.ini has no
+// such key)
+inline constexpr float elevationCost = 8.0f;
+
+// The zoo rating's esthetics term (zooRatingTerms 0x41fcc1): the zoo's
+// esthetics x 10 (0x630d60), no more than 100 (0x630d64) nor less than 0,
+// x -0.1 (0x630d74) rounded (fistp: to the nearest, halves to even) and
+// taken off - so 0 to 10 points, rounded, not cut down
+inline constexpr float ratingEstheticScale = 10.0f;
+inline constexpr float ratingEstheticMax = 100.0f;
+inline constexpr float ratingEstheticBack = -0.1f;
+
 // economy.cfg's [characteristics], as ZTGameMgr::loadConfig 0x591c0f reads
 // them; each starts at ZTGameMgr::setDefaults 0x4c2683's value, for a key
 // the file leaves out (the shipped file has no admission limits: $0 to $100)
@@ -55,10 +72,28 @@ struct Economy {
   int donationLow = 10000;    // cDonationLow (+0x128)
   int donationHigh = 20000;   // cDonationHigh (+0x12c)
   int donationChance = 0;     // cDonationChance (+0x130), percent a tick
+  // Zoo members (economy.cfg's cMembership* and cEndowmentGift* keys, read
+  // as whole numbers by loadConfig 0x591c0f; defaults from setDefaults
+  // 0x4c2683 where it sets one): a guest leaving happier than this may
+  // join, this percent of the time; each month a member stays unless a
+  // roll of 0-100 less the factor is above the zoo rating, and gives low
+  // to high dollars (Private Donations)
+  int membershipJoinHappiness = 80; // cMembershipJoinHappiness (+0x138)
+  int membershipJoinFactor = 0;     // cMembershipJoinFactor (+0x13c)
+  int endowmentGiftLow = 10000;     // cEndowmentGiftLow (+0x140)
+  int endowmentGiftHigh = 20000;    // cEndowmentGiftHigh (+0x144)
+  int membershipJoinChance = 50;    // cMembershipJoinChance (+0x148)
+  // The zoo rating's kinds term (zooRatingTerms 0x41fcc1): 10 x the kinds
+  // in exhibits, no more than this, over this - economy.cfg says 20
+  int speciesAvailable = 44;        // cSpeciesAvailable (+0x134)
 };
 // The cash a foundation gives below: a fixed $1,000 (zoo.exe 0x635128, read
 // by zooPeriodicTick 0x435243 - not cLoanAvailable, which the file also has)
 inline constexpr float foundationBelowCash = 1000.0f;
+// An animal's watchers (zoo.exe 0x4479fd): a viewing area's guests count for
+// this much less with every tile between it and them (0x630d68, a double;
+// the product truncated each time)
+inline constexpr double guestCrowdFalloff = 0.9;
 inline Economy &economy() {
   static Economy e;
   return e;

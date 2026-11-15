@@ -14,6 +14,7 @@
 #include "ZooItems.hpp"
 #include "WorldIndex.hpp"
 #include "Walkways.hpp"
+#include "ViewingAreas.hpp"
 
 class Animals;
 
@@ -165,6 +166,9 @@ public:
   void setAnimals(Animals *animals) { this->animals = animals; }
   void setGuests(Guests *guests) { this->guests = guests; }
   void setObjects(PlacedObjects *objects) { this->objects = objects; }
+  // The exhibits' viewing areas (tour guides go where guests are; guests
+  // stand in them to look)
+  ViewingAreas &viewingAreas() { return this->viewing; }
   // Dung raked with a compost in the zoo: cZooDooRecyclingAmount ($50) a
   // pile, Recycling (zoo.exe 0x4a2c98); none without one. Taken since last
   // asked.
@@ -255,6 +259,7 @@ private:
   Animals *animals = nullptr;
   Guests *guests = nullptr;
   PlacedObjects *objects = nullptr;
+  ViewingAreas viewing;
   double recycling = 0;
   void dungRecycled(float x, float y);
   bool tourWork(Member &m, const WorldMap &map, Fences &fences);

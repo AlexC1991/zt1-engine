@@ -60,8 +60,36 @@ public:
     // Touching a live electric fence instead of watching (zoo.exe
     // 0x425af4): cTestFenceChance in 100, cZapHappinessHit when zapped
     int testFenceChance = 0, zapHit = 0;
+    // Its [<kind>/Characteristics/Integers] (zoo.exe ZTGuestType::guestTypeLoad
+    // 0x4c4cb9; a kind's missing keys are the DefaultSubtype man's): each
+    // check's period in status ticks, the needs' increments, thresholds and
+    // happiness at their limit, leaving, souvenirs and surroundings
+    int hungerCheck = 30, thirstCheck = 30, bathroomCheck = 30, souvenirCheck = 40, energyCheck = 30,
+        trashCheck = 30, chaseCheck = 5, leaveCheck = 20, viewingCheck = 20, environmentCheck = 20;
+    int hungerIncrement = 4, thirstIncrement = 3, bathroomIncrement = 3, energyIncrement = 3;
+    int hungerThreshold = 50, thirstThreshold = 50, bathroomThreshold = 50, energyThreshold = 50;
+    int angryFood = -30, angryThirst = -30, angryBathroom = -30, angryEnergy = -15, maxEnergy = 100;
+    int leaveLow = 12, leaveMed = 24, leaveHigh = 30, leaveDone = 60;
+    int souvenirMed = 5, souvenirHigh = 10, angryTrash = -5, escapedChange = -100, initialHappiness = 50;
+    int estheticThreshold = 200, happyEsthetic = 5, crowdedThreshold = 75, crowdedChange = -3;
+    int stinkThreshold = 2, sickChange = -40;
+    int sawReset = 20; // cSawAnimalReset
+    // Sick from a smell (zoo.exe chooseTask 0x5b0509, Task79_GuestSick):
+    // cSickChance in 100 each time it picks what to do next; drawn with
+    // cSickPalName's skin while it stands in the stink (class slot 0x50)
+    int sickChance = 20;
+    std::string sickPal;
   };
-  enum class State { Arriving, Walking, Gawking, Leaving, Fleeing, Using, Caught };
+  // (Water: out on the water - a ride from a return building, swimming out,
+  // drowning; Guest::waterTask says which)
+  enum class State { Arriving, Walking, Gawking, Leaving, Fleeing, Using, Caught, Water };
+  // Its tasks on the water, by the original's task numbers (unitMakeTask):
+  // 0x82 a ride (Task82, class table 0x6335d4), 0x66 back to a return
+  // building's water door (guestGoToBuilding 0x43b2f6 on a ride), 0x83 in
+  // the water, making for land (Task83_InWater), 0x84 drowning
+  // (Task84_Drown), 0x7f in the water and not on a ride: out (Task7f)
+  static constexpr int kRideTask = 0x82, kRideBackTask = 0x66, kInWaterTask = 0x83, kDrownTask = 0x84,
+                       kOutOfWaterTask = 0x7f;
   struct Guest {
     int id = 0, type = 0;
     int colours[4] = {};
@@ -94,6 +122,18 @@ public:
     uint32_t inventory[5] = {}; // original item name ids; 0 is an empty slot
     bool sick = false;
     int trashCheck = 0, souvenirCheck = 0;
+    // Ticks to its next look at its surroundings (zoo.exe +0x310); just done
+    // with something - out of a building, done watching, no seat: its needs
+    // looked at on the next tick without waiting for their checks (+0x33e)
+    int environmentCheck = 0;
+    bool recheck = false;
+    bool smelled = false; // made sick by its block's stink, until out of it (+0x336)
+    // A predator seen (zoo.exe +0x24c) and the one it's fleeing (an animal
+    // id, +0x22c); ticks to its next calming down (+0x314, cSawAnimalReset)
+    bool sawPredator = false;
+    bool puking = false; // being sick (Task79: bSick, its puke animation)
+    int predator = -1;
+    int sawResetCheck = 20;
     bool souvenir = false;    // has one
     // wants one: set when a souvenir check decides so (10090), cleared at the
     // next check or when a gift's bought (zoo.exe +0x33c)
@@ -114,6 +154,22 @@ public:
     // Attacked by a loose predator (never twice), and getting up after
     bool attacked = false;
     int caughtStage = 0;
+    // Marine Mania's water rides (zoo.exe guestBuy 0x42d858 on a cReturnBuilding):
+    // the ride's building type (its cNameID, ZTGuest +0x284's low bits; 0
+    // none), its behaviour set (+0x288: "breturnboatshak1"), in the water
+    // (+0x284's 0x80000, Task83), the building it came out of (an object id)
+    int ride = 0;
+    std::string rideSet;
+    bool inWater = false;
+    int rideFrom = -1;
+    // Its task on the water (State::Water: kRideTask...) and the task's own:
+    // a ride's legs left (Task82 +0x18), idling between them (+0x20 cIdler,
+    // +0x21 idling now, +0x1c until when, game seconds), looking at
+    // exhibits (+0x22 cExhibitViewer); Task83's tries (+0x18); a drowning's
+    // plays done
+    int waterTask = 0, legs = 0, tries = 0, drownStep = 0;
+    bool idler = false, idling = false, viewer = false;
+    double idleUntil = 0;
     // ours: its art for the animation last asked for (Guests::art), for its
     // type and clothes, while the art cache has let none go (artGen)
     mutable Animation *artMemo = nullptr;
@@ -158,6 +214,14 @@ public:
   std::function<bool(int guide)> guideSpeaking;
   std::function<int(int guide)> guideBonusOf;    // its cTourGuideBonus
   std::function<int(int exhibit)> tourBonusAt;   // a guide on the exhibit's viewing tiles
+  // An exhibit's viewing areas (zoo.exe: the habitat's +0x34 list - World's
+  // ViewingAreas), in the order they were made: each one's viewing tiles,
+  // the exhibit tiles it sees and the guests standing on its viewing tiles
+  struct ViewArea {
+    std::vector<std::pair<int, int>> viewing, seen;
+    int guests = 0;
+  };
+  std::function<std::vector<ViewArea>(int exhibit)> viewAreas;
   // The HUD's Hide Guests toggle: not drawn, not picked
   bool hideAll = false;
   // What guests did at each exhibit since last asked: time spent viewing
@@ -232,6 +296,17 @@ public:
     m.swap(this->messages);
     return m;
   }
+  // News about one guest for the message bar ("%s is drowning!": zoo.exe
+  // 0x4807c2, kind 2), taken
+  struct Notice {
+    std::string text;
+    int kind = 0, guest = -1;
+  };
+  std::vector<Notice> takeNotices() {
+    std::vector<Notice> n;
+    n.swap(this->notices);
+    return n;
+  }
 
   void addToIndex(WorldIndex &index) const;
   void collect(const WorldRenderer &view, const WorldMap &map, std::vector<Fences::Drawable> &out) const;
@@ -278,6 +353,9 @@ private:
   double concessions = 0, donations = 0;
   std::map<int, ExhibitBooks> exhibitBooks;
   std::map<std::string, std::string> caughtSound; // "blackbrm" -> its roar's [Sounds] key
+  // guests.ai's water behaviour sets ("man\behaviorset\breturnchroom0",
+  // "behaviorset\binwater", bSuitIdle, bSuitDrown, bSurfDrown): their lines
+  std::map<std::string, std::vector<std::string>> behaviourSets;
   // A building as guests use it (its .ai): what it satisfies, sells, its
   // price, how long they're in, and what it does for them
   struct BuildingInfo {
@@ -305,7 +383,50 @@ private:
     std::vector<std::pair<int, int>> doors;
     struct DrawSlot { float x, y, z; };
     std::vector<DrawSlot> drawSlots;
+    // A water ride (Marine Mania; ZTBuildingType::loadConfig 0x4c0b4d):
+    // cNameID; cReturnBuilding (+0x240), cIdler (+0x19c), cExhibitViewer
+    // (+0x19d), cUserTracker (+0x19b), cStrictBuildingCapacity (+0x250);
+    // each [slot]: its entrpos and exitpos (64 a tile, turned with it),
+    // exitonwater, entranceonwater, isreturnslot, and its id list (the
+    // guest kinds' cNameIDs, read at 0x4c08dc)
+    int nameId = 0, strictCap = 0;
+    bool returnBuilding = false, idler = false, viewer = false, tracker = false;
+    struct Slot {
+      int ex = 0, ey = 0, xx = 0, xy = 0;
+      bool exitOnWater = false, entranceOnWater = false, isReturn = false;
+      std::vector<int> ids;
+    };
+    std::vector<Slot> slots;
   };
+  // A move on the water from a behaviour set's line (guests.ai
+  // fMoveWithSound(0,0,<anim>,<speed>,<sound>), fPlayTime(<anim>, <s>),
+  // fPlay / fPlayWithSound): its animation, speed (/60 a tile a second),
+  // sound, seconds
+  struct Move {
+    std::string anim, sound;
+    int speed = 0;
+    float seconds = 0;
+  };
+  std::vector<Move> behaviour(const Guest &g, const std::string &set) const;
+  std::vector<Notice> notices;
+  // The water: a lake tile out of the exhibits (terrain 9 or 10); a route
+  // over it to a tile (the last may be land); the lake's size from a tile
+  // (as many as 100); a building slot's point in the world
+  bool swimmable(int x, int y) const;
+  bool waterTo(Guest &g, int tx, int ty, const Move &m);
+  int waterSize(int x, int y) const;
+  void slotPoint(const PlacedObjects::Object &o, int px, int py, float &x, float &y) const;
+  // The rides and the water (Task82, guestGoToBuilding on a ride, Task83,
+  // Task84, Task7f): out onto it, the next leg, back, making for land,
+  // drowning, getting out
+  void rideOut(Guest &g, const PlacedObjects::Object &o, const BuildingInfo &b);
+  void rideLeg(Guest &g);
+  void rideBack(Guest &g);
+  void inWater(Guest &g);
+  void drown(Guest &g);
+  void outOfWater(Guest &g);
+  void waterNext(Guest &g);
+  void endRide(Guest &g);
   mutable std::map<std::string, BuildingInfo> buildingInfo;
   const BuildingInfo &infoOf(const std::string &file) const;
   // Scenery to look at (zoo.exe guestPickAttraction 0x4282e1's third
@@ -329,6 +450,9 @@ private:
   float artSweepIn = 15.0f; // (game seconds to the next freeing of art no guest wears)
   uint32_t artGen = 1; // (moved on as art's freed: each guest's artMemo)
   Animation *artUncached(const Guest &g, const std::string &name) const;
+  // The colours it's drawn in now: its own, the skin cSickPalName's while
+  // smell-sick (kSickSkin in the skin slot)
+  void wornColours(const Guest &g, int out[4]) const;
   // ours: each guest animation loaded once in a palette whose every entry is
   // a colour of its own (by its type's full palette and path); an outfit is
   // a copy of it with the outfit's colours (Animation::recolouredCopy) - a
@@ -342,6 +466,38 @@ public:
 private:
   Animation *selectArrow = nullptr;
   std::mt19937 rng{1977};
+  // guests.ai [Characteristics/Integers] (zoo.exe ZTGuestType::loadClassConfig
+  // 0x52196e): cSearchRadius, and cRandomStatNth with the ranges a new
+  // guest's one randomised need starts in (hunger, thirst, energy, bathroom)
+  int searchRadius = 40, randomStatNth = 2;
+  int randomMin[4] = {41, 41, 0, 0}, randomMax[4] = {50, 50, 0, 0};
+  // Animal types never a guest's favourite (cIsSpecialAnimal: zoo.exe
+  // 0x4f60f5 skips them), by index; worked out for this many types
+  std::set<int> specialAnimals;
+  size_t specialFor = 0;
+  // The 5x5-tile blocks guests judge where they are by (zoo.exe
+  // blockGridRefresh 0x41ffdc, every 7.5 s): the guests in each, the
+  // EstheticBonus of what stands there by guest kind (cNameID), its stink
+  struct Block {
+    int guests = 0;
+    std::map<int, float> esthetic;
+    float stink = 0;
+  };
+  std::vector<Block> blocks;
+  int blocksW = 0, blocksH = 0;
+  float blockMs = 0;
+  int dungStink = 1; // scenery/other/poo.ai cStink
+  bool seekFull = false; // (the last seekBuilding found only full ones)
+  // ztunit.ai [Characteristics/Integers]: cPredatorRadius (tiles), and what
+  // a step off the paths costs a route, ordinarily and running for its life
+  int predatorRadius = 7, nonPathCost = 5, nonPathCostEmergency = 1;
+  int findPredator(const Guest &g) const; // (an animal id, -1 none)
+  // How crowded the viewing area it stands in is (zoo.exe 0x425f6a)
+  int areaCrowd(const Guest &g) const;
+  bool fleeGround(int x, int y) const;
+  void refreshBlocks();
+  const Block *blockAt(float x, float y) const;
+  void surroundings(Guest &g);
   // crowd sounds
   int bedLevel = -1, bedChannel = -1;
   float chatterClock = 0;
@@ -350,7 +506,7 @@ private:
 
   bool walkable(int x, int y) const;
   bool canStep(int x, int y, int nx, int ny) const;
-  bool walkTo(Guest &g, int tx, int ty, float speed);
+  bool walkTo(Guest &g, int tx, int ty, float speed, bool emergency = false);
   void decide(Guest &g);
   void tick(Guest &g);
   void gawk(Guest &g);
