@@ -5,6 +5,7 @@
 // posts: 10029, 10030, 10031). Run from runParityChecks (the flat Basic
 // Grass test zoo); its fixture taken down after
 #include "World.hpp"
+#include "Animation.hpp"
 #include "Features.hpp"
 #include "OriginalConstants.hpp"
 #include "ResourceManager.hpp"
@@ -140,6 +141,7 @@ std::string runPanelMessageChecks(World &world, ResourceManager *rm, int &passed
       zm->healthCheck = 100;
       zm->sick = false;
       zm->starve = 0;
+      zm->takenAway = false;
       zm->noFoodSeen = false;
       zm->hunger = 0;
       zm->escaped = false;
@@ -182,6 +184,49 @@ std::string runPanelMessageChecks(World &world, ResourceManager *rm, int &passed
     });
     check("#239: sick: \"" + fill(40029) + "\" each health check, under cSickTime (0x4389aa)",
           has(sick, fill(40029)) && !has(longSick, fill(40029)));
+    // #247: starving and sick for cSickTime health checks in a row, with no
+    // keeper at its duties in its exhibit, it's taken away: 10010 (her
+    // 40010), gone at the sweep (0x4389aa -> 0x4808ac -> 0x4fa78e(1),
+    // 0x423797, 0x434df7); a keeper at work there, it stays. The check
+    // before cSickTime counts on; a fed one's count goes back to 0
+    const bool marked = zm->takenAway;
+    const auto keepWas = a.keepersAtWork;
+    a.keepersAtWork = [](int) { return 1; };
+    auto tended = tickWith([&](Animals::Member &m) {
+      m.sick = true;
+      m.health = 0;
+      m.hunger = 100;
+      m.starve = t.sickTime;
+      m.healthCheck = 0;
+    });
+    const bool tendedStays = !zm->takenAway;
+    a.keepersAtWork = keepWas;
+    auto counting = tickWith([&](Animals::Member &m) {
+      m.sick = true;
+      m.health = 0;
+      m.hunger = 100;
+      m.starve = t.sickTime - 2;
+      m.healthCheck = 0;
+    });
+    const int counted = zm->starve;
+    const bool notYet = !zm->takenAway;
+    tickWith([&](Animals::Member &m) {
+      m.sick = true;
+      m.health = 0;
+      m.hunger = 50;
+      m.starve = t.sickTime - 1;
+      m.healthCheck = 0;
+    });
+    const bool fedReset = zm->starve == 0 && !zm->takenAway && zm->health == float(t.minHits);
+    out << "PANELS #247 taken away: marked " << marked << " says 40010 " << has(longSick, fill(40010))
+        << " tended stays " << tendedStays << " counted " << counted << " fed reset " << fedReset << "\n";
+    check("#247: sick and starving cSickTime checks running, no keeper at work there: \"" + fill(40010) +
+              "\", taken away (0x4808ac, 0x4fa78e)",
+          marked && has(longSick, fill(40010)) && !has(longSick, fill(40029)));
+    check("#247: with a keeper at its duties there (habitat +0xf0) it stays; under cSickTime it counts on, "
+          "\"very sick\"; fed, the count's 0 again and its health cMinHits (0x4808ac, 0x4806ea)",
+          tendedStays && !has(tended, fill(40010)) && counted == t.sickTime - 1 && notYet &&
+              has(counting, fill(40029)) && fedReset);
     auto &types = a.typeList;
     const int prefWas = types[zm->type].habitatPreference, pctWas = types[zm->type].pctHabitat;
     types[zm->type].habitatPreference = 1000;
@@ -190,6 +235,46 @@ std::string runPanelMessageChecks(World &world, ResourceManager *rm, int &passed
     types[zm->type].habitatPreference = prefWas;
     types[zm->type].pctHabitat = pctWas;
     check("#239: far from what it wants: \"" + fill(40031) + "\" (0x438c47)", has(dislikes, fill(40031)));
+    // (#247, last: taken away, it's gone at the sweep)
+    tickWith([&](Animals::Member &m) {
+      m.sick = true;
+      m.health = 0;
+      m.hunger = 100;
+      m.starve = t.sickTime;
+      m.healthCheck = 0;
+    });
+    const bool markedAgain = zm->takenAway;
+    a.takeNotices();
+    a.lifeEvents(map, f);
+    const bool gone = a.member(z) == nullptr;
+    out << "PANELS #247 the sweep: marked " << markedAgain << " gone " << gone << "\n";
+    check("#247: taken away, it's gone at the sweep (0x434df7, 0x5bdda8)", markedAgain && gone);
+  }
+  // #242: fMove's time (its argument x 1000 ms, 0x425533) in plays of the
+  // move's animation (0x43646e, 0x42514c): ceil(time / length), at least
+  // one; a length of 0 with a time, two (0x5aa022). A mako's bEat
+  // fMove(level, 1, submerged_eat): its eat's frames x frame time
+  {
+    using Original::timedMovePlays;
+    const bool plays = timedMovePlays(1000, 800) == 2 && timedMovePlays(1000, 1000) == 1 &&
+                       timedMovePlays(3000, 999) == 4 && timedMovePlays(0, 500) == 1 &&
+                       timedMovePlays(1000, 0) == 2 && timedMovePlays(0, 0) == 1;
+    bool lengthOk = true;
+    std::string mako;
+    if (const int mk = a.typeOfFile("animals/mako.ai"); mk >= 0) {
+      Animals::Member mm;
+      mm.type = mk;
+      if (Animation *eat = a.art(mm, "submerged_eat")) {
+        const float want = std::max(1, eat->frameCount()) * (eat->frameTimeMs() ? eat->frameTimeMs() : 100) / 1000.0f;
+        lengthOk = std::abs(a.animSeconds(mm, "submerged_eat") - want) < 1e-4f;
+        mako = std::to_string(eat->frameCount()) + " frames x " + std::to_string(eat->frameTimeMs()) + " ms, " +
+               std::to_string(timedMovePlays(1000, static_cast<int>(std::lround(want * 1000)))) + " plays for 1 s";
+      }
+    }
+    out << "PANELS #242 timed fMove: plays " << plays << " mako eat " << mako << "\n";
+    check("#242: fMove's time as plays: ceil(time / its length), at least one, two for a 0 length (0x43646e, "
+          "0x42514c, 0x5aa022)",
+          plays && lengthOk);
   }
   // The name boxes (zoo.exe setName 0x449215, exhibits 0x5aedbd): a name
   // with nothing to see in it is not taken

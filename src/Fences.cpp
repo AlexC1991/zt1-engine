@@ -129,12 +129,13 @@ namespace {
 // tanks.cfg (zoo.exe loadTankSettings 0x463a0e reads these keys; the
 // values are the stock file's)
 constexpr int kTankSink = 4;       // initialSink (height units: 0x45b92f takes it off the tiles')
+constexpr int kTankSinkShow = 8;   // initialSinkShow (a show tank's, 0x46716e)
 constexpr float kWaterOffset = 1.0f; // waterOffset -1: full is a unit under the rim
 constexpr int kTankHeight = 5;     // initialHeight
 constexpr int kTankHeightShow = 9; // initialHeightShow
 constexpr int kMinWallHeight = 2;  // zoo.exe 0x5af226: the walls' least, empty
 constexpr int kTankTerrain = 2;    // tankTerrain (sand)
-constexpr float kFillSeconds = 8.0f; // ours: not in tanks.cfg (#248)
+constexpr int kTankTerrainShow = 17; // tankTerrainShow (gunite: showTankLook 0x5ab683)
 constexpr int kTankMaxHeight = 20;     // maximumTankHeight
 constexpr int kWallPriceDivisor = 5;   // wallHeightPriceDivisor
 // (zoo.exe 0x459b19: a base step's price, habitat +0x1a4, is the tiles x
@@ -144,6 +145,19 @@ constexpr double kSaltWaterPrice = 1.5;  // saltWater
 constexpr double kFreshWaterPrice = 1.0; // freshWater
 constexpr float kPurityDecaySeconds = 30.0f; // waterPurityDecayTime 30000 ms
 constexpr float kSeeThroughPurity = Original::seeThroughPurity; // (zoo.exe 0x6390b0)
+
+// A tank's water in height units (zoo.exe +0x188), up to its height
+// (+0x184) + waterOffset (tankSetWater 0x5ae565 keeps it there); ours keeps
+// it as a share of that, Exhibit::water
+int waterTop(const Fences::Exhibit &ex) { return std::max(0, ex.wallSub - static_cast<int>(kWaterOffset)); }
+int waterUnits(const Fences::Exhibit &ex) {
+  const int top = waterTop(ex);
+  return top > 0 ? static_cast<int>(std::lround(ex.water * static_cast<float>(top))) : 0;
+}
+void setWaterUnits(Fences::Exhibit &ex, int units) {
+  const int top = waterTop(ex);
+  ex.water = top > 0 ? static_cast<float>(std::clamp(units, 0, top)) / static_cast<float>(top) : 0.0f;
+}
 
 std::string fileStem(const std::string &file) {
   size_t slash = file.find_last_of('/'), dot = file.find_last_of('.');
@@ -1284,7 +1298,9 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
       for (int c = 0; c < 4; c++)
         ground = std::max(ground, static_cast<int>(t->cornerHeight[c]));
   ex.groundHeight = ground;
-  ex.floorHeight = std::max(-12, ground - kTankSink); // (0x458c6a: floors -12..12)
+  // (zoo.exe 0x45b92f: a show tank sinks initialSinkShow, 0x46716e; its
+  // walls initialHeightShow)
+  ex.floorHeight = std::max(-12, ground - (ex.show ? kTankSinkShow : kTankSink)); // (0x458c6a: floors -12..12)
   for (auto [x, y] : ex.tiles)
     if (MapTile *t = map.getTileMutable(x, y)) {
       Exhibit::Ground &g = ex.before[{x, y}];
@@ -1295,7 +1311,7 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
       for (int c = 0; c < 4; c++)
         t->cornerHeight[c] = ex.floorHeight;
       t->height = ex.floorHeight;
-      t->terrainType = kTankTerrain;
+      t->terrainType = ex.show ? kTankTerrainShow : kTankTerrain;
     }
   // Paths inside go: the original clears each tank tile's path piece (tile
   // +0x81, the path's shape - 0x416504 - set to 0 at zoo.exe 0x45e8c8, in
@@ -1316,8 +1332,8 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
     else
       it->second.tank = ex.id;
   }
-  ex.water = 0;
-  ex.wallSub = kTankHeight; // a unit above the ground
+  ex.water = 0;                              // initialWaterLevel 0
+  ex.wallSub = ex.show ? kTankHeightShow : kTankHeight; // a unit above the ground
   ex.salt = true;                            // initialSalinity 100
   // (something in it that can't be under water: left empty, 10550 - zoo.exe
   // 0x45b92f -> 0x459d94)
@@ -1327,7 +1343,10 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
     return;
   }
   ex.filling = true;                         // initialFillState 1
-  ex.water = 1;                              // full at once, as the original
+  // (zoo.exe 0x459d94: full at once while the game's paused, 0x5c86e5;
+  // else a unit an update, update)
+  if (this->paused)
+    ex.water = 1;
   ex.level = -1e9f;
 }
 
@@ -1370,11 +1389,14 @@ void Fences::drainTank(Exhibit &ex) {
   }
 }
 
-// Draining and filling happen at once, paused or not (as the original)
+// zoo.exe tankDrainCheck 0x6064ed: no longer filling (+0x198); while the
+// game's paused the water goes at once (tankSetWater(0)), else a unit an
+// update (tankTick 0x49625f)
 void Fences::drainExhibit(int id) {
   if (Exhibit *ex = this->exhibit(id)) {
     ex->filling = false;
-    ex->water = 0;
+    if (this->paused)
+      ex->water = 0;
   }
 }
 
@@ -1396,8 +1418,12 @@ bool Fences::fillExhibit(int id, bool salt) {
   ex->tank = true;
   ex->salt = salt;
   ex->filling = true;
-  ex->water = 1;
-  ex->level = -1e9f;
+  // (zoo.exe 0x459d94: full at once while the game's paused, 0x5c86e5;
+  // else a unit an update, tankTick 0x49625f)
+  if (this->paused) {
+    ex->water = 1;
+    ex->level = -1e9f;
+  }
   ex->purity = 100;
   if (ex->wallSub <= 0)
     ex->wallSub = kTankHeight;
@@ -1473,7 +1499,11 @@ void Fences::adjustWall(int id, int step) {
     return;
   // (zoo.exe 0x5af39e: no lower than the least)
   Exhibit *ex = this->exhibit(id);
+  // (its water's units kept: raised, it fills on a unit an update; lowered,
+  // cut to the new height + waterOffset at once - 0x5af39e -> 0x5acfe1)
+  const int units = waterUnits(*ex);
   ex->wallSub = std::max(ex->wallSub + step, this->minWallHeight(id));
+  setWaterUnits(*ex, units);
   // (silent, as the original: no sound for the walls, filling or draining)
 }
 
@@ -1539,14 +1569,29 @@ void Fences::update(float seconds) {
   for (Exhibit &ex : this->exhibitList) {
     if (!ex.tank)
       continue;
-    // The water shown follows the walls and the base: up a unit a second
-    // (as the original after the base is raised), down at once
+    // zoo.exe tankTick 0x49625f: each update (Original::updateMs - measured
+    // 2026-11-17: the elapsed ms it's given, 72-75 on a busy PC), filling
+    // (+0x198) the water (+0x188) a height unit up to its height +
+    // waterOffset (tankSetWater 0x5ae565), draining a unit down (0x5c882d).
+    // Paused, no update (World stops it)
+    ex.fillMs += seconds * 1000.0f;
+    while (ex.fillMs >= static_cast<float>(Original::updateMs)) {
+      ex.fillMs -= static_cast<float>(Original::updateMs);
+      const int units = waterUnits(ex);
+      if (ex.filling && units < waterTop(ex))
+        setWaterUnits(ex, units + 1);
+      else if (!ex.filling && units > 0)
+        setWaterUnits(ex, units - 1);
+    }
+    // The water shown follows it: up at most a unit an update (measured:
+    // the original draws +0x188 as it rises, a 20-high tank full in ~1.3 s),
+    // down at once
     {
       float target = ex.floorHeight + ex.water * (ex.wallTop() - kWaterOffset - ex.floorHeight);
       if (ex.level < -1e8f || ex.level > target)
         ex.level = target;
       else
-        ex.level = std::min(target, ex.level + seconds);
+        ex.level = std::min(target, ex.level + seconds * 1000.0f / static_cast<float>(Original::updateMs));
     }
     // Waves now and then, while the water's clean (murkyWaterPurity 60)
     for (Exhibit::Wave &w : ex.waves)
@@ -1566,15 +1611,9 @@ void Fences::update(float seconds) {
     } else {
       ex.waves.clear();
     }
-    // zoo.exe tankTick 0x49625f: filling (+0x198), the water (+0x188) one
-    // height unit a tick toward its height + waterOffset; ours: over a
-    // fixed kFillSeconds (#248). Its purity: as below (+0x1ac counted down
-    // by the elapsed ms, at 0 back to waterPurityDecayTime and purity - 1,
-    // tankMurkyWarning 0x49340d)
-    if (ex.filling && ex.water < 1.0f)
-      ex.water = std::min(1.0f, ex.water + seconds / kFillSeconds);
-    else if (!ex.filling && ex.water > 0.0f)
-      ex.water = std::max(0.0f, ex.water - seconds / kFillSeconds);
+    // zoo.exe tankTick 0x49625f, its purity: +0x1ac counted down by the
+    // elapsed ms, at 0 back to waterPurityDecayTime and purity - 1
+    // (tankMurkyWarning 0x49340d)
     // Standing water gets dirty; fresh water poured in is clean
     if (ex.water <= 0.0f) {
       ex.purity = 100;

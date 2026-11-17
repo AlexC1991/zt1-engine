@@ -1,4 +1,5 @@
 #include "ZooReader.hpp"
+#include "OriginalConstants.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstdio>
@@ -1061,7 +1062,9 @@ bool ZooReader::writeOriginal(std::vector<uint8_t> &out,std::string &error) cons
       if(version<85)return fail("This original version cannot store tanks.");
       w.put(int32_t(h.tankHeight));w.put(int32_t(h.waterLevel));
       if(version>=88)w.put(uint8_t(h.filling));
-      if(version>=100){w.put(uint32_t(h.salt));w.put(h.tankCounter);w.put(int32_t(h.purity));}
+      // (zoo.exe: salinity +0x18c, then the kind it's to become +0x190 - salt
+      // Original::saltSalinity, fresh 0; ours keeps no change pending)
+      if(version>=100){const uint32_t salinity=h.salt?uint32_t(Original::saltSalinity):0u;w.put(salinity);w.put(salinity);w.put(int32_t(h.purity));}
     }
   }
   span(archive.habitatEnd,archive.showsBegin);

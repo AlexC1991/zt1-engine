@@ -3,6 +3,7 @@
 #include "LabTrace.hpp"
 #include "OriginalConstants.hpp"
 #include "Guests.hpp"
+#include "Shows.hpp"
 #include "PlacedObjects.hpp"
 
 #include <algorithm>
@@ -118,6 +119,7 @@ void Staff::loadTypes(ResourceManager *rm) {
       for (const std::string &d : ai->getList(ints, "cdirt"))
         t.dirt.push_back(std::atoi(d.c_str()));
       t.chaseCheck = std::max(1, ai->getInt(ints, "cchasecheck", t.chaseCheck));
+      t.underwater = ai->getInt(ints, "cunderwater", 0) != 0;
       for (const std::string &line : ai->getList("behaviorset\\brunfrompredator", "f")) {
         std::string fn = Utils::string_to_lower(line);
         fn.erase(std::remove_if(fn.begin(), fn.end(), [](unsigned char ch) { return std::isspace(ch); }), fn.end());
@@ -900,12 +902,26 @@ bool Staff::walkAbout(Member &m, const WorldMap &map, const Fences &fences) {
 // escaped animal, 0x6f - 0x50de9f -, nor a guide's at a viewing area,
 // 0x58abff: those only set a developer's status text, as the debug overlays,
 // class slot 0x64, 0x610f8f and 0x61b61d, show; no counterpart)
-// ours: tour guides keep our earlier rhythm (not measured)
+// The set it plays is ZTStaff::startBehaviour 0x416781 (class slot 0x48):
+// ZTUnit's 0x43ca83 with no land list, so its type's [AmbientAnims]
+// (0x43cb33, the first range holding its happiness, only with no set
+// running) - or [AmbientAnimsUnderwater] / [AmbientAnimsSurface] /
+// [AmbientAnimsWater] by its water state; every staff type's lists are
+// -100..100 bZooRoutine, the routine above.
+// Tour guides (measured 2026-11-17, Lab Play original, two guides by a
+// zebra paddock with no trip to take - B:/zt1-shots/r10-staffshows/
+// poll-guide*.txt): each walk about (task 1) ends in one play of its idle
+// animation, 'stand' (2.63-2.81 s, 21 frames x 125 ms; the other guide's
+// 4.0 s), then the next walk: its bZooRoutine is fGuideRoutine 0x58a998 ->
+// 0x58a929, which, off a talk (task 0x77), plays the current animation
+// once (unitPlayCurrentAnim 0x421eb7). A trip's legs (task 0x76) pause
+// 0.2 s. (Not measured in a zoo with no exhibits: the routine doesn't
+// look at habitats, so it stands there too.)
 bool Staff::idleOriginal(const Member &m) const {
   if (Features::staffPaths)
     return false;
   const Kind k = this->typeList[m.type].kind;
-  return k == Kind::Keeper || k == Kind::Scientist || k == Kind::Trainer || k == Kind::Maint;
+  return k == Kind::Keeper || k == Kind::Scientist || k == Kind::Trainer || k == Kind::Maint || k == Kind::Guide;
 }
 void Staff::idleStep(Member &m, const WorldMap &map, Fences &fences) {
   const Kind k = this->typeList[m.type].kind;
@@ -926,7 +942,7 @@ void Staff::idleStep(Member &m, const WorldMap &map, Fences &fences) {
   bool habitats = false;
   for (const Fences::Exhibit &e : fences.exhibits())
     habitats = habitats || !e.pocket;
-  if ((k == Kind::Keeper || k == Kind::Scientist || k == Kind::Trainer) && habitats) {
+  if (((k == Kind::Keeper || k == Kind::Scientist || k == Kind::Trainer) && habitats) || k == Kind::Guide) {
     m.idleLeft = std::max(0.1f, animSeconds(m, "idle"));
     m.walksLeft = 1;
     m.anim = "idle";
@@ -2635,6 +2651,9 @@ std::string Staff::dutyText(const Member &m) const {
 // ----------------------------------------------------------------------------
 // Hiring
 // ----------------------------------------------------------------------------
+// (zoo.exe ZTUnitType::create 0x6151b3, class slot 0x5c: a new unit of its
+// class, then ZTUnit::setup 0x4f5c58, slot 0x10c - its base's, three of
+// its fields cleared. ours: a Member, set up here)
 int Staff::hire(int type, float x, float y, const WorldMap &map, const Fences &fences) {
   if (type < 0 || type >= static_cast<int>(this->typeList.size()))
     return -1;
@@ -2673,8 +2692,15 @@ int Staff::hire(int type, float x, float y, const WorldMap &map, const Fences &f
   return m.id;
 }
 
+// zoo.exe keeperRemoved 0x458759 (ZTKeeper slot 0x78, not a shutdown):
+// the show the specialist works (+0x254, the show tank's habitat id,
+// 0x41ebfd) loses it (0x5a9c96) and stops (showStopEvent 0x612d20); then
+// the habitat's told (staffNotifyHabitat 0x4a879f) and the base removal
+// 0x4586f6
 void Staff::fire(int id) {
   if (auto *m = member(id)) { releaseCatch(*m); Sound::get().stop(m->rotorChannel); }
+  if (this->shows)
+    this->shows->specialistRemoved(id);
   if (this->guests)
     this->guests->releaseTour(id);
   this->list.erase(std::remove_if(this->list.begin(), this->list.end(),
@@ -3018,8 +3044,11 @@ void Staff::helicopterStep(Member &m, float seconds, const WorldMap &map, const 
   case HeliStage::Fire: // 0x6f, Job14: bFireWeapon through, then the dart
     if (m.anim == "fire" && m.animTime >= animSeconds(m, "fire")) { m.anim = "level"; m.animTime = 0; }
     else if (m.anim == "level" && m.animTime >= animSeconds(m, "level")) {
-      // (Job14_RetrieveAnimal::atTarget 0x50dd6e: darted, in range or not)
+      // (Job14_RetrieveAnimal::atTarget 0x50dd6e: darted, in range or not;
+      // an animal: its base's recoveries one up first, the helicopter's
+      // slot 0x320, 0x48c434 - the DRT panel's 1409)
       if (valid(target)) {
+        ++m.recoveries;
         animals->tranquilise(target->id);
         SDL_Log("[DRT] %s tranquilized %s; ready for scientist containment", m.name.c_str(), target->name.c_str());
       }

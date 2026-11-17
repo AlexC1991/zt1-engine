@@ -78,6 +78,11 @@ public:
     int benefactorCount = 0; // zoo members (Number of Zoo Benefactors)
   };
   void setZooInfo(const ZooInfo &info);
+  // Zoo Status while it's open: shown again every 10 s of real time, not
+  // while paused (zoo.exe 0x401644, from 0x41a281); at once when a building
+  // is placed (0x41739a)
+  void zooStatusTick(uint64_t nowMs, bool paused);
+  void forceZooStatus();
   // The game clock and books the panels show and charge funding to
   void setSim(ZooSim *sim);
 
@@ -99,6 +104,9 @@ public:
   // Assign toggle goes off once it isn't)
   std::function<bool()> staffAssigning;
   void showStaff(int id);
+  // A DRT base clicked on the map: its own panel (drt.lyt, 1400)
+  void showDrt(int id);
+  int shownDrtId() const { return this->shownDrt; }
   int shownStaffId() const { return this->shownStaff; }
   void refreshStaff();
   // The bulldozer is on (the HUD's Clear Objects button)
@@ -167,6 +175,8 @@ public:
   std::function<void(int)> guestPickUp;
   // A guest's name typed (its id, the name): set, then the rename cheats
   std::function<void(int, const std::string &)> guestRenamed;
+  // A staff member's name typed (its id, the name): set, then the cheats
+  std::function<void(int, const std::string &)> staffRenamed;
   // Building Information: a stand's (infocom.lyt: price, sell, totals and
   // averages, items sold) or another building's (infoncm.lyt: visitors)
   void setObjects(PlacedObjects *objects, std::function<void(int)> sell) {
@@ -499,6 +509,17 @@ private:
   int shownStaff = -1, staffFilter = 0, staffListCount = -1;
   std::vector<int> listedStaff;
   bool tracking = false;
+  // Staff Information's exhibit list: the row last picked (-1 none)
+  int keeperExhibitPick = -1;
+  // The DRT base's panel, the base shown, when it's next refreshed (ms)
+  UiLayout *drtPanel = nullptr;
+  int shownDrt = -1;
+  uint32_t drtRefreshAt = 0;
+  bool drtRefreshNow = true;
+  void refreshDrt();
+  void pickStaffRow(int id);
+  // The tile an exhibit's gate is on, its middle (false: no gate)
+  bool exhibitGateTile(int id, float &x, float &y) const;
   void setupStaffPanels();
   void drawStaffPortrait(SDL_Renderer *renderer);
   std::string animalPick;
@@ -577,6 +598,7 @@ private:
 
   // Zoo Status: its pages' texts, graphs, marketing and admission
   ZooInfo zoo;
+  uint64_t zooStatusDue = 0; // (zoo.exe 0x643670)
   ZooSim *sim = nullptr;
   UiLayout *zooPanel = nullptr;
   std::vector<int> awards;

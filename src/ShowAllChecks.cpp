@@ -84,8 +84,10 @@ int runShowAllChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
   check("home and show tanks built", home >= 0 && tank >= 0 && home != tank);
   check("both are tanks", home >= 0 && tank >= 0 && f.exhibit(home) && f.exhibit(home)->tank && f.exhibit(tank) && f.exhibit(tank)->tank);
   if (home < 0 || tank < 0) return 1;
+  // (the show tank to its tallest, its home to the same top: a show tank
+  // sinks 4 deeper - initialSinkShow 8, initialSink 4)
   for (int id : {tank, home}) {
-    while (f.canAdjustWall(id, 1)) f.adjustWall(id, 1);
+    while (f.canAdjustWall(id, 1) && (id == tank || f.exhibit(id)->wallTop() < f.exhibit(tank)->wallTop())) f.adjustWall(id, 1);
     f.fillExhibit(id, true);
   }
   run(5);

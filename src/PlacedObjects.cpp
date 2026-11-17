@@ -246,6 +246,11 @@ void PlacedObjects::resolveExt(Object &o) const {
   o.ext = ".ai";
 }
 
+// (zoo.exe: its type's create, class slot 0x5c - ZTSceneryType 0x412977,
+// ZTBuildingType 0x45134e (ZTBuilding's constructor 0x451152: its counters
+// and lists cleared), ZTPathType 0x451b8a, ZTFoodType 0x4fd1de,
+// ZTRubbleType 0x48e370 (ZTRubble 0x48e343) - a new object of its class.
+// ours: one Object, its class by its folder)
 bool PlacedObjects::add(const std::string &file, float x, float y, int facing) {
   // scenery/<subclass>/<type>.ai
   size_t a = file.find('/'), b = file.find('/', a + 1), dot = file.find_last_of('.');

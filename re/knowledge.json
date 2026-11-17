@@ -3807,11 +3807,11 @@
    "summary": "A UI element by its number (the UI manager's map, this+0x38): 322 callers - uiFind(7000) is the zoo view, 0x42f/0x430 the pause icons, 0x11cb a price"
   },
   "0x401644": {
-   "by": "batty251 (the UI element numbers it asks uiFind for, from the game's layout files)",
-   "confidence": "guess",
-   "name": "ui_zooinfo_401644",
-   "provisional": true,
-   "summary": "Works on Zoo Status (ui/zooinfo.lyt): LayoutInfo"
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "zooStatusTick",
+   "provisional": false,
+   "summary": "Zoo Status (uiFind 14) shown: when forced (0x639145) or the time (ms, from 0x41a281 <- mouseEdgeScroll 0x419eb2, not while paused) reaches 0x643670: 0x643670 = time + 10000, zooStatusRefresh 0x53002b, 0x52fa39, zooGraphsRefresh 0x52ff4d, the scenario page 0x4f004a, 0x4f0979, 0x52f686. Engine: UiGameScreen::zooStatusTick"
   },
   "0x40165f": {
    "by": "batty251 (read its code, from the live steps)",
@@ -4303,6 +4303,13 @@
    "provisional": false,
    "summary": "The unit's position (class slot 0x94): x, y, z into the given place; with the flag, for units ('unit') its own way"
   },
+  "0x4108f7": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "unitInBuildingTask",
+   "provisional": false,
+   "summary": "True when the unit's task (+0x170) is 0x68, 0x69 or 0x6a: going into, in or coming out of a building"
+  },
   "0x410919": {
    "by": "batty251",
    "confidence": "sure",
@@ -4521,20 +4528,20 @@
    "summary": "A unit type's current art set (GXLLEAnimSet): with +0xd4 set, the resource named at [[+0xd0]+8]+0x14 (e.g. animals/bluejay/m/idle/idle.ani) through the resource manager [0x638044] (0x401fdd); else from the type's +0xdc key (0x409cf3, 0x402062)"
   },
   "0x412c70": {
-   "by": "batty251 (read its code, from the recordings it alone ran in: deleting an object, hiring a zookeeper)",
+   "by": "Claude",
    "class": "ZTUnit",
    "confidence": "likely",
-   "name": "canPlace",
+   "name": "ZTUnit::addedToWorld",
    "provisional": false,
-   "summary": "Whether a unit can stand where it is (class slot 0x74): the base's (0x412cdc), then its own rules (its slots 0x228, 0x24c; bMermtrans)"
+   "summary": "ZTUnit's class slot 0x74 (run when it joins the world): UnitBase's 0x412cdc, then (slot 0x228, not +0x142, slot 0x24c) 0x458610; slot 0x250(0): none -> slot 0x138/0x13c; some -> slot 0x84(1), and a type 0x1530 not loading 'bMermtrans' (icons rebuilt)"
   },
   "0x412cdc": {
-   "by": "batty251 (read its code, from the recordings it alone ran in: deleting an object, hiring a zookeeper)",
+   "by": "Claude",
    "class": "UnitBase",
    "confidence": "likely",
-   "name": "canPlace",
+   "name": "UnitBase::addedToWorld",
    "provisional": false,
-   "summary": "The base unit's placement check (class slot 0x74)"
+   "summary": "UnitBase's class slot 0x74: an empty name (+0x108) made (slot 0x20); +0x150 = footprint w x h (slot 0x94); +0x211 -> 0x4f3e7d, else 0x4137df"
   },
   "0x41300b": {
    "by": "batty251 (read the task base class table 0x6323c4 and the shared tick)",
@@ -4730,6 +4737,13 @@
    "provisional": false,
    "summary": "ZTKeeper slot 0x2d8: the destination tile set (0x416692); a different one from +0x234 first tells the old habitat it isn't coming (staffNotifyHabitat 0x4a879f: +0xf4 one down)"
   },
+  "0x41680c": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "habitatShowWantsKeeper",
+   "provisional": false,
+   "summary": "Habitat method (keeper): its show part (+4) there and 0x5a99f1(keeper's type) - the show wants this specialist. Task 0x6e's first pick (0x42400a at 0x49eee6): then job 0x13 (Job19) at the surface, else 0x17 (Job23)"
+  },
   "0x416cb7": {
    "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
    "confidence": "sure",
@@ -4743,6 +4757,13 @@
    "name": "tileNeighbours4",
    "provisional": false,
    "summary": "A tile's four neighbours (0x40fa92 for directions 0, 2, 4, 6: north, east, south, west) as a list - guestJoinTour uses the guide's target tile (+0x180)"
+  },
+  "0x41739a": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "zooStatusForce",
+   "provisional": false,
+   "summary": "0x639145 = 1, then 0x401644(0): Zoo Status redone at once (a building joining a kind list 0x4516a9; 0x500339). Engine: UiGameScreen::forceZooStatus"
   },
   "0x4174dd": {
    "by": "batty251 (read the object classes' table slots)",
@@ -4904,6 +4925,13 @@
    "name": "ui_research_41a3ba",
    "provisional": true,
    "summary": "Works on Research (ui/research.lyt): LayoutInfo"
+  },
+  "0x41a3f3": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "drtPanelTick",
+   "provisional": false,
+   "summary": "While drt.lyt (1400) is shown and the selection is a building: 0x48c87d at most once a second (next at +1000 ms, 0x64e6e0; 0x64e6e8 forces it)"
   },
   "0x41a430": {
    "by": "batty251",
@@ -8309,12 +8337,19 @@
    "summary": "ZTBuildingType's create (its table's slot 0x5c): a new object of its class / Confirmed: class slot 0x5c of ZTBuildingType - creates its object (the object's constructor stores its class table)"
   },
   "0x45158c": {
-   "by": "batty251 (read its code, from the live steps: placing an Orca Bouncy Ride)",
+   "by": "Claude",
    "class": "ZTBuilding",
    "confidence": "likely",
-   "name": "canPlace",
+   "name": "ZTBuilding::addedToWorld",
    "provisional": false,
-   "summary": "Whether the building can go where it is (class slot 0x74): the world's check (0x4f40af) and its own (0x451650); a type with +0x6f set also 0x4522ae"
+   "summary": "ZTBuilding's class slot 0x74 (not a placement check: run when it joins the world, worldAdd 0x410556, and on loading): the scenery's 0x4f40af and the building's kind lists 0x451650; a type with +0x6f (show stands) 0x4522ae"
+  },
+  "0x451650": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "buildingJoinKindLists",
+   "provisional": false,
+   "summary": "For each kind list (0x639080..0x639084, 12 bytes each) the building is a member of (0x41239d with the flag): 0x4516a9 (which also forces Zoo Status' refresh, 0x41739a)"
   },
   "0x45184a": {
    "by": "batty251 (class slots 0x68 / 0x6c read: crt_fwrite, crt_fread)",
@@ -8520,10 +8555,11 @@
   },
   "0x458759": {
    "by": "Claude",
-   "confidence": "guess",
+   "class": "ZTKeeper",
+   "confidence": "likely",
    "name": "keeperRemoved",
    "provisional": false,
-   "summary": "ZTKeeper slot 0x78: a dinosaur escape announced when its assigned show/habitat says so, then (unless +0x142) staffNotifyHabitat 0x4a879f, then the base 0x4586f6"
+   "summary": "ZTKeeper slot 0x78 (a specialist removed; arg: a shutdown): its show tank's habitat by id (+0x254, 0x41ebfd) there and not a shutdown -> the show's keeper map loses it (0x5a9c96) and the show stops (showStopEvent 0x612d20); then (unless +0x142) staffNotifyHabitat 0x4a879f, then the base 0x4586f6"
   },
   "0x458b5f": {
    "by": "Claude",
@@ -9866,6 +9902,14 @@
    "provisional": false,
    "summary": "UI handler (registered with uiRegisterHandler): gameopt2:Main_Menu_Music_ScrollBar clicked"
   },
+  "0x4808ac": {
+   "by": "Claude",
+   "class": "ZTAnimal",
+   "confidence": "sure",
+   "name": "animalTreatedPoorly",
+   "provisional": false,
+   "summary": "Being treated poorly (from animalCheckHealth at cSickTime): its habitat (slot 0x24c) or nothing; re-rates it (animalRateExhibit 0x444827) when habitat +0x2d asks; with no keeper at its duties there (habitat +0xf0 < 1) 0x4fa78e(1) marks it taken away. Engine: Animals.cpp health check, keepersAtWork"
+  },
   "0x480e9b": {
    "by": "Lab (the game's text)",
    "confidence": "guess",
@@ -10043,6 +10087,20 @@
    "name": "help_Panel_hide",
    "provisional": false,
    "summary": "UI handler (registered with uiRegisterHandler): help:LayoutInfo hidden (closed)"
+  },
+  "0x4857b9": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "fenceCanBreak",
+   "provisional": false,
+   "summary": "A fence can be broken: its type not +0x191, not the zoo gate (isZooGate 0x4a4389), type +0x190 clear, life +0x160 not 500, type +0x197 and +0x193 clear"
+  },
+  "0x4858a4": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "fenceBreak",
+   "provisional": false,
+   "summary": "A fence broken (if 0x4857b9 and not already, +0x164): life +0x160 and strength +0x15c 0, +0x164 = 1, 0x416ee8(0,0), 0x449ab4, slot 0x84(1), message 0x2732, its break sound (type +0x184, atten +0x178). Engine: Fences::breakPiece"
   },
   "0x485aa7": {
    "by": "batty251 (the texts each uses, found with the Lab's number search)",
@@ -10297,6 +10355,14 @@
    "provisional": false,
    "summary": "A flyer's way up or down: the behaviour set bAscend or bDescend played (0x499be7) - class slot 0x1b8"
   },
+  "0x48c434": {
+   "by": "Claude",
+   "class": "ZTHelicopter",
+   "confidence": "sure",
+   "name": "helicopterCountRecovery",
+   "provisional": false,
+   "summary": "ZTHelicopter slot 0x320: its base (+0x294, a building) +0x19c recoveries one up (then 0x412513, no-op for a base). Called by Job14_RetrieveAnimal::atTarget 0x50dd6e once the target is an animal. Ported: Staff.cpp HeliStage::Fire, Member::recoveries"
+  },
   "0x48c4d1": {
    "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
    "class": "Task69_HeliTakeoff",
@@ -10311,6 +10377,13 @@
    "name": "infoTrack_click",
    "provisional": false,
    "summary": "UI handler (registered with uiRegisterHandler): infostf:TrackStaff clicked; infoanm:Trackanim clicked; infogst:Trackguest clicked; drt:TrackDRT clicked"
+  },
+  "0x48c87d": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "drtPanelFill",
+   "provisional": false,
+   "summary": "drt.lyt's fill for a DRT base: its helicopter (world find of +0x158) - 1407 monthly salary (slot 0x314, setMoneyText), 1411 duty (slot 0x318), TrackDRT drawn on it (0x4ee2ba); 1409 the base's recoveries (+0x19c); 1413-1417 trained icons (none in drt.lyt); TrackDRT enabled (0x443e3e). Ported: UiGameScreen::refreshDrt"
   },
   "0x48c9ef": {
    "by": "batty251 (read its code; texts by number from the game's text)",
@@ -11305,11 +11378,11 @@
    "summary": "Task6e_DutiesInHabitat: frees the task when its destructor is asked to (flag 1)"
   },
   "0x49e9c2": {
-   "by": "batty251 (read its code, from the live steps)",
-   "confidence": "guess",
-   "name": "habitatSearch",
-   "provisional": true,
-   "summary": "From a tile, through the habitat grid (habitatMgr), the area it's joined to - a fill"
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "habitatNeighbourTile",
+   "provisional": false,
+   "summary": "Not a fill: one of the 8 tiles round the given one, at random (randSeed), that's in the same habitat (habitatMgr grid +0x28) and the unit's slot 0x164 doesn't refuse (!= 0x635494); none: the tile itself"
   },
   "0x49ebce": {
    "by": "batty251 (read its code, from the live steps)",
@@ -14350,6 +14423,13 @@
    "provisional": true,
    "summary": "Works on the main bar (ui/main.lyt): Single_Undo"
   },
+  "0x4fa78e": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "unitMarkRemoved",
+   "provisional": false,
+   "summary": "Marks a unit for removal: the zoo view's undo cleared (0x4fa68c) and its selection / info panel let go (0x41e145), +0x13d = 0, +0x13c = the flag. The sweep 0x434df7 removes it. Engine: Member::takenAway"
+  },
   "0x4fa85d": {
    "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
    "class": "Task71_LeaveAnimalsFree",
@@ -14545,6 +14625,14 @@
    "source": "gx/gxlleblend.cpp",
    "summary": "In the original's gx/gxlleblend.cpp (its own text gives the path); not named yet"
   },
+  "0x5066bb": {
+   "by": "Claude",
+   "class": "ZTHelicopter",
+   "confidence": "sure",
+   "name": "helicopterBase",
+   "provisional": false,
+   "summary": "ZTHelicopter: its base building (+0x294 id, world find, IsA building 0x638680) or 0"
+  },
   "0x506807": {
    "by": "batty251 (read the unit class tables: ticks and task choosers)",
    "class": "ZTHelicopter",
@@ -14674,11 +14762,11 @@
    "summary": "Job 4 (Job4_HealAnimal: a keeper healing (bHeal, bHealEgg, bDoneSick)) - its destructor (deleting when asked) - class slot 0 (table 0x63475c)"
   },
   "0x509071": {
-   "by": "batty251 (read its code, from the recordings it alone ran in: deleting an object, hiring a zookeeper)",
-   "confidence": "guess",
+   "by": "Claude",
+   "confidence": "likely",
    "name": "bulldozeMouse",
-   "provisional": true,
-   "summary": "The bulldozer under the mouse: the zoo view's tile there (+0x360), the drag kept up (bulldozeDrag)"
+   "provisional": false,
+   "summary": "The bulldozer's mouse move (its class table 0x630a04, slot 0x20; from the zoo view's 0x4428a8 at 0x509055): with the button held (+0x38): the cursor on the pressed tile (+0xc, +0x10) and within 16 px of the press point (+0x24, +0x28) -> a drag under way (+8) is taken back to a click (0x6097e2); otherwise, not dragging and not +9 -> a drag starts (+8 = 1, 0x41b100(0,1), slot 0x40(0)). Then the tile under the cursor (+0x18..+0x20) changed or the mode toggled: bulldozeDrag(0), then (1) while dragging. Engine: World::mouseMove (bulldozer), Original::bulldozeClickPixels"
   },
   "0x5090b5": {
    "by": "batty251 (read its code, from the recordings it alone ran in: deleting an object, hiring a zookeeper)",
@@ -14721,6 +14809,27 @@
    "name": "main_ClearObjects_off",
    "provisional": false,
    "summary": "UI handler (registered with uiRegisterHandler): main:Clear_Objects turned off (a tab or toggle let go)"
+  },
+  "0x509870": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "bulldozerCancel",
+   "provisional": false,
+   "summary": "The bulldozer's class slot 0x1c (table 0x630a04): a drag under way (+8) taken back - bulldozeDrag(0), 0x443daf(0), +8 = 0, +9 = 1 (no drag again and the release takes nothing until let go, 0x50989a -> 0x48b64f clears +9), the cursor's tile reset (0x4446f9); no drag -> the Clear Objects button turned off (uiTurnOff 0x404). Which input calls slot 0x1c not proven (right click by its effect). Engine: World::cancelTool"
+  },
+  "0x50989a": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "bulldozerRelease",
+   "provisional": false,
+   "summary": "The bulldozer's class slot 0x28: let go: dragging (+8) -> the rectangle (0x509c28); +9 (a drag taken back) -> +9 cleared, nothing taken (0x48b64f); else what's hovered (+0x434): a fence (bulldozeFence 0x5090b5) or deleteHovered 0x509176. Then bulldozeDrag(0), +8 and +0x38 cleared"
+  },
+  "0x509a31": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "bulldozerPress",
+   "provisional": false,
+   "summary": "The bulldozer's class slot 0x24: pressed (+0x38 = 1); the press tile (+0xc..+0x14) and the current tile (+0x18..) from the cursor, the press point (+0x24, +0x28); the zoo view's tile set (0x4446f9)"
   },
   "0x50a0b0": {
    "by": "batty251 (read the sell button's code: infoSellOrFire_click down)",
@@ -16648,6 +16757,13 @@
    "provisional": false,
    "summary": "A research program's effect by its +0x44: 0 make available (0x58fd9f(+0x40,1)) then 0x58fc10; 1 0x58feb7; 2 0x59af88; 3 0x618d7c; 4 0x59abd5; 5 0x59addb; 6 0x59b60a; 7 0x59b6b5 (each with +0x40, +0x48..+0x50); done -> 0x58fc10 (the build panel 0x1044 refreshed)"
   },
+  "0x58fd9f": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "researchMakeAvailable",
+   "provisional": false,
+   "summary": "(nameId, on): every type in the world's type list (0x638040 +0x98) whose cNameID (slot 0x20) is nameId: its slot 0x3c(on) - made available. Engine: applyResearch effect 0"
+  },
   "0x58ff14": {
    "by": "zt1-engine (batty251, earlier sessions)",
    "confidence": "likely",
@@ -17032,11 +17148,11 @@
    "summary": "ZTTourGuideType's create (its table's slot 0x5c): a new object of its class / Confirmed: class slot 0x5c of ZTTourGuideType - creates its object (the object's constructor stores its class table)"
   },
   "0x59b90c": {
-   "by": "batty251 (read its code, from the recordings it alone ran in: Zoo Status, its graphs, selecting a guest, funding research)",
+   "by": "Claude",
    "confidence": "likely",
-   "name": "selectAndShowInfo",
+   "name": "centreViewOn",
    "provisional": false,
-   "summary": "A unit or object selected and its info panel opened (guest, animal or staff info: ui_infogst/ui_infoanm/ui_infostf) - the lists' clicks, news items' go-to, assignment lists"
+   "summary": "The zoo view centred on a world point (+0x360 scroll; 0x4aff88 at its tile, +0x3a4 = 1); first, with tracking on (+0x43c) and a unit selected, its info panel shown again (animal/guest/staff). Used by the lists' picks (0x599ae7, 0x61861b, 0x4720cc) - was named selectAndShowInfo"
   },
   "0x59be1c": {
    "by": "batty251 (the job class tables read from memory; each job's own status text)",
@@ -17806,11 +17922,11 @@
    "summary": "Task 0x7d (Task7d_GetTrickFood: a show animal going for trick food (\"Going to get trick food\")): what the unit does once there - class slot 10"
   },
   "0x5a6f37": {
-   "by": "batty251 (the message numbers each uses, found with the Lab's new number search; texts by number)",
-   "confidence": "guess",
-   "name": "announce",
-   "provisional": true,
-   "summary": "An announcement by text number (the news)"
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "showPostEvent",
+   "provisional": false,
+   "summary": "Not the news: an event posted to the show's tank (+0x10, its slot 0 with (event, 0, 0x57, 0, 0, 1)) - from the show manager (0x612d20 event 10007, 0x612d38 event 10019)"
   },
   "0x5a6f96": {
    "by": "batty251",
@@ -17868,11 +17984,11 @@
    "summary": "Job 0x13 (Job19: a job (not yet known)) - set up when the job starts; true if it can - class slot 4 (table 0x633d44)"
   },
   "0x5ab683": {
-   "by": "batty251 (read the exhibit class table's slots, from the running game's tank)",
-   "confidence": "guess",
+   "by": "Claude",
+   "confidence": "likely",
    "name": "showTankLook",
-   "provisional": true,
-   "summary": "A tank's look: its tank terrain (tankTerrainShow) and each tank wall ('tankwall') - class slot 0x2c"
+   "provisional": false,
+   "summary": "A tank's look (habitat class slot 0x2c): a show tank (slot 0x20, +4) gets tankTerrainShow (gunite 17) through 0x458bea; then if any of its tank walls is a show wall (fence type +0x6f), every other tank wall is turned to that type (slot 0x7c(type, 1))"
   },
   "0x5ac48d": {
    "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
@@ -18305,6 +18421,13 @@
    "provisional": false,
    "summary": "UnitBaseType's create (its table's slot 0x5c): a new object of its class / Confirmed: class slot 0x5c of UnitBaseType - creates its object (the object's constructor stores its class table)"
   },
+  "0x6000d3": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "cheatUnlockScenarios",
+   "provisional": false,
+   "summary": "'Akiyama' (guests; ecx = the scenario manager 0x638ff8): every scenario of its map, zoo.ini [scenario] <token> (node +0x38) = 0 through scenarioRecordResult 0x48a80a - every scenario unlocked. Engine: RenameCheats (main.cpp hook)"
+  },
   "0x601a62": {
    "by": "batty251 (read the behaviour dispatchers 0x436065 and 0x437ccd)",
    "confidence": "sure",
@@ -18402,6 +18525,14 @@
    "provisional": false,
    "summary": "Returns +0x451 - class slot 0x140 of ZTTankWall"
   },
+  "0x60644b": {
+   "by": "Claude",
+   "class": "ZTHabitat",
+   "confidence": "likely",
+   "name": "tankSetWaterKind",
+   "provisional": false,
+   "summary": "A tank's water kind asked (salinity: 100 salt, 0 fresh): the same as +0x18c: nothing (0); else tankDrainCheck 0x6064ed (refused with animals in it: 0), +0x190 = the kind, and when the water's already gone +0x18c = it, prices (0x459b19), the tiles redrawn; paused and it had water: tankFillBlockedBy"
+  },
   "0x6064ed": {
    "by": "batty251 (the texts each uses, found with the Lab's number search)",
    "confidence": "likely",
@@ -18430,6 +18561,20 @@
    "provisional": false,
    "summary": "(id): every research category (research manager 0x639010 +0xc, each +0x38) named id: each program's effect applied (0x58fb83) - not marked done"
   },
+  "0x6070ef": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "cheatMendFences",
+   "provisional": false,
+   "summary": "'Bob V' (a maintenance man, type +0xa4 'm'): every fence broken (+0x164) or worn (+0x160 <= type +0x170) made new (fenceStartCondition 0x5b391c). Engine: RenameCheats mendFences"
+  },
+  "0x607174": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "cheatClearFoliage",
+   "provisional": false,
+   "summary": "'George W' (a maintenance man): every object whose type is cFoliage (+0x12a) sold with no money back (0x63b954 set around sellObject 0x50a432(o,1)), then 00 (0x43960000) booked by bookRemovalRefund 0x4f9329 and into the cash (0x40f018). Engine: RenameCheats clearFoliage"
+  },
   "0x6072e4": {
    "by": "Claude",
    "confidence": "likely",
@@ -18444,12 +18589,19 @@
    "provisional": false,
    "summary": "(a, b, c): every guest's +0xfc[0] = a, +0xfc[1] = b, or c for a female (+0x320). Engine: RenameCheats recolour"
   },
+  "0x607434": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "cheatFraternity",
+   "provisional": false,
+   "summary": "'Zeta Psi' (guests): every man (+0x320 and +0x324 clear): +0xfc[0] = 5, +0xfc[1] = 6; unless 0x4108f7 (task +0x170 0x68-0x6a: into, in or out of a building), slot 0x198(1,0,1) (stop), +0x336 = 1 (smell-sick), slot 0x38 (chooseTask). Engine: RenameCheats theFraternity"
+  },
   "0x6074ed": {
    "by": "Claude",
    "confidence": "likely",
-   "name": "cheatFences",
+   "name": "cheatBreakFences",
    "provisional": false,
-   "summary": "'Russell C': every fence passing 0x4857b9: 0x4858a4(0), slot 0x28(0x7fffffff)"
+   "summary": "'Russell C' (guests): every fence (class 0x638660) that can break (0x4857b9: type not +0x191, not the zoo gate, type +0x190/+0x193/+0x197 clear, life +0x160 not 500) broken (0x4858a4: +0x160 = +0x15c = 0, +0x164 = 1, message 0x2732, its break sound type +0x184), then slot 0x28(0x7fffffff). Engine: RenameCheats breakFences"
   },
   "0x607552": {
    "by": "Claude",
@@ -18585,6 +18737,13 @@
    "provisional": false,
    "summary": "The handler for the .ai behaviour function fReturnToBuilding (a [BehaviorSet] line): behaviourRunFn calls it with the line and the unit"
   },
+  "0x60d8e3": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "cheatWreckCars",
+   "provisional": false,
+   "summary": "'Marwan Jubran' (guests): every object of cNameID 0x17fa jeep1, 0x17fb sedan1, 0x17fc semi1, 0x17fe suv1, 0x1801 van1, 0x1817 labjeep to rubble (slot 0x124: objectToRubble 0x47c2ac); if any, 500 (0x45abe000) as a donation (booksAddDonation 0x42ebbe, cash 0x40f018). Engine: RenameCheats wreckCars"
+  },
   "0x60da6b": {
    "by": "batty251",
    "confidence": "guess",
@@ -18605,6 +18764,13 @@
    "name": "mulhab_HabitatName_click",
    "provisional": false,
    "summary": "UI handler (registered with uiRegisterHandler): mulhab:HabitatName clicked"
+  },
+  "0x6108d2": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "showExhibitListIfHidden",
+   "provisional": false,
+   "summary": "Element 30 (the Exhibit List, mulhab) shown if hidden (+0x7c bit 1 = hidden; slot 0x4c = show) - from infostf2_AssignList_click 0x61861b"
   },
   "0x610913": {
    "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
@@ -18719,14 +18885,14 @@
    "confidence": "likely",
    "name": "showStopEvent",
    "provisional": false,
-   "summary": "Posts event 10007 (0x2717) to the show's tank (+0x10, 0x5a6f37: slot 0 with 0x57) and calls the show's slot 0x14 - the show stopped (not an escape announcement)"
+   "summary": "A show stops: event 10007 (0x2717) posted through the show part's +0x10 (0x5a6f37: slot 0 with recipient 0x57), then its slot 0x14. The stands' handler 0x5a2abf treats 0x2715/0x2717/0x2719 alike: each seated guest gets the event after rand%6+90+rand%35, the stand closed (+0x19c 0)"
   },
   "0x612d38": {
-   "by": "batty251 (the message numbers each uses, found with the Lab's new number search; texts by number)",
+   "by": "Claude",
    "confidence": "likely",
-   "name": "announceOutOfMoney",
+   "name": "showEvent10019",
    "provisional": false,
-   "summary": "10019 \"Your zoo has run out of money.\" announced (0x5a6f37, 0x5a6e46), flagged (+0xf)"
+   "summary": "Not 'out of money': in the show manager (callers 0x5a21c5, 0x5a247c, with the show's units +0x254): the performer's record (0x59eb99) flagged +0xe/+0xf, event 10019 (0x2723) posted (0x5a6f37) and 0x5a6e46; reason 8 -> 0x5a6894(0)"
   },
   "0x612ed3": {
    "by": "batty251 (getters and setters in the class tables, read one by one)",
@@ -37111,6 +37277,416 @@
    "by": "Claude",
    "on": "2026-11-17",
    "what": "Note at 0x46a91b: 2026-11-17 (r9 guestpick): the radio set 3460's current tab activated again (last picked kept); its first one (0x63b9e4) only after loadZoo's 0x4c735c sets 0x63e47c. Ours: showGuest leaves the tab as it was"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x509071 bulldozeMouse"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x509870 bulldozerCancel"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x509a31 bulldozerPress"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x50989a bulldozerRelease"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4d9088: r10: bookings by kind as ours: animals 0x4e1fde, keepers and type 0x1f5f bookKeeperWages 0x5ad038 (row 11), tour guides 0x48bd8b (row 12), maintenance 0x483d34 (row 13), else ledgerAdd 0x4d9250 (Construction); spendCash. With param_4 (undoing a removal) and a cost > 0: animals bookRefund 0x48d2da(-cost), staff nothing, type 0x1f5f nothing, else bookRemovalRefund 0x4f9329(-cost) and cash 0x40f018(-cost). A path on a tile with a path (+0x83 & 8): the old path's type changed (slot 0x7c), the new one deleted, full price (undoRecord kind 1 with the old type). A path on a lake tile (+0x83 & 3): the tile painted terrain 3 first (0x4f8fd8(terrain list + 0x90, 1), undo kind 3 unless the group holds one) - ours refuses lake tiles for paths (Fences::tileFit): issue. A fence on an edge with a fence: fenceToolReplace 0x486965 (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x45158c ZTBuilding::addedToWorld"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x412c70 ZTUnit::addedToWorld"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x412cdc UnitBase::addedToWorld"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x451650 buildingJoinKindLists"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x41739a zooStatusForce"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x401644 zooStatusTick"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x5a6f37 showPostEvent"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x612d38 showEvent10019"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x6168c3: r10: only from develop_Objects_click 0x47ee74 - the developer panel; nothing in a player's game (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4c740a: r10: Zoo Status' scenario page reset (0x4c735c, a game starting): 104f clicked, lists 0x1031 and 0x1044 cleared, the 0x63e400 list emptied - scenarios, out of the freeform audit (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4f004a: r10: Zoo Status' scenario page: the scenario's name (0x102e), 0x102f, its goals listed (0x1031, scenarioMgr +0x34 list, each goal's slot 0x1c) - scenarios, out of the freeform audit (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x4808ac animalTreatedPoorly"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x4fa78e unitMarkRemoved"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x434df7: The unit sweep: for each unit in a list, class slot 0xac (+0x13c, taken away) -> 0x5bdda8: removed from the world (0x638040 slot 0x1c) and deleted (slot 0xa8); else the list's slot 0x44. Engine: Animals::lifeEvents (taken away)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4389aa: Round 10 (#247): health 0 -> sick, health = cMinHits (+0x238), 0x4139c9(0,0) (water mode, not ported), +0x358++ when hunger == type +0x240 (100, no key) else 0; +0x358 >= cSickTime -> 'Being treated poorly' 0x4808ac, else sick -> 10029; random illness: cSickRandomChance (+0x264, default 10) in 100 then 1 in 100; spread skipped for eggs (+0x395); slot 0xac set -> 'Being removed', 10010 via 0x4807c2 (urgency 2, its tile). Strings 0x652334 'Got sick from another animal', 0x643d40 'Got sick'"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4807c2: Posts a unit's message (unitMessageText 0x49cfeb, messageBarShowUnit) - arg 5 set: even for a unit taken away (else slot 0xac stops it). Used for 10010 (taken away) and 10242 (old age)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x42514c: A play's length: entry n (28 bytes) of the animation's list - (frames (+8..+0xc) - the background flag byte +0x18) x the frame time ms (+0); loads the entry first when not loaded. Engine: Animals::animSeconds, Original::timedMovePlays"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x43646e: Round 10 (#242): the time (fMove's arg x 1000, 0x425533) and 0x42514c(0) in ms; plays = 1, then one more while time - k x length > 0; a length of 0 with a time, two (0x5aa022 queues before testing the length). Engine: Original::timedMovePlays"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x601a62: fPlaySound: exactly one argument (count only), else the line fails; 0x601c7f plays it through the core 0x588f7e with animation '0' (0x63ba4c). Engine: Animals.cpp (sound only; the core's '0' queue not read)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Field ZTAnimal+0x358 = starveChecks"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Field ZTAnimalType+0x240 = maxHunger"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Field ZTAnimalType+0x238 = cMinHits"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x49625f: measured 2026-11-17 (round 10): runs every game update with that update's elapsed ms (ebx: 72-75 on a busy PC = Original::updateMs 67); a 20-high tank poked empty refilled to 19 in ~1.3 s and its water was drawn rising with +0x188. Not run while paused (gamePaused, theGame +0x440): poked +0x188 stayed 0. Ported in Fences::update (#248)."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x459d94: While the game's paused (theGame +0x440) the tank is filled at once: 0x5c86e5 tankSetWater(0x411111); else the tick fills it a unit an update. Fences::fillExhibit/makeTank (#248)."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x6064ed: Drain: +0x198 = 0; while paused (theGame +0x440) tankSetWater(0) at once, else tankTick drains a unit an update. Fences::drainExhibit (#248)."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x6115f2: Correction: param is the salinity - the Salt Water button (0x1305) passes 100, Fresh Water (0x1306) 0 (tankmod_Buttons_click 0x469128); param > 0 (salt) costs 0x63e468, else 0x63e464. Calls 0x60644b(kind) then always tankFillBlockedBy, which sets +0x190 = +0x18c: read, unpaused a full tank's kind change is undone by that refill (the drain hasn't emptied it); paused it takes. Not verified live."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x60644b tankSetWaterKind"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Field ZTHabitat+0x18c = tankSalinity"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Field ZTHabitat+0x190 = tankSalinityTo"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x45b92f: Tank made: +0x199 = 0; +0x184 = initialHeightShow (show) else initialHeight; +0x188 = initialWaterLevel; +0x198 = 0, then initialFillState > 0 -> tankFillBlockedBy; +0x18c = +0x190 = initialSalinity; +0x194 initialTemperature; +0x1a8 initialWaterPurity; +0x1ac waterPurityDecayTime. The floor: initialSinkShow (0x63af34) for a show tank, else initialSink (0x63af38) - 0x46716e. Ported Fences::makeTank (#251)."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x458c2b: 0x45da8b collects per tile (its 4 cells, its units list skipping type +0x6d, its edge objects) by 0x45da65(obj, mode): 0 sea animals (animals class with slot 0xc8), 1 what can't be under water (!canBeUnderwater 0x459f52), 2 types with +0x6f == 0. Mode 1 adds mode 2 when the habitat's slot 0x20 and its +4. None: 1. With the confirm flag: tankFillBlocked 0x485aa7 (10552) - No: 0. Caller 0x44e389 (a tank made): No -> 0x44c7b2 and zooView +0x455 = 1, no fill; Yes -> tankFillBlockedBy. Confirm off while zooView +0x378."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x49e9c2 habitatNeighbourTile"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x5ab683 showTankLook"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x5af19b: unitTankDepth: the unit's type +0x68 (cDepth), raised to type +0x64 (cHeight) of an object in its tile's four cells whose slot 0xb8(unit) - 0x4147fd: its type's slot 0x40 (0x414810 objects / 0x4147b5 units / 0x47c1dd rubble, the walk-through rule on type bytes +0x56..+0x59) - says no. Not ported (#251)."
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x59b90c centreViewOn"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x6108d2 showExhibitListIfHidden"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x48c87d drtPanelFill"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x41a3f3 drtPanelTick"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x48c434 helicopterCountRecovery"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x5066bb helicopterBase"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Field ZTHabitat+0x8c = gateTile"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Field ZTHabitat+0x90 = gateSide"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Field ZTBuilding+0x19c = drtRecoveries"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x61861b: Ported 2026-11-17 (r10, #252): UiGameScreen setupStaffPanels list 3569 onPick - Assign off, Remove enabled, view to the gate tile, Exhibit List shown (closing the Animal/Guest/Staff Lists, Zoo Status, show panel as mulhab_Panel_show 0x46836c does: 0x5b1426, closeOtherPanels) with the exhibit picked. Remove disabled with no row (0x47108a). Not measured live (playOriginal stayed at the main menu)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x5b66b1: Selection's panels: a building of type 0x1f5f (8031 helibase) opens drt.lyt (ui_drt_48cd7a; deselected: ui_drt_50f5fc); a staff unit of type 0x254e (9550 helicopter) deselected hides it too. Ported r10 (#252): UiGameScreen::showDrt"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4720cc: Staff List pick: a helicopter (0x638790) is swapped for its base (0x5066bb) - the DRT base panel opens; the view centres on the unit's tile (0x59b90c) unless tracking. Ported r10"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4682f1: mulhab_Panel_hide: the exhibit pick cleared (0x58b5ce(0), as mulhab_Panel_show), info panels back (0x4ef99b(0)), the Exhibit List button 0x41a off, a selected fence (gate) deselected (0x4ef75b), 0x4681b5. Ours r10: the list's pick cleared on open and shut (setPanelOpen)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4715ed: infostf2_Panel_hide: the Job Assignment page hidden - Assign (3578) turned off. Ported r10 in refreshStaff"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4716b2: infostf_Panel_show: TrackStaff 0xdbb (3515) turned off (slot 0x54) and drawn on the unit (0x4ee2ba); name 0xdae (3502) = +0x108; then 0x47108a's fill. Ours: showStaff (r10 turns the Track button off too)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x458759 keeperRemoved"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x612d20 showStopEvent"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x41680c habitatShowWantsKeeper"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x5aa24d: 2026-11-17 (r10 staffshows): Job19 is the specialist at the show platform: Task 0x6e (0x42400a, 0x49eee6 -> 0x5aa1ec) picks it when the habitat's show wants the keeper (0x41680c), 0x13 at the surface (state 2) else 0x17. Engine: Shows::trainerStep phase 2 (cited)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x416781: 2026-11-17 (r10 staffshows): 0x43ca83(0) -> 0x43cb33 with the type's [AmbientAnims] (+4) on land, Underwater/Surface/Water by state; every staff .ai has -100..100 bZooRoutine in each (trainer.ai all four), so it starts fKeeperRoutine. Engine: Staff::idleStep (cited)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4a97c0: 2026-11-17 (r10 staffshows): litter is posted once (10031 from guestDropLitter 0x52da40, 0x50c212 a can's overflow, 0x593f72, 0x438c47); entries are freed when the holder takes another (Task78 0x439cd0) or finishes (0x4a97e5 from the jobs' atTarget). A worker moved mid-job keeps +0x2c0; on its next pick that work is dropped from the list for good (no repost found). Task78 may take an entry another holds when nearer: the old holder's +0x2c0 cleared and its job aborted (slot 0x174)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x58a998: 2026-11-17 (r10 staffshows): -> 0x58a953 -> 0x58a929: on a talk (task 0x77, not arrived) guideViewingAreaDuties 0x58abff; else one play of the current animation (unitPlayCurrentAnim 0x421eb7). Measured: a guide with no trip stands one play of 'stand' (21 x 125 ms, 2.63-2.81 s) after each walk about. Engine: Staff::idleStep"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x459f52: 2026-11-17 (r10 staffshows): staff too - cUnderwater 1 only in trainer.ai and helicopt.ai, so a marine specialist standing in a tank doesn't stop it filling. Engine: World fillBlocker, Staff::Type::underwater"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x6074ed cheatBreakFences"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x4857b9 fenceCanBreak"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x4858a4 fenceBreak"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x6070ef cheatMendFences"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x607174 cheatClearFoliage"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x60d8e3 cheatWreckCars"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x6000d3 cheatUnlockScenarios"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x607434 cheatFraternity"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x4108f7 unitInBuildingTask"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x607001: Names (0x44940b): Steve Serafino 0x5aa1 (23201), Charlie Peterson 0x5aa2, John Wheeler 0x5aa3, Andrew Binder 0x5aa4, Hank Howie 0x5aa5, Adam Levesque 0x5aa6, Lou Catanzaro 0x5aa7, Dinoman 0x5aad (23213), Ron Propst 0x5aae (23214). Every branch's categories of that name: 23201 is catex1 and catex9 (11 programs). Engine: RenameCheats researchCategory, ResearchProgram::cheatApplied (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x58fb83: Jump table 0x58fbf0: 0 0x5b0f77 (0x58fd9f(target,1): every type of world+0x98 whose slot 0x20 is target gets slot 0x3c(1), made available; then 0x58fc10), 1 0x58fb98 (0x58feb7, then 0x58fc10 if true), 2 0x5b0fe7, 3 0x58fbce (0x618d7c, no program uses 3), 4 0x59ace8, 5 0x59aeac, 6 0x59b64e, 7 0x59b673. Effect 0 ported 2026-11-17 (main.cpp applyResearch) (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Named 0x58fd9f researchMakeAvailable"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4534e6: Ported 2026-11-17 (#256): main.cpp g_rateNow - set by startGoals (a new zoo and a load), the rating worked out on the next frame, paused or not; check in the finance mode (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4a60b9: Returns 0 while the unit's set name (+0x54) holds bCaughtBy or bDefense - can't be caught then. Engine: Animals' prey choice (catchable) (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4f53bd: Each section by 0x4f5465: AmbientAnims unless type slot 0xc8; AmbientAnimsWater if slot 0x44; AmbientAnimsUnderwater if 0xc4 and not 0xc0; AmbientAnimsSurface if 0xc4 (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x434c4b: Read 2026-11-17: the ambient loop +0x1bc of a type with +0x1e8 fades by 3 per ms of play (its attenuation +0x1b4, kept 0-5000: rising - fading out - while it has no users, +0x18c < 1, falling - in - while it has; slot 0x60 at 5000); the use sound +0x1c0 the same from +0x1b8, gone (0x41e3f8) once it stops; a type with +0x240 and no dock +0x1c8 checks its entrances' tiles for water (0x59398a). Ours: World::updateBuildingSounds starts and stops loops only - issue (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x4c42a2: cExplosionSoundAtten (+0x16c) read only when cExplosionSound (+0x168) is there, else the sound 0. Ported 2026-11-17: World::rubbleObjects plays the explosion with it (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x42443d: 0x6392c1 (the keepers' 'Susan Kittleson' / 'Chuck Frizelle' cheat, never cleared): the marketing bonus added a second time to the rating guests arrive by; 0x6392c0: +30 more (setter not found). Engine: RenameCheats::marketingTwice (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x431117: 0x63c2e3 ('Dr. Dolittle', a keeper): an animal of cNameID 0x1398 or 0x1399 passes its reproduction check (0x5db99f -> 0x47f444) and the flag is cleared (0x5db9c7); also read in animalCheckAgeAndBabies 0x421a16 (0x5da846). Not ported (#235) (Claude, 2026-11-17)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "what": "Note at 0x654ad8: 'Rosalie' (a tour guide, a woman) sets it; nothing reads it (Claude, 2026-11-17)"
   }
  ],
  "notes": {
@@ -37143,6 +37719,11 @@
    "by": "Claude",
    "on": "2026-11-14",
    "text": "Crushing (read 0x4a4115-0x416ed4): after the climb, jump and bash tests, an animal whose type's cCrushesFences (+0x3dc) is not 0 crosses a fence whose type's cHeight (+0x64) is no more than it - any fence but one with live current (0x4a44a0). The young have it too: ZTAnimalType::setDefaults 0x4b659e loads the default subtype's section, then the type's own. So T. rex, Allosaurus and Spinosaurus (3) cross every fence of height 3 without live current"
+  },
+  "0x416781": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "2026-11-17 (r10 staffshows): 0x43ca83(0) -> 0x43cb33 with the type's [AmbientAnims] (+4) on land, Underwater/Surface/Water by state; every staff .ai has -100..100 bZooRoutine in each (trainer.ai all four), so it starts fKeeperRoutine. Engine: Staff::idleStep (cited)"
   },
   "0x41da81": {
    "by": "Claude",
@@ -37224,10 +37805,20 @@
    "on": "2026-11-16",
    "text": "Read 2026-11-16 (ported, #207): its this is ZTGameMgr+0x10 (so +0x1c = gameMgr+0x2c the shown rating, +0x44 the guests in the zoo, +0x48 the band, +0xac..+0xbc = gameMgr+0xbc..+0xcc the chances, +0x1150 the admission). Bands: price over [0x6392ac..b8] in turn (economy.cfg cAdultAdmission copied there by loadConfig 0x591a1f when 5 given; measured 49/29/19/9 in a freeform zoo, 50/20/10/5 at the main menu). Rating >=81 / 60 / 30 / less: chances {VL,M,H,H*,VH*}, {-,L,M,H,VH*}, {-,VL,M,M,H*}, {-,-,VL,L,M} (* = 0x429d68: message 0x2721 when +0x44 > 10). Chances measured 3,5,25,30,40"
   },
+  "0x42443d": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "0x6392c1 (the keepers' 'Susan Kittleson' / 'Chuck Frizelle' cheat, never cleared): the marketing bonus added a second time to the rating guests arrive by; 0x6392c0: +30 more (setter not found). Engine: RenameCheats::marketingTwice (Claude, 2026-11-17)"
+  },
   "0x424e7f": {
    "by": "Claude",
    "on": "2026-11-15",
    "text": "Its count is a constant name or number, times 1000 (ms) - then 0x424ee7 queues whole plays of the animation to cover it. Measured 2026-11-15: a tour guide's bSpeak (fPlaySet(bSpeak1) = fPlayTime(speak,cInformGuestTime 5), fPlaySet(bSpeak2)) lasts 6.8-6.9 s (20 talks timed): speak (40 frames, 83 ms) twice = 6.64 s; speak2 never plays. (Claude)"
+  },
+  "0x42514c": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "A play's length: entry n (28 bytes) of the animation's list - (frames (+8..+0xc) - the background flag byte +0x18) x the frame time ms (+0); loads the entry first when not loaded. Engine: Animals::animSeconds, Original::timedMovePlays"
   },
   "0x425533": {
    "by": "Claude",
@@ -37384,6 +37975,11 @@
    "on": "2026-11-16",
    "text": "Read 2026-11-16: an animal (class 0x638690) passing 0x4138f0: its +0x394 clear, 0x41391d(9503) - its cPrey has the man - and not an egg (+0x395)"
   },
+  "0x431117": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "0x63c2e3 ('Dr. Dolittle', a keeper): an animal of cNameID 0x1398 or 0x1399 passes its reproduction check (0x5db99f -> 0x47f444) and the flag is cleared (0x5db9c7); also read in animalCheckAgeAndBabies 0x421a16 (0x5da846). Not ported (#235) (Claude, 2026-11-17)"
+  },
   "0x433aaf": {
    "by": "Claude",
    "on": "2026-11-17",
@@ -37408,6 +38004,16 @@
    "by": "Claude",
    "on": "2026-11-14",
    "text": "Wear: the timer (+0x16c, ms) runs down by the update's ms; out, the piece loses a point of life (+0x160) and cDecayDelta of strength (+0x15c, never under 1), broken at life 0 (0x4858a4), the timer set back to its own decay time (+0x168). At life == cDecayedLife it posts 10033 (or 10034 for an electrified one whose current has gone). Not for the zoo wall, a gate (subtype g), a type of cStrength 500, or a tank wall"
+  },
+  "0x434c4b": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "Read 2026-11-17: the ambient loop +0x1bc of a type with +0x1e8 fades by 3 per ms of play (its attenuation +0x1b4, kept 0-5000: rising - fading out - while it has no users, +0x18c < 1, falling - in - while it has; slot 0x60 at 5000); the use sound +0x1c0 the same from +0x1b8, gone (0x41e3f8) once it stops; a type with +0x240 and no dock +0x1c8 checks its entrances' tiles for water (0x59398a). Ours: World::updateBuildingSounds starts and stops loops only - issue (Claude, 2026-11-17)"
+  },
+  "0x434df7": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "The unit sweep: for each unit in a list, class slot 0xac (+0x13c, taken away) -> 0x5bdda8: removed from the world (0x638040 slot 0x1c) and deleted (slot 0xa8); else the list's slot 0x44. Engine: Animals::lifeEvents (taken away)"
   },
   "0x434e9c": {
    "by": "Claude",
@@ -37447,7 +38053,7 @@
   "0x43646e": {
    "by": "Claude",
    "on": "2026-11-17",
-   "text": "fMove's time (2026-11-17, #161): arg 2 is the time in ms, arg 5 the animation name (slot 0x130 -> its animation), arg 6 speed (slot 0x1c0), arg 7 a sound name (0x4408b4), arg 8 a flag (reverse), arg 9 the rate (slot 0x1c4). The unit's queue (+0x74) holds 12-byte entries {animation, sound, flag}. No time: one entry (the move's animation) looped, set by 0x40de33. A time: queue A = the animation once, then again while (time - length (0x42514c)) > 0, i.e. ceil(time/length) plays; queue B = slot 0x134 (0x4a9871: slot 0x12c 0x4a9bb9, the plain move name - slot 0x120 walk/surface/subswim, 0x124, 0x128) with no sound; 0x42296d makes A current and B after it. Already there (route under 2 points, not state 3): done at once. Engine: Animals.cpp fMove handler, Member::moveAnimLeft (Claude)"
+   "text": "Round 10 (#242): the time (fMove's arg x 1000, 0x425533) and 0x42514c(0) in ms; plays = 1, then one more while time - k x length > 0; a length of 0 with a time, two (0x5aa022 queues before testing the length). Engine: Original::timedMovePlays"
   },
   "0x4369b9": {
    "by": "Claude",
@@ -37501,8 +38107,8 @@
   },
   "0x4389aa": {
    "by": "Claude",
-   "on": "2026-11-16",
-   "text": "Ported 2026-11-16: poorly and not loose or chasing, bSick asked for next (replaceable 0) where 0x440a37 allows; only if that took (not in bSick, nothing else asked for) cSickChange and 'Not feeling well'; not allowed, cSickChange anyway. startBehaviour never picks bSick itself (Claude, 2026-11-16)"
+   "on": "2026-11-17",
+   "text": "Round 10 (#247): health 0 -> sick, health = cMinHits (+0x238), 0x4139c9(0,0) (water mode, not ported), +0x358++ when hunger == type +0x240 (100, no key) else 0; +0x358 >= cSickTime -> 'Being treated poorly' 0x4808ac, else sick -> 10029; random illness: cSickRandomChance (+0x264, default 10) in 100 then 1 in 100; spread skipped for eggs (+0x395); slot 0xac set -> 'Being removed', 10010 via 0x4807c2 (urgency 2, its tile). Strings 0x652334 'Got sick from another animal', 0x643d40 'Got sick'"
   },
   "0x4389f7": {
    "by": "Claude",
@@ -37667,7 +38273,7 @@
   "0x4534e6": {
    "by": "Claude",
    "on": "2026-11-17",
-   "text": "Read 2026-11-17: also 0x45348c - every animal's exhibit rated (animalRateExhibit 0x444827), exhibitFenceState 0x449920 - then zooRatingTerms at once. Ours rates the zoo only every 4 s (main.cpp) - issue opened (Claude)"
+   "text": "Ported 2026-11-17 (#256): main.cpp g_rateNow - set by startGoals (a new zoo and a load), the rating worked out on the next frame, paused or not; check in the finance mode (Claude, 2026-11-17)"
   },
   "0x457a83": {
    "by": "Claude",
@@ -37679,10 +38285,35 @@
    "on": "2026-11-17",
    "text": "2026-11-17 (r9 staff): 0x612d20 is showStopEvent, not an escape announcement: a specialist removed while its habitat (+0x254, 0x41ebfd) is there stops that habitat's show; then staffNotifyHabitat unless +0x142. Not ported (issue)"
   },
+  "0x458c2b": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "0x45da8b collects per tile (its 4 cells, its units list skipping type +0x6d, its edge objects) by 0x45da65(obj, mode): 0 sea animals (animals class with slot 0xc8), 1 what can't be under water (!canBeUnderwater 0x459f52), 2 types with +0x6f == 0. Mode 1 adds mode 2 when the habitat's slot 0x20 and its +4. None: 1. With the confirm flag: tankFillBlocked 0x485aa7 (10552) - No: 0. Caller 0x44e389 (a tank made): No -> 0x44c7b2 and zooView +0x455 = 1, no fill; Yes -> tankFillBlockedBy. Confirm off while zooView +0x378."
+  },
+  "0x459d94": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "While the game's paused (theGame +0x440) the tank is filled at once: 0x5c86e5 tankSetWater(0x411111); else the tick fills it a unit an update. Fences::fillExhibit/makeTank (#248)."
+  },
+  "0x459f52": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "2026-11-17 (r10 staffshows): staff too - cUnderwater 1 only in trainer.ai and helicopt.ai, so a marine specialist standing in a tank doesn't stop it filling. Engine: World fillBlocker, Staff::Type::underwater"
+  },
+  "0x45b92f": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "Tank made: +0x199 = 0; +0x184 = initialHeightShow (show) else initialHeight; +0x188 = initialWaterLevel; +0x198 = 0, then initialFillState > 0 -> tankFillBlockedBy; +0x18c = +0x190 = initialSalinity; +0x194 initialTemperature; +0x1a8 initialWaterPurity; +0x1ac waterPurityDecayTime. The floor: initialSinkShow (0x63af34) for a show tank, else initialSink (0x63af38) - 0x46716e. Ported Fences::makeTank (#251)."
+  },
   "0x4625af": {
    "by": "Claude",
    "on": "2026-11-15",
    "text": "Reads zoo.ini [Map] elevationCost (+0x5c) and terrainCost (+0x60), both 8.0 by default (0x41000000); the shipped zoo.ini has neither"
+  },
+  "0x4682f1": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "mulhab_Panel_hide: the exhibit pick cleared (0x58b5ce(0), as mulhab_Panel_show), info panels back (0x4ef99b(0)), the Exhibit List button 0x41a off, a selected fence (gate) deselected (0x4ef75b), 0x4681b5. Ours r10: the list's pick cleared on open and shut (setPanelOpen)"
   },
   "0x46a7c8": {
    "by": "Claude",
@@ -37709,10 +38340,25 @@
    "on": "2026-11-16",
    "text": "Round 7: 10307 'Entering %s' is pushed nowhere in zoo.exe (no 0x2843 immediate); task 0x65/0x7e show 10303 'Going to %s' (10306 when the destination is zoo ground), task 0x7f 10306, task 1 10304. Ours now matches for entering and after the duties"
   },
+  "0x4715ed": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "infostf2_Panel_hide: the Job Assignment page hidden - Assign (3578) turned off. Ported r10 in refreshStaff"
+  },
+  "0x4716b2": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "infostf_Panel_show: TrackStaff 0xdbb (3515) turned off (slot 0x54) and drawn on the unit (0x4ee2ba); name 0xdae (3502) = +0x108; then 0x47108a's fill. Ours: showStaff (r10 turns the Track button off too)"
+  },
   "0x471c30": {
    "by": "Claude",
    "on": "2026-11-15",
    "text": "Assign on: zooView+0x3fc mode on (virtual +0 then +8), and the staff info's tab set to Job Assignment (3564) unless it's the one shown. Off (0x471ebd) turns the mode off; Remove/Remove All/assign list clicks uiTurnOff(3578) first"
+  },
+  "0x4720cc": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "Staff List pick: a helicopter (0x638790) is swapped for its base (0x5066bb) - the DRT base panel opens; the view centres on the unit's tile (0x59b90c) unless tracking. Ported r10"
   },
   "0x4743cf": {
    "by": "Claude",
@@ -37748,6 +38394,11 @@
    "by": "Claude",
    "on": "2026-11-16",
    "text": "Read 2026-11-16: a tank sweep: 0x49bd60(habitat, type +0x204 cCleanTankPct) adds it to the tank's purity +0x1a8"
+  },
+  "0x4807c2": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "Posts a unit's message (unitMessageText 0x49cfeb, messageBarShowUnit) - arg 5 set: even for a unit taken away (else slot 0xac stops it). Used for 10010 (taken away) and 10242 (old age)"
   },
   "0x483d34": {
    "by": "Claude",
@@ -37837,7 +38488,7 @@
   "0x49625f": {
    "by": "Claude",
    "on": "2026-11-17",
-   "text": "Read 2026-11-17: while filling (+0x198) the water (+0x188) rises one unit a tick (0x5ae565) toward height +0x184 + waterOffset (0x6390ac); purity (+0x1a8 > 0) counts +0x1ac down by the elapsed ms, at 0 back to waterPurityDecayTime (0x63af04) and purity - 1 (tankMurkyWarning 0x49340d). Ours fills over a fixed 8 s (Fences.cpp kFillSeconds) (Claude)"
+   "text": "measured 2026-11-17 (round 10): runs every game update with that update's elapsed ms (ebx: 72-75 on a busy PC = Original::updateMs 67); a 20-high tank poked empty refilled to 19 in ~1.3 s and its water was drawn rising with +0x188. Not run while paused (gamePaused, theGame +0x440): poked +0x188 stayed 0. Ported in Fences::update (#248)."
   },
   "0x4993b9": {
    "by": "Claude",
@@ -37934,6 +38585,11 @@
    "on": "2026-11-16",
    "text": "Task 0x75 whileGoing (2026-11-16): nothing for a guest with +0x25c; with a target (slot 0x64) and no route (slot 0x6c), a flee tile (slot 0x30c, 0x4a639e) -> bRunFromPredator (every stock one fRun(0,0)) through 0x422072(set,0,1), 'Avoiding Predator'. Then for an animal: the stand-off once - both cPreattack within cDefenseRadius (0x50eae2) -> state 0x12 and the predator's slot 0x2d8(0,1) (Claude)"
   },
+  "0x4a60b9": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "Returns 0 while the unit's set name (+0x54) holds bCaughtBy or bDefense - can't be caught then. Engine: Animals' prey choice (catchable) (Claude, 2026-11-17)"
+  },
   "0x4a6acc": {
    "by": "Claude",
    "on": "2026-11-16",
@@ -37958,6 +38614,11 @@
    "by": "Claude",
    "on": "2026-11-16",
    "text": "Ported 2026-11-16: returns 1 when it dropped (the tank's purity less cPooWaterImpact through 0x49340d, with its habitat (slot 0x24c) a tank and its tile +0x85 & 0x20; or a pile made by 0x4fe07c), 0 on a water tile (+0x83 & 3, 0x410fe0) - animalCheckHunger resets the meter (+0x2c8) only on 1, so on water it stays full. After a pile in a habitat whose +0x2c is set, 0x50d9b7 posts 10032 (not read further). Engine: Animals::dropDung (Claude, 2026-11-16)"
+  },
+  "0x4a97c0": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "2026-11-17 (r10 staffshows): litter is posted once (10031 from guestDropLitter 0x52da40, 0x50c212 a can's overflow, 0x593f72, 0x438c47); entries are freed when the holder takes another (Task78 0x439cd0) or finishes (0x4a97e5 from the jobs' atTarget). A worker moved mid-job keeps +0x2c0; on its next pick that work is dropped from the list for good (no repost found). Task78 may take an entry another holds when nearer: the old holder's +0x2c0 cleared and its job aborted (slot 0x174)"
   },
   "0x4a9871": {
    "by": "Claude",
@@ -38014,6 +38675,16 @@
    "on": "2026-11-16",
    "text": "Read 2026-11-16: +0x1f4 cInformGuestTime 5, +0x1f8 cTourGuideBonus 5; cCrowdCheck +0x1fc, cCrowdRadius +0x200, cFollowChance +0x204, cMaxGroupSize +0x208 not set here (loadConfig 0x4c406f)"
   },
+  "0x4c42a2": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "cExplosionSoundAtten (+0x16c) read only when cExplosionSound (+0x168) is there, else the sound 0. Ported 2026-11-17: World::rubbleObjects plays the explosion with it (Claude, 2026-11-17)"
+  },
+  "0x4c740a": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "r10: Zoo Status' scenario page reset (0x4c735c, a game starting): 104f clicked, lists 0x1031 and 0x1044 cleared, the 0x63e400 list emptied - scenarios, out of the freeform audit (Claude, 2026-11-17)"
+  },
   "0x4c9bc9": {
    "by": "Claude",
    "on": "2026-11-17",
@@ -38033,6 +38704,11 @@
    "by": "Claude",
    "on": "2026-11-17",
    "text": "Starts on [user] lastfile like saveZooDialog; once loadZoo succeeds, lastfile = the path. Engine: SaveGame fileDialog, main.cpp Load (Claude, 2026-11-17)"
+  },
+  "0x4d9088": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "r10: bookings by kind as ours: animals 0x4e1fde, keepers and type 0x1f5f bookKeeperWages 0x5ad038 (row 11), tour guides 0x48bd8b (row 12), maintenance 0x483d34 (row 13), else ledgerAdd 0x4d9250 (Construction); spendCash. With param_4 (undoing a removal) and a cost > 0: animals bookRefund 0x48d2da(-cost), staff nothing, type 0x1f5f nothing, else bookRemovalRefund 0x4f9329(-cost) and cash 0x40f018(-cost). A path on a tile with a path (+0x83 & 8): the old path's type changed (slot 0x7c), the new one deleted, full price (undoRecord kind 1 with the old type). A path on a lake tile (+0x83 & 3): the tile painted terrain 3 first (0x4f8fd8(terrain list + 0x90, 1), undo kind 3 unless the group holds one) - ours refuses lake tiles for paths (Fences::tileFit): issue. A fence on an edge with a fence: fenceToolReplace 0x486965 (Claude, 2026-11-17)"
   },
   "0x4d923c": {
    "by": "Claude",
@@ -38084,6 +38760,11 @@
    "on": "2026-11-17",
    "text": "2026-11-17 (r9 guestpick): (on) - panels 6, 9, 17, 20, 21, 1400 and 46 to their second place (0x4ef967: +0x40/+0x44 = +0x38/+0x3c, the layout's altx/alty) or back (+0x30/+0x34); from each list's Panel_show (1) and Panel_hide (0), e.g. mulguest 0x469cc8 / 0x469d97. Ours: UiGameScreen::panelRect"
   },
+  "0x4f004a": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "r10: Zoo Status' scenario page: the scenario's name (0x102e), 0x102f, its goals listed (0x1031, scenarioMgr +0x34 list, each goal's slot 0x1c) - scenarios, out of the freeform audit (Claude, 2026-11-17)"
+  },
   "0x4f40af": {
    "by": "Claude",
    "on": "2026-11-17",
@@ -38093,6 +38774,11 @@
    "by": "Claude",
    "on": "2026-11-16",
    "text": "Read 2026-11-16: sets the object's +0x154 to its argument; for poo / dinopoo that's the pile's size: 1 plays the type's 'small' animation, 2 'giant', anything else 'idle' (dinopoo.ai: idle = mid, giant = full). Called by 0x4fe07c (the dung drop) and Job2 atTarget (food amount)"
+  },
+  "0x4f53bd": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "Each section by 0x4f5465: AmbientAnims unless type slot 0xc8; AmbientAnimsWater if slot 0x44; AmbientAnimsUnderwater if 0xc4 and not 0xc0; AmbientAnimsSurface if 0xc4 (Claude, 2026-11-17)"
   },
   "0x4f6e3c": {
    "by": "Claude",
@@ -38289,6 +38975,11 @@
    "on": "2026-11-15",
    "text": "Task77's arrival: done when the unit's behaviour set (+0x54) is no longer 'bSpeak' - the talk is the bSpeak set's length, measured 6.8-6.9 s with stock tour.ai (Claude, 2026-11-15)"
   },
+  "0x58a998": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "2026-11-17 (r10 staffshows): -> 0x58a953 -> 0x58a929: on a talk (task 0x77, not arrived) guideViewingAreaDuties 0x58abff; else one play of the current animation (unitPlayCurrentAnim 0x421eb7). Measured: a guide with no trip stands one play of 'stand' (21 x 125 ms, 2.63-2.81 s) after each walk about. Engine: Staff::idleStep"
+  },
   "0x58abff": {
    "by": "Claude",
    "on": "2026-11-17",
@@ -38333,6 +39024,11 @@
    "by": "Claude",
    "on": "2026-11-11",
    "text": "Base economy.cfg is loaded, then the .scn's [start] economy= file over it (only the keys it has); loadConfig ends with setAdmissionPrice, so scn34's cMin/cMaxAdultAdmissionPrice 0 make admission free. Ported: main.cpp applyScenarioEconomy."
+  },
+  "0x58fb83": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "Jump table 0x58fbf0: 0 0x5b0f77 (0x58fd9f(target,1): every type of world+0x98 whose slot 0x20 is target gets slot 0x3c(1), made available; then 0x58fc10), 1 0x58fb98 (0x58feb7, then 0x58fc10 if true), 2 0x5b0fe7, 3 0x58fbce (0x618d7c, no program uses 3), 4 0x59ace8, 5 0x59aeac, 6 0x59b64e, 7 0x59b673. Effect 0 ported 2026-11-17 (main.cpp applyResearch) (Claude, 2026-11-17)"
   },
   "0x59148e": {
    "by": "Claude",
@@ -38472,7 +39168,7 @@
   "0x5aa24d": {
    "by": "Claude",
    "on": "2026-11-17",
-   "text": "2026-11-17 (r9 staff): Job19 = a marine specialist at a tank's surface: begin moves it to tankEntryPoint 0x499cfa, keeps the habitat id (+4 -> +0x70) in +0x254; checkArrived 0x59f99f ends it when the habitat's gone (slot 0x174), changed, 0x59f988, or the water state (slot 0x2c8) isn't 2. Not ported (issue)"
+   "text": "2026-11-17 (r10 staffshows): Job19 is the specialist at the show platform: Task 0x6e (0x42400a, 0x49eee6 -> 0x5aa1ec) picks it when the habitat's show wants the keeper (0x41680c), 0x13 at the surface (state 2) else 0x17. Engine: Shows::trainerStep phase 2 (cited)"
   },
   "0x5ad1e8": {
    "by": "Claude",
@@ -38499,6 +39195,11 @@
    "on": "2026-11-17",
    "text": "Not exhibit names: the exhibit-rename cheats - wonderland, Microsoft, Blue Fang, (0x63b8b8), Cretaceous Corral, Kathmandu set flags / post 0x13b9, 0x13b6, 0x13b7; Copralite Corner 0x607871; Super Croc 0x14d4 (#235's)"
   },
+  "0x5af19b": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "unitTankDepth: the unit's type +0x68 (cDepth), raised to type +0x64 (cHeight) of an object in its tile's four cells whose slot 0xb8(unit) - 0x4147fd: its type's slot 0x40 (0x414810 objects / 0x4147b5 units / 0x47c1dd rubble, the walk-through rule on type bytes +0x56..+0x59) - says no. Not ported (#251)."
+  },
   "0x5b0635": {
    "by": "Claude",
    "on": "2026-11-15",
@@ -38509,6 +39210,11 @@
    "on": "2026-11-16",
    "text": "Ported 2026-11-16: exactly 2 arguments else the line fails; unit +0x258 == 4 (under the water) -> the second, else the first (out of a tank too); 0x43ddc1(set,unit,1,1) fails for a set it hasn't. Engine: Animals::nextStep PlaySetTank (Claude, 2026-11-16)"
   },
+  "0x5b66b1": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "Selection's panels: a building of type 0x1f5f (8031 helibase) opens drt.lyt (ui_drt_48cd7a; deselected: ui_drt_50f5fc); a staff unit of type 0x254e (9550 helicopter) deselected hides it too. Ported r10 (#252): UiGameScreen::showDrt"
+  },
   "0x5eccd0": {
    "by": "Claude",
    "on": "2026-11-16",
@@ -38516,13 +39222,23 @@
   },
   "0x601a62": {
    "by": "Claude",
-   "on": "2026-11-16",
-   "text": "fPlaySound: exactly one non-empty argument, else the line fails; played by 0x601c7f. No stock .ai set uses it (2026-11-16 scan of every .ztd) (Claude)"
+   "on": "2026-11-17",
+   "text": "fPlaySound: exactly one argument (count only), else the line fails; 0x601c7f plays it through the core 0x588f7e with animation '0' (0x63ba4c). Engine: Animals.cpp (sound only; the core's '0' queue not read)"
   },
   "0x601dbc": {
    "by": "Claude",
    "on": "2026-11-16",
    "text": "fFaceDirection: exactly one non-empty argument, else the line fails. No stock .ai set uses it (2026-11-16 scan) (Claude)"
+  },
+  "0x6064ed": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "Drain: +0x198 = 0; while paused (theGame +0x440) tankSetWater(0) at once, else tankTick drains a unit an update. Fences::drainExhibit (#248)."
+  },
+  "0x607001": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "Names (0x44940b): Steve Serafino 0x5aa1 (23201), Charlie Peterson 0x5aa2, John Wheeler 0x5aa3, Andrew Binder 0x5aa4, Hank Howie 0x5aa5, Adam Levesque 0x5aa6, Lou Catanzaro 0x5aa7, Dinoman 0x5aad (23213), Ron Propst 0x5aae (23214). Every branch's categories of that name: 23201 is catex1 and catex9 (11 programs). Engine: RenameCheats researchCategory, ResearchProgram::cheatApplied (Claude, 2026-11-17)"
   },
   "0x60b086": {
    "by": "Claude",
@@ -38546,8 +39262,8 @@
   },
   "0x6115f2": {
    "by": "Claude",
-   "on": "2026-11-15",
-   "text": "Pays (0x4d9250, 0x41ef68) before 0x459d94, so a fill refused with 10550 is still paid for"
+   "on": "2026-11-17",
+   "text": "Correction: param is the salinity - the Salt Water button (0x1305) passes 100, Fresh Water (0x1306) 0 (tankmod_Buttons_click 0x469128); param > 0 (salt) costs 0x63e468, else 0x63e464. Calls 0x60644b(kind) then always tankFillBlockedBy, which sets +0x190 = +0x18c: read, unpaused a full tank's kind change is undone by that refill (the drain hasn't emptied it); paused it takes. Not verified live."
   },
   "0x611b43": {
    "by": "Claude",
@@ -38596,13 +39312,13 @@
   },
   "0x6168c3": {
    "by": "Claude",
-   "on": "2026-11-16",
-   "text": "r6: a developer panel's (develop_Objects_click 0x47ee74), not gameplay"
+   "on": "2026-11-17",
+   "text": "r10: only from develop_Objects_click 0x47ee74 - the developer panel; nothing in a player's game (Claude, 2026-11-17)"
   },
   "0x61861b": {
    "by": "Claude",
    "on": "2026-11-17",
-   "text": "A keeper's exhibit row picked: Assign off (uiTurnOff 3578), Remove (3579) enabled only with a row picked; that exhibit (keeper +0x260 list, 0x61108f) made the Exhibit panel's (0x58b5ce) and selectAndShowInfo at its +0x8c's tile. Ours: nothing on a pick (round 9: not ported, needs a look at what opens)"
+   "text": "Ported 2026-11-17 (r10, #252): UiGameScreen setupStaffPanels list 3569 onPick - Assign off, Remove enabled, view to the gate tile, Exhibit List shown (closing the Animal/Guest/Staff Lists, Zoo Status, show panel as mulhab_Panel_show 0x46836c does: 0x5b1426, closeOtherPanels) with the exhibit picked. Remove disabled with no row (0x47108a). Not measured live (playOriginal stayed at the main menu)"
   },
   "0x619050": {
    "by": "Claude",
@@ -38693,6 +39409,11 @@
    "by": "Claude",
    "on": "2026-11-11",
    "text": "2026-11-11, everything-ff03-units in the running game: a maintenance worker holds a fence entry (+8 = the worker); newly worn pieces' flagged entries go to the very front. Still unseen: bin (9) and litter (7) entries - they need guests, so a played zoo with an animal exhibit."
+  },
+  "0x654ad8": {
+   "by": "Claude",
+   "on": "2026-11-17",
+   "text": "'Rosalie' (a tour guide, a woman) sets it; nothing reads it (Claude, 2026-11-17)"
   }
  },
  "questions": [
@@ -160193,6 +160914,13 @@
      "summary": "Fence-test countdown (cZapCheck)",
      "type": "int"
     },
+    "0x358": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "starveChecks",
+     "summary": "Health checks in a row with health 0 and hunger at its most (animalCheckHealth 0x4389aa); at cSickTime 'Being treated poorly' (0x4808ac)",
+     "type": "int"
+    },
     "0x360": {
      "by": "Claude",
      "confidence": "sure",
@@ -160501,10 +161229,10 @@
      "type": "int"
     },
     "0x238": {
-     "by": "batty251 (read the code: the fidelity money audit)",
-     "confidence": "likely",
+     "by": "Claude",
+     "confidence": "sure",
      "name": "cMinHits",
-     "summary": "cMinHits: animalHealthLevel 0x4679c5 shows (hits - this) x 100 / (cMaxHits - this); sellValue 0x48d21d subtracts it from health (and divides by cMaxHits alone)",
+     "summary": "cMinHits: health when it gets sick (0x4806ea, 0x430fa3, 0x5daadd); 0 in every stock .ai",
      "type": "int"
     },
     "0x23c": {
@@ -160512,6 +161240,13 @@
      "confidence": "sure",
      "name": "cPctHits",
      "summary": "[Characteristics/Integers] cPctHits, read by the loader at 4b7514",
+     "type": "int"
+    },
+    "0x240": {
+     "by": "Claude",
+     "confidence": "sure",
+     "name": "maxHunger",
+     "summary": "Hunger's most: 100 (setDefaults 0x4b661f, no config key); the hunger check's starving test and 0x4389aa's count compare to it",
      "type": "int"
     },
     "0x248": {
@@ -161243,9 +161978,9 @@
    "fields": {
     "0x19c": {
      "by": "Claude",
-     "confidence": "likely",
-     "name": "showOpen",
-     "summary": "A show grandstand open to guests: 1 at its show's event 10001 (the show started), 0 at 10005/10007/10009 or when no longer linked (0x434cca); 0x440f0c picks only stands with it over 0",
+     "confidence": "sure",
+     "name": "drtRecoveries",
+     "summary": "A DRT base's recoveries (helicopter slot 0x320 0x48c434; drt.lyt 1409; saved, ZTBuilding::save 0x477147)",
      "type": "int"
     },
     "0x1ac": {
@@ -162765,6 +163500,20 @@
      "summary": "Start of its viewing areas (a vector to +0x38); empty with no path beside it - a tank too (read live)",
      "type": "ptr"
     },
+    "0x08c": {
+     "by": "Claude",
+     "confidence": "likely",
+     "name": "gateTile",
+     "summary": "The tile holding its gate (+0x90 the gate's side; the gate via 0x492ca3, the tile's +0x14[side/2]); set at 0x435a0d. The lists' picks centre the view on its +0x34 (0x599ae7, 0x61861b)",
+     "type": "ptr"
+    },
+    "0x090": {
+     "by": "Claude",
+     "confidence": "likely",
+     "name": "gateSide",
+     "summary": "Its gate's side on the +0x8c tile (-1 none)",
+     "type": "int"
+    },
     "0x094": {
      "by": "Claude",
      "confidence": "sure",
@@ -162823,9 +163572,16 @@
     },
     "0x18c": {
      "by": "Claude",
-     "confidence": "sure",
+     "confidence": "likely",
      "name": "tankSalinity",
-     "summary": "Tanks: salinity, salt when >= 1 (0x459b19 picks saltWater; the panel's 4868 text 4888/4889)",
+     "summary": "A tank's salinity: 100 salt (initialSalinity, the Salt button), 0 fresh; read as salt when over 0 (isSaltWater 0x4936df, tankPrices 0x459b19). Saved in the zoo's habitat block after the fill flag (version >= 100)",
+     "type": "int"
+    },
+    "0x190": {
+     "by": "Claude",
+     "confidence": "likely",
+     "name": "tankSalinityTo",
+     "summary": "The salinity a tank is to become (0x60644b sets it; tankTick takes it into +0x18c when drained to 0, then refills - 0x5c885a); 0x459d94 resets it to +0x18c. Saved after +0x18c",
      "type": "int"
     },
     "0x198": {

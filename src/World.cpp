@@ -96,7 +96,8 @@ World::World(ResourceManager *resourceManager)
 }
 
 // (its looping sounds stopped: another zoo loaded from a zoo kept the old
-// one's ambience and buildings' loops playing)
+// one's ambience and buildings' loops playing; the original's world
+// destructor is worldDtor 0x57cefb)
 World::~World() {
   Animation::setFrameFreedHook(this, {});
   Sound::get().stop(this->ambienceChannel);
@@ -336,6 +337,7 @@ bool World::loadFreeform(const std::string &path) {
   // special days' flyers)
   guests.onArrive = [this]() { this->ambient.guestArrived(this->worldMap); };
   staff.setGuests(&guests);
+  staff.setShows(&shows);
   animals.findPrey = [this](float x, float y, float r) { return this->guests.nearestPrey(x, y, r); };
   animals.preyAt = [this](int g, float &x, float &y) { return this->guests.preyPosition(g, x, y); };
   animals.caughtPrey = [this](int g, const Animals::Member &by) {
@@ -349,6 +351,8 @@ bool World::loadFreeform(const std::string &path) {
     return guest ? guest->name : std::string();
   };
   animals.rubbleAt = [this](int tx, int ty, const Animals::Member &) { return this->rubbleTile(tx, ty); };
+  // (zoo.exe habitat +0xf0, read by 0x4808ac: the keepers at their duties)
+  animals.keepersAtWork = [this](int exhibit) { return this->staff.keepersAtWork(exhibit, this->fences); };
   // ours: the guests a building counts as its users, as Guests counts them
   // (those using it or on their way - its index in the placed objects)
   animals.buildingGuests = [this](int building) {
@@ -474,7 +478,7 @@ bool World::loadFreeform(const std::string &path) {
         return t.displayName;
     }
     for (const Staff::Member &m : this->staff.members())
-      if (in(m.x, m.y))
+      if (in(m.x, m.y) && !this->staff.types()[m.type].underwater)
         return nameOf(this->staff.types()[m.type].file);
     for (const Guests::Guest &g : this->guests.guests())
       if (!g.hidden && in(g.x, g.y))
@@ -638,6 +642,10 @@ bool World::loadFreeform(const std::string &path) {
   return true;
 }
 
+// (zoo.exe ZTAIMgr::aiMgrUpdate 0x4348b7: the AI clock +0xe8 given the ms,
+// whole mAITick periods, +0xe4, counted into +0xec; then every entity of the
+// world's list, +0x80, its update - slot 0x28 - with the ms. ours: each
+// system's update with the seconds)
 void World::update(const bool *state, float deltaTime, float inputSeconds) {
   FrameProfile::Scope profile("world update");
   // Sync mouse wheel zoom (modified by InputManager) with camera
@@ -656,6 +664,7 @@ void World::update(const bool *state, float deltaTime, float inputSeconds) {
   // Sounds hold while paused; animals don't react
   Sound::get().setPaused(paused);
   animals.paused = paused;
+  fences.paused = paused; // (tanks fill and drain at once while paused)
   // Where a point is from the middle of the view, in screen pixels (for
   // sounds on the map)
   if (!staff.viewOffset) {
@@ -1813,6 +1822,14 @@ void World::drawPathDebug(SDL_Renderer *renderer) {
   }
 }
 
+// ours: the original's world keeps everything in one list (+0x80) and its
+// units in an id map, each thing put in or taken out as it comes and goes
+// (worldAdd 0x410556, which then runs the thing's class slot 0x74 - a
+// building's 0x45158c, a unit's 0x412c70 and 0x412cdc - and worldDelete
+// 0x41e09e / worldRemove 0x41e221), found by id (worldFindById 0x41176c,
+// worldFindByIdMap 0x411797) or by type key (worldFindTypeByKey 0x410d48);
+// ours keeps each kind in its own list and rebuilds this tile index after
+// a change
 void World::reindex() {
   FrameProfile::Scope profile("index rebuild");
   this->index.rebuild(this->worldMap, this->placedObjects, this->fences, this->resourceManager);
@@ -2640,6 +2657,10 @@ void World::startAmbience(const std::string &scenario) {
   }
 }
 
+// (zoo.exe ZTBuilding::update 0x434c4b, class slot 0x28, also fades a
+// building's ambient loop in while it has users and out while it has none,
+// 3 a ms of attenuation to 5000, for a type with +0x1e8, and its use sound
+// down from +0x1b8 - ours: started near the view, stopped far, #267)
 void World::updateBuildingSounds(float seconds) {
   if (!this->animals.viewOffset)
     return;
@@ -2889,6 +2910,26 @@ int World::rubbleTile(int tx, int ty) {
     if (covers && keyOf(file, "crubbleable", 1) != 0)
       ids.push_back(o.id);
   }
+  return this->rubbleObjects(ids);
+}
+
+// Each of these things turned to rubble (zoo.exe its class slot 0x124: a
+// building's toRubble 0x611bd6, anything else's objectToRubble 0x47c2ac),
+// as a rampage does (rubbleTile) or the "Marwan Jubran" cheat (0x60d8e3)
+int World::rubbleObjects(const std::vector<int> &ids) {
+  auto keyOf = [this](const std::string &file, const char *key, int fallback) {
+    std::string k = file + "|" + key;
+    auto it = this->rubbleKeys.find(k);
+    if (it != this->rubbleKeys.end())
+      return it->second;
+    int v = fallback;
+    if (IniReader *ai = this->resourceManager->getIniReader(file)) {
+      v = ai->getInt("characteristics/integers", key, fallback);
+      delete ai;
+    }
+    this->rubbleKeys[k] = v;
+    return v;
+  };
   int n = 0;
   for (int id : ids) {
     int at = this->placedObjects.indexOf(id);
@@ -2964,11 +3005,14 @@ int World::rubbleTile(int tx, int ty) {
           this->placedObjects.explode(*r);
           if (j == 0)
             if (IniReader *ai = this->resourceManager->getIniReader(pieceFile)) {
+              // (and its cExplosionSoundAtten, read only with a sound: zoo.exe
+              // ZTRubbleType::loadConfig 0x4c42a2, +0x16c)
               std::string sound = ai->get("characteristics/integers", "cexplosionsound");
+              const int atten = ai->getInt("characteristics/integers", "cexplosionsoundatten", 0);
               delete ai;
               float dx = 0, dy = 0;
               if (!sound.empty() && this->animals.viewOffset && this->animals.viewOffset(x, y, dx, dy))
-                Sound::get().playAt(sound, dx, dy);
+                Sound::get().playAt(sound, dx, dy, atten);
             }
         }
       }
@@ -3009,10 +3053,11 @@ int World::rubbleTile(int tx, int ty) {
         first = false;
         if (IniReader *ai = this->resourceManager->getIniReader(pieceFile)) {
           std::string sound = ai->get("characteristics/integers", "cexplosionsound");
+          const int atten = ai->getInt("characteristics/integers", "cexplosionsoundatten", 0); // (0x4c42a2)
           delete ai;
           float dx = 0, dy = 0;
           if (!sound.empty() && this->animals.viewOffset && this->animals.viewOffset(x, y, dx, dy))
-            Sound::get().playAt(sound, dx, dy);
+            Sound::get().playAt(sound, dx, dy, atten);
         }
       }
     }
@@ -3371,6 +3416,15 @@ bool World::cancelLine() {
 bool World::cancelTool() {
   if (this->cancelLine())
     return true;
+  // The bulldozer's drag taken back, the tool kept; the button's release
+  // then takes nothing (zoo.exe 0x509870, the bulldozer's class slot at
+  // 0x630a20: bulldozeDrag(0), +8 cleared, +9 set)
+  if (this->bulldozer && this->bulldozeDrag.pressed && this->bulldozeDrag.dragging) {
+    this->bulldozeDrag.dragging = false;
+    this->bulldozeDrag.cancelled = true;
+    this->clearBulldozeRect();
+    return true;
+  }
   // (a guest held: back where it was - zoo.exe endPlacing 0x443df7)
   if (this->guests.carried >= 0) {
     this->guests.putBack();
@@ -3517,11 +3571,27 @@ void World::mouseMove(int x, int y) {
     return;
   }
   if (this->bulldozer && this->bulldozeDrag.pressed) {
-    // (moved more than 16 pixels from the press: a drag - zoo.exe 0x4ec0b4)
-    if (!this->bulldozeDrag.dragging &&
-        (std::abs(x - this->bulldozeDrag.pressX) > 16 || std::abs(y - this->bulldozeDrag.pressY) > 16) &&
-        this->bulldozeDrag.onMap)
-      this->bulldozeDrag.dragging = true;
+    // zoo.exe bulldozeMouse 0x509071 (0x4ec0b4): the cursor still on the
+    // pressed tile and no more than 16 pixels from the press, it's a click
+    // (a drag brought back there is one again); off that tile or further,
+    // a drag - not after a right click took this press's drag back (+9,
+    // 0x509870), until the button's let go
+    {
+      float cx = 0, cy = 0;
+      const bool on = this->pick(x, y, cx, cy);
+      const bool atPress = std::abs(x - this->bulldozeDrag.pressX) <= Original::bulldozeClickPixels &&
+                           std::abs(y - this->bulldozeDrag.pressY) <= Original::bulldozeClickPixels &&
+                           (!on || (static_cast<int>(std::floor(cx)) == this->bulldozeDrag.tx0 &&
+                                    static_cast<int>(std::floor(cy)) == this->bulldozeDrag.ty0));
+      if (atPress) {
+        if (this->bulldozeDrag.dragging) {
+          this->bulldozeDrag.dragging = false;
+          this->clearBulldozeRect();
+        }
+      } else if (!this->bulldozeDrag.dragging && !this->bulldozeDrag.cancelled && this->bulldozeDrag.onMap) {
+        this->bulldozeDrag.dragging = true;
+      }
+    }
     if (this->bulldozeDrag.dragging) {
       float wx, wy;
       if (this->pick(x, y, wx, wy)) {
@@ -4011,6 +4081,16 @@ int World::fencePreviewPrice() const {
 // fence pieces along its edges (not the zoo's own walls, not a tank's) and
 // the scenery on it - not buildings among the structures (its [Member]),
 // as the original leaves them - lit red, the money back for them all shown
+// ours: the drag's rectangle let go of (back to a click, or taken back)
+void World::clearBulldozeRect() {
+  this->dragPaths.clear();
+  this->dragDecks.clear();
+  this->dragObjects.clear();
+  this->dragFences.clear();
+  this->placedObjects.highlights.clear();
+  this->hoverPrice = -1;
+}
+
 void World::gatherBulldozeRect() {
   this->dragPaths.clear();
   this->dragDecks.clear();
@@ -4498,6 +4578,7 @@ World::ToolResult World::mouseDown(int x, int y) {
         u.id = o->id;
         u.money = r.cost;
         this->recordUndo(u);
+        r.buildingPlaced = o->className == "building";
         // (an entrance put on the zoo wall in the map editor: the wall opens
         // where it stands)
         if (this->fences.isEditing() && o->className == "building" && this->fences.isZooGate(o->typeName))
@@ -4708,6 +4789,13 @@ World::ToolResult World::mouseUp(int x, int y) {
     return r;
   }
   if (this->bulldozer && this->bulldozeDrag.pressed) {
+    // (its drag taken back by a right click: nothing - zoo.exe 0x50989a,
+    // +9 cleared at 0x48b64f)
+    if (this->bulldozeDrag.cancelled) {
+      this->bulldozeDrag = {};
+      this->mouseMove(x, y);
+      return r;
+    }
     const bool dragged = this->bulldozeDrag.dragging;
     this->mouseMove(x, y);
     this->bulldozeDrag.pressed = false;
@@ -4767,6 +4855,9 @@ World::ToolResult World::mouseUp(int x, int y) {
         this->pathPreview.clear();
       }
     }
+    // (over another kind of path: the tile's path changed, full price, no
+    // money back for the old one, Undo putting the old one back - zoo.exe
+    // placeObject 0x4d9088, a tile with a path, +0x83 & 8)
     for (auto &p : this->pathPreview)
       if (p.second == Fences::Fit::Ok && canLayPath(p.first.first, p.first.second)) {
         UndoStep u{UndoStep::Kind::Path};

@@ -274,6 +274,7 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   targets.insert(41); // Marine Mania show scripts and admission.
   targets.insert(46);
   targets.insert(17); // a staff member's, clicked on the map or the list
+  targets.insert(1400); // a DRT base's (drt.lyt), clicked on the map
   targets.insert(6);  // an animal's, clicked on the map
   targets.insert(28); // its Zookeeper Recommendations
   targets.insert(9);  // a guest's, clicked on the map
@@ -1327,7 +1328,29 @@ void UiGameScreen::setupZooStatus() {
 
 void UiGameScreen::setZooInfo(const ZooInfo &info) {
   this->zoo = info;
+  // (open, it waits for its next refresh, as the original's - 0x401644)
+  if (!this->isPanelOpen(14))
+    this->refreshZooStatus();
+}
+
+// zoo.exe 0x401644 (each frame from 0x41a281, not while paused -
+// mouseEdgeScroll 0x419eb2): Zoo Status (uiFind 14) shown and not hidden,
+// its counts, books, graphs and pages redone when the time (ms) reaches
+// +0x643670, which then moves 10 s on
+void UiGameScreen::zooStatusTick(uint64_t nowMs, bool paused) {
+  if (paused || !this->isPanelOpen(14) || nowMs < this->zooStatusDue)
+    return;
+  this->zooStatusDue = nowMs + Original::zooStatusRefreshMs;
   this->refreshZooStatus();
+}
+
+// zoo.exe 0x41739a: 0x639145 set, then 0x401644(0) - redone at once, and
+// again on the next tick (the due time becomes 0 + 10 s)
+void UiGameScreen::forceZooStatus() {
+  if (!this->isPanelOpen(14))
+    return;
+  this->refreshZooStatus();
+  this->zooStatusDue = 0;
 }
 
 void UiGameScreen::setSim(ZooSim *sim) {
@@ -1854,12 +1877,17 @@ void UiGameScreen::setPanelOpen(int id, bool open) {
   // overlap)
   if (open && Features::infoClosesLists && (id == 30 || id == 31 || id == 16 || id == 12))
     for (Entry &e : this->entries)
-      if (e.panel && e.open && (e.id == 6 || e.id == 9 || e.id == 17 || e.id == 20 || e.id == 21 || e.id == 28))
+      if (e.panel && e.open && (e.id == 6 || e.id == 9 || e.id == 17 || e.id == 20 || e.id == 21 || e.id == 28 || e.id == 1400))
         e.open = false;
   for (Entry &e : this->entries)
     if (e.panel && e.id == id) {
       if (open && !e.open)
         e.openedAt = ++this->openCount;
+      // (the Exhibit List opened or shut: no exhibit picked - 0x58b5ce(0)
+      // in mulhab_Panel_show 0x46836c and mulhab_Panel_hide 0x4682f1)
+      if (id == 30 && open != e.open && this->exhibitPanel)
+        if (UiListBox *list = dynamic_cast<UiListBox *>(this->exhibitPanel->getElementById(4305)))
+          list->setSelectedIndex(-1);
       e.open = open;
     }
 }
@@ -1873,7 +1901,7 @@ void UiGameScreen::openInfo(int id) {
   // (ours, smartstack: nothing else closes - the windows stand side by
   // side - only another information window, which this one replaces)
   if (Features::smartStack && !Features::infoClosesLists) {
-    for (int p : {6, 9, 17, 20, 21})
+    for (int p : {6, 9, 17, 20, 21, 1400})
       this->setPanelOpen(p, p == id);
     return;
   }
@@ -1897,7 +1925,10 @@ void UiGameScreen::openInfo(int id) {
       if (b->getActionTarget() == l)
         b->setToggledOn(true);
   }
-  for (int p : {6, 9, 17, 20, 21})
+  // (the DRT base's 1400 among them: one thing is selected at a time, and
+  // a new selection shuts the last one's panel - zoo.exe 0x5b66b1,
+  // ui_drt_50f5fc)
+  for (int p : {6, 9, 17, 20, 21, 1400})
     this->setPanelOpen(p, p == id);
   // (and the last animal's Recommendations: ours, with the switch)
   if (Features::infoClosesLists)
@@ -3429,7 +3460,8 @@ void UiGameScreen::setupExhibits() {
     drain->onClick = [this] {
       if (!this->fences)
         return;
-      // (animals in it: 10551, nothing done - zoo.exe 0x6064ed)
+      // (zoo.exe tankDrainClick 0x611487 -> tankDrainCheck 0x6064ed:
+      // animals in it, 10551 and nothing done)
       if (const Fences::Exhibit *ex = this->fences->exhibit(this->shownExhibit); ex && ex->animals > 0) {
         this->showMessage(this->resource_manager->getString(10551));
         return;
@@ -3727,12 +3759,16 @@ void UiGameScreen::setupStaffPanels() {
       };
     if (UiText *name = dynamic_cast<UiText *>(z->getElementById(3502)))
       name->onCommit = [this](const std::string &typed) {
-        // (zoo.exe infostf_StaffName_click 0x61847c: setName, 0x449215)
+        // (zoo.exe infostf_StaffName_click 0x61847c: setName, 0x449215; a
+        // staff member's class slot 0x1c is 0x449515, the rename cheats
+        // 0x44940b)
         if (!this->staff || !Original::nameTaken(typed))
           return;
         if (Staff::Member *m = this->staff->member(this->shownStaff))
           m->name = typed;
         this->staffListCount = -1;
+        if (this->staffRenamed)
+          this->staffRenamed(this->shownStaff, typed);
       };
     // A maintenance worker's duties: ticks (zoo.exe infostf3_MwAssignList_click
     // 0x6186f2: a row clicked flips its bit, staff +0x2a8, and the count of
@@ -3756,6 +3792,105 @@ void UiGameScreen::setupStaffPanels() {
         assignOff();
         if (Staff::Member *m = this->staff ? this->staff->member(this->shownStaff) : nullptr)
           m->exhibits.clear();
+      };
+    // A keeper's exhibit picked (zoo.exe infostf2_AssignList_click 0x61861b):
+    // Assign off (uiTurnOff 3578), Remove enabled (3579's slot 0x68), the
+    // view to the exhibit's gate (its habitat +0x8c, the gate's tile, set at
+    // 0x435a0d: centred on by 0x59b90c), the Exhibit List shown if it's
+    // hidden (0x6108d2: element 30's slot 0x4c) and that exhibit made its
+    // pick (0x58b5ce; a show tank: its show panel)
+    if (UiListBox *l = dynamic_cast<UiListBox *>(z->getElementById(3569)))
+      l->onPick = [this, z, assignOff](int row) {
+        assignOff();
+        if (UiButton *remove = dynamic_cast<UiButton *>(z->getElementById(3579)))
+          remove->setDisabled(false);
+        const Staff::Member *m = this->staff ? this->staff->member(this->shownStaff) : nullptr;
+        if (!m || row < 0 || row >= (int)m->exhibits.size())
+          return;
+        const int ex = m->exhibits[row];
+        float gx = 0, gy = 0;
+        if (this->centreOn && this->exhibitGateTile(ex, gx, gy))
+          this->centreOn(gx, gy);
+        if (!this->isPanelOpen(30)) {
+          // (mulhab_Panel_show 0x46836c: the other lists at the bottom
+          // right shut - Animal 16, Guest 12, Staff 31: 0x5b1426 - and Zoo
+          // Status and the show panel, closeOtherPanels 0x443af8; the
+          // information windows stay, moved above it, 0x4ef99b)
+          for (int p : {16, 12, 31, 14, 41, 30}) {
+            this->setPanelOpen(p, p == 30);
+            for (UiButton *b : this->panelButtons)
+              if (b->getActionTarget() == p)
+                b->setToggledOn(p == 30);
+          }
+          this->listedExhibits.clear();
+          this->shownListCount = -1;
+        }
+        if (const Fences::Exhibit *e = this->fences ? this->fences->exhibit(ex) : nullptr; e && e->show) {
+          this->showShow(ex);
+          return;
+        }
+        auto centre = this->centreOn;
+        this->centreOn = nullptr;
+        this->refreshExhibits();
+        if (UiListBox *list = this->exhibitPanel ? dynamic_cast<UiListBox *>(this->exhibitPanel->getElementById(4305)) : nullptr)
+          for (size_t i = 0; i < this->listedExhibits.size(); i++)
+            if (this->listedExhibits[i] == ex) {
+              list->setSelectedIndex((int)i);
+              this->refreshExhibits();
+            }
+        this->centreOn = centre;
+      };
+  }
+  // The DRT base's panel (drt.lyt, 1400; its handlers registered by
+  // register_drt_handlers 0x516f07)
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 1400)
+      this->drtPanel = e.layout;
+  if (UiLayout *d = this->drtPanel) {
+    if (UiElement *name = d->getElementById(1403))
+      name->setHidden(false);
+    // Its name (drt_DRTName_click 0x61615a: setName, as the others -
+    // 0x449215, Original::nameTaken)
+    if (UiText *name = dynamic_cast<UiText *>(d->getElementById(1403)))
+      name->onCommit = [this](const std::string &typed) {
+        if (!this->staff || !Original::nameTaken(typed))
+          return;
+        if (Staff::Member *m = this->staff->member(this->shownDrt))
+          m->name = typed;
+        this->staffListCount = -1;
+        this->drtRefreshNow = true;
+      };
+    // TrackDRT (infoTrack_click 0x48c7ef / infoTrack_off 0x616231: the
+    // view follows its helicopter, view +0x43c, as Track Staff)
+    if (UiButton *b = dynamic_cast<UiButton *>(d->getElementById(1405)))
+      b->onClick = [this] {
+        this->tracking = !this->tracking;
+        if (this->staffRequest)
+          this->staffRequest(StaffRequest::Track, this->tracking ? this->shownDrt : -1);
+      };
+    // Fire Team (infoSellOrFire_click 0x48d0b4 -> removeObject 0x50a0b0:
+    // a base of type 8031 asks as firing its helicopter does - text 155,
+    // "Are you sure you want to fire %s?", and the helicopter's monthly
+    // salary, its slot 0x314)
+    if (UiButton *b = dynamic_cast<UiButton *>(d->getElementById(1419)))
+      b->onClick = [this] {
+        const Staff::Member *m = this->staff ? this->staff->member(this->shownDrt) : nullptr;
+        if (!m)
+          return;
+        const int id = m->id;
+        std::string ask = this->resource_manager->getString(155);
+        if (size_t at = ask.find("%s"); at != std::string::npos)
+          ask.replace(at, 2, m->name);
+        ask += formatPrice(this->staff->types()[m->type].salary);
+        this->askConfirm(ask, [this, id] {
+          if (this->staffRequest)
+            this->staffRequest(StaffRequest::Fire, id);
+          if (this->shownDrt == id) {
+            this->shownDrt = -1;
+            this->setPanelOpen(1400, false);
+          }
+          this->staffListCount = -1;
+        });
       };
   }
   if (UiLayout *l = this->staffList) {
@@ -3786,7 +3921,12 @@ void UiGameScreen::showStaff(int id) {
   this->openInfo(17);
   this->shownStaff = id;
   this->staff->selected = id;
+  // (zoo.exe infostf_Panel_show 0x4716b2: TrackStaff turned off, slot 0x54,
+  // and drawn on it; its name; then 0x47108a's fill)
   this->tracking = false;
+  if (UiButton *track = dynamic_cast<UiButton *>(this->staffPanel->getElementById(3515)))
+    track->setToggledOn(false);
+  this->pickStaffRow(id);
   const Staff::Type &t = this->staff->types()[m->type];
   // (tour guides can be given exhibits too: their tours go to those)
   bool keeperLike = t.kind == Staff::Kind::Keeper || t.kind == Staff::Kind::Scientist ||
@@ -3813,14 +3953,113 @@ void UiGameScreen::showStaff(int id) {
   this->refreshStaff();
 }
 
+// The tile by an exhibit's gate, its middle. zoo.exe: the habitat's +0x8c,
+// the tile holding its gate piece (set at 0x435a0d; the gate itself through
+// 0x492ca3, the tile's +0x14 by +0x90's side); ours: of the gate's two
+// tiles, the one inside (which one the original keeps wasn't measured - the
+// view moves less than a tile)
+bool UiGameScreen::exhibitGateTile(int id, float &x, float &y) const {
+  if (!this->fences)
+    return false;
+  for (const auto &[e, p] : this->fences->pieces())
+    if (p.gate && this->fences->exhibitOf(e) == id) {
+      int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
+      if (this->fences->exhibitAt(ax, ay) != id) {
+        ax = e.x;
+        ay = e.y;
+      }
+      x = ax + 0.5f;
+      y = ay + 0.5f;
+      return true;
+    }
+  return false;
+}
+
+// A DRT base clicked: its panel (zoo.exe ui_main_4b2322 -> 0x5b66b1: a
+// building of type 8031, the helibase, ui_drt_48cd7a - drt.lyt shown;
+// drt_Panel_show 0x48ccc1: TrackDRT off, its name, then 0x48c87d's fill).
+// The Staff List's DRT picks it too (mulstaff_list_click 0x4720cc: the
+// helicopter's base, 0x5066bb). ours: the base and its helicopter are one
+// staff member; picking either on the map opens this
+void UiGameScreen::showDrt(int id) {
+  if (!this->drtPanel || !this->staff || !this->staff->member(id))
+    return;
+  this->openInfo(1400);
+  this->shownDrt = id;
+  this->staff->selected = id;
+  this->tracking = false;
+  if (UiButton *track = dynamic_cast<UiButton *>(this->drtPanel->getElementById(1405)))
+    track->setToggledOn(false);
+  this->drtRefreshNow = true;
+  this->pickStaffRow(id);
+  this->refreshDrt();
+}
+
+// The Staff List's pick follows the selection (zoo.exe 0x5b66b1 ->
+// ui_mulstaff_47158c with the unit): its row, or none
+void UiGameScreen::pickStaffRow(int id) {
+  UiListBox *list = this->staffList ? dynamic_cast<UiListBox *>(this->staffList->getElementById(4205)) : nullptr;
+  if (!list)
+    return;
+  int row = -1;
+  for (size_t i = 0; i < this->listedStaff.size() && i < list->getItemCount(); i++)
+    if (this->listedStaff[i] == id)
+      row = (int)i;
+  list->setSelectedIndex(row);
+}
+
+// zoo.exe 0x48c87d (on show, and every 1000 ms while it's shown, 0x41a3f3):
+// 1407 the helicopter's monthly salary (slot 0x314, setMoneyText 0x40ed88),
+// 1411 its duty (slot 0x318), 1409 the base's recoveries (+0x19c, a whole
+// number, 0x417879), TrackDRT enabled again (0x443e3e); 1413-1417, a
+// trained keeper's icons, aren't in drt.lyt
+void UiGameScreen::refreshDrt() {
+  UiLayout *d = this->drtPanel;
+  if (!d || !this->staff)
+    return;
+  const Staff::Member *m = this->staff->member(this->shownDrt);
+  if (this->isPanelOpen(1400) && !m)
+    this->setPanelOpen(1400, false);
+  if (!this->isPanelOpen(1400)) {
+    if (this->shownDrt >= 0) {
+      if (this->staff->selected == this->shownDrt)
+        this->staff->selected = -1;
+      if (this->tracking && this->staffRequest)
+        this->staffRequest(StaffRequest::Track, -1);
+      this->tracking = false;
+      this->shownDrt = -1;
+    }
+    return;
+  }
+  const uint32_t now = static_cast<uint32_t>(SDL_GetTicks());
+  if (!this->drtRefreshNow && now < this->drtRefreshAt)
+    return;
+  this->drtRefreshNow = false;
+  this->drtRefreshAt = now + 1000;
+  auto text = [&](int eid, const std::string &s) {
+    if (UiText *e = dynamic_cast<UiText *>(d->getElementById(eid)))
+      if (!e->isBeingEdited())
+        e->setText(s);
+  };
+  text(1403, m->name);
+  text(1407, formatCost(this->staff->types()[m->type].salary));
+  text(1411, this->staff->dutyText(*m));
+  text(1409, std::to_string(m->recoveries));
+  if (UiElement *track = d->getElementById(1405))
+    track->setDisabled(false);
+}
+
 void UiGameScreen::refreshStaff() {
   if (!this->staff)
     return;
+  this->refreshDrt();
   // Staff Information
   if (UiLayout *z = this->staffPanel) {
     Staff::Member *m = this->staff->member(this->shownStaff);
     if (this->isPanelOpen(17) && !m)
       this->setPanelOpen(17, false);
+    // (closed - its CloseWindow, infoPanel_CloseWindow_click 0x599c18 ->
+    // 0x4ef75b: ui_main_4b2322(0, 1), nothing selected - tracking ends)
     if (!this->isPanelOpen(17) && this->shownStaff >= 0) {
       if (this->staff->selected == this->shownStaff)
         this->staff->selected = -1;
@@ -3837,21 +4076,37 @@ void UiGameScreen::refreshStaff() {
             e->setText(s);
       };
       text(3502, m->name);
-      if (UiButton *a = dynamic_cast<UiButton *>(z->getElementById(3578)))
+      if (UiButton *a = dynamic_cast<UiButton *>(z->getElementById(3578))) {
         if (a->isToggledOn() && this->staffAssigning && !this->staffAssigning())
           a->setToggledOn(false);
+        // (the Job Assignment page hidden - another tab picked: Assign off,
+        // infostf2_Panel_hide 0x4715ed, uiTurnOff 3578)
+        UiButton *job = dynamic_cast<UiButton *>(z->getElementById(3564));
+        if (a->isToggledOn() && job && !job->isToggledOn()) {
+          a->setToggledOn(false);
+          if (this->staffRequest)
+            this->staffRequest(StaffRequest::Assign, -1);
+        }
+      }
       text(3503, formatCost(t.salary));
       text(3505, this->staff->dutyText(*m));
       if (UiListBox *duties = dynamic_cast<UiListBox *>(z->getElementById(3587)))
         for (int i = 0; i < 4; i++)
           m->duties[i] = duties->isChecked(i);
-      if (UiListBox *l = dynamic_cast<UiListBox *>(z->getElementById(3569)))
+      // (zoo.exe 0x47108a: the list refilled, its pick kept, 0x4ef81c;
+      // Remove enabled only while a row is picked - slot 0x68 / 0x6c)
+      if (UiListBox *l = dynamic_cast<UiListBox *>(z->getElementById(3569))) {
         if ((int)l->getItemCount() != (int)m->exhibits.size()) {
+          const int pick = l->getSelectedIndex();
           l->clear();
           for (int ex : m->exhibits)
             if (const Fences::Exhibit *e = this->fences ? this->fences->exhibit(ex) : nullptr)
               l->addItem(e->name);
+          l->setSelectedIndex(pick < (int)l->getItemCount() ? pick : -1);
         }
+        if (UiButton *remove = dynamic_cast<UiButton *>(z->getElementById(3579)))
+          remove->setDisabled(l->getSelectedIndex() < 0);
+      }
     }
   }
   // Staff List
@@ -3925,15 +4180,23 @@ void UiGameScreen::refreshStaff() {
       this->staffListCount = (int)shown.size();
       list->setSelectedIndex(-1);
       for (size_t i = 0; i < shown.size(); i++)
-        if (shown[i] == this->shownStaff)
+        if (shown[i] == this->shownStaff || shown[i] == this->shownDrt)
           list->setSelectedIndex((int)i);
     }
+    // (zoo.exe mulstaff_list_click 0x4720cc: the unit selected, ui_main_4b2322
+    // - a helicopter (0x638790) as its base, +0x294 through 0x5066bb, so the
+    // DRT base's panel - and the view to its tile, 0x59b90c, unless tracking)
     int sel = list->getSelectedIndex();
-    if (sel >= 0 && sel < (int)this->listedStaff.size() && this->listedStaff[sel] != this->shownStaff) {
+    if (sel >= 0 && sel < (int)this->listedStaff.size() && this->listedStaff[sel] != this->shownStaff &&
+        this->listedStaff[sel] != this->shownDrt) {
       int id = this->listedStaff[sel];
       if (this->staffRequest)
         this->staffRequest(StaffRequest::Select, id);
-      this->showStaff(id);
+      const Staff::Member *pick = this->staff->member(id);
+      if (pick && this->staff->types()[pick->type].kind == Staff::Kind::Helicopter)
+        this->showDrt(id);
+      else
+        this->showStaff(id);
     }
   }
 }
@@ -5183,16 +5446,11 @@ void UiGameScreen::refreshExhibits() {
   };
   if (id != this->shownExhibit) {
     this->shownExhibit = id;
-    if (ex && this->centreOn) {
-      float cx = 0, cy = 0;
-      for (auto [tx, ty] : ex->tiles) {
-        cx += tx + 0.5f;
-        cy += ty + 0.5f;
-      }
-      cx /= ex->tiles.size();
-      cy /= ex->tiles.size();
+    // (zoo.exe mulhab_HabitatList_click 0x599ae7: the view to its gate's
+    // tile, habitat +0x8c, through 0x59b90c - none, it stays)
+    float cx = 0, cy = 0;
+    if (ex && this->centreOn && this->exhibitGateTile(ex->id, cx, cy))
       this->centreOn(cx, cy);
-    }
     // The page: Modify Tank for a tank, else its status
     UiButton *tankTab = dynamic_cast<UiButton *>(element(4365));
     UiButton *statusTab = dynamic_cast<UiButton *>(element(4310));
@@ -5336,6 +5594,7 @@ void UiGameScreen::refreshExhibits() {
   const bool wet = ex->water * static_cast<float>(ex->wallSub - 1) >= 1.0f;
   grey(4869, wet);
   grey(4870, wet);
+  // (Salinity_Type, 0x1304: zoo.exe 0x468fe4 sets its text)
   text(4868, this->resource_manager->getString(ex->salt ? 4888 : 4889));
   text(4871, formatCost(this->fences->fillCost(id, true)));
   text(4872, formatCost(this->fences->fillCost(id, false)));

@@ -35,6 +35,7 @@ class WorldRenderer;
 //   (their Job Assignment ticks: empty trash, sweep, fences, filters);
 //   keepers, scientists and marine specialists need animals.
 class Guests;
+class Shows;
 class PlacedObjects;
 
 class Staff {
@@ -106,6 +107,9 @@ public:
     // 2); running from one, its bRunFromPredator: fRun (run, cFastRate) or
     // fMove(0,0,<anim>,<rate>) - maint.ai's run at 55
     int chaseCheck = 2;
+    // cUnderwater (unit type +0x17e): it may be in a tank as it fills
+    // (0x459e09) - the marine specialist, the DRT helicopter
+    bool underwater = false;
     std::string fleeAnim = "run";
     int fleeRate = -1; // -1: cFastRate
     // Its work's behaviour sets from its .ai ([BehaviorSet\bHeal] and the
@@ -181,6 +185,9 @@ public:
     // x/y stay the base's anchor even while its aircraft is away. Old saves
     // already store those coordinates; flight jobs restart safely on load.
     HeliStage heliStage = HeliStage::Parked;
+    // a DRT base's recoveries (ZTBuilding +0x19c, raised by ZTHelicopter
+    // slot 0x320 0x48c434), saved from v23
+    int recoveries = 0;
     float heliX = 0, heliY = 0, heliZ = 0;
     // the tile middle its chase flies to (Job13's route, 0x422238); -1 none
     float heliToX = -1, heliToY = -1;
@@ -292,6 +299,9 @@ public:
   // The animals (keepers dart and crate escaped ones)
   void setAnimals(Animals *animals) { this->animals = animals; }
   void setGuests(Guests *guests) { this->guests = guests; }
+  // The marine shows (a specialist fired mid-show stops it: keeperRemoved
+  // 0x458759)
+  void setShows(Shows *shows) { this->shows = shows; }
   void setObjects(PlacedObjects *objects) { this->objects = objects; }
   // The exhibits' viewing areas (tour guides go where guests are; guests
   // stand in them to look)
@@ -398,6 +408,7 @@ private:
   ZooItems *items = nullptr;
   Animals *animals = nullptr;
   Guests *guests = nullptr;
+  Shows *shows = nullptr;
   PlacedObjects *objects = nullptr;
   ViewingAreas viewing;
   double recycling = 0;
@@ -421,6 +432,13 @@ public:
   // 0x44e4eb, after OK on its name): 0, or the message posted - 11000 "%s
   // is inaccessible to zoo staff.", 11001 "The entrance to %s is blocked..."
   int exhibitAccess(int exhibit, const WorldMap &map, const Fences &fences);
+  // The keepers at their duties in an exhibit (the habitat's +0xf0: 0x4808ac
+  // asks it of a starving sick animal)
+  int keepersAtWork(int exhibit, const Fences &fences) const {
+    int inDuties = 0, headed = 0;
+    keepersAt(exhibit, -1, fences, inDuties, headed);
+    return inDuties;
+  }
 private:
   void catchStep(Member &m, float seconds, const WorldMap &map, const Fences &fences);
   WorldIndex *index = nullptr;

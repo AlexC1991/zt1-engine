@@ -526,6 +526,16 @@ bool Shows::trainerStep(Show &s,float seconds,bool leaving) {
     staff.climb(*m,m->outX,m->outY,0,true,false,0,map);
     m->phase=3;return false;
   }
+  // zoo.exe Job19 (job 0x13: ctor 0x5aa181, ZTKeeper class only; jobId
+  // 0x59f963; dtor 0x5a3168), the specialist at the show tank's surface:
+  // Task 0x6e's first pick (0x42400a at 0x49eee6) when the habitat's show
+  // wants this specialist (0x41680c -> 0x5a99f1), 0x13 at the surface
+  // (water state 2) else 0x17, Job23_GoToPlatformExitTank (our phases 0-1).
+  // begin 0x5aa24d: at the tank's entry point (tankEntryPoint 0x499cfa),
+  // facing in from its tile (0x5aa20b), the habitat's show id kept in
+  // +0x254; checkArrived 0x59f99f: no habitat - aborted (slot 0x174); the
+  // show id changed, the show over (0x59f988), or off the surface - done.
+  // Ours: phase 2 until the show's leaving (Shows::update) or cancel()
   if(m->phase==2) {
     staff.face(*m,m->inX,m->inY);
     // zoo.exe ZTKeeper::statusText 0x471399, job 0x13 (Job19, the
@@ -712,6 +722,15 @@ void Shows::cancel(int tank,const std::string &why) {
   }
   releaseAudience(*s,true);s->trainer=-1;s->phase=returning?Phase::Returning:Phase::Waiting;s->clock=0;s->elapsed=0;
   if(!returning)s->actors.clear();notice(*s,why);
+}
+
+// zoo.exe keeperRemoved 0x458759: a specialist removed while it works a show
+// (+0x254 set from the show's start, showStartingAnnounce 0x5a3de4, until
+// it's over, 0x5a8532) - the show stops at once (showStopEvent 0x612d20:
+// event 10007, which the stands treat as the show's end, 0x5a2abf)
+void Shows::specialistRemoved(int id) {
+  for(auto &[tank,s]:list)
+    if(s.trainer==id && s.phase!=Phase::Waiting)cancel(tank,"The show stopped: its specialist was removed.");
 }
 
 void Shows::finish(Show &s) {

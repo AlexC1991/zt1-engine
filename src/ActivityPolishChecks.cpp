@@ -1,4 +1,5 @@
 #include "RenameCheats.hpp"
+#include "Research.hpp"
 #include "Ambient.hpp"
 #include "World.hpp"
 #include "GpuTankLayer.hpp"
@@ -1170,6 +1171,11 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       zt.sets[0]["bparityface0"]=setOf({"fFaceDirection()","fPlay(walk)"});
       zt.sets[0]["bparityface2"]=setOf({"fFaceDirection(1,2)","fPlay(walk)"});
       zt.sets[0]["bparityface1"]=setOf({"fFaceDirection(3)","fPlay(walk)"});
+      zt.sets[0]["bparitysound1"]=setOf({"fPlaySound(nosuchsound)","fPlay(walk)"});
+      zt.sets[0]["bparitysound2"]=setOf({"fPlaySound(a,b)","fPlay(walk)"});
+      zt.sets[0]["bparityent3"]=setOf({"fMoveEntityDelta(0,0,0)","fPlay(walk)"});
+      zt.sets[0]["bparityent2"]=setOf({"fMoveEntityDelta(1,2)","fPlay(walk)"});
+      zt.sets[0]["bparityspec4"]=setOf({"fMoveEntitySpecial(1,2,3,4)","fPlay(walk)"});
       if(z) {
         z->x=30.5f;z->y=32.5f;
         const int home=z->exhibit;
@@ -1215,6 +1221,14 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         const bool faceOn=z->anim=="walk";
         check("fFaceDirection: one argument passes (does nothing), none or two fail the line (0x601dbc, 0x60cac6)",
               faceOn&&fails("bparityface0")&&fails("bparityface2"));
+        // fPlaySound 0x601a62: one argument, else the line fails;
+        // fMoveEntityDelta / Special (0x601aa5, 0x601b73): three, else it fails
+        start("bparitysound1");
+        const bool soundOn=z->anim=="walk";
+        start("bparityent3");
+        const bool entOn=z->anim=="walk";
+        check("fPlaySound: one argument passes, two fail the line; fMoveEntityDelta/Special: three pass, two or four fail (0x601a62, 0x601aa5, 0x601b73)",
+              soundOn&&fails("bparitysound2")&&entOn&&fails("bparityent2")&&fails("bparityspec4"));
         int missA=0,missFail=0;
         for(int i=0;i<1000;++i){
           start("bparitymiss");
@@ -3041,6 +3055,83 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       check("an egg in the tank: no water (0x459f52)",eggStops);
       *tk=before;
     }
+    // #248, zoo.exe tankTick 0x49625f: the water a height unit an update
+    // (Original::updateMs) up to the walls' height + waterOffset -1, down a
+    // unit an update drained; while the game's paused, filling and draining
+    // at once (0x459d94 -> 0x5c86e5, 0x6064ed); the walls raised keep the
+    // water's units (it fills on), lowered cut it at once (0x5af39e)
+    if(auto *tk=f.exhibit(swimTank)) {
+      const Fences::Exhibit before=*tk;const bool pausedWas=f.paused;
+      const auto keep=a.list;a.list.clear();world.reindex();
+      tk->tank=true;tk->wallSub=6;tk->filling=true;tk->water=1;tk->level=-1e9f;tk->fillMs=0;
+      const float tick=Original::updateMs/1000.0f;
+      auto units=[&]{return static_cast<int>(std::lround(tk->water*(tk->wallSub-1)));};
+      f.paused=false;
+      f.drainExhibit(swimTank);
+      const int afterDrain=units();
+      f.update(tick);const int oneDown=units();
+      for(int k=0;k<10;++k)f.update(tick);
+      const int empty=units();
+      f.takeFillRefusals();
+      const bool filled=f.fillExhibit(swimTank,true);
+      const int afterFill=units();
+      f.update(tick);const int oneUp=units();
+      const float shown=tk->level-tk->floorHeight;
+      f.update(tick);f.update(tick);const int threeUp=units();
+      for(int k=0;k<10;++k)f.update(tick);
+      const int full=units();
+      tk->wallSub=6;f.adjustWall(swimTank,1);const int raisedKept=units();
+      f.update(tick);const int raisedFill=units();
+      f.adjustWall(swimTank,-1);f.adjustWall(swimTank,-1);const int lowered=units();
+      f.paused=true;
+      f.drainExhibit(swimTank);const float pausedDrain=tk->water;
+      f.fillExhibit(swimTank,true);const float pausedFill=tk->water;
+      out<<"FILLRATE drain "<<afterDrain<<" -> "<<oneDown<<" -> "<<empty<<" fill "<<filled<<" "<<afterFill<<" -> "<<oneUp<<" (shown "<<shown<<") -> "
+         <<threeUp<<" -> "<<full<<" raised "<<raisedKept<<" -> "<<raisedFill<<" lowered "<<lowered<<" paused "<<pausedDrain<<" / "<<pausedFill<<"\n";
+      check("#248: a drained tank empties a height unit an update (0x49625f), not at once",
+            afterDrain==5 && oneDown==4 && empty==0);
+      check("#248: a tank filling rises a height unit an update to its height + waterOffset -1, shown as it rises",
+            filled && afterFill==0 && oneUp==1 && std::fabs(shown-1.0f)<0.01f && threeUp==3 && full==5 && tk->water==1.0f);
+      check("#248: walls raised keep the water's units and it fills on; lowered cut it at once (0x5af39e)",
+            raisedKept==5 && raisedFill==6 && lowered==4);
+      check("#248: while paused a tank drains and fills at once (0x6064ed, 0x459d94)",pausedDrain==0.0f && pausedFill==1.0f);
+      f.paused=pausedWas;*tk=before;a.list=keep;world.reindex();
+    }
+    // #251, zoo.exe 0x45b92f: a show tank sinks initialSinkShow 8 (0x46716e)
+    // and its walls start initialHeightShow 9; an exhibit tank 4 and 5
+    {
+      int showWall=-1;
+      for(size_t k=0;k<f.types().size()&&showWall<0;++k)if(f.types()[k].tank&&f.types()[k].showFence)showWall=static_cast<int>(k);
+      int tx=-1,ty=-1;
+      for(int y=4;y<map.getHeight()-12&&tx<0;++y)for(int x=4;x<map.getWidth()-12&&tx<0;++x){
+        bool ok=true;
+        for(int yy=y-1;yy<=y+5&&ok;++yy)for(int xx=x-1;xx<=x+11&&ok;++xx)ok=f.exhibitAt(xx,yy)<0&&f.insideZoo(xx,yy)&&!map.isPath(xx,yy);
+        for(const auto &o:objects.objects())ok=ok&&!(o.x>x-2&&o.x<x+13&&o.y>y-2&&o.y<y+7);
+        if(ok){tx=x;ty=y;}
+      }
+      check("room for a show tank and an exhibit tank",tx>=0 && showWall>=0);
+      if(tx>=0 && showWall>=0) {
+        auto groundOf=[&](int x0,int y0){int g=INT32_MIN;for(int y=y0;y<y0+4;++y)for(int x=x0;x<x0+4;++x)
+          if(const MapTile *t=map.getTile(x,y))for(int c=0;c<4;++c)g=std::max(g,static_cast<int>(t->cornerHeight[c]));return g;};
+        const int showGround=groundOf(tx,ty),plainGround=groundOf(tx+6,ty);
+        const int show=rectangle(tx,ty,4,4,showWall,"Show start tank");
+        const int plain=rectangle(tx+6,ty,4,4,f.typeIndex("atltank"),"Exhibit start tank");
+        const Fences::Exhibit *s=f.exhibit(show),*p=f.exhibit(plain);
+        out<<"TANKSTART show "<<(s?s->show:0)<<" wall "<<(s?s->wallSub:-1)<<" floor "<<(s?s->floorHeight:-99)<<" ground "<<showGround
+           <<" | exhibit wall "<<(p?p->wallSub:-1)<<" floor "<<(p?p->floorHeight:-99)<<" ground "<<plainGround<<"\n";
+        const MapTile *sf=map.getTile(tx+1,ty+1),*pf=map.getTile(tx+7,ty+1);
+        out<<"TANKSTART floors "<<(sf?int(sf->terrainType):-1)<<" / "<<(pf?int(pf->terrainType):-1)<<"\n";
+        check("#251: a show tank starts with walls 9 high, sunk 8 (initialHeightShow, initialSinkShow)",
+              s && s->tank && s->show && s->wallSub==9 && s->floorHeight==std::max(-12,showGround-8));
+        check("a show tank's floor is gunite, tankTerrainShow 17 (showTankLook 0x5ab683); an exhibit tank's sand",
+              sf && pf && sf->terrainType==17 && pf->terrainType==2);
+        check("#251: an exhibit tank starts with walls 5 high, sunk 4 (initialHeight, initialSink)",
+              p && p->tank && !p->show && p->wallSub==5 && p->floorHeight==std::max(-12,plainGround-4));
+        for(int id:{show,plain})if(f.exhibit(id))f.drainExhibit(id);
+        for(int x0:{tx,tx+6})for(int k=0;k<4;++k){f.remove({true,x0+k,ty},map);f.remove({true,x0+k,ty+4},map);f.remove({false,x0,ty+k},map);f.remove({false,x0+4,ty+k},map);}
+        f.updateExhibits(map,1,0,1);world.reindex();
+      }
+    }
 
     // Idling: two animals standing on the same spot must be parted. This is
     // the one thing 10.28 added that is kept, so it is what this guards.
@@ -4493,6 +4584,11 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
           check("its status line by task: 0x6a 10316, 0x69 10318, 0x6f 10308, 0x67 10319, 0x68 10317 (0x48c9ef)",
                 lines[0x6a]==std::set<int>{10316}&&lines[0x69]==std::set<int>{10318}&&lines[0x6f]==std::set<int>{10308}&&
                 lines[0x67]==std::set<int>{10319}&&lines[0x68]==std::set<int>{10317});
+          // (#252: the dart counts a recovery on its base - Job14_RetrieveAnimal::
+          // atTarget 0x50dd6e -> ZTHelicopter slot 0x320 0x48c434, base +0x19c,
+          // the DRT panel's 1409)
+          if(const Staff::Member *hm=st.member(h))
+            check("its dart counts one recovery on its base (0x48c434: base +0x19c)",darted&&hm->recoveries==1);
           st.fire(h);
         }
         out<<"STAFF helicopter pick: 5 straight off "<<straight<<", 3+3 off "<<diagonal<<", picked "<<picked<<"\n";
@@ -4725,6 +4821,32 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
             st.idleStep(*wm,map,f);
             maint=!wm->path.empty()&&wm->idleLeft<=0?"walks on at once":"stands";
           }
+          // #253: a tour guide with no trip to take stands one play of its
+          // idle animation ('stand', 21 frames at 125 ms; measured 2.63-2.81
+          // s) and walks about - with no exhibits too (fGuideRoutine 0x58a998)
+          float guideStand=-1,guideWant=-1;std::string guideAfter="?",guideNoHabitat="?";
+          if(const int guideType=st.typeOfFile("staff/tour.ai");guideType>=0) {
+            const int gd=st.hire(guideType,26.5f,24.5f,map,f);
+            if(Staff::Member *gm=st.member(gd)) {
+              guideWant=st.animSeconds(*gm,"idle");
+              still(*gm,25.5f,26.5f);
+              st.idleStep(*gm,map,f);
+              guideStand=gm->path.empty()&&gm->walksLeft==1?gm->idleLeft:-1;
+              st.idleStep(*gm,map,f);
+              guideAfter=!gm->path.empty()&&gm->walksLeft==0?"walks about":"stays";
+              still(*gm,25.5f,26.5f);
+              std::vector<int> hidden;
+              for(const Fences::Exhibit &e:f.exhibits())if(!e.pocket)hidden.push_back(e.id);
+              for(int id:hidden)f.exhibit(id)->pocket=true;
+              st.idleStep(*gm,map,f);
+              for(int id:hidden)f.exhibit(id)->pocket=false;
+              guideNoHabitat=gm->path.empty()&&gm->walksLeft==1?"stands":"walks on at once";
+            }
+            if(gd>=0)st.fire(gd);
+          }
+          out<<"STAFF #253 tour guide, no trip: stands "<<guideStand<<" s (its idle "<<guideWant<<" s) then "<<guideAfter<<"; no exhibits: "<<guideNoHabitat<<"\n";
+          check("a tour guide with no trip stands one play of its idle animation, then walks about (measured 2.63-2.81 s: 'stand' 21 frames at 125 ms)",
+                guideWant>2.5f&&std::abs(guideStand-guideWant)<0.01f&&guideAfter=="walks about"&&guideNoHabitat=="stands");
           // on a path: 40 walks about, each to a path tile; from grass, grass
           // (a straight path of 15 tiles laid on open grass for it, as the
           // measured zoos' paths, then lifted)
@@ -5131,6 +5253,109 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     } else check("rename cheats fixture: four guests",false);
     for(size_t k=objects.objects().size();k>firstObj;--k)objects.remove(k-1);
     g.clear();world.reindex();
+  }
+  // More rename cheats (#235): "Russell C" (0x6074ed) breaks every fence that
+  // can break; a maintenance man named "Bob V" (0x6070ef) makes every broken
+  // or worn one new, a maintenance woman so named nothing; "Steve Serafino"
+  // (0x607001, category 23201) applies each of its programs (the gorilla made
+  // available, effect 0) without marking it done; "Marwan Jubran" (0x60d8e3)
+  // wrecks the cars and gives $5,500 once; "George W" (0x607174) takes
+  // every cFoliage object away
+  {
+    g.clear();g.setEntrance(25,26);for(int k=0;k<4;++k)g.admit(k);
+    const int penDrag=drag;
+    const int pen=rectangle(60,60,2,2,f.typeIndex("chainlnk"),"Cheat fence");
+    std::vector<Fences::Edge> sides;
+    // (every piece that can break, the pen's and any other's)
+    for(const auto &[e,p]:f.pieces()){const auto &ft=f.types()[p.type];if(!p.gate&&p.tank<0&&!ft.zooWall&&!ft.indestructible)sides.push_back(e);}
+    const size_t firstObj=objects.objects().size();
+    const bool car=objects.add("scenery/other/jeep1.ai",66.0f,66.0f,0)&&objects.add("scenery/other/sedan1.ai",68.0f,66.0f,0);
+    const bool tree=objects.add("scenery/foliage/whtthrna.ai",70.5f,66.5f,0);
+    world.reindex();
+    out<<"RENAME FIXTURE guests "<<g.list.size()<<" pen "<<pen<<" sides "<<sides.size()<<" cars "<<car<<" tree "<<tree<<"\n";
+    if(g.list.size()==4&&!sides.empty()&&car&&tree) {
+      // (Zeta Psi: the men, and only they, in 5 and 6, smell-sick)
+      for(auto &q:g.list){q.colours[0]=q.colours[1]=0;q.smelled=false;}
+      const std::string zeta=RenameCheats::guestRenamed(world,0,"Zeta Psi");
+      int men=0;bool zetaOk=true;
+      for(auto &q:g.list){
+        const bool man=!g.typeList[q.type].female&&!g.typeList[q.type].child;men+=man;
+        zetaOk=zetaOk&&(man?q.colours[0]==5&&q.colours[1]==6&&q.smelled:q.colours[0]==0&&q.colours[1]==0&&!q.smelled);
+      }
+      for(auto &q:g.list)q.smelled=false;
+      out<<"RENAME ZETA "<<zeta<<" men "<<men<<" ok "<<zetaOk<<"\n";
+      check("\"Zeta Psi\": every man's clothes 5 and 6 and smell-sick, nobody else's (0x607434)",zeta=="0x607434"&&men>=1&&zetaOk);
+      const std::string russell=RenameCheats::guestRenamed(world,0,"Russell C");
+      bool broken=true;for(const auto &e:sides)broken=broken&&f.lifeOf(e)==0;
+      int woman=-1,man=-1;const int kind=st.typeOfFile("staff/maint.ai");
+      for(int y=56;y<70&&(woman<0||man<0);++y)for(int x=56;x<70&&(woman<0||man<0);++x){
+        const int id=st.hire(kind,x+0.5f,y+0.5f,map,f);if(id<0)continue;
+        auto *m=const_cast<Staff::Member *>(st.member(id));
+        if(woman<0){m->female=true;woman=id;}else{m->female=false;man=id;}
+      }
+      const std::string herBob=RenameCheats::staffRenamed(world,woman,"Bob V");
+      bool still=true;for(const auto &e:sides)still=still&&f.lifeOf(e)==0;
+      const std::string bob=RenameCheats::staffRenamed(world,man,"Bob V");
+      bool mended=true;for(const auto &e:sides)mended=mended&&f.lifeOf(e)==static_cast<float>(f.types()[f.pieces().at(e).type].life);
+      out<<"RENAME FENCES russell "<<russell<<" broken "<<broken<<" her Bob V '"<<herBob<<"' still broken "<<still<<" bob "<<bob<<" mended "<<mended<<"\n";
+      check("\"Russell C\": every fence broken (0x6074ed, 0x4858a4)",russell=="0x6074ed"&&broken);
+      check("\"Bob V\": a maintenance man mends every broken fence, a woman so named nothing (0x6070ef, 0x5b391c)",herBob.empty()&&still&&bob=="0x6070ef"&&mended);
+      // (a keeper: a woman named "Chuck Frizelle" nothing, "Susan Kittleson"
+      // the marketing counted twice; a maintenance woman so named nothing)
+      {
+        const bool was=RenameCheats::marketingTwice();RenameCheats::setMarketingTwice(false);
+        int keeper=-1;const int kk=st.typeOfFile("staff/keeper.ai");
+        for(int y=56;y<70&&keeper<0;++y)for(int x=56;x<70&&keeper<0;++x)keeper=st.hire(kk,x+0.5f,y+0.5f,map,f);
+        if(auto *k=st.member(keeper))k->female=true;
+        const std::string chuck=RenameCheats::staffRenamed(world,keeper,"Chuck Frizelle");
+        const std::string maintSusan=RenameCheats::staffRenamed(world,woman,"Susan Kittleson");
+        const bool before=RenameCheats::marketingTwice();
+        const std::string susan=RenameCheats::staffRenamed(world,keeper,"Susan Kittleson");
+        const bool after=RenameCheats::marketingTwice();
+        RenameCheats::setMarketingTwice(was);
+        out<<"RENAME KEEPER keeper "<<keeper<<" her Chuck '"<<chuck<<"' maint Susan '"<<maintSusan<<"' before "<<before<<" susan "<<susan<<" after "<<after<<"\n";
+        check("\"Susan Kittleson\" (a woman keeper): the marketing counted twice for arrivals; as a man's or a worker's name nothing (0x6392c1, 0x42443d)",
+              keeper>=0&&chuck.empty()&&maintSusan.empty()&&!before&&susan=="0x6392c1"&&after);
+      }
+      // (research: the gorilla's program, 23301 in category 23201)
+      const CatalogItem *gorilla=ItemCatalog::get().findName(5021);
+      const bool hidden=gorilla&&!ItemCatalog::get().isAvailable(*gorilla);
+      const std::string steve=RenameCheats::guestRenamed(world,0,"Steve Serafino");
+      int programs=0,applied=0,notDone=0,others=0;
+      for(auto &b:Research::get().branches())for(auto &c:b.categories)for(auto &p:c.programs){
+        if(c.nameId==23201){programs++;applied+=p.cheatApplied==1;notDone+=!p.done;}else others+=p.cheatApplied!=0;
+      }
+      const bool shown=gorilla&&ItemCatalog::get().isAvailable(*gorilla);
+      out<<"RENAME RESEARCH steve "<<steve<<" programs "<<programs<<" applied "<<applied<<" not done "<<notDone<<" others "<<others
+         <<" gorilla hidden "<<hidden<<" then shown "<<shown<<"\n";
+      check("\"Steve Serafino\": each of category 23201's programs applied once, none done, the gorilla made available (0x607001, 0x58fd9f)",
+            steve=="0x607001"&&programs>=6&&applied==programs&&notDone==programs&&others==0&&hidden&&shown);
+      for(auto &b:Research::get().branches())for(auto &c:b.categories)for(auto &p:c.programs)p.cheatApplied=0;
+      if(gorilla)ItemCatalog::get().setAvailable(*gorilla,false);
+      // (the cars and the tree; the money counted here, not paid)
+      const RenameCheats::Hooks realHooks=RenameCheats::hooks();
+      RenameCheats::Hooks counted=realHooks;
+      double given=0,refunded=0;int gifts=0;
+      counted.donation=[&](double d){given+=d;++gifts;};
+      counted.removalRefund=[&](double d){refunded+=d;};
+      RenameCheats::setHooks(counted);
+      const std::string marwan=RenameCheats::guestRenamed(world,0,"Marwan Jubran");
+      int cars=0,rubble=0;
+      for(const auto &o:objects.objects()){const std::string fl=PlacedObjects::fileOf(o);cars+=fl.find("jeep1")!=std::string::npos||fl.find("sedan1")!=std::string::npos;rubble+=o.rubbleOf!=0;}
+      const std::string again=RenameCheats::guestRenamed(world,0,"Marwan Jubran");
+      const std::string george=RenameCheats::staffRenamed(world,man,"George W");
+      int trees=0;for(const auto &o:objects.objects())trees+=PlacedObjects::fileOf(o).find("whtthrna")!=std::string::npos;
+      RenameCheats::setHooks(realHooks);
+      out<<"RENAME OBJECTS marwan "<<marwan<<" cars left "<<cars<<" rubble "<<rubble<<" again "<<again<<" given "<<given<<" in "<<gifts
+         <<" george "<<george<<" trees left "<<trees<<" refunded "<<refunded<<"\n";
+      check("\"Marwan Jubran\": the jeep and the sedan wrecked, $5,500 given once - not again with no cars (0x60d8e3)",
+            marwan=="0x60d8e3"&&cars==0&&rubble>0&&given==5500&&gifts==1);
+      check("\"George W\": every cFoliage object taken away, $300 back (0x607174)",george=="0x607174"&&trees==0&&refunded==300);
+    } else check("rename cheats fixture: four guests, a fence, two cars, a tree",false);
+    for(size_t k=objects.objects().size();k>firstObj;--k)objects.remove(k-1);
+    {std::vector<Fences::Edge> all;for(const auto &[e,p]:f.pieces())if(p.drag>=penDrag&&p.drag<penDrag+4)all.push_back(e);for(const auto &e:all)f.remove(e,map);}
+    f.updateExhibits(map,1,0,1);
+    st.clear();g.clear();world.reindex();
   }
   // Hide Buildings (zoo.exe ZTBuilding::draw 0x433aaf): only a building whose
   // [Member] lists "structures" - a restroom hidden, a burrow (shelters) not

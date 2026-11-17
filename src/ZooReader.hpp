@@ -150,7 +150,7 @@ public:
     bool tank = false, show = false;
     int tankHeight = 0, waterLevel = 0; // steps above the tank's floor
     bool salt = true, filling = true;
-    uint32_t tankCounter = 100;
+    uint32_t tankCounter = 100; // (zoo.exe +0x190: the salinity it's to become; written as salt's)
     int purity = 100;
     std::vector<uint8_t> rawShow; // original show program, without the surrounding habitat
     uint64_t built = 0, viewed = 0;

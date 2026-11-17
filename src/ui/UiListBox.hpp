@@ -1,6 +1,7 @@
 #ifndef UI_LISTBOX_HPP
 #define UI_LISTBOX_HPP
 
+#include <functional>
 #include <vector>
 #include <string>
 #include <SDL3/SDL.h>
@@ -72,6 +73,10 @@ public:
     int getRowHeight() const { return item_height; }
 
     void setSelectionAction(UiAction action) { selection_action = action; }
+    // A row clicked, each click (the same row again too): the original's
+    // list handlers run on every click (zoo.exe infostf2_AssignList_click
+    // 0x61861b) - ours: a hook for them
+    std::function<void(int)> onPick;
 
     // toggleselect=1 lists (the research categories): every item has a
     // checkbox, drawn in the miniconwidth column; clicking toggles it

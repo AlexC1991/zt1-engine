@@ -124,6 +124,9 @@ int runEverythingZoo(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
   auto fail = [&](const std::string &s) { ++failures; note("FAIL " + s); };
 
   auto &f = world.getFences();
+  // ours: built as if paused - its tanks full at once (zoo.exe 0x459d94
+  // while paused), not a unit an update
+  f.paused = true;
   auto &map = world.getMap();
   auto &animals = world.getAnimals();
   auto &staff = world.getStaff();
@@ -229,9 +232,13 @@ int runEverythingZoo(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     showTank.x = sx + 10; showTank.y = sy; showTank.w = 20; showTank.h = 16;
     home.id = enclose(home.x, home.y, 10, 16, typeOfKey("tankwal2"), "Everything home tank");
     showTank.id = enclose(showTank.x, showTank.y, 20, 16, typeOfKey("tankwal3"), "Everything show tank");
-    for (int id : {home.id, showTank.id})
+    // (the show tank to its tallest, its home to the same top: a show tank
+    // sinks 4 deeper - initialSinkShow 8, initialSink 4)
+    for (int id : {showTank.id, home.id})
       if (id >= 0) {
-        while (f.canAdjustWall(id, 1)) f.adjustWall(id, 1);
+        while (f.canAdjustWall(id, 1) && (id == showTank.id || showTank.id < 0 ||
+                                          f.exhibit(id)->wallTop() < f.exhibit(showTank.id)->wallTop()))
+          f.adjustWall(id, 1);
         f.fillExhibit(id, true);
       }
   }

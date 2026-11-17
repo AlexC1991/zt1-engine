@@ -135,6 +135,7 @@ public:
         int building = -1;             // a building clicked (its id)
         int animalCost = 0;            // an animal adopted: its price
         double tankWalls = 0;          // a tank's walls dragged: their price, negative for money back (zoo.exe 0x489f53)
+        bool buildingPlaced = false;   // a building placed (Zoo Status refreshed at once: zoo.exe 0x4516a9 -> 0x41739a)
     };
     // Where a world grid vertex is on the window (pixels), on the ground
     bool vertexToWindow(int vx, int vy, int &x, int &y);
@@ -259,6 +260,8 @@ public:
     // A rampaging animal onto a tile (zoo.exe 0x437572): each thing standing
     // on it that can be (cRubbleable) turned to rubble (0x47c2ac); how many
     int rubbleTile(int tx, int ty);
+    // These things (placed objects' ids) turned to rubble; how many
+    int rubbleObjects(const std::vector<int> &ids);
     // What a placed object sells for: rubble its own way (0x615a89), any
     // other its catalog cost x sellFactor (objectSellValue 0x41ec7f); 0 not
     // in the catalog
@@ -545,6 +548,7 @@ private:
     // drag the rectangle's
     struct BulldozeDrag {
       bool pressed = false, dragging = false, onMap = false;
+      bool cancelled = false; // (a right click took this press's drag back: zoo.exe +9)
       int pressX = 0, pressY = 0, tx0 = 0, ty0 = 0, tx1 = 0, ty1 = 0;
     } bulldozeDrag;
     std::vector<std::pair<int, int>> dragPaths, dragDecks;
@@ -552,6 +556,7 @@ private:
     std::vector<Fences::Edge> dragFences;
     std::vector<Fences::Edge> pendingFences; // (a drag's walls waiting on the escape question)
     void gatherBulldozeRect();
+    void clearBulldozeRect();
     ToolResult bulldozeClick(int x, int y);
     ToolResult bulldozeRectRelease();
     int wallDragCost() const;

@@ -100,6 +100,12 @@ void ItemCatalog::load(ResourceManager *rm, bool force) {
   std::unordered_map<std::string, std::string> configText = rm->readResources(configs);
   std::vector<std::string> files;
   std::map<std::string, std::string> fileSection, fileKey;
+  // A registry section is its types' class: the name their className gives
+  // and isKindOf compares (zoo.exe ZTPathType 0x401f92 "paths",
+  // ZTBuildingType 0x401f98, ZTFoodType 0x401fa4 "food", ZTRubbleType
+  // 0x4aa6ae; isKindOf 0x40f856, 0x40f9a9, 0x40feca - its own, the base
+  // "objects" or its runtime class's - and by name 0x4aa361, 0x4aa43a,
+  // 0x4aa4bc, 0x4aa8a4). ours: fileSection, a placed object's className
   // An entity's subtypes can be given by the registry ([<key>/subtypes],
   // e.g. the tank walls' f and g) instead of its own [Global]; the first is
   // its default

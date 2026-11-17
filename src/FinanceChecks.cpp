@@ -26,6 +26,7 @@
 #include <set>
 #include "ui/UiGameScreen.hpp"
 #include "ui/UiGraph.hpp"
+#include "ui/UiText.hpp"
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -489,6 +490,49 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     check("let go: the paths and scenery taken, the snack stand left, the money shown paid back ($" +
               std::to_string(r.refund) + ")",
           pathsLeft == 0 && world.getObjects().objects().size() == objects - 2 && std::lround(r.refund) == shown);
+    // zoo.exe bulldozeMouse 0x509071: a few pixels across into the next
+    // tile is a drag (ours had only the 16 pixels); back on the pressed
+    // tile near the press, a click again. A right click mid drag (0x509870)
+    // takes the rectangle back, the tool kept, the release taking nothing
+    {
+      for (int i = 0; i < 3; i++)
+        map.setPath(bx + i, by, "dirtpath");
+      int c0x, c0y, c1x, c1y;
+      centre(bx, by, c0x, c0y);
+      centre(bx + 1, by, c1x, c1y);
+      const int mx = (c0x + c1x) / 2, my = (c0y + c1y) / 2;
+      const int ax = mx + (c0x - mx) / 4, ay = my + (c0y - my) / 4; // (bx's side of the edge)
+      const int qx2 = mx + (c1x - mx) / 4, qy2 = my + (c1y - my) / 4; // (bx + 1's)
+      world.mouseMove(ax, ay);
+      world.mouseDown(ax, ay);
+      world.mouseMove(qx2, qy2);
+      const bool tileDrag = world.bulldozeDragging();
+      world.mouseMove(ax, ay);
+      const bool backClick = !world.bulldozeDragging() && world.bulldozeDragCount() == 0;
+      r = world.mouseUp(ax, ay);
+      check("the bulldozer: " + std::to_string(std::abs(qx2 - ax)) + "," + std::to_string(std::abs(qy2 - ay)) +
+                " px into the next tile is a drag; back by the press, a click (0x509071)",
+            tileDrag && backClick && std::abs(qx2 - ax) <= Original::bulldozeClickPixels &&
+                std::abs(qy2 - ay) <= Original::bulldozeClickPixels);
+      check("let go there: the pressed tile's path alone taken", !map.isPath(bx, by) && map.isPath(bx + 1, by) &&
+                                                                    map.isPath(bx + 2, by) && r.refund > 0);
+      int ex, ey;
+      centre(bx + 1, by, px, py);
+      centre(bx + 3, by + 3, ex, ey);
+      world.mouseMove(px, py);
+      world.mouseDown(px, py);
+      world.mouseMove(ex, ey);
+      const bool was = world.bulldozeDragging();
+      const bool took = world.cancelTool();
+      world.mouseMove(ex + 20, ey + 20);
+      const bool stillOff = !world.bulldozeDragging() && world.bulldozeDragCount() == 0;
+      r = world.mouseUp(ex + 20, ey + 20);
+      check("a right click mid bulldozer drag takes it back, the tool kept; the release takes nothing (0x509870)",
+            was && took && stillOff && world.isBulldozer() && r.refund == 0 && map.isPath(bx + 1, by) &&
+                map.isPath(bx + 2, by));
+      map.setPath(bx + 1, by, "");
+      map.setPath(bx + 2, by, "");
+    }
     // A click on the snack stand: a building (cNeedsConfirm 1) is asked
     // about first, "Are you sure you want to sell Snack Stand 1? Refund:
     // $N" (zoo.exe deleteHovered 0x509176 -> sellObject 0x50a432 ->
@@ -967,6 +1011,39 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     const bool top = arrows(e.maxAdmission, true, false), bottom = arrows(e.minAdmission, false, true),
                middle = arrows((e.minAdmission + e.maxAdmission) / 2, false, false);
     hud.setZooInfo(before);
+    // Zoo Status open: its counts redone every 10 s, not while paused, at
+    // once for a building placed (zoo.exe 0x401644, 0x41739a)
+    {
+      const bool wasOpen = hud.isPanelOpen(14);
+      hud.setPanelOpen(14, true);
+      auto shown = [&]() {
+        const UiText *t = dynamic_cast<const UiText *>(hud.getElementById(4121));
+        return t ? t->getText() : std::string("?");
+      };
+      UiGameScreen::ZooInfo info = before;
+      const uint64_t t0 = 1000000;
+      hud.zooStatusTick(t0, false); // (due: shown now, next at +10 s)
+      info.guestCount = before.guestCount + 7;
+      hud.setZooInfo(info);
+      const std::string waiting = shown();
+      hud.zooStatusTick(t0 + 5000, false);
+      const std::string at5 = shown();
+      hud.zooStatusTick(t0 + 10000, true);
+      const std::string paused = shown();
+      hud.zooStatusTick(t0 + 10000, false);
+      const std::string at10 = shown();
+      info.guestCount = before.guestCount + 9;
+      hud.setZooInfo(info);
+      hud.forceZooStatus();
+      const std::string forced = shown();
+      const std::string was = std::to_string(before.guestCount), now7 = std::to_string(before.guestCount + 7);
+      check("Zoo Status open: a new count waits (" + waiting + ", " + at5 + " at 5 s, " + paused + " paused), shown at 10 s (" +
+                at10 + "), at once for a building placed (" + forced + ") (0x401644)",
+            waiting == was && at5 == was && paused == was && at10 == now7 &&
+                forced == std::to_string(before.guestCount + 9));
+      hud.setPanelOpen(14, wasOpen);
+      hud.setZooInfo(before);
+    }
     check("the admission arrows grey out at the highest and lowest price (top " + std::to_string(top) + ", bottom " +
               std::to_string(bottom) + ", between " + std::to_string(middle) + ")",
           top && bottom && middle);

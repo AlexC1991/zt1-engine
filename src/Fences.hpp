@@ -182,6 +182,9 @@ public:
     std::vector<Wave> waves;
     float waveIn = 0;
     float purityClock = 0;
+    // The game's ms toward the tank's next update (zoo.exe tankTick
+    // 0x49625f: the water a height unit an update; Original::updateMs)
+    float fillMs = 0;
     // DEV CONSOLE fake stats (no animals yet): how many animals it "has"
     // and what kind, for the staff to look after
     int testAnimals = 0;
@@ -344,12 +347,18 @@ public:
   // loop was started); the gate's price
   int finishExhibit(int id, const std::string &name, WorldMap &map);
   int exhibitCount() const { return this->made; }
-  // Drains a tank (its Drain button): the water runs out, the tank stays
+  // Drains a tank (its Drain button): the water runs out a height unit an
+  // update, the tank stays - at once while the game's paused
   void drainExhibit(int id);
-  // A tank drained fills again, with salt or fresh water (Fill Tank)
+  // A tank drained fills again, with salt or fresh water (Fill Tank): a
+  // height unit an update, full at once while the game's paused
   // Filled (false: refused - something in it can't be under water, see
   // fillBlocker)
   bool fillExhibit(int id, bool salt = true);
+  // The game paused (zoo.exe theGame +0x440): filling and draining happen at
+  // once (0x459d94 -> 0x5c86e5, 0x6064ed). ours: the world sets it each
+  // frame; till then (checks that build tanks with no world) as paused
+  bool paused = true;
   // The first thing in a tank that can't be under water, by its kind's name
   // ("" none) - zoo.exe 0x459e09; the world fills it in
   std::function<std::string(int exhibit)> fillBlocker;

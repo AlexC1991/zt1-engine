@@ -271,6 +271,10 @@ UiAction UiListBox::handleInputs(std::vector<Input>& inputs) {
                 selected_index = clicked;
                 if (selection_action != UiAction::NONE) result = selection_action;
             }
+            if (!toggle_select && clicked >= 0 && onPick) {
+                selected_index = clicked;
+                onPick(clicked);
+            }
         }
         else if (input.event == InputEvent::SCROLL_UP) {
             if (getItemAtPoint(mx, my) >= 0 ||

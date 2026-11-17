@@ -35,7 +35,7 @@
 namespace {
 constexpr uint32_t kMagic = 0x5A543153; // "S1TZ"
 constexpr uint32_t kMapMagic = 0x504D3153; // "S1MP": a map design (saveMap)
-constexpr uint32_t kVersion = 22; // 22: guests attacked by a predator. // 21: the flyers in flight, their spawn clock and special days' marks; rubble pieces' groups and types. // 20: guests' visited lists as tiles and their visit counts. // 19: each month's guests in the zoo (books row 25). // 18: guests' recent-species lists. // 17: tank filters' built and serviced days and months in operation. // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
+constexpr uint32_t kVersion = 23; // 23: DRT bases' recoveries. // 22: guests attacked by a predator. // 21: the flyers in flight, their spawn clock and special days' marks; rubble pieces' groups and types. // 20: guests' visited lists as tiles and their visit counts. // 19: each month's guests in the zoo (books row 25). // 18: guests' recent-species lists. // 17: tank filters' built and serviced days and months in operation. // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
 
 // A little binary writer and reader: numbers as they are, strings with
 // their length, vectors with their count
@@ -2004,6 +2004,7 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
     for (int e : m.exhibits)
       o.raw(e);
     o.raw(m.fx); o.raw(m.fy); o.raw(m.workCheck); o.raw(m.crowdClock);
+    o.raw(m.recoveries);
   }
   o.raw(st.nextId);
   o.raw(static_cast<uint32_t>(st.counts.size()));
@@ -2328,6 +2329,7 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
     for (uint32_t e = i.raw<uint32_t>(); e > 0 && !i.bad; e--)
       m.exhibits.push_back(i.raw<int>());
     if (version >= 12) { i.get(m.fx); i.get(m.fy); i.get(m.workCheck); i.get(m.crowdClock); }
+    if (version >= 23) i.get(m.recoveries);
     if (m.type >= 0)
       st.list.push_back(m);
   }

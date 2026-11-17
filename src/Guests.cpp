@@ -591,7 +591,8 @@ float Guests::walkSpeed(const Guest &g) const {
 bool Guests::walkTo(Guest &g, int tx, int ty, float speed, bool emergency) {
   int sx = static_cast<int>(std::floor(g.x)), sy = static_cast<int>(std::floor(g.y));
   // Running from a predator (zoo.exe chooseTask's task 0x75 sets +0x230 to
-  // cNonPathCostEmergency): open ground as well as the paths, a step off
+  // cNonPathCostEmergency, else cNonPathCost; the route finder asks it back
+  // through ZTUnit::pathCost 0x60c9a4, class slot 0x194): open ground as well as the paths, a step off
   // them costing cNonPathCostEmergency. ours: left on open ground after
   // running, back the same way, a step off the paths costing cNonPathCost
   const bool open = emergency || !walkable(sx, sy);

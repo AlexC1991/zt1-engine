@@ -30,7 +30,8 @@ std::string prepareMarineSoak(World &world,ResourceManager *rm) {
     drag+=4;
     for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,name,map);
     const int id=f.exhibitAt(x,y);if(auto *ex=f.exhibit(id)) {
-      while(ex->wallSub<12&&f.canAdjustWall(id,1))f.adjustWall(id,1);
+      // (to the same top for both: a show tank sinks 4 deeper)
+      while(ex->wallTop()<ex->groundHeight+8&&f.canAdjustWall(id,1))f.adjustWall(id,1);
       ex->water=1;ex->purity=100;
     }
     return id;
@@ -111,7 +112,9 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   int tank=rectangle(42,24,10,10,f.typeIndex("tankwal3"));
   int home=rectangle(28,24,14,14,f.typeIndex("tankwal2"));
   check("two adjacent tanks formed",tank>=0 && home>=0 && tank!=home);if(tank<0 || home<0)return 1;
-  for(int id:{tank,home})while(f.exhibit(id)->wallSub<10 && f.canAdjustWall(id,1))f.adjustWall(id,1);
+  // (a show tank sinks 4 deeper than an exhibit tank - initialSinkShow 8,
+  // initialSink 4 - so their walls meet at the same top 4 steps taller)
+  for(int id:{tank,home})while(f.exhibit(id)->wallTop()<f.exhibit(home)->floorHeight+10 && f.canAdjustWall(id,1))f.adjustWall(id,1);
   run(5);shows.refresh();check("show fence classified separately",shows.show(tank) && !shows.show(home));
   int ports=0;for(const auto &[edge,p]:f.pieces()){int show=-1,h=-1;if(f.showPortal(edge,show,h) && show==tank && h==home)++ports;}
   check("one portal in shared tank wall",ports==1);
@@ -295,7 +298,7 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   while(f.exhibit(home)->wallSub>4 && f.canAdjustWall(home,-1))f.adjustWall(home,-1);
   run(2);
   check("deep trick unavailable in shallow tank",!shows.add(tank,"ballplay"));
-  for(int id:{tank,home})while(f.exhibit(id)->wallSub<10 && f.canAdjustWall(id,1))f.adjustWall(id,1);
+  for(int id:{tank,home})while(f.exhibit(id)->wallTop()<f.exhibit(home)->floorHeight+10 && f.canAdjustWall(id,1))f.adjustWall(id,1);
   run(5);
   // Show-object behavior, including its hidden food reward and exclusive use.
   while(shows.remove(tank,0)){}
@@ -453,7 +456,9 @@ std::string runShowStartChecks(World &world) {
   int home=rectangle(28,24,14,14,f.typeIndex("tankwal2"));
   check("linked show and home tanks created",tank>=0 && home>=0 && tank!=home);
   if(tank<0 || home<0)return out.str();
-  for(int id:{tank,home})while(f.exhibit(id)->wallSub<10 && f.canAdjustWall(id,1))f.adjustWall(id,1);
+  // (a show tank sinks 4 deeper than an exhibit tank - initialSinkShow 8,
+  // initialSink 4 - so their walls meet at the same top 4 steps taller)
+  for(int id:{tank,home})while(f.exhibit(id)->wallTop()<f.exhibit(home)->floorHeight+10 && f.canAdjustWall(id,1))f.adjustWall(id,1);
   auto run=[&](float seconds){for(int k=0;k<seconds*20;++k)world.update(SDL_GetKeyboardState(nullptr),0.05f);};
   run(5);shows.refresh();
   int animal=a.adopt(a.typeOfFile("animals/orca.ai"),false,34.5f,31.5f,map,f);
@@ -710,7 +715,8 @@ std::string runShowPolishChecks(World &world,ResourceManager *rm,bool demo) {
 std::string runShowManagementChecks(World &world,ResourceManager *rm) {
   if(!world.getFences().exhibits().empty())return "Load flat ff01 with no exhibits first.";
   std::ostringstream out;out<<runShowStartChecks(world);int passed=0,total=0;
-  auto check=[&](const char *name,bool ok){++total;passed+=ok;out<<(ok?"PASS ":"FAIL ")<<name<<"\n";};
+  // (each also in the log as it goes: a crash further on keeps them)
+  auto check=[&](const char *name,bool ok){++total;passed+=ok;out<<(ok?"PASS ":"FAIL ")<<name<<"\n";SDL_Log("[ShowCheck] %s %s",ok?"PASS":"FAIL",name);};
   auto &f=world.getFences();auto &map=world.getMap();auto &a=world.getAnimals();
   auto &st=world.getStaff();auto &g=world.getGuests();auto &shows=world.getShows();auto &objects=world.objectsMutable();
   const int tank=1,home=2;if(!f.exhibit(tank)||!f.exhibit(home))return out.str();
@@ -763,9 +769,13 @@ std::string runShowManagementChecks(World &world,ResourceManager *rm) {
     return f.exhibitAt(x,y);
   };
   const int home2=rectangle(42,14,10,10,f.typeIndex("tankwal2"));
-  if(home2>=0)while(f.exhibit(home2)->wallSub<10 && f.canAdjustWall(home2,1))f.adjustWall(home2,1);
+  if(home2>=0)while(f.exhibit(home2)->wallTop()<f.exhibit(tank)->wallTop() && f.canAdjustWall(home2,1))f.adjustWall(home2,1);
   run(5);shows.refresh();
   auto ports=shows.links(tank);
+  for(const auto &why:f.takeFillRefusals())SDL_Log("[ShowCheck] fill refused: %s",why.c_str());
+  if(const auto *h2=f.exhibit(home2))SDL_Log("[ShowCheck] home2 %d tank %d filling %d water %d top %.2f / show top %.2f water %d, links %zu",
+    home2,h2->tank,h2->filling,f.waterLevel(*h2),h2->wallTop(),f.exhibit(tank)->wallTop(),f.waterLevel(*f.exhibit(tank)),ports.size());
+  else SDL_Log("[ShowCheck] home2 %d: no exhibit",home2);
   check("one show tank links two separate home tanks",home2>=0 &&
     std::any_of(ports.begin(),ports.end(),[&](auto p){return p.second==home;}) &&
     std::any_of(ports.begin(),ports.end(),[&](auto p){return p.second==home2;}));
@@ -813,6 +823,9 @@ std::string runShowManagementChecks(World &world,ResourceManager *rm) {
   a.clear();st.clear();g.clear();
   const int first=a.adopt(a.typeOfFile("animals/orca.ai"),false,34.5f,31.5f,map,f);
   const int second=a.adopt(a.typeOfFile("animals/orca.ai"),true,47.5f,19.5f,map,f);
+  // (a stand-in for an animal that was never adopted: later checks FAIL, not crash)
+  Animals::Member gone;gone.exhibit=gone.showHome=-99;gone.boxed=true;
+  auto A=[&](int id)->const Animals::Member&{const auto *x=a.member(id);return x?*x:gone;};
   const int trainer=st.hire(st.typeOfFile("staff/trainer.ai"),54.5f,24.5f,map,f);
   auto *m=st.member(trainer);if(m){m->workCheck=100000;m->idleLeft=100000;}
   shows.selectSpecies(tank,"animals/orca.ai");auto *s=shows.show(tank);s->script.clear();shows.add(tank,"finswim");s->frequency=-1;
@@ -978,15 +991,34 @@ std::string runShowManagementChecks(World &world,ResourceManager *rm) {
   shows.cancel(tank,"Cancellation return regression");
   check("cancelling an entered show keeps live performers reserved for return",
     entered && s->phase==Shows::Phase::Returning && s->trainer<0 &&
-    a.member(first)->showHome==home && a.member(second)->showHome==home2 &&
-    !a.member(first)->boxed && !a.member(second)->boxed);
+    A(first).showHome==home && A(second).showHome==home2 &&
+    !A(first).boxed && !A(second).boxed);
   bool restored=shows.restore(shows.snapshot());s=shows.show(tank);
   check("an interrupted show's separate home assignments survive restore",
-    restored && s->phase==Shows::Phase::Returning && a.member(first)->showHome==home && a.member(second)->showHome==home2);
+    restored && s->phase==Shows::Phase::Returning && A(first).showHome==home && A(second).showHome==home2);
   for(int i=0;i<3600 && s->phase!=Shows::Phase::Waiting;++i)run(0.05f);
   check("cancelled performers swim home without reopening capsules in the show tank",
-    s->phase==Shows::Phase::Waiting && a.member(first)->exhibit==home && a.member(second)->exhibit==home2 &&
-    !a.member(first)->boxed && !a.member(second)->boxed);
+    s->phase==Shows::Phase::Waiting && A(first).exhibit==home && A(second).exhibit==home2 &&
+    !A(first).boxed && !A(second).boxed);
+  // zoo.exe keeperRemoved 0x458759: the specialist working a show fired -
+  // the show stops then, not on a later look
+  {
+    s=shows.show(tank);s->frequency=-1;s->script={"finswim"};s->species="animals/orca.ai";
+    // (a specialist of its own, standing free beside the platform)
+    const int fresh=st.hire(st.typeOfFile("staff/trainer.ai"),54.5f,24.5f,map,f);
+    if(auto *k=st.member(fresh)){k->workCheck=k->idleLeft=100000;}
+    for(auto &animal:const_cast<std::vector<Animals::Member>&>(a.members())){animal.happiness=100;animal.hunger=0;animal.energy=0;}
+    const bool going=shows.start(tank,why) && s->trainer>=0;
+    if(going)run(1);
+    const int fired=s->trainer;
+    const bool working=going && fired>=0 && s->phase!=Shows::Phase::Waiting;
+    if(working)st.fire(fired);
+    check("firing the specialist working a show stops it at once (keeperRemoved 0x458759)",
+      working && !st.member(fired) && s->trainer<0 && s->phase!=Shows::Phase::Gathering && s->phase!=Shows::Phase::Performing);
+    for(int i=0;i<3600 && s->phase!=Shows::Phase::Waiting;++i)run(0.05f);
+    out<<"FIRED SPECIALIST: started "<<going<<" ("<<why<<") trainer "<<fired<<" phase "<<int(s->phase)<<"\n";
+    SDL_Log("[ShowCheck] fired specialist: started %d (%s) trainer %d",int(going),why.c_str(),fired);
+  }
   // If the portal is removed, keep a transport capsule closed until placed home.
   auto *stranded=a.member(first);
   if(stranded) {

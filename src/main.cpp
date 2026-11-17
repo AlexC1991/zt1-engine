@@ -112,6 +112,10 @@ static int g_esthetic = 0; // the zoo rating's esthetics term (0-10)
 // A scenario's ending (zoo.exe scenarioComplete 0x48a408): its outcome as the
 // goals report it, and what its dialog chose - done between frames
 static int g_scenarioOutcome = 0;
+// A zoo just loaded or started: rated on the next frame, paused or not
+// (zoo.exe worldAfterLoad 0x4534e6 -> zooRatingTerms 0x41fcc1 at once)
+static bool g_rateNow = false;
+static void setRenameHooks(ResourceManager *rm);
 static std::vector<int> g_queuedActions; // (UiActions)
 static std::string g_nextScenario;
 
@@ -758,14 +762,19 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
     updateHudClock(rm);
   });
   g_hud->guestPickUp = [world](int id) { world->pickUpGuest(id); };
-  g_hud->guestRenamed = [world](int id, const std::string &name) {
+  g_hud->guestRenamed = [world, rm](int id, const std::string &name) {
     auto &list = world->getGuests().mutableGuests();
     for (size_t i = 0; i < list.size(); i++)
       if (list[i].id == id) {
         list[i].name = name;
         RenameCheats::guestRenamed(*world, static_cast<int>(i), name);
+        updateHudClock(rm);
         break;
       }
+  };
+  g_hud->staffRenamed = [world, rm](int id, const std::string &name) {
+    RenameCheats::staffRenamed(*world, id, name);
+    updateHudClock(rm);
   };
   g_hud->setGuests(&world->getGuests(), [world, rm](int type) {
     const auto &types = world->getAnimals().types();
@@ -840,6 +849,8 @@ static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
   if (!g_hud)
     return;
   updateHudDate(rm);
+  // (Zoo Status redone every 10 s while open, not while paused: zoo.exe 0x401644)
+  g_hud->zooStatusTick(SDL_GetTicks(), g_world && g_world->isPaused());
   UiTransform t = getUiTransform(renderer);
   if (g_widescreen) {
     SDL_Rect rect = hudLayoutRect(renderer, t);
@@ -896,7 +907,11 @@ static SDL_Cursor *g_arrowCursor = nullptr, *g_bulldozeCursor = nullptr, *g_tank
 static int g_mouseX = 0, g_mouseY = 0;
 
 // What a fence drag or bulldozer click did: charge it, name new exhibits,
-// ask before draining a tank
+// ask before draining a tank. What's placed is booked by its kind, as
+// zoo.exe placeObject 0x4d9088 books it: an animal on Animal Purchases
+// (0x4e1fde), a keeper, guide or maintenance worker on Employee Wages
+// (rows 11-13: 0x5ad038, 0x48bd8b, 0x483d34), anything else on
+// Construction (ledgerAdd 0x4d9250), then spent (spendCash 0x41ef68)
 static void handleToolResult(const World::ToolResult &r, ResourceManager *rm) {
   if (r.cost > 0)
     g_sim.spend(ZooSim::Construction, r.cost);
@@ -970,6 +985,9 @@ static void handleToolResult(const World::ToolResult &r, ResourceManager *rm) {
   // A building clicked: its Building Information
   if (r.building >= 0)
     g_hud->showBuilding(r.building);
+  // A building placed: Zoo Status redone at once (zoo.exe 0x4516a9 -> 0x41739a)
+  if (r.buildingPlaced)
+    g_hud->forceZooStatus();
   // A held guest put down: selected, its panel open again (zoo.exe
   // placeObject 0x4d923c: ui_main_4b2322(it, 1), 0x431712)
   if (r.guestDown >= 0)
@@ -985,8 +1003,15 @@ static void handleToolResult(const World::ToolResult &r, ResourceManager *rm) {
   // Hired: the first month's pay at once
   if (r.wage > 0)
     g_sim.spend(ZooSim::Wages, r.wage);
-  if (r.staff >= 0 && r.wage == 0)
-    g_hud->showStaff(r.staff);
+  // (a DRT base: its own panel - zoo.exe 0x5b66b1, a building of type 8031
+  // opens drt.lyt, ui_drt_48cd7a)
+  if (r.staff >= 0 && r.wage == 0) {
+    const Staff::Member *m = g_world->getStaff().member(r.staff);
+    if (m && g_world->getStaff().types()[m->type].kind == Staff::Kind::Helicopter)
+      g_hud->showDrt(r.staff);
+    else
+      g_hud->showStaff(r.staff);
+  }
   if (r.wage > 0 || r.staff >= 0) {
     UiGameScreen::ZooInfo info = g_hud->zooInfo();
     info.staffCount = static_cast<int>(g_world->getStaff().members().size());
@@ -1034,7 +1059,11 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
   // guest bar
   {
     Guests &gs = g_world->getGuests();
-    g_world->setEconomy(static_cast<int>(g_sim.rating()) + g_hud->marketingBenefit(), g_hud->zooInfo().admission);
+    // (zoo.exe guestArrivalCheck 0x424375: the rating plus the marketing's
+    // bonus - twice after a keeper's "Susan Kittleson" / "Chuck Frizelle"
+    // cheat, 0x6392c1 at 0x42443d)
+    g_world->setEconomy(static_cast<int>(g_sim.rating()) + g_hud->marketingBenefit() * (RenameCheats::marketingTwice() ? 2 : 1),
+                        g_hud->zooInfo().admission);
     int came = 0;
     double paid = gs.takeIncome(came);
     if (double given = gs.takeDonations(); given > 0) {
@@ -1116,7 +1145,12 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
   // objects', fences' and path tiles' EstheticBonus over the tiles objects
   // stand on - a new Death Mountain zoo: 2322 / ~740 = 3, so 37, as
   // measured); less 50 while an animal is loose,
-  // 2 less a day after (cEscapedAnimalChange / Time); 0-100
+  // 2 less a day after (cEscapedAnimalChange / Time); 0-100. Also once
+  // straight after a zoo is loaded or started, paused or not (zoo.exe
+  // worldAfterLoad 0x4534e6, the world's class slot 0x40: every entity's
+  // slot 0x70 and the lists rebuilt, each animal's exhibit rated - 0x45348c
+  // -> animalRateExhibit 0x444827, ours on demand - and the fences' states,
+  // then, with a game manager, zooRatingTerms 0x41fcc1)
   {
     static float ratingClock = 0;
     static double lastEscape = -1e9;
@@ -1124,8 +1158,9 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
     Uint32 nowTick = SDL_GetTicks();
     ratingClock += g_world->isPaused() ? 0.0f : (nowTick - lastTick) / 1000.0f;
     lastTick = nowTick;
-    if (ratingClock >= 4.0f) {
+    if (ratingClock >= 4.0f || g_rateNow) {
       ratingClock = 0;
+      g_rateNow = false;
       const Animals &an = g_world->getAnimals();
       int n = static_cast<int>(an.members().size());
       std::set<int> kinds;
@@ -1583,6 +1618,7 @@ static std::string devCommand(const std::vector<std::string> &w, ResourceManager
   if (!w.empty() && w[0] == "paritycheck") {
     if (g_hud) return "Run this fixture in the Lab Test Zoo, not a player zoo.";
     extern std::string runParityChecks(World &, ResourceManager *);
+    setRenameHooks(rm); // (as a game started has them)
     return runParityChecks(*g_world, rm);
   }
   if(!w.empty() && (w[0]=="originalwrite" || w[0]=="originalexport")) {
@@ -3109,9 +3145,12 @@ static void setupGoals(ResourceManager *rm) {
 // cReproductionChance, 3 cSickChance, 4 cTimeDeath (the living ones too),
 // 5 cNumberAnimalsMax); 4 the same for every animal of an expansion
 // (target < 100) or family; 5 chow's price. Changed by effectval3: 0 add,
-// 1 set, 2 by a percentage of itself (rounded toward 0). (0 makes an item
-// available - in freeform everything already is; 1 animal houses'
-// collections, 6 marine tricks, 7 a research discount: not done here)
+// 1 set, 2 by a percentage of itself (rounded toward 0). 0 makes the target
+// available (case 0x5b0f77: 0x58fd9f(target, 1) - every type of that cNameID,
+// its slot 0x3c(1) - then the build panel shown afresh, 0x58fc10: a
+// researched animal such as the gorilla is in no freeform unlock list, so
+// research alone brings it). (1 animal houses' collections, 6 marine
+// tricks: read where they're used; 7 a research discount: not done here)
 // ----------------------------------------------------------------------------
 static std::map<std::string, int> g_foodPercent; // chow -> price change, cents formula state
 static int researchChange(int field, int value, int mode) {
@@ -3125,6 +3164,12 @@ static int researchChange(int field, int value, int mode) {
 static void applyResearch(const ResearchProgram &p) {
   if (!g_world)
     return;
+  if (p.effect == 0) {
+    if (const CatalogItem *item = ItemCatalog::get().findName(p.target))
+      if (ItemCatalog::get().setAvailable(*item, true) && g_hud)
+        g_hud->refreshCatalog();
+    return;
+  }
   int which = p.effectVal[0], value = p.effectVal[1], mode = p.effectVal[2];
   Animals &an = g_world->getAnimals();
   auto animalChange = [&](Animals::Type &t) {
@@ -3176,7 +3221,10 @@ static void applyResearch(const ResearchProgram &p) {
 }
 
 // What research changes, as the files had it: put back at a new game, then
-// what's done applied (costing nothing: done from the start)
+// what's done applied (costing nothing: done from the start), and each
+// program once more for each time a rename cheat applied it without its
+// being done (zoo.exe 0x607001; ours: kept while the zoo runs, as the
+// original's save holds only a program's progress)
 static void resetResearchEffects() {
   if (!g_world)
     return;
@@ -3215,8 +3263,25 @@ static void resetResearchEffects() {
   for (ResearchBranch &b : Research::get().branches())
     for (ResearchCategory &c : b.categories)
       for (ResearchProgram &p : c.programs)
-        if (p.done || p.cost <= 0)
+        for (int n = (p.done || p.cost <= 0 ? 1 : 0) + p.cheatApplied; n > 0; n--)
           applyResearch(p);
+}
+
+// The rename cheats' money and research (ours: their way out of the world)
+static void setRenameHooks(ResourceManager *rm) {
+  RenameCheats::Hooks h;
+  h.rm = rm;
+  h.research = [](const ResearchProgram &p) { applyResearch(p); };
+  h.donation = [](double amount) { g_sim.earn(ZooSim::Donations, amount); };
+  h.removalRefund = [](double amount) { g_sim.earn(ZooSim::Recycling, amount); };
+  h.unlockScenarios = [] {
+    for (int i = 0; g_scenarioManager && g_scenarioManager->getScenario(i); i++) {
+      const ScenarioInfo *info = g_scenarioManager->getScenario(i);
+      if (!info->unlocks.empty())
+        Settings::setInt("scenario", info->unlocks.front(), 0);
+    }
+  };
+  RenameCheats::setHooks(h);
 }
 
 // A map's goals, started as it is
@@ -3225,6 +3290,8 @@ static void startGoals(ResourceManager *rm, const std::string &mapPath) {
   setupGoals(rm);
   Research::get().restart();
   resetResearchEffects();
+  g_rateNow = true; // (zoo.exe worldAfterLoad 0x4534e6: rated at once)
+  setRenameHooks(rm);
   g_world->getStaff().foodPrice = [](const std::string &, double price) {
     auto it = g_foodPercent.find("");
     if (it == g_foodPercent.end())
@@ -3469,7 +3536,7 @@ static bool applyModSelection(ResourceManager *rm, UiLayout *&layout, IniReader 
         branch.fundingLevel = old.fundingLevel;
         for (auto &category : branch.categories) for (const auto &oldCategory : old.categories) if (category.file == oldCategory.file)
           for (auto &program : category.programs) for (const auto &oldProgram : oldCategory.programs) if (program.file == oldProgram.file) {
-            program.progress = oldProgram.progress; program.done = oldProgram.done;
+            program.progress = oldProgram.progress; program.done = oldProgram.done; program.cheatApplied = oldProgram.cheatApplied;
           }
       }
       resetResearchEffects();
@@ -4527,6 +4594,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   // <out>/parity-checks.txt
   if (std::getenv("ZT_PARITY_CHECKS")) {
     extern std::string runParityChecks(World &, ResourceManager *);
+    setRenameHooks(rm); // (as a game started has them)
     const std::string result = runParityChecks(*world, rm);
     std::ofstream(outDir + "/parity-checks.txt") << result;
     if(timings)std::fclose(timings);return result.find("FAIL ") == std::string::npos && result.find("PASS ") != std::string::npos ? 0 : 1;
@@ -4771,6 +4839,34 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     setupGoals(rm);
     {extern Goals::Hooks g_financeGoalHooks;g_financeGoalHooks=g_goals.getHooks();}
     int result=runFinanceChecks(*world,*g_hud,g_sim,rm,outDir);
+    // A loaded zoo rated at once, even paused (zoo.exe worldAfterLoad
+    // 0x4534e6 -> zooRatingTerms 0x41fcc1; #256): saved at a rating of 99,
+    // the first frame after the load works it out again (last: it loads a
+    // zoo of its own)
+    {
+      std::ofstream ratingReport(outDir + "/finance-rating.txt");
+      g_sim.setRating(99);
+      const std::string file = outDir + "/rating-after-load.zoo";
+      const bool saved = gameSave(file);
+      bool ok = false;
+      if (saved && gameLoad(rm, file)) {
+        world = g_world;
+        setGamePaused(true);
+        const double loaded = g_sim.rating();
+        std::vector<Input> none;
+        worldInputs(renderer, rm, none);
+        const double rated = g_sim.rating();
+        setGamePaused(false);
+        ok = loaded == 99 && rated != 99 && !g_rateNow;
+        ratingReport << (ok ? "PASS" : "FAIL") << " a loaded zoo rated at once, paused (0x4534e6): saved 99, loaded "
+                     << loaded << ", after one frame " << rated << "\n";
+      } else {
+        ratingReport << "FAIL the rating-after-load zoo saved and loaded back\n";
+      }
+      SDL_Log("[Finance] %s a loaded zoo rated at once, paused (0x4534e6, #256)", ok ? "PASS" : "FAIL");
+      if (!ok)
+        result = 1;
+    }
     if(timings)std::fclose(timings);return result;
   }
   if (std::getenv("ZT_LIGHTING_GALLERY")) {
@@ -7008,6 +7104,56 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         check("Assign toggles picking exhibits, brings up Job Assignment; Remove All ends it",
               on && off && cleared);
       }
+      // A keeper's exhibit picked in Job Assignment (#252, zoo.exe
+      // infostf2_AssignList_click 0x61861b): Assign off, Remove enabled (off
+      // with no row picked, 0x47108a), the Exhibit List opened with that
+      // exhibit picked, Staff Information still open
+      {
+        int pen = -1;
+        for (const Fences::Exhibit &e : fn.exhibits())
+          if (e.named && !e.tank && !e.show && pen < 0)
+            for (const auto &[edge, piece] : fn.pieces())
+              if (piece.gate && fn.exhibitOf(edge) == e.id)
+                pen = e.id;
+        Staff::Member *keeper = st.member(ids[1]);
+        if (pen >= 0 && keeper) {
+          keeper->exhibits = {pen};
+          g_hud->showPanel(31, "");
+          g_hud->showStaff(ids[1]);
+          click(3564);
+          g_hud->refreshStaff();
+          capture("staff_keeper_exhibits");
+          UiButton *remove = dynamic_cast<UiButton *>(g_hud->getElementById(3579));
+          const bool offFirst = remove && remove->isDisabled();
+          bool picked = false;
+          if (UiListBox *l = dynamic_cast<UiListBox *>(g_hud->getElementById(3569))) {
+            SDL_Rect r = l->getScrollBounds(); // (as last drawn)
+            Input in{};
+            in.type = InputType::POSITIONED;
+            in.event = InputEvent::LEFT_CLICK;
+            in.position = {r.x + r.w / 2, r.y + 2 + l->getRowHeight() / 2};
+            in.x = in.position.x;
+            in.y = in.position.y;
+            std::vector<Input> inputs = {in};
+            g_hud->handleInputs(inputs);
+            picked = l->getSelectedIndex() == 0;
+          }
+          g_hud->refreshStaff();
+          capture("staff_keeper_exhibit_picked");
+          UiButton *assign = dynamic_cast<UiButton *>(g_hud->getElementById(3578));
+          check(("keeper's exhibit picked: Exhibit List open on it, Remove enabled, Assign off (0x61861b; exhibit " +
+                 std::to_string(pen) + ", list on " + std::to_string(g_hud->shownExhibitId()) + ", row picked " +
+                 std::to_string(picked) + ", Remove off before " + std::to_string(offFirst) + ")").c_str(),
+                offFirst && picked && g_hud->isPanelOpen(30) && g_hud->shownExhibitId() == pen && g_hud->isPanelOpen(17) &&
+                    !g_hud->isPanelOpen(31) && remove && !remove->isDisabled() && assign && !assign->isToggledOn() &&
+                    !world->isAssigning());
+          keeper = st.member(ids[1]);
+          if (keeper)
+            keeper->exhibits.clear();
+        } else {
+          check("keeper's exhibit picked: an exhibit with a gate to give the keeper", false);
+        }
+      }
       g_hud->showPanel(0, "");
       // A worn fence: the maintenance worker comes and fixes it
       Fences::Edge worn{false, -1, -1};
@@ -7313,6 +7459,25 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         if (h)
           world->centreOn(h->x, h->y);
         capture("staff_drt");
+        // Its own panel (#252: drt.lyt 1400, zoo.exe 0x5b66b1 -> ui_drt_48cd7a;
+        // drt_Panel_show 0x48ccc1, 0x48c87d): name, the helicopter's salary,
+        // duty, recoveries
+        if (h) {
+          g_hud->showDrt(at);
+          g_hud->refreshStaff();
+          capture("staff_drt_panel");
+          auto textOf = [&](int id) {
+            UiText *t = dynamic_cast<UiText *>(g_hud->getElementById(id));
+            return t ? t->getText() : std::string("?");
+          };
+          check(("DRT base panel: \"" + textOf(1403) + "\", " + textOf(1407) + ", \"" + textOf(1411) + "\", recoveries " +
+                 textOf(1409)).c_str(),
+                g_hud->isPanelOpen(1400) && !g_hud->isPanelOpen(17) && g_hud->shownDrtId() == at && textOf(1403) == h->name &&
+                    textOf(1407) == "$2000" && textOf(1409) == "0" && textOf(1411) == st.dutyText(*h));
+          g_hud->showPanel(0, "");
+          g_hud->setPanelOpen(1400, false);
+          g_hud->refreshStaff();
+        }
         // (let go again: its pad blocks the ground under it, and since it
         // lands on grid-aligned level ground it took the flat strip the
         // walkway and terraform tests below need)

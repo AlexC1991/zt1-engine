@@ -200,6 +200,8 @@ public:
     std::string customFood; // Enabled mod food key, cKeeperFood in Strings.
     // Care (zoo.exe defaults where a file leaves them out)
     int maxHits = 500, pctHits = 20, sickChange = -20, otherSickChange = -10, sickChance = 10;
+    // cSickRandomChance (type +0x264, default 10 at 0x4b665e; no stock file sets it)
+    int sickRandomChance = 10;
     int hungryHealthChange = 5, sickTime = 5, keeperArrivesChange = 25;
     int dirtyIncrement = 15, dirtyThreshold = 70, energyThreshold = 70;
     // cMaxDirty, cMinDirty (the dung meter's limits, type +0x250/+0x254), cPooWaterImpact
@@ -295,6 +297,10 @@ public:
     bool dying = false;
     int dieAfter = 0; // its bDie playing (gone when it's done)
     bool sick = false, noFoodSeen = false, sleeping = false;
+    // Taken away for poor treatment (zoo.exe unit +0x13c, set by 0x4fa78e(1)
+    // from 0x4808ac): gone at the next sweep (0x434df7 - ours lifeEvents,
+    // the same frame, so never saved)
+    bool takenAway = false;
     // The set it's to start when the one it's in ends (zoo.exe unit +0xdc,
     // set by setBehaviourSet 0x4300f6; "" none). Its flag +0xe8 - whether a
     // later request may replace it - is 0 for the two that ask here (bSleep
@@ -632,6 +638,9 @@ public:
   // The guests using a building (object id) - its users with the animals
   // in it (zoo.exe building +0x18c)
   std::function<int(int building)> buildingGuests;
+  // The keepers at their duties in an exhibit (zoo.exe habitat +0xf0, as
+  // Staff::keepersAt counts them); unset: none
+  std::function<int(int exhibit)> keepersAtWork;
   // A water tile (fresh or salt water; a waterfall is land)
   static bool isWater(const WorldMap &map, int x, int y);
   // (the ZT1 Lab) A route for one of them from where it stands to a tile, by

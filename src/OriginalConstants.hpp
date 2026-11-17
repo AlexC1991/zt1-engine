@@ -8,6 +8,7 @@
 // (economy.cfg: Original::Economy below), with the original's default for
 // when the file doesn't set it.
 
+#include <cstdint>
 #include <string>
 
 class ResourceManager;
@@ -18,6 +19,13 @@ namespace Original {
 // brings back of its cost - ZTEntity::objectSellValue 0x41ec7f,
 // ZTUnit::sellValue 0x61338b, ZTAnimal::sellValue 0x48d21d
 inline constexpr float sellFactor = 0.8f;
+// The bulldozer: a press stays a click while the cursor is on the pressed
+// tile and no more than this many pixels from the press (zoo.exe
+// bulldozeMouse 0x509071, at 0x4ec0cb: cmp 0x10, jg)
+inline constexpr int bulldozeClickPixels = 16;
+// Zoo Status, while open, is redone every 10000 ms (zoo.exe 0x401644:
+// 0x643670 = the time + 10000)
+inline constexpr uint64_t zooStatusRefreshMs = 10000;
 // ZTAnimal::sellValue 0x48d21d: happiness (-100 to 100) as 0 to 1,
 // (happiness + 100) x 0.005 (0x630d64, 0x635060); the whole halved (0x630d54)
 inline constexpr float sellHappinessOffset = 100.0f;
@@ -172,6 +180,12 @@ inline constexpr int sightFenceClear = 1;
 // A tank's glass (cSeeThrough) is seen through while its water's purity is
 // over this (zoo.exe 0x6390b0, read live: the "can not see" line)
 inline constexpr float seeThroughPurity = 1.0f;
+// A tank's salinity (habitat +0x18c, and +0x190 the kind it's to become):
+// salt is 100 (tanks.cfg initialSalinity; the Salt Water button's,
+// tankmod_Buttons_click 0x469128 -> tankFillBuy 0x6115f2(100)), fresh 0
+// (0x6115f2(0)); the game reads it as salt when over 0 (isSaltWater
+// 0x4936df, tankPrices 0x459b19)
+inline constexpr int saltSalinity = 100;
 // Scenery hides what's behind it unless its .ai says cBlocksLOS 0 (zoo.exe
 // sceneryTypeLoad 0x4ba5b0: 1 when the file doesn't set it - the show toys
 // set 0)
@@ -273,6 +287,22 @@ inline float unitTilesPerSecond(int rate) {
   if (steps < 1)
     steps = 1;
   return static_cast<float>(steps) * 1000.0f / updateMs / unitStepsPerTile;
+}
+
+// zoo.exe 0x43646e (0x49c3a6..0x49c4b5, 0x5aa019): fMove's time (ms, its
+// argument x 1000 - 0x425533) as plays of the move's animation, each
+// 0x42514c(0) ms long: one, then one more while what's left of the time
+// after them is over 0 - so ceil(time / length), at least one. (A length of
+// 0 with a time: the second play is queued before the length is tested,
+// 0x5aa022, so two)
+inline int timedMovePlays(int timeMs, int lengthMs) {
+  int plays = 1;
+  for (int left = timeMs - lengthMs; left > 0; left -= lengthMs) {
+    plays++;
+    if (lengthMs <= 0)
+      break;
+  }
+  return plays;
 }
 
 // A unit's walk about (unitWalkAbout 0x43d948): a tile on a ring round it,

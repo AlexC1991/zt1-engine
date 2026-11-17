@@ -94,6 +94,9 @@ public:
   bool standOpen(int object) const;
   bool start(int tank, std::string &why);
   void cancel(int tank, const std::string &why);
+  // A specialist taken out of the zoo (fired): the show it works stops
+  // (zoo.exe keeperRemoved 0x458759)
+  void specialistRemoved(int id);
   int benefit(int tank);
   std::string describe() const;
   std::string command(const std::vector<std::string> &words);

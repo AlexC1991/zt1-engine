@@ -47,6 +47,10 @@ struct ResearchProgram {
   int effectVal[3] = {0, 0, 0}; // effectval1-3: which, how much, how (add / set / percent)
   float progress = 0; // work done
   bool done = false;
+  // The times a rename cheat applied its effect without its being done
+  // (zoo.exe 0x607001 -> researchApplyEffect 0x58fb83; ours: not saved - the
+  // original's save holds a program's progress alone)
+  int cheatApplied = 0;
 };
 
 struct ResearchCategory {
@@ -121,7 +125,7 @@ public:
     for (ResearchBranch &b : this->list)
       for (ResearchCategory &c : b.categories)
         for (ResearchProgram &p : c.programs)
-          if (p.effect == 1 && p.target == nameId && (p.done || p.cost <= 0))
+          if (p.effect == 1 && p.target == nameId && (p.done || p.cost <= 0 || p.cheatApplied > 0))
             out.push_back(&p);
     std::stable_sort(out.begin(), out.end(), [](const ResearchProgram *a, const ResearchProgram *b) {
       return a->effectVal[0] < b->effectVal[0];
@@ -135,6 +139,7 @@ public:
         for (ResearchProgram &p : c.programs) {
           p.progress = 0;
           p.done = false;
+          p.cheatApplied = 0;
         }
       b.fundingLevel = 0;
       b.enabled.assign(b.categories.size(), true);
