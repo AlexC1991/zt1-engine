@@ -187,6 +187,16 @@ void Animals::loadTypes(ResourceManager *rm) {
     this->crateArt = rm->getAnimation("objects/box/idle/idle");
   ItemCatalog &catalog = ItemCatalog::get();
   catalog.load(rm);
+  // The class-wide settings (zoo.exe ZTAnimalType::loadClassConfig 0x4b6436,
+  // ZUPDATE1 ai4.ztd animals.ai [Characteristics/Integers]) each type's own
+  // falls back on: cKeeperArrivesChange 25, cKeeperArrivesChangeAmphibious 35
+  // (its own defaults, without the file: 100 and 100)
+  int classKeeperChange = 100, classKeeperChangeAmphibious = 100;
+  if (IniReader *cls = rm->getIniReader("animals.ai")) {
+    classKeeperChange = cls->getInt("characteristics/integers", "ckeeperarriveschange", 100);
+    classKeeperChangeAmphibious = cls->getInt("characteristics/integers", "ckeeperarriveschangeamphibious", 100);
+    delete cls;
+  }
   for (const CatalogItem *item : catalog.inCategory("animals", false)) {
     IniReader *ai = rm->getIniReader(item->file);
     if (!ai)
@@ -237,7 +247,9 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.sickRandomChance = num("csickrandomchance", 10); // (loader 0x4b7633)
     t.hungryHealthChange = num("chungryhealthchange", 5);
     t.sickTime = num("csicktime", 5);
-    t.keeperArrivesChange = num("ckeeperarriveschange", 25);
+    // (type +0x2fc and +0x300, loadConfig 0x4b6c51 at 0x4b78ab, 0x4b78d0)
+    t.keeperArrivesChange = num("ckeeperarriveschange", classKeeperChange);
+    t.keeperArrivesChangeAmphibious = num("ckeeperarriveschangeamphibious", classKeeperChangeAmphibious);
     t.dirtyIncrement = num("cdirtyincrement", 15);
     t.dirtyThreshold = num("cdirtythreshold", 70);
     t.maxDirty = num("cmaxdirty", 100);
@@ -318,8 +330,17 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.drinkWaterChance = num("cdrinkwaterchance", 0);
     t.chaseAnimalChance = num("cchaseanimalchance", 0);
     t.preattack = num("cpreattack", 0) != 0;
+    t.manEater = num("cismaneater", 0) != 0;
+    t.resetPreyPosition = num("cresetpreyposition", 0) != 0;
     t.footX = num("cfootprintx", 0);
     t.footY = num("cfootprinty", 0);
+    // (ZTUnitType::loadConfig 0x4b5681 at 0x4b58b7; ZTAnimalType's 0x4b6c51
+    // at 0x4b8658..0x4b86af - the defaults 0x4b5c71, 0x4b659e)
+    t.mapFoot = num("cmapfootprint", Original::unitMapFootprint);
+    t.boxX = num("cboxfootprintx", Original::animalBoxFootprint);
+    t.boxY = num("cboxfootprinty", Original::animalBoxFootprint);
+    t.eggX = num("ceggfootprintx", Original::animalEggFootprint);
+    t.eggY = num("ceggfootprinty", Original::animalEggFootprint);
     t.rampageThreshold = num("crampagethreshold", 0);
     t.rampageChance = num("crampagechance", 0);
     t.rampageTimeMin = num("crampagetimemin", 0);
@@ -920,6 +941,41 @@ void Animals::chase(Member &m, const WorldMap &map, const Fences &fences) {
     m.huntAnimal = -1; // (no way to it: given up)
 }
 
+// zoo.exe fHidePredator 0x50e879 -> 0x50e816: the guest's attacker
+// (0x412259: its +0x22c, a unit not +0x143/+0x142), an animal: slot
+// 0xcc(0) - +0x13f cleared (not drawn: setupShadow 0x43f81c skips it; its
+// panel 0x43f0c5)
+void Animals::hidePredator(int id) {
+  if (Member *m = this->member(id))
+    m->hidden = true;
+}
+
+// zoo.exe fShowPredator 0x50e764 -> 0x50e6fa: the guest's attacker, an
+// animal: animalEatenMessage 0x50e648 (attacker, guest) - a guest victim of
+// a type with cIsManEater (+0x3d5) is eaten: slot 0xcc(0) and
+// unitMarkRemoved 0x4fa78e(1), no message (11002 is for a staff victim);
+// any other guest nothing. Then the guest's slot 0x254 (0x431af4): the
+// attacker shown (slot 0xcc(1)), +0x3a5 and +0x20d (frozen) cleared and its
+// goal cleared (slot 0x174, ZTAnimal::clearGoal 0x43e784)
+void Animals::showPredator(int id, int guest) {
+  Member *m = this->member(id);
+  if (!m)
+    return;
+  if (this->typeList[m->type].manEater && this->takeGuestAway) {
+    ZT_STEP("0x50e648", "A man-eater: the guest is eaten", {"animal", m->name});
+    this->takeGuestAway(guest);
+  }
+  m->hidden = false;
+  if (m->mauling == guest) {
+    m->mauling = -1;
+    m->prey = -1;
+    m->stack.clear();
+    m->path.clear();
+    m->pathAt = 0;
+    m->stepping = false;
+  }
+}
+
 void Animals::tranquilise(int id) {
   Member *m = this->member(id);
   if (!m)
@@ -927,7 +983,8 @@ void Animals::tranquilise(int id) {
   m->tranquilised = true;
   // (darted: the chase is over, and a mauling with it)
   m->prey = -1;
-  m->maulFor = 0;
+  m->mauling = -1;
+  m->hidden = false;
   m->stack.clear();
   m->path.clear();
   m->pathAt = 0;
@@ -943,7 +1000,8 @@ void Animals::box(int id) {
   m->tranquilised = false;
   m->escaped = false;
   m->prey = -1;
-  m->maulFor = 0;
+  m->mauling = -1;
+  m->hidden = false;
   m->claimedBy = -1;
   m->stack.clear();
   m->path.clear();
@@ -1246,11 +1304,61 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
   // A zoo animal: a land exhibit
   if (!e || !standable(tx, ty, t, ex, map, fences))
     return Fences::Fit::Outside;
+  // A steep tile (zoo.exe zooViewMouse 0x4ded90's animal branch, 0x4e1279
+  // -> 0x5ad00a -> 0x5cd93c: the slope code +0x81 not flat nor a plain
+  // slope - WorldMap::pathShapeOk) refuses one whose footprint covers 4 or
+  // more half-tile squares (its +0x150, x times y of class slot 0x94's
+  // footprint, UnitBase::addedToWorld 0x412cdc), with no message; a small
+  // one is put down anyway. The one being placed: a held egg its egg's
+  // footprint, a held crate its box's. (One over 2 half tiles either way
+  // gets the footprint-wide check 0x4f7fbd as well: not here yet, #279)
+  {
+    const Member *held = this->carried >= 0 ? this->member(this->carried) : nullptr;
+    int fx = t.footX, fy = t.footY;
+    if (held && held->type == type && held->egg)
+      fx = t.eggX, fy = t.eggY;
+    else if (held && held->type == type && held->boxed)
+      fx = t.boxX, fy = t.boxY;
+    if (fx * fy >= Original::animalSteepFootprintArea && !map.pathShapeOk(tx, ty))
+      return Fences::Fit::InTheWay; // (red, no message: +0x14 left unset)
+  }
   // Not on top of another (the original shows red over one)
   for (const Member &m : this->list)
     if (m.id != this->carried && std::fabs(m.x - x) < 0.5f && std::fabs(m.y - y) < 0.5f)
       return Fences::Fit::InTheWay;
   return Fences::Fit::Ok;
+}
+
+// zoo.exe ZTAnimal's class slot 0x94 (0x410803): an egg (+0x395) its type's
+// cEggFootprint (+0x410), one in its crate (+0x394) its cBoxFootprint
+// (+0x1d8), whatever the flag; else ZTUnit::footprint 0x41070b - with the
+// flag cMapFootprint (type +0x150) both ways (0 high), without it the
+// entity's own (0x40f916: cFootprintX/Y, type +0xb4). The original swaps x
+// and y for an odd facing (+0x12c & 3); ours keeps them as the type gives
+// them - every footprint read here is square or only its area is used
+std::pair<int, int> Animals::footprint(const Member &m, bool map) const {
+  const Type &t = this->typeList[m.type];
+  if (m.egg)
+    return {t.eggX, t.eggY};
+  if (m.boxed)
+    return {t.boxX, t.boxY};
+  return map ? std::pair<int, int>{t.mapFoot, t.mapFoot} : std::pair<int, int>{t.footX, t.footY};
+}
+
+// zoo.exe 0x4137df (its counterpart 0x4402ed takes it off): the unit on the
+// map's tiles (0x410b0f: the tile's list, +0x85 |= 1) - from its tile (its
+// position / 64, toward 0), the footprint with the flag in whole tiles,
+// (n + 1) / 2 each way, back half of that: cMapFootprint 2 its own tile, 4
+// (apato.ai, a big crate) the 2 x 2 from one tile back
+std::vector<std::pair<int, int>> Animals::mapTiles(const Member &m) const {
+  const auto [fx, fy] = footprint(m, true);
+  const int w = (fx + 1) / 2, h = (fy + 1) / 2;
+  const int x0 = static_cast<int>(std::floor(m.x)) - w / 2, y0 = static_cast<int>(std::floor(m.y)) - h / 2;
+  std::vector<std::pair<int, int>> out;
+  for (int i = 0; i < w; i++)
+    for (int j = 0; j < h; j++)
+      out.push_back({x0 + i, y0 + j});
+  return out;
 }
 
 // The height a move in a tank ends at, over its floor (zoo.exe 0x43dc11,
@@ -1317,6 +1425,11 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
     m.swimZ = m.swimTo = this->placementDepth(type,this->tankAt(x,y));
   m.name = (!t.displayName.empty() ? t.displayName : this->rm ? this->rm->getString(t.nameId) : t.key) + " " +
            std::to_string(++this->counts[type]);
+  // (the default name set through setName 0x4e1d6b - defaultName 0x4e1b58
+  // at 0x4e1d54 - so through the rename cheats 0x44940b: only the name
+  // table can match a default name; not while a zoo is read in)
+  if (!restoring)
+    RenameCheats::applyNameTable(m.name, t.key, m.female ? "f" : "m", nullptr, 0);
   m.happiness = static_cast<float>(std::clamp(t.initialHappiness, -100, 100));
   m.energy = 0;
   m.health = static_cast<float>(t.maxHits);
@@ -3086,38 +3199,35 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
         }
       }
     }
-    // Mauling a guest (bCaughtGuest: 6 s, out of sight - the guest's
-    // animation has it); then it stands a while
-    if (m.maulFor > 0) {
-      m.maulFor -= seconds;
-      continue;
+    // Mauling a guest: held (+0x20d) till the guest's set lets it go
+    // (Guests::caughtNext's fShowPredator -> showPredator). ours: a guest
+    // gone from its set meanwhile (left, taken away, a load) lets it go too
+    if (m.mauling >= 0) {
+      if (this->guestHolds && this->guestHolds(m.mauling, m.id))
+        continue;
+      m.mauling = -1;
+      m.hidden = false;
     }
-    // Caught up with its prey
+    // Caught up with its prey (zoo.exe animalCaughtTarget 0x4a6043, a
+    // guest): the guest stopped and frozen, its attacker (+0x22c) this one,
+    // its bCaughtBy set started (0x50ed8f), attacked (+0x33b) and thinking
+    // 10246; this one's prey forgotten (slot 0x258), its bCaughtGuest
+    // (fPlayTime(stand, 6)) and frozen (+0x3a5, +0x20d). No message: 11002
+    // "%1s has been eaten by %2s." is a staff victim's (0x50e648 posts it
+    // only for 0x638710, ZTStaff)
     if (m.prey >= 0 && this->preyAt && !m.tranquilised && !m.boxed) {
       float px = 0, py = 0;
       if (this->preyAt(m.prey, px, py) && std::hypot(px - m.x, py - m.y) < 0.6f) {
-        // zoo.exe 0x50e648 (from fCaughtPrey 0x588c2d, its bCaughtGuest):
-        // a guest caught, 11002 "%1s has been eaten by %2s." (0x49cec0
-        // priority 2, as an old-age death: urgent)
-        if (this->rm && this->preyName) {
-          std::string s = this->rm->getString(11002);
-          const std::string who = this->preyName(m.prey);
-          for (const std::string *arg : std::initializer_list<const std::string *>{&who, &m.name})
-            for (const char *tok : {"%1s", "%2s", "%s"})
-              if (size_t at = s.find(tok); at != std::string::npos) {
-                s.replace(at, std::strlen(tok), *arg);
-                break;
-              }
-          this->notices.push_back({s, 2, m.id});
-        }
-        if (this->caughtPrey)
-          this->caughtPrey(m.prey, m);
+        ZT_STEP("0x4a6043", "Catches a guest", {"guest", m.prey});
+        const int guest = m.prey;
         m.prey = -1;
-        m.maulFor = 6.0f;
+        m.mauling = guest;
         m.path.clear();
         m.pathAt = 0;
         m.stack.clear();
-        play(m, "stand", Member::Mode::Loop, 6.0f);
+        play(m, "stand", Member::Mode::Loop, 3600.0f);
+        if (this->caughtPrey)
+          this->caughtPrey(guest, m);
         continue;
       }
     }
@@ -3303,7 +3413,7 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
     if (!a)
       continue;
     // Inside a shelter: not seen
-    if ((m.inside && m.insideFor > 0) || m.maulFor > 0)
+    if ((m.inside && m.insideFor > 0) || m.hidden)
       continue;
     // Held (Move Animal): its likeness at the cursor, green where it can go
     if (m.id == this->carried) {
@@ -4988,7 +5098,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   // A loose predator hunts (cEscapedCheck 2 ticks; cPreyRadius 5): the
   // nearest man in reach, chased at its run (cFastRate), given up after
   // cChaseTimeOut 10 s
-  if (t.eatsPeople && m.escaped && !m.boxed && !m.baby && !m.tranquilised && !m.dying && m.maulFor <= 0) {
+  if (t.eatsPeople && m.escaped && !m.boxed && !m.baby && !m.tranquilised && !m.dying && m.mauling < 0) {
     if (m.prey >= 0) {
       float px = 0, py = 0;
       if (!this->preyAt || !this->preyAt(m.prey, px, py) || this->now - m.chaseStart > 10.0) {
@@ -5342,10 +5452,16 @@ void Animals::leaveShelter(Member &m) {
   m.insideFor = 0;
 }
 
+// A keeper's visit (zoo.exe animalUpdate 0x437620 with +0x39c set, at
+// 0x49f579): an amphibious type's - type slot 0xcc, 0x410e41: cUnderwater
+// (+0x17e) without cOnlyUnderwater (+0x17f) - cKeeperArrivesChangeAmphibious
+// (+0x300), any other's cKeeperArrivesChange (+0x2fc), onto +0x2ac
 void Animals::keeperArrives(int exhibit) {
   for (Member &m : this->list)
-    if (m.exhibit == exhibit && !m.boxed)
-      m.pending += this->typeList[m.type].keeperArrivesChange;
+    if (m.exhibit == exhibit && !m.boxed) {
+      const Type &t = this->typeList[m.type];
+      m.pending += t.underwater && !t.onlyUnderwater ? t.keeperArrivesChangeAmphibious : t.keeperArrivesChange;
+    }
 }
 
 // zoo.exe Job4_HealAnimal::atTarget 0x4702e8's "Dr. Frankenstein" part:

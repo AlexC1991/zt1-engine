@@ -14,6 +14,7 @@
 #include "Animation.hpp"
 #include "Fences.hpp"
 #include "OriginalConstants.hpp"
+#include "OriginalConstants.hpp"
 #include "WorldIndex.hpp"
 #include "ZooItems.hpp"
 
@@ -186,6 +187,13 @@ public:
     bool babiesAttack = false;
     int timeToHatch = 0, minHatchHits = 0, minHits = 0;
     bool eatsPeople = false; // cPrey lists people (9503): guests run from it
+    // cIsManEater (type +0x3d5, loadConfig 0x4b6c51 at 0x4b8e17; the T. rex
+    // and the sharks): a guest it mauls is eaten at the end of it (0x50e648)
+    bool manEater = false;
+    // cResetPreyPosition (type +0x3d8, loadConfig at 0x4b8e29; the
+    // dinosaurs, the orca, the giant squid): the guest it catches is put
+    // where it stands, its way (0x4a6043)
+    bool resetPreyPosition = false;
     // cPreattack (ZTAnimalType+0x3d6; the dinosaurs, Smilodon, Macrauchenia):
     // two that both have it stand off before a chase (zoo.exe 0x42fad3)
     bool preattack = false;
@@ -197,6 +205,13 @@ public:
     // half tiles; zoo.exe's type loader 0x4b5681 keeps them at +0xb4,
     // +0xb8): a big one is drawn in strips by it (Animals::collect)
     int footX = 0, footY = 0;
+    // Its other footprints, half tiles (zoo.exe class slot 0x94, ZTUnit::
+    // footprint 0x41070b and ZTAnimal's 0x410803): cMapFootprint (ZTUnitType
+    // +0x150, both ways: which tiles list it), its crate's cBoxFootprintX/Y
+    // (ZTAnimalType +0x1d8) and its egg's cEggFootprintX/Y (+0x410)
+    int mapFoot = Original::unitMapFootprint;
+    int boxX = Original::animalBoxFootprint, boxY = Original::animalBoxFootprint;
+    int eggX = Original::animalEggFootprint, eggY = Original::animalEggFootprint;
     // cPrey: the cNameIDs of the animals it hunts, per sex (m, f, y: a
     // lion's list is the lioness's alone; one without its own has the
     // male's)
@@ -209,7 +224,7 @@ public:
     int maxHits = 500, pctHits = 20, sickChange = -20, otherSickChange = -10, sickChance = 10;
     // cSickRandomChance (type +0x264, default 10 at 0x4b665e; no stock file sets it)
     int sickRandomChance = 10;
-    int hungryHealthChange = 5, sickTime = 5, keeperArrivesChange = 25;
+    int hungryHealthChange = 5, sickTime = 5, keeperArrivesChange = 25, keeperArrivesChangeAmphibious = 35;
     int dirtyIncrement = 15, dirtyThreshold = 70, energyThreshold = 70;
     // cMaxDirty, cMinDirty (the dung meter's limits, type +0x250/+0x254), cPooWaterImpact
     // (+0x448): zoo.exe's type defaults (0x4b659e), no stock file sets the first two
@@ -348,11 +363,13 @@ public:
     // height it's swimming to (fWalk's surface, floor, dive, rise, level)
     float swimZ = 0, swimTo = 0;
     // Hunting a guest (loose predators, cPrey 9503): who, since when, the
-    // check's countdown; mauling (out of sight: the guest's animation shows
-    // both) and resting after
+    // check's countdown; the guest it's caught (held, +0x20d, till that
+    // guest's fShowPredator lets it go - zoo.exe 0x4a6043, 0x431af4); hidden
+    // (+0x13f clear: slot 0xcc(0), the guest's fHidePredator 0x50e816)
     int prey = -1, preyCheck = 0;
     double chaseStart = 0;
-    float maulFor = 0;
+    int mauling = -1;
+    bool hidden = false;
     // In its exhibit (zoo.exe 0x43954c, 0x4369b9, 0x4a6043): the animal it's
     // chasing (a prey it lists, or one of its own kind at play - tag), since
     // when; the one it's running from; caught (frozen under the dust ball,
@@ -444,6 +461,12 @@ public:
   // Where one can go: an exhibit's ground (a land exhibit for a zoo
   // animal), not water, not on top of another
   Fences::Fit canPlace(int type, float x, float y, const WorldMap &map, const Fences &fences) const;
+  // Its footprint in half tiles (class slot 0x94, ZTAnimal 0x410803): an
+  // egg's cEggFootprint, a crate's cBoxFootprint, else with `map` its
+  // cMapFootprint both ways, without its cFootprintX/Y
+  std::pair<int, int> footprint(const Member &m, bool map) const;
+  // The tiles it's listed on in the map (0x4137df, slot 0x94 with the flag)
+  std::vector<std::pair<int, int>> mapTiles(const Member &m) const;
   float placementDepth(int type,int tank) const;
   int adopt(int type, bool female, float x, float y, const WorldMap &map, const Fences &fences,
             bool restoring = false);
@@ -631,10 +654,14 @@ public:
   std::function<int(float x, float y, float radius)> findPrey;
   std::function<bool(int guest, float &x, float &y)> preyAt;
   std::function<void(int guest, const Member &by)> caughtPrey;
+  // (whether the guest is still in the set this one caught it into)
+  std::function<bool(int guest, int animal)> guestHolds;
+  // The caught guest's set's fHidePredator (zoo.exe 0x50e816) and
+  // fShowPredator (0x50e6fa) on this one, its attacker
+  void hidePredator(int id);
+  void showPredator(int id, int guest);
   // A guest taken away (zoo.exe 0x4fa78e(1) on it: fKillPrey 0x60cb3a)
   std::function<void(int guest)> takeGuestAway;
-  // (a guest's name, for "%1s has been eaten by %2s.")
-  std::function<std::string(int guest)> preyName;
   // An exhibit's viewing areas (zoo.exe: the habitat's list at +0x34): each
   // one's path tiles (+0x40), the exhibit's tiles seen from it (+4) and the
   // guests standing on it (+0x54)

@@ -312,7 +312,7 @@ void Staff::clear() {
   this->work.clear();
   this->postedItems.clear();
   this->binsFull.clear();
-  this->fencesWorn.clear();
+  this->fencePosted.clear();
   this->filterPosted.clear();
 }
 
@@ -416,9 +416,16 @@ bool Staff::workGone(const WorkEntry &e, const Fences &fences) const {
 // - a trash can whose fill reaches 13 (10030: a guest's trash in, 0x59d758,
 //   posts on +0x19c == 0xd - once, until it's emptied and fills again);
 // - a fence piece worn down to its cDecayedLife (10033, ZTFence::update
-//   0x434b1d) - for each tile beside it it can be stood on, its own tile's
-//   flagged (read in the running game 2026-11-11: pairs a tile apart, the
-//   owner's flagged);
+//   0x434b1d; 10034, flagged, for an electrified one, its current gone:
+//   fenceIsLiveElectric 0x4a44a0) and broken (10034, flagged: fenceBreak
+//   0x4858a4) - one entry each time, on the one tile 0x49e3e2(0) picks
+//   (fenceWorkTile); one broken without wearing first posts only the
+//   flagged one. measured: 2026-11-18, the original's list (0x638fa4) over
+//   a chain-link paddock - a side piece worn: one entry, the grounds-side
+//   tile across, not flagged; then broken: a second, the same tile,
+//   flagged, at the front; a top piece worn: one entry, its own tile (the
+//   grounds side). (The 2026-11-11 reading of two tiles a piece apart was
+//   wrong);
 // - a filter decayed to cDecayedHealth (10035) and broken, its health 0
 //   (10036, flagged) (filterDecayTick 0x615c29).
 // After clear() (a load, a new zoo) all of the zoo's work is posted afresh
@@ -428,18 +435,22 @@ bool Staff::workGone(const WorkEntry &e, const Fences &fences) const {
 // (ours: what's new is noticed at the next look or tick rather than posted
 // where it happens; on one tick, fences, filters, cans, dung, then litter)
 void Staff::noticeWork(const WorldMap &map, const Fences &fences) {
-  // Fences
-  for (auto it = this->fencesWorn.begin(); it != this->fencesWorn.end();)
-    it = fences.worn(*it) ? std::next(it) : this->fencesWorn.erase(it);
+  // Fences: worn (1), broken (2)
+  for (auto it = this->fencePosted.begin(); it != this->fencePosted.end();)
+    it = fences.worn(it->first) ? std::next(it) : this->fencePosted.erase(it);
   for (const auto &kv : fences.pieces()) {
     const Fences::Edge &e = kv.first;
-    if (!fences.worn(e) || this->fencesWorn.count(e))
+    if (!fences.worn(e))
       continue;
-    this->fencesWorn.insert(e);
-    int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
-    for (auto [tx, ty] : {std::make_pair(ax, ay), std::make_pair(e.x, e.y)})
-      if (walkable(tx, ty, map, fences))
-        postWork(Job::Fence, tx, ty, -1, e, tx == kv.second.ownerX && ty == kv.second.ownerY);
+    const int state = fences.broken(e) ? 2 : 1;
+    int &before = this->fencePosted[e];
+    if (state <= before)
+      continue;
+    const auto [tx, ty] = fenceWorkTile(e, kv.second, map, fences);
+    const bool electric = kv.second.type >= 0 && kv.second.type < static_cast<int>(fences.types().size()) &&
+                          fences.types()[static_cast<size_t>(kv.second.type)].electrified;
+    postWork(Job::Fence, tx, ty, -1, e, state == 2 || electric);
+    before = state;
   }
   // Filters: decayed (10035), broken (10036, flagged)
   {
@@ -499,9 +510,133 @@ void Staff::rebuildWorkList(const WorldMap &map, const Fences &fences) {
   this->work.clear();
   this->postedItems.clear();
   this->binsFull.clear();
-  this->fencesWorn.clear();
+  this->fencePosted.clear();
   this->filterPosted.clear();
   noticeWork(map, fences);
+}
+
+// zoo.exe 0x49e3e2(0) (for the posts of ZTFence::update 0x434b1d,
+// fenceBreak 0x4858a4 and the fence's afterLoad 0x594060): of the piece's
+// own tile (its unit's, unitTile) and the one across (0x40fa92 by its side,
+// +0x12c), the one on the zoo's grounds (its habitat's +0x2c) that can be
+// stood on - one of its four quarters (+4..+0x10) empty or what's there
+// walked through (slot 0xb4) - own tile first; else whichever can be stood
+// on, own first; else its own. measured: 2026-11-18 (see noticeWork).
+// ours: walkable(), with the tile's own exhibit open, for the quarters
+// test; our grounds are inside the zoo and in no exhibit
+std::pair<int, int> Staff::fenceWorkTile(const Fences::Edge &e, const Fences::Piece &p, const WorldMap &map,
+                                         const Fences &fences) const {
+  const int ox = p.ownerX, oy = p.ownerY;
+  int ax = ox, ay = oy;
+  if (e.alongX)
+    ay = oy == e.y ? e.y - 1 : e.y;
+  else
+    ax = ox == e.x ? e.x - 1 : e.x;
+  auto stands = [&](int x, int y) { return walkable(x, y, map, fences, fences.exhibitAt(x, y)); };
+  auto grounds = [&](int x, int y) { return fences.insideZoo(x, y) && fences.exhibitAt(x, y) < 0; };
+  if (grounds(ox, oy) && stands(ox, oy))
+    return {ox, oy};
+  if (grounds(ax, ay) && stands(ax, ay))
+    return {ax, ay};
+  if (stands(ox, oy))
+    return {ox, oy};
+  if (stands(ax, ay))
+    return {ax, ay};
+  return {ox, oy};
+}
+
+// zoo.exe maintPickTrashCan 0x61b146 (Job9_GoToTrashCan's whileGoing
+// 0x4271a1, when the worker has no destination, unit +0x234 0): of the
+// zoo's trash cans (buildings that satisfy "trash", 0x41239d) on a tile
+// with +0x83 & 0x40 (0x40fb8d(1)) and over 12 full (+0x19c > 0xc), the
+// lowest of the squared tile distance (tileDistanceSq 0x4118b1) + rand %
+// 60 (0x40f103) - its fill, the first of equals, its tile not on the
+// worker's invalid list (0x4a2768). ours: the tile flag taken as the zoo's
+// grounds (what +0x83 & 0x40 means isn't named)
+int Staff::pickTrashCan(const Member &m, const WorldMap &map, const Fences &fences) {
+  if (!this->objects)
+    return -1;
+  (void)map;
+  const int mx = static_cast<int>(std::floor(m.x)), my = static_cast<int>(std::floor(m.y));
+  int best = -1;
+  long long bestScore = 0x7fffffff;
+  std::uniform_int_distribution<int> roll(0, 0x7fff);
+  for (const PlacedObjects::Object &o : this->objects->objects()) {
+    if (!o.trashCan)
+      continue;
+    const int cx = static_cast<int>(std::floor(o.x)), cy = static_cast<int>(std::floor(o.y));
+    if (!fences.insideZoo(cx, cy) || fences.exhibitAt(cx, cy) >= 0 || o.fill <= 12)
+      continue;
+    const long long dist = static_cast<long long>(mx - cx) * (mx - cx) + static_cast<long long>(my - cy) * (my - cy);
+    const long long score = dist + roll(this->rng) % 60 - o.fill;
+    if (score < bestScore &&
+        std::find(m.invalid.begin(), m.invalid.end(), std::make_pair(cx, cy)) == m.invalid.end()) {
+      bestScore = score;
+      best = o.id;
+    }
+  }
+  return best;
+}
+
+// The job a maintenance worker saves (ours v24; zoo.exe saves every unit's
+// task and job: UnitBase::load 0x4547cc -> 0x454aaf reads the task state -
+// the task +0x170, the job +0x174, their target and destination, the task
+// and job objects themselves - and its route (+0x154); ZTUnit::load
+// 0x454488 its destination, +0x238 -> +0x234). measured: 2026-11-18, the
+// original saved with one worker going to sweep (job 7) and one sweeping
+// (job 8): loaded, both still on task 0x78 with their destinations, the
+// first went on and swept that litter; neither held a work list entry
+// (+0x2c0 0: a load rebuilds the list, 0x5b11a2). ours: only a maintenance
+// worker's work (litter, dung, a can, a fence, a filter); work it was doing
+// starts again from the beginning of its set
+Staff::SavedJob Staff::savedJob(const Member &m, const Type &t) {
+  SavedJob s;
+  const bool work = m.job == Job::Litter || m.job == Job::Dung || m.job == Job::Trash || m.job == Job::Fence ||
+                    m.job == Job::Filter;
+  if (t.kind != Kind::Maint || !work)
+    return s;
+  s.job = static_cast<int>(m.job);
+  s.item = m.jobItem;
+  s.filter = m.jobFilter;
+  s.edge = m.jobEdge;
+  s.dutyId = m.dutyId;
+  s.goalX = m.goalX;
+  s.goalY = m.goalY;
+  s.working = m.playsLeft > 0;
+  if (!s.working && m.pathAt < m.path.size()) {
+    s.path = m.path;
+    s.pathLayers = m.pathLayers;
+    s.pathAt = static_cast<uint32_t>(m.pathAt);
+    s.layer = m.layer;
+  }
+  return s;
+}
+
+void Staff::restoreJob(Member &m, const SavedJob &s) {
+  if (s.job <= 0 || s.job > static_cast<int>(Job::Flee))
+    return;
+  const Job job = static_cast<Job>(s.job);
+  if (job != Job::Litter && job != Job::Dung && job != Job::Trash && job != Job::Fence && job != Job::Filter)
+    return;
+  m.job = job;
+  m.jobItem = s.item;
+  m.jobFilter = s.filter;
+  m.jobEdge = s.edge;
+  m.dutyId = s.dutyId;
+  m.goalX = s.goalX;
+  m.goalY = s.goalY;
+  m.workEntry = -1;
+  if (s.working) {
+    // (at its work: there again next tick, the work's set from its start)
+    m.path = {{m.x, m.y}};
+    m.pathLayers.clear();
+    m.pathAt = 0;
+  } else if (s.pathAt < s.path.size()) {
+    m.path = s.path;
+    m.pathLayers = s.pathLayers;
+    m.pathAt = s.pathAt;
+    m.layer = s.layer;
+  }
 }
 
 // ours: one by its id
@@ -2855,6 +2990,11 @@ int Staff::hire(int type, float x, float y, const WorldMap &map, const Fences &f
   int n = ++this->counts[type];
   const CatalogItem *item = ItemCatalog::get().find(t.file);
   m.name = (item ? item->name : this->rm ? this->rm->getString(t.nameId) : t.key) + " " + std::to_string(n);
+  // (the default name set through setName 0x449515 - defaultName 0x4e1b58
+  // at 0x4e1d54 - so through the rename cheats 0x44940b: no cheat's name
+  // ends in a number, so only the name table can match; not while a zoo is
+  // read in, RenameCheats::loading)
+  RenameCheats::applyNameTable(m.name, t.key, m.female ? "f" : "m", nullptr, 0);
   m.x = x;
   m.y = y;
   m.fx = 0;
@@ -3505,6 +3645,51 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
       catchStep(m, seconds, map, fences);
       if (m.job != Job::Catch || m.playsLeft > 0)
         continue;
+    }
+    // A can job with no destination (unit +0x234 0: loaded without one): it
+    // picks a can itself (Job9_GoToTrashCan's whileGoing 0x4271a1 ->
+    // maintPickTrashCan 0x61b146) and a route to its tile (0x422238); no
+    // way, that tile on its invalid list (0x4a97ed) and one of its four
+    // neighbours tried at random (0x4171a1), that one too; no can or no way,
+    // the job's off (0x4801dd: no destination, +0x2a4 set, the job ended,
+    // its entry let go)
+    if (t.kind == Kind::Maint && m.job == Job::Trash && m.path.empty() && m.playsLeft == 0) {
+      const int can = pickTrashCan(m, map, fences);
+      const PlacedObjects::Object *o = can >= 0 && this->objects ? this->objects->byId(can) : nullptr;
+      bool going = false;
+      if (o) {
+        const int cx = static_cast<int>(std::floor(o->x)), cy = static_cast<int>(std::floor(o->y));
+        auto reach = [&](int tx, int ty) {
+          return walkable(tx, ty, map, fences) && findPath(m, tx, ty, map, fences, tx + 0.5f, ty + 0.5f);
+        };
+        going = reach(cx, cy);
+        if (!going) {
+          m.invalid.push_back({cx, cy});
+          const int d[4][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+          const auto &dd = d[std::uniform_int_distribution<int>(0, 3)(this->rng)];
+          going = reach(cx + dd[0], cy + dd[1]);
+          if (!going)
+            m.invalid.push_back({cx + dd[0], cy + dd[1]});
+        }
+      }
+      ZT_STEP("0x4271a1", going ? "A can job with no destination: it picks a can itself (0x61b146)"
+                                : "A can job with no destination and no can to go to: the job's off",
+              {"can", can});
+      if (going) {
+        m.jobItem = can;
+        m.dutyId = kGoingToCan;
+      } else {
+        if (WorkEntry *w = m.workEntry >= 0 ? this->workEntry(m.workEntry) : nullptr)
+          w->holder = -1;
+        m.workEntry = -1;
+        m.job = Job::None;
+        m.jobItem = -1;
+        m.anim = "idle";
+        m.idleLeft = 0.5f;
+        m.dutyId = kMaintMonitoring;
+        m.workCheck = 0;
+      }
+      continue;
     }
     // Walking a path. Litter gone before it gets there (another worker swept
     // it): "Done with trash piles", the job ends (Job7_GoToTrashPile's

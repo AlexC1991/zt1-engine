@@ -35,6 +35,10 @@ public:
   // A picture drawn inside the frame (iconfirst=1: under it), centred
   void setIcon(Animation *icon) { this->icon = icon; }
   void setToggledOn(bool on) { this->toggled_on = on; }
+  // Switched off, drawn greyed even while on (Hire Staff's info plaque
+  // button: measured greyed with its plaque still up); others keep their
+  // on frame, as a locked tick box must
+  void setGreyWhenOff(bool on) { this->grey_first = on; }
   // Made a latching toggle by the game (the layout's state=2048 hidden)
   void setToggle(bool on) {
     if (on)
@@ -103,6 +107,7 @@ private:
   Uint32 press_time = 0, last_repeat = 0;
   static constexpr Uint32 kRepeatDelay = 400, kRepeatInterval = 100;
   bool toggled_on = true;
+  bool grey_first = false;
   SDL_Color fill_color = {0, 0, 0, 0};
   Animation *icon = nullptr;
   std::shared_ptr<std::vector<UiButton *>> radio_group;

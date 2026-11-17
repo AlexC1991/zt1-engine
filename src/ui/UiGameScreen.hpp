@@ -108,6 +108,10 @@ public:
   void showDrt(int id);
   int shownDrtId() const { return this->shownDrt; }
   int shownStaffId() const { return this->shownStaff; }
+  // Hire Staff's info plaque (splaque.lyt, 33) for a staff type's .ai, or
+  // none (zoo.exe 0x481648)
+  void showStaffPlaque(const std::string &file);
+  const std::string &staffPlaqueShown() const { return this->staffPlaqueFile; }
   void refreshStaff();
   // The bulldozer is on (the HUD's Clear Objects button)
   bool bulldozerOn() const;
@@ -278,6 +282,11 @@ public:
   bool selectBuyItem(int panel, const std::string &file);
   // The exhibit (or tank) whose information is open, or -1
   int shownExhibitId() const { return this->isPanelOpen(30) ? this->shownExhibit : -1; }
+  // The exhibit whose gate the Exhibit List picked, selected (the arrow over
+  // it), or -1: the list's own pick, not a keeper's (#266)
+  int selectedGateExhibit() const {
+    return this->isPanelOpen(30) && this->gateExhibit >= 0 && this->gateExhibit == this->shownExhibit ? this->gateExhibit : -1;
+  }
   // Whether a point (layout units) is on an open panel (the wheel scrolls
   // its lists there rather than zooming the map)
   bool isOverPanel(int x, int y) const;
@@ -403,6 +412,13 @@ private:
   // Which details the chosen tab shows, as the original does
   void showDetails(BuyPanel &panel, const CatalogItem *item);
   std::map<int, std::string> infoImages; // ui/infoimg.cfg: id -> image
+  // Hire Staff (personel.lyt, 10): its pick let go - the texts emptied,
+  // the labels and rotate arrows hidden, nothing held (zoo.exe
+  // personel_Staff_off 0x4e6711)
+  void hireStaffLetGo(BuyPanel &panel);
+  // Its info plaque button and the plaque kept with what's held
+  void refreshStaffPlaque();
+  std::string staffPlaqueFile; // zoo.exe 0x63cf9c: the plaque's staff type
 
   // The Buy Habitat panel's Terrain Types and Terrain Height tabs, which
   // show ui/teraform.lyt over the panel
@@ -596,6 +612,8 @@ private:
   int litExhibitAnimal = -1;
   std::vector<std::string> listedExhibitThoughts;
   int shownExhibit = -1, shownListCount = -1;
+  int gateExhibit = -1;      // (the gate selected: selectedGateExhibit)
+  bool keeperPicking = false; // (a keeper's exhibit pick shows the list without selecting the gate)
   void setupExhibits();
 
   // Zoo Status: its pages' texts, graphs, marketing and admission

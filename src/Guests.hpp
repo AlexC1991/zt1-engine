@@ -122,28 +122,37 @@ public:
   // and the "in a building" test 0x4108f7 read it), and the slots run by
   // every task's tick (begin, whileGoing, checkArrived, atTarget). Ours keeps
   // a State and the guest's own fields instead; the classes' plumbing read
-  // 2026-11-17 (each ctor, dtor and taskId as said), and where each is:
-  //   0x64 Task64_PickAttraction (ctor 0x440fb9, dtor 0x422886, taskId
-  //     0x4281f7): Guests::decide's pick (guestPickAttraction 0x4282e1).
+  // 2026-11-17 (each ctor, dtor and taskId as said; each destroy sets its
+  // own class table, then the base's, and each freeIfAsked deletes it when
+  // its argument's bit 1 is set - read 2026-11-18), and where each is:
+  //   0x64 Task64_PickAttraction (ctor 0x440fb9, dtor 0x422886, destroy
+  //     0x422890, freeIfAsked 0x42289d, taskId 0x4281f7): Guests::decide's
+  //     pick (guestPickAttraction 0x4282e1).
   //   0x65 Task65_Guest (ctor 0x413ed7, dtor 0x4260f5, destroy 0x4260ff,
   //     freeIfAsked 0x42610c, taskId 0x436800 - shared with the keepers'):
   //     going to an exhibit's viewing tile (whileGoing 0x43aab4, atTarget
   //     0x42612f: task 0x70) - Guests::update's walk to Guest::target.
-  //   0x66 Task66_BuildingCrowded (ctor 0x4a8162, dtor 0x42a49b, taskId
-  //     0x4124c6): seekBuilding's crowded building (10243).
-  //   0x67 Task67_GoToBuilding (ctor 0x4a826d, dtor 0x42c836), 0x68
-  //     Task68_EnterBuilding (ctor 0x42c7ca, dtor 0x42a4d5), 0x69
-  //     Task69_ExitBuilding (ctor 0x42a8f0, dtor 0x42a549), 0x6a
-  //     Task6a_InsideBuilding (ctor 0x4a8201): Guest::building and
-  //     State::Using.
-  //   0x6b Task6b_GoEat (ctor 0x59d3e6, dtor 0x59d3ac, taskId 0x59d57a), 0x6c
-  //     Task6c_Eat (ctor 0x52dc85, dtor 0x52d967, taskId 0x52d94f), 0x6d
-  //     Task6d_EatStanding (ctor 0x52de0e, dtor 0x52da06, taskId 0x52da00):
+  //   0x66 Task66_BuildingCrowded (ctor 0x4a8162, dtor 0x42a49b, destroy
+  //     0x42a4a5, freeIfAsked 0x42a4b2, taskId 0x4124c6): seekBuilding's
+  //     crowded building (10243).
+  //   0x67 Task67_GoToBuilding (ctor 0x4a826d, dtor 0x42c836, destroy
+  //     0x42c840, freeIfAsked 0x42c84d), 0x68 Task68_EnterBuilding (ctor
+  //     0x42c7ca, dtor 0x42a4d5, destroy 0x42a4df, freeIfAsked 0x42a4ec),
+  //     0x69 Task69_ExitBuilding (ctor 0x42a8f0, dtor 0x42a549, destroy
+  //     0x42a553, freeIfAsked 0x42a560), 0x6a Task6a_InsideBuilding (ctor
+  //     0x4a8201, dtor 0x42a50f, destroy 0x42a519, freeIfAsked 0x42a526):
+  //     Guest::building and State::Using.
+  //   0x6b Task6b_GoEat (ctor 0x59d3e6, dtor 0x59d3ac, destroy 0x59d3b6,
+  //     freeIfAsked 0x59d3c3, taskId 0x59d57a), 0x6c Task6c_Eat (ctor
+  //     0x52dc85, dtor 0x52d967, destroy 0x52d971, freeIfAsked 0x52d97e,
+  //     taskId 0x52d94f), 0x6d Task6d_EatStanding (ctor 0x52de0e, dtor
+  //     0x52da06, destroy 0x52da10, freeIfAsked 0x52da1d, taskId 0x52da00):
   //     Guest::eatStep.
-  //   0x70 Task70_ViewAnimals (ctor 0x4a837b, dtor 0x4261cf, taskId
-  //     0x423214): State::Gawking at an exhibit.
-  //   0x71 Task71_LeaveAnimalsFree (ctor 0x4a6758, dtor 0x4fa2e4, taskId
-  //     0x4233e4): Guest::leaving.
+  //   0x70 Task70_ViewAnimals (ctor 0x4a837b, dtor 0x4261cf, destroy
+  //     0x4261d9, freeIfAsked 0x4261e6, taskId 0x423214): State::Gawking at
+  //     an exhibit.
+  //   0x71 Task71_LeaveAnimalsFree (ctor 0x4a6758, dtor 0x4fa2e4, destroy
+  //     0x4fa2ee, freeIfAsked 0x4fa2fb, taskId 0x4233e4): Guest::leaving.
   //   0x76 Task76_GuestFollowGuide (ctor 0x58d276, dtor 0x58d2e2, destroy
   //     0x58d2ec, freeIfAsked 0x58d2f9, taskId 0x58ce66 - shared with the
   //     guide's): Guest::guide, joinTour.
@@ -151,10 +160,19 @@ public:
   //     freeIfAsked 0x5b05bb, taskId 0x5b05de): Guest::puking.
   //   0x7f Task7f_GuestInWater (ctor 0x49a5ad, dtor 0x49a432, taskId
   //     0x4994bd), 0x84 Task84_Drown (ctor 0x61a68a, dtor 0x61a6dc, taskId
-  //     0x61a6d6): State::Water, Guest::waterTask (kOutOfWaterTask,
-  //     kDrownTask).
-  //   0x81 Task81_GawkObject (ctor 0x4a6bbd, dtor 0x441256, taskId 0x441216):
-  //     Guest::gawkObject.
+  //     0x61a6d6; destroy 0x61a6fa, its own class table 0x633fec), 0x83
+  //     Task83_InWater (dtor 0x5a5d2b, destroy 0x5a5d35, freeIfAsked
+  //     0x5a5d42, taskId 0x5a5d03), 0x82 the ride (class table 0x6335d4: dtor
+  //     0x5a058e, destroy 0x5a0598, freeIfAsked 0x5a05a5, taskId 0x59fe50):
+  //     State::Water, Guest::waterTask (kOutOfWaterTask, kDrownTask,
+  //     kInWaterTask, kRideTask).
+  //   0x81 Task81_GawkObject (ctor 0x4a6bbd, dtor 0x441256, destroy 0x441260,
+  //     freeIfAsked 0x44126d, taskId 0x441216): Guest::gawkObject.
+  // (zoo.exe ZTGuest::debugText 0x619050, class slot 0x64: a developer's
+  // overlay, drawn only while zooTime +0x100 is set - "Hap:%d Hun:%d Ths:%d
+  // Bth:%d Eng:%d NonPath:%d" from +0x2a8, +0x2b0, +0x2b8, +0x2c0, +0x2c8
+  // and slot 0x194, white, then the unit's own text; as the staff's
+  // 0x610f8f, ours has no counterpart: the needs are Guest's own fields)
   enum class State { Arriving, Walking, Gawking, Leaving, Fleeing, Using, Caught, Water };
   // Its tasks on the water, by the original's task numbers (unitMakeTask):
   // 0x82 a ride (Task82, class table 0x6335d4), 0x66 back to a return
@@ -258,9 +276,14 @@ public:
     // has cheered it yet
     int guide = -1;
     bool tourHeard = false;
-    // Attacked by a loose predator (never twice), and getting up after
+    // Attacked by a loose predator (never twice); while caught, its
+    // bCaughtBy set's lines (the next one to run) and its attacker (zoo.exe
+    // +0x22c, the predator's id; -1 once fShowPredator has let it go) - not
+    // saved
     bool attacked = false;
-    int caughtStage = 0;
+    std::vector<std::string> caughtLines;
+    size_t caughtLine = 0;
+    int attacker = -1;
     // The rename cheats' flags (zoo.exe +0x340, not saved): Original::Cheat's
     // stinky, rpro, boogyman, yellowman, redman - Guests::cheatTick
     int cheatFlags = 0;
@@ -316,10 +339,18 @@ public:
   // Loose predators (zoo.exe 0x43971c, 0x4a6043): only men (cPrey 9503 is
   // the man guest) not already attacked; caught, it's mauled (its
   // bCaughtBy<animal><m|f>: the animation and roar), gets up and thinks
-  // "Ouch! I've just been attacked by %s." - it lives
+  // "Ouch! I've just been attacked by %s." - it lives (a man-eater's: eaten
+  // at the set's fShowPredator)
   int nearestPrey(float x, float y, float radius) const;
   bool preyPosition(int guest, float &x, float &y) const;
-  void caught(int guest, const std::string &animalKey, bool female, const std::string &animalName);
+  void caught(int guest, int animal, const std::string &animalKey, bool female, const std::string &animalName);
+  // Its set's fHidePredator (zoo.exe 0x50e879) and fShowPredator (0x50e764)
+  // lines: the attacker hidden; the attacker shown and let go, the guest
+  // eaten by a man-eater (World wires them to Animals)
+  std::function<void(int animal)> hidePredator;
+  std::function<void(int animal, int guest)> showPredator;
+  // Whether a guest is still in the set it was caught into by that animal
+  bool heldBy(int guest, int animal) const;
   // Taken away (zoo.exe unitMarkRemoved 0x4fa78e(1): +0x13c, removed at the
   // sweep 0x434df7) - fKillPrey's guest. ours: out of the zoo, as drowned
   void takeAway(int guest);
@@ -520,7 +551,10 @@ private:
   ZooItems *items = nullptr;
   double concessions = 0, donations = 0;
   std::map<int, ExhibitBooks> exhibitBooks;
-  std::map<std::string, std::string> caughtSound; // "blackbrm" -> its roar's [Sounds] key
+  // guests.ai's [BehaviorSet\bCaughtBy<animal><m|f>] sets and the sets
+  // their fPlaySetTerrain names: "bcaughtbylionm" -> its lines
+  std::map<std::string, std::vector<std::string>> caughtSets;
+  void caughtNext(Guest &g);
   // guests.ai's water behaviour sets ("man\behaviorset\breturnchroom0",
   // "behaviorset\binwater", bSuitIdle, bSuitDrown, bSurfDrown): their lines
   std::map<std::string, std::vector<std::string>> behaviourSets;

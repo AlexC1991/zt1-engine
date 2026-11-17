@@ -98,7 +98,7 @@ void DayNightLighting::collectActors(World &world) {
   };
   auto &animals=world.getAnimals();
   for(const auto &m:animals.members()) {
-    if(m.id==animals.carried || (m.inside && m.insideFor>0) || m.maulFor>0)continue;
+    if(m.id==animals.carried || (m.inside && m.insideFor>0) || m.hidden)continue;
     if(m.anim.find("dust")!=std::string::npos || m.anim.find("fight")!=std::string::npos)continue;
     Animation *a=m.boxed?animals.crate(m):animals.art(m,m.anim);if(!a)continue;
     int count=std::max(1,a->frameCount()),f=int(m.animTime*1000/(a->frameTimeMs()?a->frameTimeMs():100u));

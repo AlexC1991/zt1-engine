@@ -17,6 +17,7 @@
 #include <zlib.h>
 
 #include "OriginalConstants.hpp"
+#include "RenameCheats.hpp"
 #include "Research.hpp"
 #include "World.hpp"
 #include "ZooSim.hpp"
@@ -35,7 +36,7 @@
 namespace {
 constexpr uint32_t kMagic = 0x5A543153; // "S1TZ"
 constexpr uint32_t kMapMagic = 0x504D3153; // "S1MP": a map design (saveMap)
-constexpr uint32_t kVersion = 23; // 23: DRT bases' recoveries. // 22: guests attacked by a predator. // 21: the flyers in flight, their spawn clock and special days' marks; rubble pieces' groups and types. // 20: guests' visited lists as tiles and their visit counts. // 19: each month's guests in the zoo (books row 25). // 18: guests' recent-species lists. // 17: tank filters' built and serviced days and months in operation. // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
+constexpr uint32_t kVersion = 25; // 25: the rename cheats' names used once only. // 24: maintenance workers' jobs (their work, its target, route and destination). // 23: DRT bases' recoveries. // 22: guests attacked by a predator. // 21: the flyers in flight, their spawn clock and special days' marks; rubble pieces' groups and types. // 20: guests' visited lists as tiles and their visit counts. // 19: each month's guests in the zoo (books row 25). // 18: guests' recent-species lists. // 17: tank filters' built and serviced days and months in operation. // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
 
 // A little binary writer and reader: numbers as they are, strings with
 // their length, vectors with their count
@@ -532,6 +533,7 @@ void SaveGame::resumeAmbients(World &world) {
 
 bool SaveGame::loadOriginalWorld(World &world) {
   saveFailure.clear();
+  const RenameCheats::Loading reading; // (zoo.exe loadingZoo, theGame +0x441)
   const ZooReader &z = world.zooReader;
   for(auto &object:world.placedObjects.list)
     for(const auto &record:z.getObjects())if(record.id==uint32_t(object.id) && record.className=="building" &&
@@ -2005,6 +2007,20 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
       o.raw(e);
     o.raw(m.fx); o.raw(m.fy); o.raw(m.workCheck); o.raw(m.crowdClock);
     o.raw(m.recoveries);
+    // (v24: a maintenance worker's job, as the original keeps each unit's
+    // task and job - Staff::savedJob)
+    const Staff::SavedJob job = Staff::savedJob(m, st.typeList[m.type]);
+    o.raw(job.job);
+    if (job.job > 0) {
+      o.raw(job.item); o.raw(job.filter); o.raw(job.edge.alongX); o.raw(job.edge.x); o.raw(job.edge.y);
+      o.raw(job.dutyId); o.raw(job.goalX); o.raw(job.goalY); o.raw(job.working); o.raw(job.layer);
+      o.raw(job.pathAt);
+      o.raw(static_cast<uint32_t>(job.path.size()));
+      for (size_t k = 0; k < job.path.size(); k++) {
+        o.raw(job.path[k].first); o.raw(job.path[k].second);
+        o.raw(k < job.pathLayers.size() ? job.pathLayers[k] : 0);
+      }
+    }
   }
   o.raw(st.nextId);
   o.raw(static_cast<uint32_t>(st.counts.size()));
@@ -2110,6 +2126,10 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
         for (int id : x.rubbleGroup) o.raw(id);
       }
   }
+  // Version 25: the rename cheats' names used once only (zoo.exe 0x641860,
+  // kept in the original's zoo too: cheatsSave 0x47a10c)
+  o.raw(static_cast<uint32_t>(RenameCheats::usedNames().size()));
+  for (const std::string &name : RenameCheats::usedNames()) o.str(name);
 
   std::string extension=std::filesystem::path(path).extension().string();
   std::transform(extension.begin(),extension.end(),extension.begin(),::tolower);
@@ -2147,6 +2167,7 @@ std::string SaveGame::mapOf(const std::string &path) {
 
 bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameScreen &hud) {
   saveFailure.clear();
+  const RenameCheats::Loading reading; // (zoo.exe loadingZoo, theGame +0x441)
   std::vector<char> b;
   if (!readAll(path, b))
     return false;
@@ -2330,6 +2351,24 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
       m.exhibits.push_back(i.raw<int>());
     if (version >= 12) { i.get(m.fx); i.get(m.fy); i.get(m.workCheck); i.get(m.crowdClock); }
     if (version >= 23) i.get(m.recoveries);
+    if (version >= 24) {
+      Staff::SavedJob job;
+      i.get(job.job);
+      if (job.job > 0) {
+        i.get(job.item); i.get(job.filter); i.get(job.edge.alongX); i.get(job.edge.x); i.get(job.edge.y);
+        i.get(job.dutyId); i.get(job.goalX); i.get(job.goalY); i.get(job.working); i.get(job.layer);
+        i.get(job.pathAt);
+        for (uint32_t k = i.count(); k > 0 && !i.bad; k--) {
+          std::pair<float, float> p;
+          int layer = 0;
+          i.get(p.first); i.get(p.second); i.get(layer);
+          job.path.push_back(p);
+          job.pathLayers.push_back(layer);
+        }
+      }
+      if (m.type >= 0 && !i.bad)
+        st.restoreJob(m, job);
+    }
     if (m.type >= 0)
       st.list.push_back(m);
   }
@@ -2472,6 +2511,14 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
         x->rubbleGroup = group;
       }
     }
+  }
+  // (version 25: the names used once only, in place of those of the
+  // original part it holds - main's setRenameHooks reads them from there,
+  // as cheatsLoad 0x594197 does)
+  if (version >= 25 && !i.bad) {
+    std::vector<std::string> used(i.count(100000, 4));
+    for (std::string &name : used) name = i.str();
+    if (!i.bad) world.zooReader.usedNames = used;
   }
   // (the flyers' list and lasts as the original makes them on a load; the
   // lasts saved since version 21 are ours and give way)
@@ -2724,6 +2771,10 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
       if(z.version>=55) {
         // The original's decay timer is in milliseconds (0x434b1d): the
         // piece's own decay time (0x5b391c), then what's left of it.
+        // (zoo.exe ZTFence::save 0x477e25: after the scenery part,
+        // +0x15c strength, +0x160 life, +0x168 decay time, +0x16c timer;
+        // ZTTankWall::save 0x605b38 adds the bytes +0x450, the portal, and
+        // +0x451 - get_451 0x605b87, not named: 0 here)
         const uint32_t period=uint32_t(std::max(1.0f,world.fences.wearPeriod(p)*1000.0f));
         const double fraction=life>0?double(life)-(std::ceil(life)-1):1;
         Out condition;condition.raw(o.strength);condition.raw(o.life);
@@ -3015,6 +3066,8 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
     }
   }
   if(goals)z.awards=goals->awards;
+  // (the rename cheats' names used once only: cheatsSave 0x47a10c)
+  z.usedNames.assign(RenameCheats::usedNames().begin(),RenameCheats::usedNames().end());
   // The scenario's block: the script and every goal's state in the
   // original's order, so the original carries on from the same goals
   // (an emergency grant already given is not given again)

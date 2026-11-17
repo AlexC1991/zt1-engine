@@ -960,6 +960,9 @@ void Fences::remove(const Edge &e, WorldMap &map, bool wholeTank) {
   auto it = this->edges.find(e);
   if (it == this->edges.end())
     return;
+  // (zoo.exe bulldozeFence 0x5090b5: a tank wall between two different
+  // tanks takes the other tank's record of it too, 0x508c23 - ours keeps
+  // one piece for both sides, tank and tank2, so it goes once)
   // For the exhibits' rebuild: whose gate this was, and whose side it stood on
   this->lastRemovedGateOf = it->second.gate ? this->exhibitOf(e) : -1;
   {
@@ -1234,6 +1237,10 @@ std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int y
       for (const Edge &e : sharedOrdinary)
         if (auto it = this->edges.find(e); it != this->edges.end())
           it->second.type = firstShowType;
+    // (zoo.exe habitatListAdd 0x44c7b2: onto the end of the habitat
+    // manager's list, +0x1c..+0x24, and the exhibit lists redone - ours
+    // build theirs when shown; the zoo's own ground, +0x2c set, is held
+    // apart at +0x18, and ours keeps no record for it)
     this->exhibitList.push_back(ex);
     if (ex.tank)
       this->makeTank(this->exhibitList.back(), map);
@@ -1324,16 +1331,25 @@ int Fences::finishExhibit(int id, const std::string &name, WorldMap &map) {
 // ----------------------------------------------------------------------------
 // Tanks
 // ----------------------------------------------------------------------------
+// zoo.exe 0x45b92f: the floor is the tank tiles' average height (each
+// tile's +0x3c, ours MapTile::height - the corner tileCornerHeight 0x40f4f9
+// reads as it is - summed over the habitat's tiles, divided by their count,
+// truncated), less initialSink, or initialSinkShow for a show tank
+// (0x46716e), then 0x458c6a clamps it to -12..12
 void Fences::makeTank(Exhibit &ex, WorldMap &map) {
+  // (ours: the ground round the walls, for drawing them - the highest corner)
   int ground = INT32_MIN;
+  int sum = 0, count = 0;
   for (auto [x, y] : ex.tiles)
-    if (const MapTile *t = map.getTile(x, y))
+    if (const MapTile *t = map.getTile(x, y)) {
       for (int c = 0; c < 4; c++)
         ground = std::max(ground, static_cast<int>(t->cornerHeight[c]));
+      sum += t->height;
+      count++;
+    }
   ex.groundHeight = ground;
-  // (zoo.exe 0x45b92f: a show tank sinks initialSinkShow, 0x46716e; its
-  // walls initialHeightShow)
-  ex.floorHeight = std::max(-12, ground - (ex.show ? kTankSinkShow : kTankSink)); // (0x458c6a: floors -12..12)
+  const int average = count ? sum / count : 0;
+  ex.floorHeight = std::clamp(average - (ex.show ? kTankSinkShow : kTankSink), -12, 12);
   for (auto [x, y] : ex.tiles)
     if (MapTile *t = map.getTileMutable(x, y)) {
       Exhibit::Ground &g = ex.before[{x, y}];
@@ -2031,11 +2047,15 @@ bool Fences::pieceAt(float px, float py, const WorldRenderer &view, const WorldM
     // (a front one from the ground just outside it: where that's higher
     // than the tank's own, the ground hides the wall's foot - looked for
     // from the tank's ground, a sunken tank in a dip was picked from the
-    // grass in front of it)
-    float low = static_cast<float>(outD > inD ? x->groundHeight : x->floorHeight);
-    if (outD > inD)
+    // grass in front of it. ours: the ground at this wall's own ends, h0
+    // and h1 - on a slope a tank's floor is sunk from its tiles' average,
+    // #274, and the tank's highest corner can be as high as its walls)
+    float low = static_cast<float>(x->floorHeight);
+    if (outD > inD) {
+      low = std::max(low, static_cast<float>(std::max(h0, h1)));
       if (const MapTile *out = map.getTile(ox, oy))
         low = std::max(low, static_cast<float>(out->height));
+    }
     if (low >= x->wallTop())
       continue;
     float s0x, s0y, s1x, s1y, t0x, t0y, t1x, t1y, d0, d1;
@@ -2698,6 +2718,15 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     right.sx1 = s1x;
     out.push_back(left);
     out.push_back(right);
+    // The selected gate (ui_main_4b2322's selection, the Exhibit List's
+    // pick: #266, measured 2026-11-17): the selection arrow over it.
+    // ours: over its art's height, as over a selected animal
+    if (placed && p.gate && this->selectedGate >= 0 && this->selectArrow && this->exhibitOf(e) == this->selectedGate) {
+      int aw = 0, ah = 0;
+      art->queryTexture(side, &aw, &ah);
+      out.push_back({std::max(d0, d1) + 0.101f, sx, sy - static_cast<float>(std::max(40, ah)), this->selectArrow,
+                     CompassDirection::N, SDL_Color{255, 255, 255, 255}, false});
+    }
   };
 
   // Each tank's inside: its back walls from the floor up (glazed), the

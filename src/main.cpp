@@ -1583,6 +1583,12 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
     g_hud->setWorldTip(g_world->hoverTip());
   // The tank whose panel is open: an arrow over its platform
   g_world->getFences().selectedTank = g_hud->shownExhibitId();
+  // The gate the Exhibit List picked: the selection arrow over it, till the
+  // list shuts or something else is selected (#266)
+  g_world->getFences().selectedGate =
+      g_world->getAnimals().selected < 0 && g_world->getGuests().selected < 0 && g_world->getStaff().selected < 0
+          ? g_hud->selectedGateExhibit()
+          : -1;
   // The tank filter, in the fence list, is placed like an object
   g_world->setFilterTool(!g_hud->bulldozerOn() && !file.empty() &&
                          g_world->getFences().selectFilter(file));
@@ -3333,10 +3339,13 @@ static void setRenameHooks(ResourceManager *rm) {
   };
   RenameCheats::setHooks(h);
   // The name table (zoo.exe 0x514554, at a zoo's start) and its names used
-  // once emptied (cheatsLoad 0x594197 empties them before reading a zoo's;
-  // ours: a zoo's own aren't read yet - #275)
+  // once: emptied, then the zoo's own read in (cheatsLoad 0x594197 - ours:
+  // the zoo's reader holds them, or a saved game's version 25)
   RenameCheats::loadNameTable(rm);
   RenameCheats::usedNames().clear();
+  if (g_world)
+    for (const std::string &name : g_world->mapReader().getUsedNames())
+      RenameCheats::usedNames().insert(name);
 }
 
 // A map's goals, started as it is
@@ -7139,6 +7148,89 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       g_hud->showPanel(31, "");
       g_hud->refreshStaff();
       capture("staff_list");
+      // Delete on the list does nothing, a row picked or not (zoo.exe's
+      // mulstaff_list_pickB 0x61841d sits on the event table 0x6391ec that
+      // nothing fires; measured in the running game, #270)
+      if (UiListBox *sl = dynamic_cast<UiListBox *>(g_hud->getElementById(4205)); sl && sl->getItemCount() > 0) {
+        SDL_Rect r = sl->getScrollBounds();
+        Input in{};
+        in.type = InputType::POSITIONED;
+        in.event = InputEvent::LEFT_CLICK;
+        in.position = {r.x + r.w / 2, r.y + 2 + sl->getRowHeight() / 2};
+        in.x = in.position.x;
+        in.y = in.position.y;
+        std::vector<Input> inputs = {in};
+        g_hud->handleInputs(inputs);
+        const int picked = g_hud->shownStaffId();
+        const size_t staffBefore = st.members().size();
+        Input del{};
+        del.type = InputType::BUTTON;
+        del.event = InputEvent::KEY_DOWN;
+        del.key = SDLK_DELETE;
+        std::vector<Input> keys = {del};
+        g_hud->handleInputs(keys);
+        const bool quiet = !g_hud->dialogOpen();
+        if (g_hud->dialogOpen())
+          g_hud->answerDialog(false);
+        check(("Delete on the Staff List does nothing (0x61841d never fired, measured; picked " + std::to_string(picked) + ")").c_str(),
+              picked >= 0 && quiet && st.member(picked) && st.members().size() == staffBefore && g_hud->isPanelOpen(17));
+      }
+      // Hire Staff (#270, measured in the running game): a pick shows the
+      // name, Salary and Duties and enables the info plaque button; the
+      // plaque (splaque.lyt, 33) shows the type's name and TEXT; a right
+      // click on the map lets the pick go (personel_Staff_off 0x4e6711: no
+      // name or texts, labels hidden, the button greyed, the plaque left
+      // up); closing Hire Staff shuts the plaque (0x4e6794); opening it
+      // picks the last type again (personel_Panel_show 0x4e6fc2); the
+      // button clicked again shuts the plaque (staffPlaque_close 0x4816a9)
+      {
+        std::vector<Input> none;
+        auto hidden = [&](int id) {
+          UiElement *e = g_hud->getElementById(id);
+          return !e || e->isHidden();
+        };
+        auto textOf = [&](int id) {
+          UiText *t = dynamic_cast<UiText *>(g_hud->getElementById(id));
+          return t ? t->getText() : std::string("?");
+        };
+        g_hud->showPanel(10, "");
+        g_hud->handleInputs(none);
+        capture("hire_staff");
+        UiButton *plaque = dynamic_cast<UiButton *>(g_hud->getElementById(3699));
+        const std::string held = g_hud->staffToolFile();
+        const int heldType = st.typeOfFile(held);
+        const std::string heldName = heldType >= 0 ? rm->getString(st.types()[heldType].nameId) : "";
+        const bool picked = !held.empty() && !hidden(3610) && !hidden(3612) && !hidden(3620) && plaque &&
+                            !plaque->isDisabled() && !textOf(3611).empty();
+        click(3699);
+        capture("hire_staff_plaque");
+        const bool plaqueUp = g_hud->isPanelOpen(33) && plaque && plaque->isToggledOn() && textOf(40001) == heldName &&
+                              textOf(40003).size() > 40;
+        g_hud->dropPicks();
+        g_hud->handleInputs(none);
+        capture("hire_staff_let_go");
+        const bool letGo = g_hud->staffToolFile().empty() && hidden(3610) && hidden(3612) && hidden(3620) &&
+                           textOf(3611).empty() && textOf(3613).empty() && plaque->isDisabled() && g_hud->isPanelOpen(33);
+        g_hud->showPanel(0, "");
+        g_hud->handleInputs(none);
+        const bool plaqueShut = !g_hud->isPanelOpen(33) && !plaque->isToggledOn();
+        g_hud->showPanel(10, "");
+        g_hud->handleInputs(none);
+        capture("hire_staff_again");
+        const bool pickedAgain = g_hud->staffToolFile() == held && !hidden(3610);
+        click(3699);
+        const bool on2 = g_hud->isPanelOpen(33);
+        capture("hire_staff_plaque2");
+        click(3699);
+        const bool off2 = !g_hud->isPanelOpen(33) && !plaque->isToggledOn();
+        check(("Hire Staff: pick, info plaque, right click lets go, close shuts the plaque, reopen picks again (#270; " + held + " \"" +
+               textOf(40001) + "\" " + std::to_string(picked) + std::to_string(plaqueUp) + std::to_string(letGo) +
+               std::to_string(plaqueShut) + std::to_string(pickedAgain) + std::to_string(on2) + std::to_string(off2) + ")")
+                  .c_str(),
+              picked && plaqueUp && letGo && plaqueShut && pickedAgain && on2 && off2);
+        g_hud->showPanel(0, "");
+        g_hud->handleInputs(none);
+      }
       g_hud->showPanel(0, "");
       g_hud->showStaff(ids[1]);
       capture("staff_panel_keeper");
@@ -7221,6 +7313,35 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                    std::to_string(gx) + "," + std::to_string(gy) + ", view " + std::to_string(vx) + "," +
                    std::to_string(vy) + ")").c_str(),
                   centred);
+          }
+          // (#266: a keeper's pick only picks the exhibit, 0x61861b -> 0x58b5ce;
+          // the Exhibit List's own pick selects its gate - 0x599ae7 ->
+          // 0x492ca3 -> ui_main_4b2322(gate, 1), the arrow over it, measured
+          // - closing what was selected's information; the list shut, it's
+          // deselected - mulhab_Panel_hide 0x4682f1 -> 0x4ef75b, measured)
+          {
+            const bool keeperNone = g_hud->selectedGateExhibit() < 0;
+            bool listPicked = false;
+            if (UiListBox *list = dynamic_cast<UiListBox *>(g_hud->getElementById(4305))) {
+              list->setSelectedIndex(-1);
+              g_hud->refreshExhibits();
+              for (int row = 0; row < static_cast<int>(list->getItemCount()) && !listPicked; row++) {
+                list->setSelectedIndex(row);
+                g_hud->refreshExhibits();
+                listPicked = g_hud->shownExhibitId() == pen;
+              }
+            }
+            const int selected = g_hud->selectedGateExhibit();
+            const bool infoShut = !g_hud->isPanelOpen(17);
+            fn.selectedGate = selected;
+            capture("exhibit_list_gate_selected");
+            g_hud->setPanelOpen(30, false);
+            const int afterHide = g_hud->selectedGateExhibit();
+            fn.selectedGate = -1;
+            check(("Exhibit List: its pick selects the exhibit's gate (not a keeper's pick), Staff Information shut; "
+                   "shut, the gate deselected (0x599ae7, 0x4682f1; keeper's " + std::to_string(keeperNone) + ", list's " +
+                   std::to_string(selected) + " of " + std::to_string(pen) + ", after " + std::to_string(afterHide) + ")").c_str(),
+                  keeperNone && listPicked && selected == pen && infoShut && afterHide < 0);
           }
           keeper = st.member(ids[1]);
           if (keeper)
@@ -8508,6 +8629,33 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         click(3122);
         capture("animal_advice");
         check("Zookeeper Recommendations open", g_hud->isPanelOpen(28));
+        // (a toggle: clicked again, infoanm_KeeperPlaque_off 0x48330d shuts
+        // them; a third click opens them again)
+        click(3122);
+        const bool shutAgain = !g_hud->isPanelOpen(28) && g_hud->isPanelOpen(6);
+        click(3122);
+        check("Zookeeper Recommendations clicked again close (0x48330d), and open again",
+              shutAgain && g_hud->isPanelOpen(28));
+        // A bottom list opened (smartstack off, as the original): Zoo Status
+        // shuts (closeOtherPanels 0x443af8); the Staff List shuts the
+        // Recommendations too (0x44410c), the Animal List doesn't
+        {
+          const bool keep = Features::smartStack;
+          Features::smartStack = false;
+          g_hud->setPanelOpen(14, true);
+          g_hud->setPanelOpen(16, true);
+          const bool animalList = g_hud->isPanelOpen(28) && !g_hud->isPanelOpen(14) && g_hud->isPanelOpen(6);
+          g_hud->setPanelOpen(16, false);
+          g_hud->setPanelOpen(14, true);
+          g_hud->setPanelOpen(31, true);
+          const bool staffList = !g_hud->isPanelOpen(28) && !g_hud->isPanelOpen(14) && g_hud->isPanelOpen(6);
+          g_hud->setPanelOpen(31, false);
+          Features::smartStack = keep;
+          check(("a bottom list shuts Zoo Status; the Staff List the Recommendations too, the Animal List not (0x469fc4, 0x469627; " +
+                 std::to_string(animalList) + std::to_string(staffList) + ")").c_str(),
+                animalList && staffList);
+          click(3122);
+        }
         // ESC closes what's on top, one at a time, as the original: the
         // recommendations, then Animal Information; then nothing's open
         bool esc1 = g_hud->closeTopmost();
@@ -9751,6 +9899,34 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           int animalsNow = static_cast<int>(world->getAnimals().members().size());
           check(("Animal List: " + textOf(3835) + " " + textOf(3816)).c_str(),
                 al && static_cast<int>(al->getItemCount()) == animalsNow && textOf(3816) == std::to_string(animalsNow));
+          // Delete on it does nothing (zoo.exe mulanim_list_pickB 0x618451,
+          // on the event table nothing fires; measured, #270)
+          if (al && al->getItemCount() > 0) {
+            SDL_Rect r = al->getScrollBounds();
+            Input in{};
+            in.type = InputType::POSITIONED;
+            in.event = InputEvent::LEFT_CLICK;
+            in.position = {r.x + r.w / 2, r.y + 2 + al->getRowHeight() / 2};
+            in.x = in.position.x;
+            in.y = in.position.y;
+            std::vector<Input> inputs = {in};
+            g_hud->handleInputs(inputs);
+            g_hud->handleInputs(none);
+            const int picked = world->getAnimals().selected;
+            const size_t animalsBefore = world->getAnimals().members().size();
+            Input del{};
+            del.type = InputType::BUTTON;
+            del.event = InputEvent::KEY_DOWN;
+            del.key = SDLK_DELETE;
+            std::vector<Input> keys = {del};
+            g_hud->handleInputs(keys);
+            const bool quiet = !g_hud->dialogOpen();
+            if (g_hud->dialogOpen())
+              g_hud->answerDialog(false);
+            check(("Delete on the Animal List does nothing (0x618451 never fired, measured; picked " + std::to_string(picked) + ")").c_str(),
+                  picked >= 0 && quiet && world->getAnimals().member(picked) &&
+                      world->getAnimals().members().size() == animalsBefore);
+          }
           g_hud->showPanel(12, "");
           g_hud->handleInputs(none);
           capture("guest_list");
@@ -10543,7 +10719,8 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           bool chased = false, spared = true;
           Animals::Member *b = bear >= 0 ? an.member(bear) : nullptr;
           if (b && b->escaped) {
-            b->maulFor = 0;
+            b->mauling = -1;
+            b->hidden = false;
             b->prey = -1;
             b->preyCheck = 0;
             const Guests::Guest *man = nullptr;
@@ -10582,7 +10759,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                   spared = spared && g->state != Guests::State::Caught;
               }
               b = an.member(bear);
-              spared = spared && b && b->prey < 0 && b->maulFor <= 0;
+              spared = spared && b && b->prey < 0 && b->mauling < 0;
             }
           }
           check("a bear darted mid-chase mauls nobody", chased && spared);

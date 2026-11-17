@@ -615,6 +615,9 @@ public:
   // inside where the ground in front of it hides the pit
   std::function<void(SDL_Renderer *, const std::vector<std::pair<int, int>> &)> redrawGround; // (sorted)
   int selectedTank = -1;
+  // The exhibit whose gate is selected (the Exhibit List's pick, #266): an
+  // arrow over its gate; -1 none
+  int selectedGate = -1;
   Animation *selectArrow = nullptr;
 
   // The placement preview: edges and whether they can be built

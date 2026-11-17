@@ -143,7 +143,7 @@ float Animals::tankClearance(const Member &m,float x,float y,const Fences &fence
 }
 
 bool Animals::awareOf(const Member &a, const Member &b) const {
-  if (a.id == b.id || b.id == carried || b.boxed || b.inside || b.maulFor > 0 ||
+  if (a.id == b.id || b.id == carried || b.boxed || b.inside || b.mauling >= 0 ||
       b.caughtBy >= 0 || b.type < 0) return false;
   // Chasing/catching is intentional contact, unlike ordinary locomotion.
   if (a.victim == b.id || b.victim == a.id) return false;

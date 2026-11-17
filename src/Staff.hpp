@@ -438,15 +438,33 @@ public:
   void noticeWork(const WorldMap &map, const Fences &fences);
   // ours (checks): emptied and posted again, as a load does
   void rebuildWorkList(const WorldMap &map, const Fences &fences);
+  // The tile a fence piece's work is posted for (zoo.exe 0x49e3e2(0))
+  std::pair<int, int> fenceWorkTile(const Fences::Edge &e, const Fences::Piece &p, const WorldMap &map,
+                                    const Fences &fences) const;
+  // A trash can for a can job with no destination (zoo.exe maintPickTrashCan
+  // 0x61b146): its object id, -1 none
+  int pickTrashCan(const Member &m, const WorldMap &map, const Fences &fences);
+  // A maintenance worker's job as saved (v24) and put back by a load
+  // (zoo.exe UnitBase::load 0x4547cc -> 0x454aaf, ZTUnit::load 0x454488)
+  struct SavedJob {
+    int job = 0, item = -1, filter = -1, dutyId = 0, goalX = -1, goalY = -1, layer = 0;
+    bool working = false;
+    Fences::Edge edge = {false, -1, -1};
+    std::vector<std::pair<float, float>> path;
+    std::vector<int> pathLayers;
+    uint32_t pathAt = 0;
+  };
+  static SavedJob savedJob(const Member &m, const Type &t);
+  void restoreJob(Member &m, const SavedJob &s);
 
 private:
   std::vector<WorkEntry> work;
   int nextWorkId = 1;
   // What's been posted: the litter and dung by id, the trash cans over 12
-  // full, the worn fence pieces, each filter's state by its tile (1 decayed,
-  // 2 broken)
+  // full, each fence piece's posts (1 worn, 2 broken), each filter's state
+  // by its tile (1 decayed, 2 broken)
   std::set<int> postedItems, binsFull;
-  std::set<Fences::Edge> fencesWorn;
+  std::map<Fences::Edge, int> fencePosted;
   std::map<std::pair<int, int>, int> filterPosted;
   void postWork(Job job, int x, int y, int item, Fences::Edge edge, bool flagged);
   WorkEntry *workEntry(int id);

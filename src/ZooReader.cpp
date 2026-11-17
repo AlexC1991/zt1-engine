@@ -796,8 +796,12 @@ bool ZooReader::readExact(const uint8_t *data, size_t size) {
     marketing = r.i32(); // funding level, ZTMarketingMgr::load 0x594129
   if (v >= 89 && v <= 96)
     shows();
+  archive.cheatsBegin = size_t(r.p - data);
+  // (the cheats, cheatsLoad 0x594197: a count, then each name - its u32
+  // length, its bytes)
   if (v >= 104)
-    r.skipStrings(); // (the cheats, cheatsLoad 0x594197)
+    for (uint32_t k = 0, n = r.count(4); k < n && r.ok; ++k) usedNames.push_back(r.str());
+  archive.cheatsEnd = size_t(r.p - data);
   if (v >= 58)
     r.skip(v <= 66 ? 12 : 8); // (the world clock)
   if (!r.ok)
@@ -1107,6 +1111,13 @@ bool ZooReader::writeOriginal(std::vector<uint8_t> &out,std::string &error) cons
     if(from<archive.entitiesEnd || from>to || b>w.b.size()){w.ok=false;return;}
     w.b.erase(w.b.begin()+a,w.b.begin()+b);w.b.insert(w.b.begin()+a,data.b.begin(),data.b.end());
   };
+  // The names used once only (zoo.exe cheatsSave 0x47a10c: the count, then
+  // each in the set's order - byte order, 0x401b4c - its length and bytes)
+  if(version>=104) {
+    ZooOut c;c.put(uint32_t(usedNames.size()));for(const auto &name:usedNames)c.text(name);
+    if(!c.ok)return fail("A rename cheat's name is too long to be saved.");
+    replace(archive.cheatsBegin,archive.cheatsEnd,c);
+  }
   if(version>=59) {
     ZooOut a;a.put(uint32_t(awards.size()));for(int n:awards)a.put(int32_t(n));
     replace(archive.awardsBegin,archive.awardsEnd,a);
@@ -1204,7 +1215,7 @@ bool ZooReader::load(const AssetBuffer &buffer) {
   why.clear();
   language = nextUnitId = rating = 0;
   cash = 0;
-  research.clear(); thoughts.clear(); awards.clear(); marketing = 0; books = {};
+  research.clear(); thoughts.clear(); awards.clear(); marketing = 0; usedNames.clear(); books = {};
   admission = 49.0f;
   std::fill(std::begin(date), std::end(date), 0);
   std::fill(std::begin(view), std::end(view), 0);

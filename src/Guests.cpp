@@ -2,11 +2,13 @@
 #include "ZooSim.hpp"
 #include "LabTrace.hpp"
 #include "OriginalConstants.hpp"
+#include "RenameCheats.hpp"
 #include "Research.hpp"
 #include "Settings.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 
 #include "Animals.hpp"
 #include "PlacedObjects.hpp"
@@ -232,28 +234,18 @@ void Guests::load(ResourceManager *rm) {
     this->soundFile[lower(kv.first)] = lower(v.substr(0, semi));
     this->soundAtten[lower(kv.first)] = semi == std::string::npos ? 0 : std::atoi(v.substr(semi + 1).c_str());
   }
-  // Mauled by a predator: [BehaviorSet\bCaughtBy<animal><m|f>] f =
-  // fPlayWithSound(<anim>, <sound>) - the sound each plays
+  // Mauled by a predator: [BehaviorSet\bCaughtBy<animal><m|f>] - e.g.
+  // fPlayWithSound(lionm, soft_growl), fHidePredator(), fPlay(getupall),
+  // fShowPredator() - and the sets a tiger's fPlaySetTerrain(bcbtigermland,
+  // ...) names ([BehaviorSet\bcbtigermland]): each one's lines
   for (const std::string &sec : ai->getSections()) {
     std::string low = lower(sec);
-    const std::string pre = "behaviorset\\bcaughtby";
-    if (low.rfind(pre, 0) != 0)
+    if (low.rfind("behaviorset\\bcaughtby", 0) != 0 && low.rfind("behaviorset\\bcb", 0) != 0)
       continue;
-    std::string key = low.substr(pre.size());
-    for (const std::string &f : ai->getList(sec, "f")) {
-      std::string fl = lower(f);
-      size_t a = fl.find("fplaywithsound(");
-      if (a == std::string::npos)
-        continue;
-      size_t comma = fl.find(',', a), close = fl.find(')', a);
-      if (comma == std::string::npos || close == std::string::npos)
-        continue;
-      std::string snd = fl.substr(comma + 1, close - comma - 1);
-      snd.erase(0, snd.find_first_not_of(" 	"));
-      snd.erase(snd.find_last_not_of(" 	") + 1);
-      this->caughtSound[key] = snd;
-      break;
-    }
+    std::vector<std::string> lines;
+    for (const std::string &f : ai->getList(sec, "f"))
+      lines.push_back(lower(f));
+    this->caughtSets[low.substr(12)] = lines;
   }
   // The water's behaviour sets (Marine Mania): each ride's
   // [<kind>\BehaviorSet\bReturn<building><program>] (zoo.exe 0x597028 makes
@@ -2093,6 +2085,11 @@ double Guests::admit(double admission) {
   // guests' one counter (0x4f6cc5: a count per class, 0x63e260 - from 1 on
   // a new map, startMap; kept in the save, saveEntities)
   g.name = (this->rm ? this->rm->getString(9507) : std::string("Guest")) + " " + std::to_string(g.id);
+  // (set through setName - 0x4f72de, slot 0x1c 0x449515 - so through the
+  // rename cheats 0x44940b: no cheat's name ends in a number, so only the
+  // name table can match, its colours the guest's picks; not while a zoo
+  // is read in, RenameCheats::loading)
+  RenameCheats::applyNameTable(g.name, RenameCheats::guestType(t.key), RenameCheats::guestSubtype(t.key), g.colours, 4);
   g.arrived = this->clock;
   if (this->randomStatNth > 0 && std::uniform_int_distribution<int>(0, this->randomStatNth - 1)(this->rng) == 0) {
     const int k = std::uniform_int_distribution<int>(0, 3)(this->rng);
@@ -2639,30 +2636,111 @@ bool Guests::preyPosition(int guest, float &x, float &y) const {
   return false;
 }
 
-void Guests::caught(int guest, const std::string &animalKey, bool female, const std::string &animalName) {
+// zoo.exe 0x50ed8f (from animalCaughtTarget 0x4a6043): the guest's
+// attacker (+0x22c) its predator, and its set "bCaughtBy" + the predator's
+// type name and sex letter; none such, bCaughtBylionm (bCaughtBylionf for a
+// female). Its lines then run one by one (caughtNext)
+void Guests::caught(int guest, int animal, const std::string &animalKey, bool female, const std::string &animalName) {
   for (Guest &g : this->list) {
     if (g.id != guest)
       continue;
     g.attacked = true;
     g.guide = -1; g.tourHeard = false;
     g.state = State::Caught;
-    g.caughtStage = 0;
     g.path.clear();
     g.pathAt = 0;
     g.building = -1;
-    std::string anim = animalKey + (female ? "f" : "m");
-    float secs = 3.0f;
-    if (Animation *a = this->art(g, anim))
-      if (a->frameTimeMs() > 0 && a->frameCount() > 0)
-        secs = a->frameCount() * a->frameTimeMs() / 1000.0f;
-    play(g, anim, secs);
-    // (its roar: bCaughtBy...'s sound - the cats a soft growl, the bears a roar)
-    std::string sound = this->caughtSound.count(anim) ? this->caughtSound[anim] : std::string();
-    if (this->sounds && !sound.empty() && this->soundFile.count(sound))
-      Sound::get().play(this->soundFile[sound], this->soundAtten[sound] + 600);
+    g.attacker = animal;
+    const char sex = female ? 'f' : 'm';
+    auto it = this->caughtSets.find("bcaughtby" + animalKey + sex);
+    if (it == this->caughtSets.end())
+      it = this->caughtSets.find(std::string("bcaughtbylion") + sex);
+    g.caughtLines = it != this->caughtSets.end() ? it->second : std::vector<std::string>{};
+    g.caughtLine = 0;
     think(g, 10246, animalName);
+    caughtNext(g);
     return;
   }
+}
+
+// The caught guest's set, line by line (zoo.exe behaviourRunnerUpdate
+// 0x435e57: a done line moves on at once, a playing one waits for its end):
+// fPlayWithSound(anim, sound) 0x438399 and fPlay(anim) 0x440b92 play it
+// through; fPlaySetTerrain 0x4314d6 runs its land set (a guest is caught on
+// land); fHidePredator 0x50e879 -> 0x50e816: the attacker (0x412259) hidden
+// (slot 0xcc(0), +0x13f); fShowPredator 0x50e764 -> 0x50e6fa: the attacker's
+// end of it (Animals::showPredator), then the guest's slot 0x254 (0x431af4:
+// its +0x22c cleared) and +0x20d (frozen) cleared. The set over, it's on its
+// way (leaving: it's been attacked)
+void Guests::caughtNext(Guest &g) {
+  while (g.caughtLine < g.caughtLines.size()) {
+    const std::string line = g.caughtLines[g.caughtLine++];
+    const size_t open = line.find('(');
+    std::string fn = line.substr(0, open);
+    fn.erase(fn.find_last_not_of(" \t") + 1);
+    std::vector<std::string> args;
+    if (open != std::string::npos) {
+      std::string rest = line.substr(open + 1, line.find(')', open) - open - 1);
+      std::stringstream ss(rest);
+      for (std::string a; std::getline(ss, a, ',');) {
+        a.erase(0, a.find_first_not_of(" \t"));
+        a.erase(a.find_last_not_of(" \t") + 1);
+        args.push_back(a);
+      }
+    }
+    if ((fn == "fplaywithsound" || fn == "fplay") && !args.empty()) {
+      float secs = 3.0f;
+      if (Animation *a = this->art(g, args[0]))
+        if (a->frameTimeMs() > 0 && a->frameCount() > 0)
+          secs = a->frameCount() * a->frameTimeMs() / 1000.0f;
+      play(g, args[0], secs);
+      // (its roar: the cats a soft growl, the bears a roar)
+      if (fn == "fplaywithsound" && args.size() > 1 && this->sounds && this->soundFile.count(args[1]))
+        Sound::get().play(this->soundFile[args[1]], this->soundAtten[args[1]] + 600);
+      return;
+    }
+    if (fn == "fplaysetterrain" && !args.empty()) {
+      auto it = this->caughtSets.find(args[0]);
+      g.caughtLines = it != this->caughtSets.end() ? it->second : std::vector<std::string>{};
+      g.caughtLine = 0;
+      continue;
+    }
+    if (fn == "fhidepredator") {
+      ZT_STEP("0x50e816", "fHidePredator: its attacker hidden", {"guest", g.name});
+      if (g.attacker >= 0 && this->hidePredator)
+        this->hidePredator(g.attacker);
+      continue;
+    }
+    if (fn == "fshowpredator") {
+      ZT_STEP("0x50e6fa", "fShowPredator: its attacker shown and let go", {"guest", g.name});
+      const int by = g.attacker;
+      g.attacker = -1;
+      if (by >= 0 && this->showPredator)
+        this->showPredator(by, g.id);
+      if (g.x < -999)
+        return; // (eaten)
+      continue;
+    }
+  }
+  g.caughtLines.clear();
+  g.caughtLine = 0;
+  if (g.attacker >= 0 && this->showPredator) {
+    // ours: a set with no fShowPredator (a mod's) still lets its attacker go
+    const int by = g.attacker;
+    g.attacker = -1;
+    this->showPredator(by, g.id);
+    if (g.x < -999)
+      return;
+  }
+  g.state = State::Walking;
+  decide(g);
+}
+
+bool Guests::heldBy(int guest, int animal) const {
+  for (const Guest &g : this->list)
+    if (g.id == guest)
+      return g.x > -999 && g.state == State::Caught && g.attacker == animal;
+  return false;
 }
 
 void Guests::takeAway(int guest) {
@@ -4308,18 +4386,9 @@ void Guests::update(float seconds, int zooRating, double admission) {
       continue;
     }
     if (g.state == State::Caught) {
-      // Mauled: up again (getupall), then on its way
-      if (g.caughtStage == 0) {
-        g.caughtStage = 1;
-        float secs = 1.5f;
-        if (Animation *a = this->art(g, "getupall"))
-          if (a->frameTimeMs() > 0 && a->frameCount() > 0)
-            secs = a->frameCount() * a->frameTimeMs() / 1000.0f;
-        play(g, "getupall", secs);
-        continue;
-      }
-      g.state = State::Walking;
-      decide(g);
+      // Mauled: its bCaughtBy set's next line (up again, getupall, then on
+      // its way)
+      caughtNext(g);
       continue;
     }
     // A building's set, on (0x5ad535's b<name><goal><slot>): its play

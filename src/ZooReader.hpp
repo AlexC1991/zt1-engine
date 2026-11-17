@@ -187,6 +187,7 @@ public:
   const std::vector<ResearchRecord> &getResearch() const { return research; }
   const std::vector<int> &getAwards() const { return awards; }
   int getMarketing() const { return marketing; }
+  const std::vector<std::string> &getUsedNames() const { return usedNames; }
   // ZTThoughtMgr records (0x594e63): text id, speaker/subject unit ids,
   // and an optional habitat tile x/y. The last two are not dates.
   struct Thought {
@@ -220,7 +221,7 @@ private:
     size_t entitiesEnd = 0, finance = 0, admission = 0, date = 0, cash = 0;
     size_t researchBegin = 0, researchEnd = 0, awardsBegin = 0, awardsEnd = 0;
     size_t eventsBegin = 0, eventsEnd = 0, thoughtsBegin = 0, thoughtsEnd = 0;
-    size_t marketing = 0;
+    size_t marketing = 0, cheatsBegin = 0, cheatsEnd = 0;
     size_t scenarioBegin = 0, scenarioEnd = 0; // (its size word to its end)
   } archive;
   // The scenario's block (gameMgrLoad 0x5948c6): the script it was started
@@ -241,6 +242,10 @@ private:
   std::vector<Thought> thoughts;
   std::vector<int> awards;
   int marketing = 0;
+  // The rename cheats' names used once only (zoo.exe 0x641860, a set of
+  // strings in byte order: cheatsSave 0x47a10c, cheatsLoad 0x594197 - from
+  // version 104)
+  std::vector<std::string> usedNames;
   Books books;
   uint16_t date[8] = {};
   int32_t view[5] = {};

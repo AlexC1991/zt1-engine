@@ -317,7 +317,9 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
     CompassDirection state = CompassDirection::N;
     // A locked checkbox must still show that it is on. G is an empty box
     // in the original art, so use S for checked toggles even while disabled.
-    if (this->isToggle() && this->toggled_on &&
+    if (this->grey_first && this->isDisabled() && this->animation->hasFrames(CompassDirection::G))
+      state = CompassDirection::G;
+    else if (this->isToggle() && this->toggled_on &&
         this->animation->hasFrames(CompassDirection::S))
       state = CompassDirection::S;
     else if (this->isDisabled() && this->animation->hasFrames(CompassDirection::G))

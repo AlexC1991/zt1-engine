@@ -1621,6 +1621,109 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     }
   }
   {
+    // #272: a man caught by a loose predator runs its bCaughtBy set
+    // (guests.ai: fPlayWithSound(lionm, soft_growl), fHidePredator(),
+    // fPlay(getupall), fShowPredator()): the predator held and drawn while
+    // the mauling plays, hidden by fHidePredator (0x50e816), shown and let
+    // go by fShowPredator (0x50e6fa -> 0x431af4); no "has been eaten"
+    // message (0x50e648: a staff victim's only); a man-eater's (cIsManEater,
+    // the T. rex) man eaten at its fShowPredator
+    const auto &lionSet=g.caughtSets["bcaughtbylionm"];
+    const auto has=[&](size_t i,const char *what){return i<lionSet.size()&&lionSet[i].find(what)==0;};
+    check("#272: guests.ai's bCaughtBylionm read: the mauling with its roar, fHidePredator, getupall, fShowPredator",
+          lionSet.size()==4&&has(0,"fplaywithsound(lionm")&&lionSet[0].find("soft_growl")!=std::string::npos&&
+          has(1,"fhidepredator")&&has(2,"fplay(getupall)")&&has(3,"fshowpredator"));
+    int manT=-1;
+    for(size_t i=0;i<g.typeList.size();++i)if(g.typeList[i].key=="man")manT=static_cast<int>(i);
+    struct Maul{bool caught=false,shownWhileMauled=false,noMessage=true,hiddenForGetup=false,letGo=false,eaten=false,
+                leaving=false,movedOnto=false;std::string maulAnim;};
+    const auto maul=[&](int type)->Maul{
+      Maul r;
+      a.clear();g.clear();world.reindex();g.setEntrance(25,26);g.admit(0);
+      if(g.list.empty()||manT<0||type<0)return r;
+      Guests::Guest &man=g.list.front();
+      const int manId=man.id;
+      man.type=manT;man.x=30.8f;man.y=32.5f;man.state=Guests::State::Walking;man.path.clear();man.pathAt=0;
+      man.leaving=false;man.attacked=false;man.animTime=0;man.playFor=600.0f;
+      const int lid=a.adopt(type,false,30.5f,32.5f,map,f,true);
+      Animals::Member *l=a.member(lid);
+      if(!l)return r;
+      l->escaped=true;l->prey=manId;l->chaseStart=a.now;l->preyCheck=1000;
+      const size_t noticesBefore=a.notices.size();
+      for(int i=0;i<40&&l->mauling<0;++i){a.update(0.05f,0,map,f);l=a.member(lid);if(!l)return r;}
+      const Guests::Guest *gg=g.guest(manId);
+      r.caught=gg&&gg->state==Guests::State::Caught&&gg->attacker==lid&&l->mauling==manId;
+      r.maulAnim=gg?gg->anim:std::string();
+      r.shownWhileMauled=!l->hidden;
+      r.movedOnto=gg&&gg->x==l->x&&gg->y==l->y;
+      // (11002's words between its two names: " has been eaten by ")
+      const std::string eatenText=rm?rm->getString(11002):std::string();
+      const size_t n1=eatenText.find("%1s"),n2=eatenText.find("%2s");
+      const std::string eatenWords=n1!=std::string::npos&&n2!=std::string::npos&&n2>n1+3?
+                                   eatenText.substr(n1+3,n2-n1-3):std::string(" has been eaten by ");
+      for(size_t i=noticesBefore;i<a.notices.size();++i)
+        r.noMessage=r.noMessage&&a.notices[i].text.find(eatenWords)==std::string::npos;
+      // (read the moment its fShowPredator has run: on the flat zoo a guest
+      // off for the gate with no way there is gone at its next step)
+      bool sawGetup=false,showRan=false;
+      const auto keepShow=g.showPredator;
+      g.showPredator=[&](int by,int who){
+        keepShow(by,who);
+        if(who!=manId||showRan)return;
+        showRan=true;
+        const Guests::Guest *q=g.guest(manId);
+        const Animals::Member *p=a.member(by);
+        r.eaten=!q||q->x<-999;r.leaving=q&&q->attacked;r.letGo=p&&p->mauling<0&&!p->hidden;
+      };
+      for(int i=0;i<600&&!showRan;++i){
+        g.update(0.05f,0,1000);a.update(0.05f,0,map,f);
+        l=a.member(lid);gg=g.guest(manId);
+        if(!l)break;
+        if(gg&&gg->state==Guests::State::Caught&&gg->anim=="getupall"&&!sawGetup){sawGetup=true;r.hiddenForGetup=l->hidden&&l->mauling==manId;}
+      }
+      g.showPredator=keepShow;
+      a.clear();g.clear();world.reindex();
+      return r;
+    };
+    const Maul byLion=maul(a.typeOfFile("animals/lion.ai")),byRex=maul(a.typeOfFile("animals/trex.ai"));
+    out<<"MAUL lion: caught "<<byLion.caught<<" ("<<byLion.maulAnim<<"), shown while mauling "<<byLion.shownWhileMauled
+       <<", no message "<<byLion.noMessage<<", hidden for getupall "<<byLion.hiddenForGetup<<", let go "<<byLion.letGo
+       <<", eaten "<<byLion.eaten<<", leaving "<<byLion.leaving<<"; T. rex: caught "<<byRex.caught<<" ("<<byRex.maulAnim
+       <<"), hidden for getupall "<<byRex.hiddenForGetup<<", let go "<<byRex.letGo<<", eaten "<<byRex.eaten<<"\n";
+    check("#272: a lion's man mauled (lionm, no message), the lion hidden by fHidePredator for getupall, shown and let go by fShowPredator; he lives and leaves (0x50e816, 0x50e6fa, 0x431af4)",
+          byLion.caught&&byLion.maulAnim=="lionm"&&byLion.shownWhileMauled&&byLion.noMessage&&byLion.hiddenForGetup&&
+          byLion.letGo&&!byLion.eaten&&byLion.leaving);
+    check("#272: a T. rex's man (cIsManEater) is eaten at fShowPredator, the T. rex let go (0x50e648)",
+          byRex.caught&&byRex.maulAnim=="trexm"&&byRex.hiddenForGetup&&byRex.letGo&&byRex.eaten);
+    check("#281: a T. rex's man is put where it stands (cResetPreyPosition), a lion's stays where he was caught (0x4a6043)",
+          byRex.caught&&byRex.movedOnto&&byLion.caught&&!byLion.movedOnto);
+  }
+  {
+    // A keeper's visit (zoo.exe animalUpdate 0x437620 at 0x49f579): an
+    // amphibious type's (cUnderwater, not cOnlyUnderwater: 0x410e41) cheer is
+    // cKeeperArrivesChangeAmphibious - animals.ai's 35 - any other's
+    // cKeeperArrivesChange (animals.ai's 25 unless its own file says)
+    const int tiger=a.typeOfFile("animals/tiger.ai"),zebra=a.typeOfFile("animals/zebra.ai");
+    if(tiger>=0&&zebra>=0) {
+      a.clear();
+      const int tid=a.adopt(tiger,true,30.5f,32.5f,map,f,true),zid=a.adopt(zebra,true,33.5f,32.5f,map,f,true);
+      Animals::Member *tm=a.member(tid),*zm=a.member(zid);
+      if(tm&&zm) {
+        tm->exhibit=zm->exhibit=77;
+        const float tBefore=tm->pending,zBefore=zm->pending;
+        a.keeperArrives(77);
+        tm=a.member(tid);zm=a.member(zid);
+        const auto &tt=a.typeList[tiger],&zt=a.typeList[zebra];
+        out<<"KEEPER CHEER tiger (amphibious "<<(tt.underwater&&!tt.onlyUnderwater)<<") +"<<(tm->pending-tBefore)
+           <<" ("<<tt.keeperArrivesChangeAmphibious<<"), zebra +"<<(zm->pending-zBefore)<<" ("<<zt.keeperArrivesChange<<")\n";
+        check("a keeper's visit cheers a tiger (cUnderwater) by cKeeperArrivesChangeAmphibious 35, a zebra by cKeeperArrivesChange (0x49f579, 0x410e41)",
+              tt.keeperArrivesChangeAmphibious==35&&tm->pending-tBefore==35.0f&&!zt.underwater&&
+              zm->pending-zBefore==static_cast<float>(zt.keeperArrivesChange));
+      } else check("the keeper-cheer fixture's tiger and zebra",false);
+      a.clear();
+    }
+  }
+  {
     // A drink (zoo.exe Task 0x7a, whileGoing 0x4a0c55, atTarget 0x4265a0):
     // the habitat's nearest water tile, the species' bFindOtherFood -
     // fWalk(otherfood,0) - to it, then bEat there (#201)
@@ -1910,6 +2013,53 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       tile->terrainType=was;
       check("dropped on water: a zebra refused with 10569, a dolphin with 10554 (0x4e1564)",onWater==10569 && seaOnWater==10554);
     }
+  }
+  {
+    // #273: a unit's footprint (class slot 0x94, 0x41070b / ZTAnimal
+    // 0x410803): cMapFootprint 2 unless set (0x4b5c71; apato.ai 4), a crate's
+    // and an egg's 2 unless set (0x4b659e; allo.ai's crate 4); the tiles a
+    // unit is listed on (0x4137df): (n + 1) / 2 a side, from half that back;
+    // and zooViewMouse 0x4ded90's 0x5cd93c: on a steep tile (slope code not
+    // flat nor plain) one of footprint area 4 or more refused, silently
+    const int zebra=a.typeOfFile("animals/zebra.ai"),elephant=a.typeOfFile("animals/elephant.ai");
+    const int apato=a.typeOfFile("animals/apato.ai"),allo=a.typeOfFile("animals/allo.ai");
+    if(zebra>=0&&elephant>=0) {
+      const auto &tz=a.typeList[zebra];
+      Animals::Member z;z.type=zebra;z.x=30.5f;z.y=32.5f;
+      const auto zt=a.mapTiles(z);
+      bool ok=tz.mapFoot==2&&tz.boxX==2&&tz.boxY==2&&tz.eggX==2&&tz.eggY==2&&
+              zt==std::vector<std::pair<int,int>>{{30,32}}&&a.footprint(z,false)==std::pair<int,int>{tz.footX,tz.footY};
+      z.egg=true;ok=ok&&a.footprint(z,false)==std::pair<int,int>{2,2}&&a.mapTiles(z).size()==1;
+      std::vector<std::pair<int,int>> at,bt;
+      if(apato>=0){Animals::Member m;m.type=apato;m.x=30.5f;m.y=32.5f;at=a.mapTiles(m);
+        ok=ok&&a.typeList[apato].mapFoot==4&&at==std::vector<std::pair<int,int>>{{29,31},{29,32},{30,31},{30,32}};}
+      if(allo>=0){Animals::Member m;m.type=allo;m.x=30.5f;m.y=32.5f;m.boxed=true;bt=a.mapTiles(m);
+        ok=ok&&a.typeList[allo].boxX==4&&a.mapTiles(m).size()==4&&a.footprint(m,true)==std::pair<int,int>{4,4};
+        m.boxed=false;ok=ok&&a.mapTiles(m).size()==1;}
+      out<<"FOOTPRINT zebra map "<<tz.mapFoot<<" box "<<tz.boxX<<"x"<<tz.boxY<<" egg "<<tz.eggX<<"x"<<tz.eggY<<" tiles "<<zt.size()
+         <<"; apato tiles "<<at.size()<<"; allosaurus crate tiles "<<bt.size()<<"\n";
+      check("#273: footprints - cMapFootprint 2 (apato 4), crate and egg 2 unless set; a unit listed on (n+1)/2 tiles a side "
+            "from half back, an apatosaurus or a big crate on 2 x 2 (0x41070b, 0x410803, 0x4137df)",ok);
+      MapTile *tile=map.getTileMutable(30,32);
+      if(tile) {
+        int was[4];for(int c=0;c<4;++c)was[c]=tile->cornerHeight[c];
+        const auto fit=[&](int type){return a.canPlace(type,30.5f,32.5f,map,f);};
+        const Fences::Fit flatZ=fit(zebra),flatE=fit(elephant);
+        // (one corner up: not a plain slope)
+        tile->cornerHeight[CORNER_X0Y0]=was[CORNER_X0Y0]+1;
+        const Fences::Fit steepZ=fit(zebra),steepE=fit(elephant);const int steepMsg=a.placeMessage;
+        // (two side by side up: a plain slope)
+        tile->cornerHeight[CORNER_X1Y0]=was[CORNER_X1Y0]+1;
+        const Fences::Fit slopeE=fit(elephant);
+        for(int c=0;c<4;++c)tile->cornerHeight[c]=was[c];
+        out<<"STEEP zebra flat/steep "<<int(flatZ)<<"/"<<int(steepZ)<<", elephant flat/steep/plain slope "<<int(flatE)<<"/"<<int(steepE)
+           <<"/"<<int(slopeE)<<" message "<<steepMsg<<"\n";
+        check("#273: a steep tile refuses an elephant (footprint 2 x 2) with no message, not a zebra (1 x 2), and a plain "
+              "slope takes both (0x4ded90: 0x5ad00a, 0x5cd93c)",
+              flatZ==Fences::Fit::Ok&&flatE==Fences::Fit::Ok&&steepZ==Fences::Fit::Ok&&steepE==Fences::Fit::InTheWay&&
+              steepMsg==0&&slopeE==Fences::Fit::Ok);
+      }
+    } else check("#273: the zebra and elephant load",false);
   }
   for(int y=24;y<42;++y)for(int x=23;x<40;++x)
     if(f.exhibitAt(x,y)<0 && world.canLayPath(x,y))map.setPath(x,y,"path");
@@ -3185,8 +3335,9 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       }
       check("room for a show tank and an exhibit tank",tx>=0 && showWall>=0);
       if(tx>=0 && showWall>=0) {
-        auto groundOf=[&](int x0,int y0){int g=INT32_MIN;for(int y=y0;y<y0+4;++y)for(int x=x0;x<x0+4;++x)
-          if(const MapTile *t=map.getTile(x,y))for(int c=0;c<4;++c)g=std::max(g,static_cast<int>(t->cornerHeight[c]));return g;};
+        // (the floor sinks from the tiles' average height, #274)
+        auto groundOf=[&](int x0,int y0){int sum=0,n=0;for(int y=y0;y<y0+4;++y)for(int x=x0;x<x0+4;++x)
+          if(const MapTile *t=map.getTile(x,y)){sum+=t->height;++n;}return n?sum/n:0;};
         const int showGround=groundOf(tx,ty),plainGround=groundOf(tx+6,ty);
         const int show=rectangle(tx,ty,4,4,showWall,"Show start tank");
         const int plain=rectangle(tx+6,ty,4,4,f.typeIndex("atltank"),"Exhibit start tank");
@@ -3196,14 +3347,49 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         const MapTile *sf=map.getTile(tx+1,ty+1),*pf=map.getTile(tx+7,ty+1);
         out<<"TANKSTART floors "<<(sf?int(sf->terrainType):-1)<<" / "<<(pf?int(pf->terrainType):-1)<<"\n";
         check("#251: a show tank starts with walls 9 high, sunk 8 (initialHeightShow, initialSinkShow)",
-              s && s->tank && s->show && s->wallSub==9 && s->floorHeight==std::max(-12,showGround-8));
+              s && s->tank && s->show && s->wallSub==9 && s->floorHeight==std::clamp(showGround-8,-12,12));
         check("a show tank's floor is gunite, tankTerrainShow 17 (showTankLook 0x5ab683); an exhibit tank's sand",
               sf && pf && sf->terrainType==17 && pf->terrainType==2);
         check("#251: an exhibit tank starts with walls 5 high, sunk 4 (initialHeight, initialSink)",
-              p && p->tank && !p->show && p->wallSub==5 && p->floorHeight==std::max(-12,plainGround-4));
+              p && p->tank && !p->show && p->wallSub==5 && p->floorHeight==std::clamp(plainGround-4,-12,12));
         for(int id:{show,plain})if(f.exhibit(id))f.drainExhibit(id);
         for(int x0:{tx,tx+6})for(int k=0;k<4;++k){f.remove({true,x0+k,ty},map);f.remove({true,x0+k,ty+4},map);f.remove({false,x0,ty+k},map);f.remove({false,x0+4,ty+k},map);}
         f.updateExhibits(map,1,0,1);world.reindex();
+      }
+    }
+    // #274, zoo.exe 0x45b92f: a tank on a slope sinks from its tiles' average
+    // height (tile +0x3c, ours MapTile::height; summed, divided by their
+    // count, truncated towards 0 as idiv), not its highest corner. A 4x4
+    // plot ramping up eastwards from -2: tiles -2,-1,0,1 (corners up to 2),
+    // average -8/16 = 0 truncated, floor 0-4 = -4 (the highest corner
+    // would give -2, and rounding down -5)
+    {
+      int tx=-1,ty=-1;
+      for(int y=4;y<map.getHeight()-12&&tx<0;++y)for(int x=4;x<map.getWidth()-12&&tx<0;++x){
+        bool ok=true;
+        for(int yy=y-1;yy<=y+5&&ok;++yy)for(int xx=x-1;xx<=x+5&&ok;++xx)ok=f.exhibitAt(xx,yy)<0&&f.insideZoo(xx,yy)&&!map.isPath(xx,yy);
+        for(const auto &o:objects.objects())ok=ok&&!(o.x>x-2&&o.x<x+7&&o.y>y-2&&o.y<y+7);
+        if(ok){tx=x;ty=y;}
+      }
+      check("#274: room for a tank on a slope",tx>=0);
+      if(tx>=0) {
+        std::map<std::pair<int,int>,MapTile> kept;
+        for(int y=ty;y<ty+4;++y)for(int x=tx;x<tx+4;++x)if(MapTile *t=map.getTileMutable(x,y)){
+          kept[{x,y}]=*t;const int h=-2+(x-tx);
+          t->height=h;t->cornerHeight[CORNER_X0Y0]=t->cornerHeight[CORNER_X0Y1]=h;t->cornerHeight[CORNER_X1Y0]=t->cornerHeight[CORNER_X1Y1]=h+1;
+        }
+        map.touch();
+        const int id=rectangle(tx,ty,4,4,f.typeIndex("atltank"),"Slope tank");
+        const Fences::Exhibit *e=f.exhibit(id);
+        const MapTile *mid=map.getTile(tx+2,ty+2);
+        out<<"TANKSLOPE floor "<<(e?e->floorHeight:-99)<<" ground "<<(e?e->groundHeight:-99)<<" tile "<<(mid?mid->height:-99)<<"\n";
+        check("#274: a tank on a slope sinks initialSink from its tiles' average height, truncated (0x45b92f)",
+              e && e->tank && e->floorHeight==-4 && mid && mid->height==-4 && e->groundHeight==2);
+        if(e)f.drainExhibit(id);
+        for(int k=0;k<4;++k){f.remove({true,tx+k,ty},map);f.remove({true,tx+k,ty+4},map);f.remove({false,tx,ty+k},map);f.remove({false,tx+4,ty+k},map);}
+        f.updateExhibits(map,1,0,1);
+        for(auto &kv:kept)if(MapTile *t=map.getTileMutable(kv.first.first,kv.first.second))*t=kv.second;
+        map.touch();world.reindex();
       }
     }
     // #261, zoo.exe 0x44e1e8: a show tank only when every wall round it is a
@@ -3703,6 +3889,102 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       check("work list: an emptied can's entry goes; it's posted again once as it reaches 13 (0x59d758)",
             afterEmpty==0&&at13==1&&listed(Staff::Job::Trash,canId)==1);
       items.remove(dropped);items.remove(other);
+      // A fence piece's work (#271; ZTFence::update 0x434b1d, fenceBreak
+      // 0x4858a4, afterLoad 0x594060; its tile 0x49e3e2(0)), as measured in
+      // the original (2026-11-18): worn, one entry on the grounds side, not
+      // flagged; broken, a second for the same tile, flagged, at the front;
+      // a load posts a broken piece once, flagged. The paddock's west side:
+      // its own tile inside, the grounds across; its north side: its own
+      // tile the grounds
+      {
+        auto same=[](const Fences::Edge &x,const Fences::Edge &y){return !(x<y)&&!(y<x);};
+        auto pieceAt=[&](bool alongX,int x,int y,int run){
+          Fences::Edge e{alongX,x,y};
+          for(int k=0;k<run;++k){e=alongX?Fences::Edge{true,x+k,y}:Fences::Edge{false,x,y+k};
+            if(f.at(e)&&!f.at(e)->gate)return e;}
+          return Fences::Edge{alongX,-1,-1};
+        };
+        auto entries=[&](const Fences::Edge &pe){std::vector<Staff::WorkEntry> v;
+          for(const auto &e:st.workList())if(e.job==Staff::Job::Fence&&same(e.edge,pe))v.push_back(e);return v;};
+        const Fences::Edge west=pieceAt(false,26,30,6),north=pieceAt(true,29,28,6);
+        st.clear();world.reindex();st.noticeWork(map,f);
+        if(f.at(west)&&f.at(north)) {
+          const int decayed=f.types()[static_cast<size_t>(f.at(west)->type)].decayedLife;
+          const float lifeWas=f.lifeOf(west),northWas=f.lifeOf(north);
+          f.setLife(west,static_cast<float>(decayed));st.noticeWork(map,f);
+          const auto worn=entries(west);
+          f.setLife(west,0.0f);st.noticeWork(map,f);
+          const auto broken=entries(west);
+          out<<"FENCE work: worn "<<worn.size()<<" at "<<(worn.empty()?-1:worn[0].x)<<","<<(worn.empty()?-1:worn[0].y)
+             <<", broken "<<broken.size()<<"\n";
+          check("#271: a worn fence piece posts one entry, the grounds side across, not flagged (0x434b1d, 0x49e3e2)",
+                worn.size()==1&&worn[0].x==west.x-1&&worn[0].y==west.y&&!worn[0].flagged);
+          check("#271: broken, it posts a second for the same tile, flagged, at the list's front (0x4858a4)",
+                broken.size()==2&&broken[0].flagged&&!broken[1].flagged&&broken[0].x==west.x-1&&broken[0].y==west.y&&
+                !st.workList().empty()&&same(st.workList().front().edge,west));
+          st.rebuildWorkList(map,f);
+          const auto reloaded=entries(west);
+          check("#271: a load posts a broken piece once, flagged (0x594060)",reloaded.size()==1&&reloaded[0].flagged);
+          f.setLife(north,static_cast<float>(decayed));st.noticeWork(map,f);
+          const auto top=entries(north);
+          check("#271: a worn piece whose own tile is the grounds posts its own tile (0x49e3e2)",
+                top.size()==1&&top[0].x==north.x&&top[0].y==north.y-1&&!top[0].flagged);
+          f.setLife(west,lifeWas);f.setLife(north,northWas);
+          st.noticeWork(map,f);
+        } else check("#271: paddock pieces for the fence work",false);
+      }
+      // A worker's job across a save (#271; ours v24 - the original keeps
+      // each unit's task and job, UnitBase::load 0x4547cc -> 0x454aaf;
+      // measured 2026-11-18: a worker going to sweep went on and swept it
+      // after the load, holding no entry, the list rebuilt)
+      {
+        ZooSim books;books.start(1000000,50);UiGameScreen hud(rm,"","");
+        Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
+        for(const char *extension:{".zt1save",".zoo"}) {
+          st.clear();world.reindex();
+          const int lit=items.add(ZooItems::Kind::Litter,-1,24.5f,35.5f);
+          const int wj=st.hire(maintType,24.5f,30.5f,map,f);
+          world.reindex();
+          Staff::Member *mj=st.member(wj);
+          const bool tookJ=mj&&st.findWork(*mj,map,f)&&mj->job==Staff::Job::Litter&&mj->jobItem==lit;
+          const size_t legs=mj?mj->path.size():0;
+          const auto file=std::filesystem::temp_directory_path()/("zt1-parity-job-"+std::to_string(SDL_GetTicks())+extension);
+          const bool ok=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn")&&SaveGame::load(file.string(),world,books,hud);
+          st.noticeWork(map,f);
+          const Staff::Member *back=st.member(wj);
+          int heldLit=-2;for(const auto &e:st.workList())if(e.job==Staff::Job::Litter&&e.item==lit)heldLit=e.holder;
+          out<<"JOB "<<extension<<": saved "<<ok<<", job "<<(back?static_cast<int>(back->job):-1)<<" item "
+             <<(back?back->jobItem:-1)<<" legs "<<(back?back->path.size():0)<<" of "<<legs<<"\n";
+          check(std::string("#271: a worker going to sweep keeps its job, its litter and its route across a ")+extension+
+                " save, holding no entry (0x454aaf)",ok&&tookJ&&back&&back->job==Staff::Job::Litter&&back->jobItem==lit&&
+                back->path.size()==legs&&back->pathAt<back->path.size()&&back->workEntry<0&&heldLit==-1);
+          std::error_code ec;std::filesystem::remove(file,ec);
+          items.remove(lit);
+        }
+        SaveGame::goals=priorGoals;
+      }
+      // A can job with no destination picks a can itself (#271;
+      // maintPickTrashCan 0x61b146: over 12 full, near, not invalid); none
+      // over 12, and the job's off (0x4801dd)
+      {
+        st.clear();world.reindex();
+        if(auto *can=objects.byId(canId))can->fill=20;
+        const int wt=st.hire(maintType,24.5f,30.5f,map,f);
+        world.reindex();
+        if(Staff::Member *mt=st.member(wt)){mt->job=Staff::Job::Trash;mt->jobItem=-1;mt->path.clear();mt->pathAt=0;mt->idleLeft=0;}
+        st.update(0.02f,map,f);
+        const Staff::Member *mt=st.member(wt);
+        check("#271: a can job with no destination picks the full can and goes to it (0x61b146)",
+              mt&&mt->job==Staff::Job::Trash&&mt->jobItem==canId&&!mt->path.empty());
+        if(auto *can=objects.byId(canId))can->fill=5;
+        const int wn=st.hire(maintType,24.5f,31.5f,map,f);
+        world.reindex();
+        if(Staff::Member *mn=st.member(wn)){mn->job=Staff::Job::Trash;mn->jobItem=-1;mn->path.clear();mn->pathAt=0;mn->idleLeft=0;}
+        st.update(0.02f,map,f);
+        const Staff::Member *mn=st.member(wn);
+        check("#271: no can over 12 full, the can job's off (0x4801dd)",mn&&mn->job!=Staff::Job::Trash);
+        st.clear();world.reindex();
+      }
     }
     for(size_t i=0;i<objects.objects().size();++i)if(objects.objects()[i].id==canId){objects.remove(static_cast<int>(i));break;}
     st.clear();world.reindex();
@@ -5156,7 +5438,7 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       // (and a mauling's roar: [BehaviorSet\bCaughtBy<animal><m|f>]'s
       // fPlayWithSound, read with the backslash - a "\b" escape read none)
       check("a mauled guest's roar is read for each predator (bCaughtBylionm: soft_growl)",
-            g.caughtSound.count("lionm")&&g.caughtSound["lionm"]=="soft_growl");
+            !g.caughtSets["bcaughtbylionm"].empty()&&g.caughtSets["bcaughtbylionm"][0].find("soft_growl")!=std::string::npos);
       if(manT>=0&&womanT>=0&&boyT>=0) {
         g.admit(0);g.admit(0);auto &m=g.list[0],&w=g.list[1];m.type=manT;w.type=womanT;
         auto move=[&](const Guests::Guest &who,const char *set){auto v=g.behaviour(who,set);return v.empty()?Guests::Move{}:v[0];};
@@ -5879,6 +6161,78 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       } else check("name table fixture: a keeper, two guests",false);
       RenameCheats::setNameEntry("","","",0,0,0,0,{},false);RenameCheats::usedNames().clear();
       st.clear();g.clear();
+    }
+    // A default name goes through the name table too (#275: setName from
+    // defaultName 0x4f70e4 at 0x4f72de, 0x4e1b58 at 0x4e1d54), but not while
+    // a zoo is read in (theGame +0x441, 0x4494d1); the names used once only
+    // kept in a saved zoo - the original's part (cheatsSave 0x47a10c, read
+    // back by cheatsLoad 0x594197) and ours (version 25)
+    {
+      g.clear();
+      const std::string next="Guest "+std::to_string(g.nextId);
+      RenameCheats::setNameEntry(next,"","",0,7,8,9,{},true);
+      RenameCheats::usedNames().clear();
+      g.admit(0);
+      const bool defaulted=g.list.size()==1&&g.list[0].name==next&&g.list[0].colours[0]==7&&g.list[0].colours[1]==8&&
+                           g.list[0].colours[2]==9&&RenameCheats::usedNames().count(next)==1;
+      g.clear();
+      const std::string reading="Guest "+std::to_string(g.nextId);
+      RenameCheats::usedNames().clear();
+      RenameCheats::setNameEntry(reading,"","",0,0x77,0x77,0x77,{},false); // (a pick no guest kind has)
+      bool skipped=false;
+      {
+        const RenameCheats::Loading loading;
+        g.admit(0);
+        if(!g.list.empty())out<<"RENAME READING "<<g.list[0].name<<" (entry "<<reading<<") pick "<<g.list[0].colours[0]<<"\n";
+        skipped=g.list.size()==1&&g.list[0].name==reading&&g.list[0].colours[0]!=0x77&&!RenameCheats::usedNames().count(reading);
+      }
+      g.clear();
+      // measured: a guest type's +0x98 is its kind ("man"), +0xa4 empty - an
+      // entry for "man" matches a man, one for "man" with a subtype doesn't
+      int manType=-1;
+      for(int k=0;k<static_cast<int>(g.types().size());++k)if(g.types()[k].key=="man")manType=k;
+      RenameCheats::setNameEntry("Kind Man","man","",0,0x55,0x55,0x55,{},false);
+      RenameCheats::setNameEntry("Kind Sub","man","m",0,0x66,0x66,0x66,{},false);
+      RenameCheats::setNameEntry("Kind Woman","woman","",0,0x44,0x44,0x44,{},false);
+      g.admit(0);
+      bool kinds=false;
+      if(manType>=0&&g.list.size()==1) {
+        g.list[0].type=manType;
+        RenameCheats::guestRenamed(world,0,"Kind Man");const bool man=g.list[0].colours[0]==0x55;
+        RenameCheats::guestRenamed(world,0,"Kind Sub");const bool sub=g.list[0].colours[0]==0x55;
+        RenameCheats::guestRenamed(world,0,"Kind Woman");const bool woman=g.list[0].colours[0]==0x55;
+        kinds=man&&sub&&woman;
+        out<<"RENAME GUEST KIND man "<<man<<" subtype m refused "<<sub<<" woman's refused "<<woman<<"\n";
+      }
+      check("the name table matches a guest by its kind (+0x98 \"man\"), its subtype (+0xa4) empty (measured, #275)",kinds);
+      g.clear();
+      RenameCheats::setNameEntry("","","",0,0,0,0,{},false);
+      RenameCheats::usedNames()={"Zed Name","Ann Name"};
+      ZooSim books;books.start(1000000,50);UiGameScreen hud(rm,"","");
+      Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
+      const auto file=std::filesystem::temp_directory_path()/("zt1-parity-usednames-"+std::to_string(SDL_GetTicks())+".zoo");
+      const bool saved=SaveGame::save(file.string(),world,books,hud,"freeform/ff01.scn");
+      std::vector<std::string> inOriginal;uint32_t version=0;
+      if(saved) {
+        std::ifstream in(file,std::ios::binary);
+        std::vector<char> bytes((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+        AssetBuffer buffer;buffer.data=bytes.data();buffer.size=bytes.size();
+        ZooReader decoded;
+        if(decoded.load(buffer)&&decoded.hasGame()){inOriginal=decoded.getUsedNames();version=decoded.getVersion();}
+        buffer.data=nullptr;buffer.size=0;
+      }
+      RenameCheats::usedNames().clear();
+      const bool loaded=saved&&SaveGame::load(file.string(),world,books,hud);
+      const std::vector<std::string> back=world.mapReader().getUsedNames();
+      SaveGame::goals=priorGoals;
+      std::error_code ec;std::filesystem::remove(file,ec);
+      const std::vector<std::string> sorted={"Ann Name","Zed Name"};
+      out<<"RENAME USED NAMES default name "<<defaulted<<" while reading "<<skipped<<", saved "<<saved<<" (original v"<<version
+         <<") original part "<<inOriginal.size()<<" names, loaded "<<loaded<<" back "<<back.size()<<"\n";
+      check("the name table runs on a default name too, not while a zoo is read in (0x4f72de, 0x4494d1, #275)",defaulted&&skipped);
+      check("the names used once only kept in a saved zoo: the original's part, in byte order, and ours (0x47a10c, 0x594197, #275)",
+            saved&&version>=104&&inOriginal==sorted&&loaded&&back==sorted);
+      RenameCheats::usedNames().clear();
     }
     RenameCheats::setHooks(realHooks);
     RenameCheats::setFlags(flagsWas);

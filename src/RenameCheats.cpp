@@ -278,6 +278,7 @@ struct NameEntry {
 };
 std::map<std::string, NameEntry> g_nameTable;
 std::set<std::string> g_usedNames; // (zoo.exe 0x641860)
+bool g_loading = false;            // (zoo.exe theGame +0x441)
 RenameCheats::Flags g_flags;
 
 } // namespace
@@ -384,16 +385,23 @@ static std::string guestCheat(World &world, int guest, const std::string &name) 
   return "";
 }
 
+// measured: (2026-11-18, the running original - the four ZTGuestType
+// objects, class table 0x62e330, read live) a guest type's +0x98 is its key
+// in guests.cfg ("man", "woman", "boy", "girl": the entity type's
+// constructor 0x4be045 takes it as the type, guests.cfg having no
+// [<kind>/subtypes]) and its +0xa4 is empty (its begin and end the same)
+std::string RenameCheats::guestType(const std::string &kind) { return kind; }
+std::string RenameCheats::guestSubtype(const std::string &) { return ""; }
+
 std::string RenameCheats::guestRenamed(World &world, int guest, const std::string &name) {
   Guests &guests = world.getGuests();
   if (guest < 0 || guest >= static_cast<int>(guests.mutableGuests().size()))
     return "";
   const std::string cheat = guestCheat(world, guest, name);
-  // (then the name table, whatever matched - 0x4494b5; ours: a guest's
-  // subtype unmeasured, its kind's name for both)
+  // (then the name table, whatever matched - 0x4494b5)
   Guests::Guest &g = guests.mutableGuests()[guest];
   const std::string kind = g.type >= 0 && g.type < static_cast<int>(guests.types().size()) ? guests.types()[g.type].key : "";
-  applyNameTable(name, kind, kind, g.colours, 4);
+  applyNameTable(name, guestType(kind), guestSubtype(kind), g.colours, 4);
   return cheat;
 }
 
@@ -552,6 +560,9 @@ void RenameCheats::loadNameTable(ResourceManager *rm) {
 }
 
 std::set<std::string> &RenameCheats::usedNames() { return g_usedNames; }
+bool RenameCheats::loading() { return g_loading; }
+RenameCheats::Loading::Loading() : was(g_loading) { g_loading = true; }
+RenameCheats::Loading::~Loading() { g_loading = was; }
 
 void RenameCheats::setNameEntry(const std::string &name, const std::string &type, const std::string &subtype,
                                 int bonusCash, int c0, int c1, int c2, const std::vector<int> &research,
@@ -583,6 +594,8 @@ void RenameCheats::setNameEntry(const std::string &name, const std::string &type
 // research manager (0x639010), and the name noted as used (0x607ab7)
 bool RenameCheats::applyNameTable(const std::string &name, const std::string &typeName, const std::string &subtype,
                                   int *colours, int colourCount) {
+  if (g_loading)
+    return false;
   auto it = g_nameTable.find(name);
   if (it == g_nameTable.end())
     return false;

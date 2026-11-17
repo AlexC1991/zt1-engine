@@ -57,7 +57,8 @@ void setFlags(const Flags &f);
 void dolittleUsed();
 // The name table (zoo.exe 0x639040, filled by 0x514554 from every resource
 // skeepr*.cfg; none ship with the game) and its names used once (0x641860,
-// saved in a zoo's cheats section - cheatsLoad 0x594197)
+// saved in a zoo's cheats section - cheatsSave 0x47a10c, cheatsLoad
+// 0x594197: ZooReader::usedNames, and SaveGame's version 25)
 void loadNameTable(ResourceManager *rm);
 std::set<std::string> &usedNames();
 // The name table's entry for a unit renamed (zoo.exe 0x44940b's end): its
@@ -65,6 +66,21 @@ std::set<std::string> &usedNames();
 // picks (the guest's +0xfc, nullptr none). Returns whether one was applied
 bool applyNameTable(const std::string &name, const std::string &typeName, const std::string &subtype,
                     int *colours, int colourCount);
+// A guest kind's type name (zoo.exe its type's +0x98) and subtype (+0xa4),
+// for the name table, from its key in guests.cfg ("man", "woman", "boy",
+// "girl")
+std::string guestType(const std::string &kind);
+std::string guestSubtype(const std::string &kind);
+// A zoo being read in (zoo.exe theGame +0x441, loadingZoo: set at 0x453052,
+// cleared at 0x4531ca): the name table isn't applied then (0x4494d1) - a
+// unit's name read from the zoo, or a default name made as it's read in.
+// ours: SaveGame sets it while it reads a zoo; Loading holds it for a scope
+bool loading();
+struct Loading {
+  bool was;
+  Loading();
+  ~Loading();
+};
 // (ours: the checks) An entry put in the table, as a skeepr*.cfg section;
 // an empty name empties it
 void setNameEntry(const std::string &name, const std::string &type, const std::string &subtype, int bonusCash,

@@ -344,13 +344,22 @@ bool World::loadFreeform(const std::string &path) {
     const Animals::Type &t = this->animals.types()[by.type];
     std::string key = t.file.substr(t.file.find_last_of('/') + 1);
     key = key.substr(0, key.find('.'));
-    this->guests.caught(g, key, by.female, by.name);
+    // (zoo.exe 0x4a6043: an attacker with cResetPreyPosition, type +0x3d8 -
+    // the guest's slot 0x78(0), put at the attacker's place, 0x410141(+0x114),
+    // slot 0x74, and its way, +0x12c)
+    if (t.resetPreyPosition)
+      if (Guests::Guest *gg = this->guests.guest(g)) {
+        gg->x = by.x;
+        gg->y = by.y;
+        gg->fx = by.fx;
+        gg->fy = by.fy;
+      }
+    this->guests.caught(g, by.id, key, by.female, by.name);
   };
+  animals.guestHolds = [this](int g, int a) { return this->guests.heldBy(g, a); };
+  guests.hidePredator = [this](int a) { this->animals.hidePredator(a); };
+  guests.showPredator = [this](int a, int g) { this->animals.showPredator(a, g); };
   animals.takeGuestAway = [this](int g) { this->guests.takeAway(g); };
-  animals.preyName = [this](int g) {
-    const Guests::Guest *guest = this->guests.guest(g);
-    return guest ? guest->name : std::string();
-  };
   animals.rubbleAt = [this](int tx, int ty, const Animals::Member &) { return this->rubbleTile(tx, ty); };
   // (zoo.exe habitat +0xf0, read by 0x4808ac: the keepers at their duties)
   animals.keepersAtWork = [this](int exhibit) { return this->staff.keepersAtWork(exhibit, this->fences); };
@@ -5347,7 +5356,12 @@ World::TankContents World::tankContents(int tank) {
       c.items.push_back(it.id);
   }
   for (const Animals::Member &m : this->animals.members()) {
-    if (m.id == this->animals.carried || !in(m.x, m.y))
+    // (an animal is on every tile it's listed on: its map footprint,
+    // 0x4137df - an apatosaurus or a big crate on 2 x 2)
+    bool on = false;
+    for (auto [tx, ty] : this->animals.mapTiles(m))
+      on = on || ex->tiles.count({tx, ty}) > 0;
+    if (m.id == this->animals.carried || !on)
       continue;
     const Animals::Type &t = this->animals.types()[m.type];
     if (m.egg || !t.underwater || (show && !t.showAnimal))
@@ -5403,8 +5417,9 @@ float World::clearTankForFill(int tank) {
       return false;
     auto on = [x, y](float ux, float uy) { return static_cast<int>(std::floor(ux)) == x && static_cast<int>(std::floor(uy)) == y; };
     for (const Animals::Member &m : this->animals.members())
-      if (on(m.x, m.y))
-        return false;
+      for (auto [ax, ay] : this->animals.mapTiles(m)) // (its map footprint, 0x4137df)
+        if (ax == x && ay == y)
+          return false;
     for (const Staff::Member &m : this->staff.members())
       if (on(m.x, m.y))
         return false;

@@ -403,6 +403,22 @@ inline constexpr bool guestArrivalGoodValue[4][5] = {
     {false, false, false, false, true}, {false, false, false, false, false}};
 inline constexpr int goodValueGuests = 10;
 
+// A unit's footprints (class slot 0x94: ZTUnit::footprint 0x41070b, the
+// animal's 0x410803), in half tiles. cMapFootprint (ZTUnitType +0x150) is 2
+// unless its .ai says (ZTUnitType::setDefaults 0x4b5c71; only apato.ai does:
+// 4); an animal's crate (cBoxFootprintX/Y/Z, ZTAnimalType +0x1d8) and egg
+// (cEggFootprintX/Y/Z, +0x410) are 2 each way unless set
+// (ZTAnimalType::setDefaults 0x4b659e)
+inline constexpr int unitMapFootprint = 2;
+inline constexpr int animalBoxFootprint = 2;
+inline constexpr int animalEggFootprint = 2;
+// zooViewMouse 0x4ded90's animal branch (0x4e1279 -> 0x5ad00a -> 0x5cd93c):
+// on a tile whose slope code (+0x81) isn't flat or one of the four plain
+// slopes, an animal whose footprint covers this many half-tile squares or
+// more (its +0x150, UnitBase::addedToWorld 0x412cdc: x times y of slot
+// 0x94's footprint) can't be put down
+inline constexpr int animalSteepFootprintArea = 4;
+
 // The rename cheats (zoo.exe 0x44940b and what reads their flags)
 namespace Cheat {
 // "Eggman": an egg made from then on (animalBecomeEgg 0x5a5283, with 1)

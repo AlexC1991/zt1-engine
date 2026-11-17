@@ -23,6 +23,7 @@
 #include <cstring>
 #include <map>
 #include "../Utils.hpp"
+#include "../LangText.hpp"
 #include "UiButton.hpp"
 #include "UiGraph.hpp"
 #include "UiLayout.hpp"
@@ -277,6 +278,7 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   targets.insert(1400); // a DRT base's (drt.lyt), clicked on the map
   targets.insert(6);  // an animal's, clicked on the map
   targets.insert(28); // its Zookeeper Recommendations
+  targets.insert(33); // Hire Staff's info plaque (splaque.lyt)
   targets.insert(9);  // a guest's, clicked on the map
   targets.insert(21); // a stand's Building Information
   targets.insert(20); // another building's
@@ -591,12 +593,41 @@ void UiGameScreen::setupBuyPanels() {
               g->setToggledOn((sex == 1) == this->animalPickFemale);
         }
       }
+      // A staff member picked while the info plaque is up: the plaque
+      // shows that one (zoo.exe personel_Staff_click 0x4e69b8: 0xe73 on,
+      // flag 8 - 0x481648 with the type)
+      if (self->id == 10)
+        if (UiButton *plaque = dynamic_cast<UiButton *>(self->info ? self->layout->getElementById(self->info) : nullptr))
+          if (plaque->isToggledOn() && index >= 0 && index < (int)self->items.size() && this->staff) {
+            const int t = this->staff->typeOfFile(self->items[index]->file);
+            if (t >= 0)
+              this->showStaffPlaque(this->staff->types()[t].file);
+          }
       // Picking a fence leaves gate mode
       if (self->id == 8 && index >= 0 && self->gate)
         if (UiButton *g = dynamic_cast<UiButton *>(self->layout->getElementById(self->gate)))
           g->setToggledOn(false);
       this->showItem(*self, index);
     };
+    // Hire Staff's info plaque, a toggle (state=2048): on, the plaque for
+    // the staff member held (zoo.exe personel_StaffInfoPlaque_click 0x4816c6:
+    // the zoo view's placing list's first thing, its type - the DRT base's,
+    // 0x1f5f, its helicopter's, 0x254e - if a staff type, 0x481648); off,
+    // the plaque shut (staffPlaque_close 0x4816a9: 0x481648(0))
+    if (p.id == 10 && p.info)
+      if (UiButton *plaque = dynamic_cast<UiButton *>(p.layout->getElementById(p.info))) {
+        plaque->setToggledOn(false);
+        plaque->setGreyWhenOff(true);
+        plaque->onClick = [this, plaque] {
+          if (!plaque->isToggledOn()) {
+            this->showStaffPlaque("");
+            return;
+          }
+          const int t = this->staff ? this->staff->typeOfFile(this->staffToolFile()) : -1;
+          if (t >= 0)
+            this->showStaffPlaque(this->staff->types()[t].file);
+        };
+      }
     // Buy Habitat's gate button: a toggle (gate mode)
     if (p.id == 8 && p.gate)
       if (UiButton *g = dynamic_cast<UiButton *>(p.layout->getElementById(p.gate))) {
@@ -798,6 +829,12 @@ void UiGameScreen::showDetails(BuyPanel &p, const CatalogItem *item) {
   show(p.rotateLeft, rotates || raises);
   show(p.rotateRight, rotates || raises);
   show(p.era, false);
+  // Hire Staff's Salary and Duties labels and the name: shown with a pick
+  // (zoo.exe personel_Staff_click 0x4e69b8 -> 0x4e6b43, slot 0x4c), hidden
+  // when it's let go (personel_Staff_off 0x4e6711 -> 0x4e66bf, slot 0x48)
+  if (p.id == 10)
+    for (int id : {3610, 3612, 3620})
+      show(id, item != nullptr);
 
   image(p.location, 0, places && item ? infoImage(item->locationId) : "");
   image(p.habitat, p.habitatFrame,
@@ -834,6 +871,85 @@ void UiGameScreen::showDetails(BuyPanel &p, const CatalogItem *item) {
   // Enabled while there's an exhibit to put a gate on
   if (UiElement *gate = element(p.gate))
     gate->setDisabled(!this->exhibitsExist || !this->exhibitsExist());
+}
+
+// Hire Staff's info plaque (splaque.lyt, 33): zoo.exe 0x481648 - the staff
+// type kept (0x63cf9c; the same one again changes nothing), the panel
+// (uiFind 0x21) filled by 0x481768 and shown (slot 0x4c), or for none
+// hidden (slot 0x48). 0x481768: 40001 the type's name (its slot 0x20,
+// cNameID, through setTextId slot 0xc8), 40002 its cPlaqueImageName
+// (+0x1c0, read at 0x4c38d8), then 0x481751 -> 0x48173e -> 0x4f0264: 40003
+// the lang DLLs' TEXT resource its cGeneralInfoTextName names (+0x1cc,
+// read at 0x4c3896; 0x4f00f6). The DRT's is its helicopter's (type 0x254e,
+// personel_StaffInfoPlaque_click 0x4816c6)
+void UiGameScreen::showStaffPlaque(const std::string &file) {
+  if (file == this->staffPlaqueFile)
+    return;
+  this->staffPlaqueFile = file;
+  UiLayout *z = nullptr;
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 33)
+      z = e.layout;
+  if (file.empty() || !z) {
+    this->setPanelOpen(33, false);
+    return;
+  }
+  IniReader *ai = this->resource_manager->getIniReader(file);
+  // (per subtype: the male's, as the type the panel places - the female
+  // sections have none)
+  auto str = [&](const char *key) {
+    std::string v = ai ? ai->get("m/characteristics/strings", key) : "";
+    return v.empty() && ai ? ai->get("characteristics/strings", key) : v;
+  };
+  int nameId = 0;
+  if (ai) {
+    nameId = ai->getInt("m/characteristics/integers", "cnameid", 0);
+    if (!nameId)
+      nameId = ai->getInt("characteristics/integers", "cnameid", 0);
+  }
+  if (UiText *name = dynamic_cast<UiText *>(z->getElementById(40001)))
+    name->setText(nameId ? this->resource_manager->getString(nameId) : "");
+  if (UiImage *image = dynamic_cast<UiImage *>(z->getElementById(40002)))
+    image->setImage(Utils::string_to_lower(str("cplaqueimagename")));
+  // (its own line breaks kept, each line wrapped to the box at word breaks
+  // - measured: the scientist's "...specialize" ends a line short)
+  if (UiText *text = dynamic_cast<UiText *>(z->getElementById(40003)))
+    text->setMessage(langText(str("cgeneralinfotextname")));
+  delete ai;
+  this->setPanelOpen(33, true);
+}
+
+// The plaque and its button kept with what's held: the button enabled only
+// while a staff member is held (setPlaceItem 0x4f189a: staffInfoPlaque
+// 0x4f188a, slot 0x68 with a thing, 0x6c without); the plaque shut by its
+// own close (splaque:CloseWindow, staffPlaque_close 0x4816a9: 0x63cf9c
+// cleared) or with Hire Staff (personel_Staff_hide 0x4e6794: 0x481648(0)
+// while the button's on; personel_Panel_hide 0x4e6776 lets the HUD's
+// button 0x3ed go) lets the button go (splaque_Panel_hide 0x48168c, slot
+// 0x54); shown, it's on (splaque_Panel_show 0x4816b2, slot 0x50)
+void UiGameScreen::refreshStaffPlaque() {
+  if (!this->staffPlaqueFile.empty() && this->isPanelOpen(33) && !this->isPanelOpen(10))
+    this->showStaffPlaque("");
+  if (!this->isPanelOpen(33))
+    this->staffPlaqueFile.clear();
+  for (BuyPanel &p : this->buyPanels)
+    if (p.id == 10 && p.info)
+      if (UiButton *plaque = dynamic_cast<UiButton *>(p.layout->getElementById(p.info))) {
+        if (!this->isPanelOpen(33))
+          plaque->setToggledOn(false);
+        plaque->setDisabled(this->staffToolFile().empty());
+      }
+}
+
+// zoo.exe personel_Staff_off 0x4e6711: Hire Staff's pick let go - the cost
+// and duties emptied (staffPanelClearText 0x4e664a), the labels and name
+// hidden (0x4e66bf), the rotate arrows switched off and hidden (0x4e65ab),
+// nothing held (setPlaceItem 0x4f189a with none)
+void UiGameScreen::hireStaffLetGo(BuyPanel &p) {
+  if (!p.region || p.region->getSelected() < 0)
+    return;
+  p.region->setSelected(-1);
+  this->showItem(p, -1);
 }
 
 bool UiGameScreen::gateMode() const {
@@ -1846,6 +1962,7 @@ void UiGameScreen::showTab(int panelId, int buttonId) {
   }
   for (BuyPanel &p : this->buyPanels)
     this->refreshBuyPanel(p);
+  this->refreshStaffPlaque();
   this->refreshTerraform();
   this->refreshResearch();
   this->refreshZooStatus();
@@ -1879,15 +1996,49 @@ void UiGameScreen::setPanelOpen(int id, bool open) {
     for (Entry &e : this->entries)
       if (e.panel && e.open && (e.id == 6 || e.id == 9 || e.id == 17 || e.id == 20 || e.id == 21 || e.id == 28 || e.id == 1400))
         e.open = false;
+  // A list at the bottom right opened: Zoo Status and the show panel shut
+  // (closeOtherPanels 0x443af8 with 0: 0xe, 0x323, 0x29), and from the
+  // Staff and Guest Lists the animal plaque and a carer's Recommendations
+  // too (0x44410c(0): 0x1b, 0x1c) - mulstaff_Panel_show 0x469fc4,
+  // mulguest_Panel_show 0x469cc8, mulanim_Panel_show 0x469627 (no
+  // 0x44410c); the information windows move above it (0x4ef99b, in
+  // panelRect). Their Panel_hide - mulstaff 0x469ded, mulanim 0x46954b -
+  // let the HUD button go (slot 0x54) and move the windows back. (ours,
+  // smartstack: the other windows stay)
+  if (open && !this->isPanelOpen(id) && (id == 16 || id == 12 || id == 31) && !Features::smartStack) {
+    std::vector<int> shut = {14, 41};
+    if (id != 16)
+      shut.push_back(28);
+    for (int p : shut) {
+      this->setPanelOpen(p, false);
+      for (UiButton *b : this->panelButtons)
+        if (b->getActionTarget() == p)
+          b->setToggledOn(false);
+    }
+  }
+  // Hire Staff opened with its pick let go: the last staff type picked
+  // again, else the first (zoo.exe personel_Panel_show 0x4e6fc2: the type
+  // 0x63e474 looked up in the refilled list, else 0, selected - 0x4e9fea -
+  // and personel_Staff_click 0x4e69b8 run on it)
+  if (id == 10 && open && !this->isPanelOpen(10))
+    for (BuyPanel &p : this->buyPanels)
+      if (p.id == 10 && p.region && p.region->getSelected() < 0) {
+        p.category.clear();
+        this->refreshBuyPanel(p);
+      }
   for (Entry &e : this->entries)
     if (e.panel && e.id == id) {
       if (open && !e.open)
         e.openedAt = ++this->openCount;
       // (the Exhibit List opened or shut: no exhibit picked - 0x58b5ce(0)
-      // in mulhab_Panel_show 0x46836c and mulhab_Panel_hide 0x4682f1)
+      // in mulhab_Panel_show 0x46836c and mulhab_Panel_hide 0x4682f1; shut,
+      // a selected gate deselected too - 0x4ef75b(0, 1), measured: the
+      // arrow over it gone, #266)
       if (id == 30 && open != e.open && this->exhibitPanel)
         if (UiListBox *list = dynamic_cast<UiListBox *>(this->exhibitPanel->getElementById(4305)))
           list->setSelectedIndex(-1);
+      if (id == 30 && open != e.open)
+        this->gateExhibit = -1;
       e.open = open;
     }
 }
@@ -3043,6 +3194,7 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
   // A tab may have changed what a buy panel lists
   for (BuyPanel &p : this->buyPanels)
     this->refreshBuyPanel(p);
+  this->refreshStaffPlaque();
   this->refreshTerraform();
   this->refreshResearch();
   this->refreshZooStatus();
@@ -3132,6 +3284,10 @@ std::string UiGameScreen::pathToolFile() const {
   return "";
 }
 
+// The staff member held comes from Hire Staff's grid while it's shown
+// (zoo.exe personel_Staff_show 0x4e6f87: the zoo view's +0x364 set to the
+// grid, 0xe12; personel_Staff_hide 0x4e6794: back to none, and nothing
+// held, setPlaceItem 0x4f189a)
 std::string UiGameScreen::staffToolFile() const {
   if (!this->isPanelOpen(10))
     return "";
@@ -3157,6 +3313,14 @@ void UiGameScreen::dropPicks() {
     bool drop = false;
     for (const char *c : placed)
       drop = drop || p.category == c;
+    if (p.id == 10) {
+      // (the staff member held too: the zoo view's placing let go, and
+      // Hire Staff's pick with it - personel_Staff_off 0x4e6711; measured:
+      // the right click leaves no pick, no name, salary or duties, the
+      // info plaque button greyed, the plaque itself left up)
+      this->hireStaffLetGo(p);
+      continue;
+    }
     if (!drop || !p.region || p.region->getSelected() < 0)
       continue;
     p.region->setSelected(-1);
@@ -3831,6 +3995,9 @@ void UiGameScreen::setupStaffPanels() {
         }
         auto centre = this->centreOn;
         this->centreOn = nullptr;
+        // (0x58b5ce alone: the exhibit picked, its gate not selected - no
+        // ui_main_4b2322 here, unlike the list's own pick)
+        this->keeperPicking = true;
         this->refreshExhibits();
         if (UiListBox *list = this->exhibitPanel ? dynamic_cast<UiListBox *>(this->exhibitPanel->getElementById(4305)) : nullptr)
           for (size_t i = 0; i < this->listedExhibits.size(); i++)
@@ -3838,6 +4005,7 @@ void UiGameScreen::setupStaffPanels() {
               list->setSelectedIndex((int)i);
               this->refreshExhibits();
             }
+        this->keeperPicking = false;
         this->centreOn = centre;
       };
   }
@@ -3909,6 +4077,11 @@ void UiGameScreen::setupStaffPanels() {
           this->staffFilter = i;
           this->staffListCount = -1;
         };
+    // No keys on the list: zoo.exe registers a Delete handler for it
+    // (mulstaff_list_pickB 0x61841d: key 0x2e -> sellSelected 0x48d052) on
+    // the UI's event table 0x6391ec, which nothing fires - every uiDispatch
+    // 0x41ab24 names another table - and Delete on a picked staff member
+    // does nothing in the running game (measured, #270)
   }
 }
 
@@ -4263,6 +4436,10 @@ void UiGameScreen::setupLists() {
           e->setHidden(false);
   hook(this->animalListPanel, kAnimalFilters, &this->animalFilter);
   hook(this->guestListPanel, kGuestFilters, &this->guestFilter);
+  // (no keys on the Animal List either: its Delete handler,
+  // mulanim_list_pickB 0x618451, sits on the event table 0x6391ec that
+  // nothing fires - Delete on a picked animal does nothing in the running
+  // game, measured, #270)
 }
 
 // The filters (zoo.exe 0x4537fe, 0x4f5d7f), T = cUIThreshold (75 in both
@@ -4457,6 +4634,10 @@ void UiGameScreen::refreshLists() {
                        ? nullptr
                        : this->resource_manager->getAnimation(path);
           });
+      // (zoo.exe mulanim_list_click 0x5a599c: the row's animal, if it's
+      // still in the zoo, the bulldozer put away, the animal selected -
+      // ui_main_4b2322, so its panel - and the view centred on its tile,
+      // centreViewOn 0x59b90c)
       if (picked >= 0) {
         this->bulldozerOff();
         this->showAnimal(picked);
@@ -4582,9 +4763,17 @@ void UiGameScreen::setupAnimalPanel() {
       if (m && m->exhibit >= 0)
         this->showExhibit(m->exhibit);
     };
+  // (a toggle, state=2048, without a lit frame: on, zoo.exe
+  // infoanm_KeeperPlaque_click 0x483b21 -> 0x4831b2 fills and shows the
+  // Recommendations; off, infoanm_KeeperPlaque_off 0x48330d -> 0x4440f1
+  // hides them, uiFind(0x1c) slot 0x48; their own close lets the toggle go,
+  // keprinfo_Panel_hide 0x4832f9 slot 0x54 - so it's on while they're open,
+  // and a second click shuts them)
   if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3122)))
     b->onClick = [this] {
-      if (this->shownAnimal >= 0)
+      if (this->isPanelOpen(28))
+        this->setPanelOpen(28, false);
+      else if (this->shownAnimal >= 0)
         this->showAdvice(this->shownAnimal);
     };
   if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3111)))
@@ -5155,6 +5344,8 @@ void UiGameScreen::refreshAnimal() {
   const Animals::Member *m = this->animals->member(this->shownAnimal);
   if (this->isPanelOpen(6) && !m)
     this->setPanelOpen(6, false);
+  // (shut, nothing's selected: zoo.exe infoanm_CloseWindow_click 0x4ed80a,
+  // ui_main_4b2322 with none)
   if (!this->isPanelOpen(6) && this->shownAnimal >= 0) {
     if (this->animals->selected == this->shownAnimal)
       this->animals->selected = -1;
@@ -5238,7 +5429,9 @@ void UiGameScreen::refreshAnimal() {
 }
 
 // Zookeeper Recommendations (measured in the original): the animal's name
-// over a list of what would make it happier, problems in red
+// over a list of what would make it happier, problems in red (zoo.exe
+// keprinfo_Panel_show 0x483b71: the animal kept at 0x643194 - its name,
+// +0x108, into 26001, the list 26002 filled)
 void UiGameScreen::showAdvice(int id) {
   const Animals::Member *m = this->animals ? this->animals->member(id) : nullptr;
   UiLayout *z = nullptr;
@@ -5486,6 +5679,29 @@ void UiGameScreen::refreshExhibits() {
     float cx = 0, cy = 0;
     if (ex && this->centreOn && this->exhibitGateTile(ex->id, cx, cy))
       this->centreOn(cx, cy);
+    // (and its gate selected: 0x492ca3 - the habitat's gate piece, a fence
+    // - to ui_main_4b2322(gate, 1), the selection arrow over it; measured
+    // 2026-11-17, #266. That selection replaces the last: an animal's,
+    // guest's or staff member's information closed - 0x4ee5a3, 0x4b2afd,
+    // 0x58b750, the helicopter's 0x50f5fc - read in its code. A keeper's
+    // pick of the exhibit doesn't select it: infostf2_AssignList_click
+    // 0x61861b only picks it, 0x58b5ce)
+    this->gateExhibit = -1;
+    if (ex && !this->keeperPicking) {
+      bool gate = false;
+      if (this->fences)
+        for (const auto &[e, p] : this->fences->pieces())
+          if (p.gate && p.tank < 0 && this->fences->exhibitOf(e) == ex->id) {
+            gate = true;
+            break;
+          }
+      if (gate) {
+        this->gateExhibit = ex->id;
+        for (int info : {6, 9, 17, 1400})
+          if (this->isPanelOpen(info))
+            this->setPanelOpen(info, false);
+      }
+    }
     // The page: Modify Tank for a tank, else its status
     UiButton *tankTab = dynamic_cast<UiButton *>(element(4365));
     UiButton *statusTab = dynamic_cast<UiButton *>(element(4310));
