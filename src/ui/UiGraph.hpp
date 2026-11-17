@@ -38,6 +38,8 @@ public:
     std::string label; // the X axis label (a month)
   };
   void setPoints(const std::vector<Point> &points) { this->points = points; }
+  size_t pointCount() const { return this->points.size(); } // ours: for the checks
+  const std::vector<Point> &pointList() const { return this->points; } // ours: for the checks
   // Line or bar (the page's Line / Bar buttons)
   void setBars(bool bars) { this->bars = bars; }
 

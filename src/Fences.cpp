@@ -126,15 +126,20 @@ void drawLayered(SDL_Renderer *renderer, const std::function<void()> &draw) { la
 #include "ZooReader.hpp"
 
 namespace {
-// tanks.cfg
+// tanks.cfg (zoo.exe loadTankSettings 0x463a0e reads these keys; the
+// values are the stock file's)
 constexpr int kTankSink = 4;       // initialSink (height units: 0x45b92f takes it off the tiles')
 constexpr float kWaterOffset = 1.0f; // waterOffset -1: full is a unit under the rim
 constexpr int kTankHeight = 5;     // initialHeight
+constexpr int kTankHeightShow = 9; // initialHeightShow
+constexpr int kMinWallHeight = 2;  // zoo.exe 0x5af226: the walls' least, empty
 constexpr int kTankTerrain = 2;    // tankTerrain (sand)
-constexpr float kFillSeconds = 8.0f;
+constexpr float kFillSeconds = 8.0f; // ours: not in tanks.cfg (#248)
 constexpr int kTankMaxHeight = 20;     // maximumTankHeight
 constexpr int kWallPriceDivisor = 5;   // wallHeightPriceDivisor
-constexpr int kBaseStepPerTile = 8;    // measured: a 2 x 2 tank's base step $32
+// (zoo.exe 0x459b19: a base step's price, habitat +0x1a4, is the tiles x
+// the world's float +0x64 - measured: a 2 x 2 tank's base step $32)
+constexpr int kBaseStepPerTile = 8;
 constexpr double kSaltWaterPrice = 1.5;  // saltWater
 constexpr double kFreshWaterPrice = 1.0; // freshWater
 constexpr float kPurityDecaySeconds = 30.0f; // waterPurityDecayTime 30000 ms
@@ -1408,6 +1413,9 @@ bool Fences::fillExhibit(int id, bool salt) {
   return true;
 }
 
+// zoo.exe 0x459b19: a wall step's price, habitat +0x19c - each tank wall
+// piece's price (class slot 0xa4) / wallHeightPriceDivisor - and, while it
+// fills, the water's, +0x1a0: the tiles x saltWater / freshWater
 double Fences::wallStepCost(int id) const {
   const Exhibit *ex = this->exhibit(id);
   if (!ex)
@@ -1423,25 +1431,49 @@ double Fences::wallStepCost(int id) const {
   return walls + water;
 }
 
+// zoo.exe 0x4ef687: the walls taken from one height to another - a step's
+// price (wallStepCost: habitat +0x19c, and +0x1a0 while it fills, +0x198)
+// for each step above initialHeight (initialHeightShow for a show tank):
+// up to it free, down from above it money back (a negative price, booked
+// so by tankModBuy 0x4691cd and the wall drag 0x489f53)
+double Fences::wallChangeCost(int id, int from, int to) const {
+  const Exhibit *ex = this->exhibit(id);
+  if (!ex)
+    return 0;
+  const int initial = ex->show ? kTankHeightShow : kTankHeight;
+  const int steps = std::max(to, initial) - std::max(from, initial);
+  return this->wallStepCost(id) * steps;
+}
+
 int Fences::baseStepCost(int id) const {
   const Exhibit *ex = this->exhibit(id);
   return ex ? static_cast<int>(ex->tiles.size()) * kBaseStepPerTile : 0;
+}
+
+// zoo.exe 0x5af226: no lower than 2, nor than a unit over the deepest
+// thing in it (its depth less waterOffset -1; tankDepth); FUN_005af39e
+// keeps the walls to it and the panel greys its down arrow there (0x5ae509)
+int Fences::minWallHeight(int id) const {
+  const int need = this->tankDepth ? this->tankDepth(id) : 0;
+  return std::max(kMinWallHeight, need + static_cast<int>(kWaterOffset));
 }
 
 bool Fences::canAdjustWall(int id, int step) const {
   const Exhibit *ex = this->exhibit(id);
   if (!ex || !ex->tank)
     return false;
-  // (as the original: down to a unit over the floor - the 1-height tank's
-  // low pieces, under the ground round it - up to maximumTankHeight)
+  // (zoo.exe 0x5ae509: down while the least, minWallHeight, is under the
+  // height (+0x184); up while it's under maximumTankHeight)
   int sub = ex->wallSub + step;
-  return sub <= kTankMaxHeight && sub >= 1;
+  return step > 0 ? sub <= kTankMaxHeight : sub >= this->minWallHeight(id);
 }
 
 void Fences::adjustWall(int id, int step) {
   if (!this->canAdjustWall(id, step))
     return;
-  this->exhibit(id)->wallSub += step;
+  // (zoo.exe 0x5af39e: no lower than the least)
+  Exhibit *ex = this->exhibit(id);
+  ex->wallSub = std::max(ex->wallSub + step, this->minWallHeight(id));
   // (silent, as the original: no sound for the walls, filling or draining)
 }
 
@@ -1534,6 +1566,11 @@ void Fences::update(float seconds) {
     } else {
       ex.waves.clear();
     }
+    // zoo.exe tankTick 0x49625f: filling (+0x198), the water (+0x188) one
+    // height unit a tick toward its height + waterOffset; ours: over a
+    // fixed kFillSeconds (#248). Its purity: as below (+0x1ac counted down
+    // by the elapsed ms, at 0 back to waterPurityDecayTime and purity - 1,
+    // tankMurkyWarning 0x49340d)
     if (ex.filling && ex.water < 1.0f)
       ex.water = std::min(1.0f, ex.water + seconds / kFillSeconds);
     else if (!ex.filling && ex.water > 0.0f)
@@ -1547,13 +1584,7 @@ void Fences::update(float seconds) {
     ex.purityClock += seconds;
     while (ex.purityClock >= kPurityDecaySeconds) {
       ex.purityClock -= kPurityDecaySeconds;
-      // zoo.exe 0x49340d (the purity set): from over tanks.cfg's lowest
-      // band (0x6390b0, 1 - measured in the running original) to at or
-      // under it, the "too murky" message (10549, priority 0)
-      const bool was = ex.purity > kSeeThroughPurity;
-      ex.purity = std::max(0.0f, ex.purity - 1.0f);
-      if (was && ex.purity <= kSeeThroughPurity)
-        this->murkyTanks.push_back(ex.id);
+      setPurity(ex.id, ex.purity - 1.0f);
     }
   }
   for (Filter &f : this->filterList) {
@@ -1591,6 +1622,19 @@ void Fences::update(float seconds) {
       f.upkeepTotal += k.upkeep;
     }
   }
+}
+
+// zoo.exe 0x49340d (the purity set): kept to 0..100 (0x63af00); from over
+// tanks.cfg's lowest band (0x6390b0, 1 - measured in the running original)
+// to at or under it, the "too murky" message (10549, priority 0)
+void Fences::setPurity(int tank, float purity) {
+  Exhibit *ex = this->exhibit(tank);
+  if (!ex)
+    return;
+  const bool was = ex->purity > kSeeThroughPurity;
+  ex->purity = std::clamp(purity, 0.0f, 100.0f);
+  if (was && ex->purity <= kSeeThroughPurity)
+    this->murkyTanks.push_back(ex->id);
 }
 
 // ----------------------------------------------------------------------------

@@ -72,6 +72,10 @@ public:
   uint32_t frameTimeMs() const { return this->frame_time_in_ms; }
   // How many frames it plays (its first direction's)
   int frameCount() const { return this->frame_count; }
+  // How many views its .ani lists ([animation] animation = N, NE, ...; zoo.exe
+  // GXLLEAnimSet::attempt 0x40b967: its list +0x10, 0x1c-byte entries, sized
+  // to them); 0 for art not from an .ani
+  int viewCount() const { return this->view_count; }
 
   // Returns true if animation has at least one valid surface or texture
   // Returns true if animation has at least one valid surface or texture
@@ -222,6 +226,7 @@ private:
   uint32_t frame_time_in_ms = 0;
   bool has_background = 0;
   int frame_count = 0;
+  int view_count = 0;
 
   // Its frames, unpacked (null: packed - sourceFrame unpacks it - or no
   // such frame). Each direction keeps a place for every frame.

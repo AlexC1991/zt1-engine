@@ -44,6 +44,9 @@ public:
   // 1 small, 2 giant, else the idle art)
   int addDung(int exhibit, float x, float y, bool dino, int size);
   static bool dinoDung(const Item &i) { return i.kind == Kind::Dung && i.food == "dinopoo"; }
+  // A dung pile's type id, the cNameID of its .ai (poo 6062, dinopoo 6094):
+  // what a keeper's cDirt lists
+  int dirtType(const Item &i) const;
   // Food for an exhibit: enough for its animals for a day or so
   int addFood(int exhibit, float x, float y, int animals, const std::string &food);
   // A keeper food's .ai (scenery/other/herbchow.ai; Marine Mania's are under
@@ -62,6 +65,9 @@ public:
   void removeOn(const std::set<std::pair<int, int>> &tiles);
 
   float foodIn(int exhibit) const;
+  // Of one kind of food alone (zoo.exe 0x4a85da: the habitat's count of a
+  // keeper food, +0xa8 by its cKeeperFoodType)
+  float foodIn(int exhibit, const std::string &food) const;
   // An animal eats from a pile of food: what it got (the pile goes when
   // it's eaten up)
   float eat(int id, float units);
@@ -83,6 +89,7 @@ private:
   int nextId = 1;
   mutable std::map<std::string, Animation *> artCache;
   mutable std::map<std::string, std::string> foodSlots;
+  mutable std::map<std::string, int> dirtIds;
   Animation *art(const std::string &path) const;
 };
 

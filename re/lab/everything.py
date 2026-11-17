@@ -37,6 +37,8 @@ CLASSES = {
     'food': ('ZTFood', 'type'),
     'filter': ('ZTTankFilter', 'sub'),
     'ambient': ('Ambient animals', 'type'),
+    # (a wreck's rubble: rubble/other/<kind>, ZTRubble - census-verified, ff03 brubble2/4)
+    'rubble': ('ZTRubble', 'type'),
 }
 # Made by the original itself, whatever the save holds
 OWN = {('Scenery', 'tankripl'), ('Scenery', 'twaterwv'), ('Scenery', 'frshwav')}

@@ -36,6 +36,19 @@ inline constexpr float priceStep = 0.25f;
 // plus 29.9 (0x6351a8) cut toward zero (fistp in the chop mode), over 30
 // as whole numbers; at least 1. Days 0-30 show 1 month, 31-60 show 2.
 inline constexpr float monthsOpenRound = 29.9f;
+// Zoo Status' graphs show this month and the 11 before it (zooGraphsRefresh
+// 0x52ff4d: each line's loop runs 12 months, 0xc, from the month less 11)
+inline constexpr size_t graphMonths = 12;
+// A Restroom's type (its cNameID): rubbled, it leaves bathrubl (ZTBuilding::
+// toRubble 0x611bd6: cmp 0x1f48)
+inline constexpr int restroomNameId = 8008;
+// Rubble's sell value (ZTRubble's class slot 0x120, 0x615a89): the type it
+// was made from (its cNameID, +0x15c) - that type's cost (type slot 0xa4)
+// times 0.5 (0x635420); 0 that way gives 0.1 (0x63553c); no such type 1
+// (0x635490)
+inline constexpr float rubbleSellFactor = 0.5f;
+inline constexpr float rubbleSellAtLeast = 0.1f;
+inline constexpr float rubbleSellUntyped = 1.0f;
 inline constexpr long long monthsOpenDays = 30;
 inline int monthsOpen(double openedDay, double today) {
   const long long days = static_cast<long long>(today - openedDay);
@@ -103,6 +116,15 @@ struct Economy {
   // them; setDefaults 0x4c2683: 0.8 and 1.2; economy.cfg: 0.5 and 2.
   // measured: 0.5 and 2.0 live in a new freeform zoo, 2026-11-16)
   float itemCheap = 0.8f, itemExpensive = 1.2f;
+  // Guest arrivals (guestArrivalCheck 0x424375; its this is ZTGameMgr+0x10):
+  // the admission bands - the price over each in turn - cAdultAdmission's
+  // five, copied over the exe's 50, 20, 10, 5, 0 (0x6392ac) when the file
+  // gives five (loadConfig 0x591a1f); measured 49, 29, 19, 9, 0 in a new
+  // freeform zoo, 2026-11-16. And cCreateGuestChanceVeryLow..VeryHigh
+  // (this+0xac..+0xbc; setDefaults 0x4c2a12: 1 each), measured 3, 5, 25,
+  // 30, 40 (gameMgr+0xbc..+0xcc)
+  float adultAdmission[5] = {50.0f, 20.0f, 10.0f, 5.0f, 0.0f};
+  int createGuestChance[5] = {1, 1, 1, 1, 1};
   float adviceEveryMs = 10000.0f;      // [checks] message: the advice messages' timer (zoo.exe 0x4351a9)
   // The advisor's shares (zooAdvisories 0x420347): a message when more than
   // this share of the animals or guests are so
@@ -180,6 +202,20 @@ std::string sellQuestion(ResourceManager *rm, const std::string &name, float ref
 // Whether zoo.ini's [UI] confirmSell asks (0x51f80c; default 1)
 bool confirmSell();
 
+// A name typed into an information panel (zoo.exe's setName, class slot
+// 0x1c of every unit and object, 0x449515 -> 0x449215; an exhibit's
+// 0x5aedbd) is taken only when it has something to see: a letter, digit or
+// punctuation mark (the C library's ctype 0x117, 0x4491ea) or a double-
+// byte character's lead byte. All spaces (or nothing), the name stays as
+// it was. ours: any other byte over 0x7f counts too (the original asks the
+// code page's own tables)
+inline bool nameTaken(const std::string &typed) {
+  for (unsigned char c : typed)
+    if (c > 0x7f || (c > 0x20 && c < 0x7f))
+      return true;
+  return false;
+}
+
 // ZTGameMgr::setAdmissionPrice 0x4bbf10: no more than the most, and the
 // least if that leaves it at or below the least
 inline float clampAdmission(float price) {
@@ -188,12 +224,36 @@ inline float clampAdmission(float price) {
   return p <= e.minAdmission ? e.minAdmission : p;
 }
 
+// The main bar's happiness meters (ZTGameMgr::update 0x435055, once a
+// second: the animal meter 0x41d08b, the guest meter 0x41d15d): an average
+// (-100..100) shown as (it + 100) x 100 / 200, 0 when there's none to count
+inline int mainBarMeter(int average, int count) { return count ? (average + 100) * 100 / 200 : 0; }
+
+// A 'fun' building's score when zoo.ini [AI] useAttractionAttractiveness is
+// set (zoo.exe attractionHighestScore 0x60b086): 100 - (1000 - its squared
+// distance in tiles from the guest's tile, at most 990) / 10, the division
+// cut toward zero - the further, the higher, up to 99 from about 31.5 tiles
+// on. The guest takes the highest, the first of equals (0x60b10f: only a
+// higher score replaces it)
+inline int attractionScore(int dx, int dy) {
+  int d = dx * dx + dy * dy;
+  if (d > 990)
+    d = 990;
+  return 100 - (1000 - d) / 10;
+}
+
 // The limits a guest's happiness and needs are held to (ZTGuestType::
 // setDefaults 0x4c47dd: happiness +0x1e4 / +0x1ec, hunger, thirst, energy
 // and the restroom +0x1f0 to +0x20c - no .ai key sets them), as
 // guestApplyPending 0x43b03a clamps them
 inline constexpr float guestHappinessMax = 100.0f, guestHappinessMin = -100.0f;
 inline constexpr float guestNeedMax = 100.0f, guestNeedMin = 0.0f;
+
+// The zoo's thoughts (ZTThoughtMgr, [0x639090]): at most 1000, the oldest
+// dropped past it (its constructor 0x464b83: +0xc = 1000, read by thoughtPush
+// 0x42311a; measured: 1000 live, 2026-11-16); Guest Information lists a
+// guest's newest 5 of them (guestThoughtsList 0x46a040 -> 0x46a7c8(guest, 5))
+inline constexpr int thoughtListCap = 1000, guestInfoThoughts = 5;
 
 // The game's updates a second: zoo.ini [user] UpdateRate=15. measured: in
 // the running original (2026-11-15) the ms each update moves on by
@@ -214,6 +274,24 @@ inline float unitTilesPerSecond(int rate) {
     steps = 1;
   return static_cast<float>(steps) * 1000.0f / updateMs / unitStepsPerTile;
 }
+
+// A unit's walk about (unitWalkAbout 0x43d948): a tile on a ring round it,
+// its half-widths rand % (the AI manager's slot 0x20 / 0x24) + 1 + BaseX /
+// BaseY. The AI manager (ZTAIMgr, [0x638098]) reads them from zoo.ini [AI]
+// (0x5267ec: BaseX, BaseY 1, RandomX, RandomY 5; 0x52599f: mRandomXGuest,
+// mRandomYGuest, mRandomXStaff, mRandomYStaff 9, below 1 made 1); its
+// slots 0x20 / 0x24 (0x43dcf2 / 0x43dcc7) give a guest's or a staff
+// member's own pair, any other unit RandomX / RandomY. The shipped zoo.ini
+// has no [AI] section. measured: 2026-11-17 in the running original (#229),
+// [0x638098] +0xd4..+0xe0 1 1 5 5, +0x140..+0x14c 9 9 9 9
+// A guest's show pick (0x440f0c): none when the nearest open grandstand is
+// further than zoo.ini [AI] maxDistToGoToShow tiles (read once; default
+// 150 at [0x6395ac] - the shipped zoo.ini has no [AI] section)
+inline constexpr int maxDistToGoToShow = 150;
+inline constexpr int aiWalkBase = 1;
+inline constexpr int aiWalkRandom = 5;
+inline constexpr int aiWalkRandomStaff = 9;
+inline constexpr int aiWalkRandomGuest = 9;
 
 // zoo.exe 0x42250a (ZTGuest's class slot 0x1c0, which sets the rate +0x1f8
 // a move uses): with the zoo manager's +0x11c set, the rate given plus the
@@ -245,6 +323,36 @@ inline int mimicOf(int nameId) {
     return 2;
   return 0;
 }
+
+// cSicklyAnimalPct (global 0x6386f8; staff/keeper.ai, scient.ai and
+// trainer.ai all 15): animalIsSickly 0x4a88cf - health x 100 at or under
+// cMaxHits x (100 - it) - an animal a keeper goes to heal
+inline constexpr int sicklyAnimalPct = 15;
+
+// zoo.exe guestRecordVisit 0x4a840e: a guest's visited list (+0x260) keeps
+// its last 10 places (past 10, the oldest dropped)
+inline constexpr size_t guestVisitedPlaces = 10;
+
+// zoo.exe ZTGuest::guestNearNeedBuilding 0x46b7d6 (push 0xa): a guest put
+// down in need looks for a building within 10 tiles (the squared tile
+// distance against 10 x 10, guestFindNearBuilding 0x46b818)
+inline constexpr int guestPutDownBuildingRadius = 10;
+
+// guestArrivalCheck 0x424375's table: by the rating (this+0x1c, the shown
+// one, plus the marketing benefit) - 81 or more, 60, 30, under 30 - and the
+// admission band (the price over cAdultAdmission[0], [1], [2], [3], else
+// the cheapest), which of the five chances, VeryLow (0) to VeryHigh (4), is
+// rolled (chancePercent 0x4244ab) for a guest at the gate (0x4f6e3c); -1
+// none. Read from its disassembly (jump tables 0x42456c, 0x42457c,
+// 0x42458c and 0x42452e)
+inline constexpr int guestArrivalChance[4][5] = {
+    {0, 2, 3, 3, 4}, {-1, 1, 2, 3, 4}, {-1, 0, 2, 2, 3}, {-1, -1, 0, 1, 2}};
+// ... and the cells whose arrival also posts "good value" (0x2721, 10017,
+// by 0x429d68: only with more than 10 guests in the zoo, this+0x44)
+inline constexpr bool guestArrivalGoodValue[4][5] = {
+    {false, false, false, true, true}, {false, false, false, false, true},
+    {false, false, false, false, true}, {false, false, false, false, false}};
+inline constexpr int goodValueGuests = 10;
 
 } // namespace Original
 

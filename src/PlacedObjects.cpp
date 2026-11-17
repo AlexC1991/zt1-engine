@@ -195,8 +195,21 @@ void PlacedObjects::loadLayers(Object &o) {
           o.randomWait = std::uniform_real_distribution<float>(o.minUsePeriod, o.maxUsePeriod)(randomUseRng);
         o.used = this->paintedArtOf(o, "used");
       }
+      // (its dead look: sceneryTypeLoad 0x4ba5b0's keys, each "== 1"; the
+      // idledead its [Animations] names - none, no art change, as showDead
+      // 0x44a6ae finds no animation by that name)
+      o.deadOnLand = ai->getInt(ints, "cdeadonland", 0) == 1;
+      o.deadOnFlatWater = ai->getInt(ints, "cdeadonflatwater", 0) == 1;
+      o.deadUnderwater = ai->getInt(ints, "cdeadunderwater", 0) == 1;
+      o.deadSurface = ai->getInt(ints, "csurface", 0) == 1;
+      o.height = ai->getInt(ints, "cheight", 0);
+      o.deadArt = (o.deadOnLand || o.deadOnFlatWater || o.deadUnderwater) && !ai->get("animations", "idledead").empty()
+                      ? this->paintedArtOf(o, "idledead")
+                      : nullptr;
       delete ai;
     }
+  if (const CatalogItem *item = ItemCatalog::get().find(fileOf(o)))
+    o.structure = item->members.count("structures") > 0;
   if (o.trashCan) o.half = this->paintedArtOf(o, "half");
   if (o.subClass != "building")
     return;
@@ -361,7 +374,7 @@ int PlacedObjects::pick(float px, float py, const WorldRenderer &view, const Wor
   for (size_t i = 0; i < this->list.size(); i++) {
     const Object &o = this->list[i];
     // Scenery, and buildings bought (not the map's own, like the entrance)
-    if (o.fence || (o.className != "objects" && !o.bought) || !o.art || this->hiddenNow(o))
+    if (o.fence || (o.className != "objects" && o.className != "rubble" && !o.bought) || !o.art || this->hiddenNow(o))
       continue;
     float z = o.z;
     if (const MapTile *t = map.getTile(static_cast<int>(std::floor(o.x)), static_cast<int>(std::floor(o.y)))) {
@@ -414,6 +427,10 @@ void PlacedObjects::load(const ZooReader &reader, ResourceManager *rm) {
     resolveExt(o);
     o.name = obj.name;
     o.label = obj.name;
+    // (rubble: its group's ids and the type it was, ZTRubble::load 0x48e392)
+    for (uint32_t id : obj.rubbleIds)
+      o.rubbleGroup.push_back(static_cast<int>(id));
+    o.rubbleOf = obj.rubbleOf;
     o.id = obj.id > 0 && obj.id < static_cast<uint32_t>(INT32_MAX) ? static_cast<int>(obj.id) : this->nextId++;
     if (!usedIds.insert(o.id).second) { o.id = this->nextId++; usedIds.insert(o.id); }
     o.x = obj.x / 64.0f;

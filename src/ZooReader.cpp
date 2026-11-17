@@ -198,7 +198,9 @@ void common(Cursor &r, ZooReader::ZooObject &o) {
 }
 
 // Scenery (food, objects, paths): its food counter, then the common part
-// (zoo.exe foodSceneryLoad 0x44f625)
+// (zoo.exe foodSceneryLoad 0x44f625; a path's own, ZTPath::load 0x451bac
+// and ZTPath::save 0x477326, only pass on to it and to foodScenerySave
+// 0x477b03)
 void scenery(Cursor &r, ZooReader::ZooObject &o) {
   o.food = r.i32();
   common(r, o);
@@ -278,7 +280,8 @@ void animal(Cursor &r, ZooReader::ZooObject &o) {
   a.sick = r.u8() != 0;
   a.sleeping = r.u8() != 0;
   r.skip(3);
-  r.skip(5 + 20);
+  a.keepers = r.i32(); // +0x378
+  r.skip(1 + 20);
   a.female = r.str().rfind('M', 0) != 0; // ("M..." is a male)
   r.str();
   for (auto &check : a.checks) check = r.i32();
@@ -370,12 +373,14 @@ void guest(Cursor &r, ZooReader::ZooObject &o) {
   }
   o.guest.chaseCheck = r.i32();
   o.guest.leaving = r.u8() != 0; o.guest.afraid = r.u8() != 0;
-  r.skip(4 + 2);
+  r.skip(4); // +0x314
+  o.guest.attacked = r.u8() != 0; // +0x33b, attacked by a predator (save 0x47873e at 0x478bc4)
+  r.skip(1); // +0x33c
   o.guest.arrived = r.u32(); o.guest.arrived |= uint64_t(r.u32()) << 32;
   o.guest.favourite = r.i32();
   r.skip(2 + 8);
   if (v >= 42)
-    r.skip(2);
+    o.guest.visitCount = r.u16(); // +0x334 (ZTGuest::save 0x47873e at 0x478c79)
   if (v >= 54)
     r.skip(1);
   if (v >= 56)
@@ -459,7 +464,8 @@ bool body(Cursor &r, const std::string &cls, ZooReader::ZooObject &o) {
       r.skip(1);
     }
   } else if (cls == "ambient") {
-    r.skip(8); // (zoo.exe ZTAmbientAnimal::load 0x450261)
+    o.ambientSpeed = r.i32(); // (zoo.exe ZTAmbientAnimal::load 0x450261)
+    o.ambientStep = r.i32();
     common(r, o);
   } else if (cls == "filter") {
     scenery(r, o); // (zoo.exe ZTTankFilter::load 0x45d468)
@@ -471,9 +477,10 @@ bool body(Cursor &r, const std::string &cls, ZooReader::ZooObject &o) {
       o.filterPeriod = r.u32();
     }
   } else if (cls == "rubble") {
-    scenery(r, o); // (zoo.exe ZTRubble::load 0x48e392)
-    r.skipList(4);
-    r.skip(4);
+    scenery(r, o); // (zoo.exe ZTRubble::load 0x48e392: its list, +0x15c)
+    for (uint32_t k = 0, n = r.count(4); k < n && r.ok; ++k)
+      o.rubbleIds.push_back(r.u32());
+    o.rubbleOf = r.i32();
   } else if (cls == "building") {
     scenery(r, o);
     building(r);
@@ -718,6 +725,10 @@ bool ZooReader::readExact(const uint8_t *data, size_t size) {
   r.skip(4 + 12 + 1);
   const uint32_t zooRating = r.u32();
   r.skip(12 + 4);
+  // (zoo.exe gameMgrLoadSettings 0x59497f: the month (1-12, +0x14c) and
+  // year (+0x150) the books are at, the rows and the years they hold, then
+  // each row's 12 months, each row's years, each row's lifetime total -
+  // only the first 31 rows and 20 years kept)
   books.month = r.u32(); books.year = r.u32();
   const uint32_t rows = r.u32(), cols = r.u32();
   if (!r.ok || (static_cast<uint64_t>(12 + cols + 1) * 4 * rows) > r.left)
@@ -869,11 +880,20 @@ void zooUnitOut(ZooOut &w, uint32_t v, bool guest, int mode) {
   if (v >= 85) w.text("");
   if (v >= 98) zero(2);
 }
+// An animal's own part, in zoo.exe ZTAnimal::save 0x478cff's order: +0x2a8,
+// +0x2b0, +0x2b8, +0x2c0, the five bytes +0x3a7..+0x3ab, +0x378, +0x390, then
+// +0x2d0..+0x2e0 (ZTAnimal::load 0x455533 reads it back)
 void zooAnimalOut(ZooOut &w, const ZooReader::ZooObject &o, uint32_t v) {
   const auto &a=o.animal; ZooFields f(o,v);
   for (int n : {a.happiness,a.hunger,a.health,a.energy}) f.field(int32_t(n));
   f.field(uint8_t(a.sick)); f.field(uint8_t(a.sleeping));
-  f.keep(3); f.keep(5);
+  f.keep(3);
+  // +0x378, then +0x390: as ZTAnimal::setup 0x453e59 makes them, 1 and 0
+  // (0 there and the original's animalCheckKeepers 0x438d31 - under the
+  // type's +0x28c, 1 - says "Not enough keepers" every cKeeperCheck and
+  // costs it cNotEnoughKeepersChange)
+  if(f.kept) f.keep(4); else f.out.put(int32_t(1));
+  f.keep(1);
   for(int i=0;i<5;++i) { if(f.kept) f.keep(4); else f.out.put(uint32_t(1)); }
   f.text(a.female ? "Female" : "Male"); f.oldText();
   for(int n:a.checks) f.field(int32_t(n));
@@ -926,9 +946,10 @@ void zooGuestOut(ZooOut &w, const ZooReader::ZooObject &o, uint32_t v) {
   if(f.kept)f.in.skipList(8);
   f.out.put(uint32_t(g.visited.size()));for(auto [x,y]:g.visited){f.out.put(int32_t(x));f.out.put(int32_t(y));}
   f.field(int32_t(g.chaseCheck));f.field(uint8_t(g.leaving));f.field(uint8_t(g.afraid));
-  f.keep(6);f.field(uint64_t(g.arrived));f.field(int32_t(g.favourite));
+  f.keep(4);f.field(uint8_t(g.attacked));f.keep(1); // +0x314, +0x33b (ZTGuest::save 0x47873e at 0x478bc4), +0x33c
+  f.field(uint64_t(g.arrived));f.field(int32_t(g.favourite));
   f.keep(2);if(f.kept)f.keep(8);else f.out.put(uint64_t(UINT64_MAX));
-  if(v>=42)f.keep(2);
+  if(v>=42)f.field(uint16_t(g.visitCount)); // +0x334, its visit count
   if(v>=54)f.keep(1);
   if(v>=56)f.keep(1);
   if(v>=65)f.field(uint32_t(g.guide));
@@ -969,7 +990,7 @@ bool zooBodyOut(ZooOut &w,const ZooReader::ZooObject &o,uint32_t v) {
   if(o.hasAnimal)zooAnimalOut(w,o,v);
   else if(o.hasGuest)zooGuestOut(w,o,v);
   else if(o.hasStaff)zooStaffOut(w,o,v);
-  else if(c=="ambient")w.zeros(8);
+  else if(c=="ambient"){w.put(o.ambientSpeed);w.put(o.ambientStep);}
   else if(c=="objects"||c=="food"||c=="paths"||c=="fences"||c=="tankwall"||c=="filter"||c=="rubble"||c=="building")
     w.put(int32_t(o.food));
   else return false;
@@ -983,6 +1004,10 @@ bool zooBodyOut(ZooOut &w,const ZooReader::ZooObject &o,uint32_t v) {
   }
   if(v>=67){w.put(uint32_t(o.colours.size()));w.bytes(o.colours);}
   if(!o.suffixOverride.empty())w.bytes(o.suffixOverride);
+  else if(c=="rubble") {
+    // (ZTRubble::save 0x6159c0: its list - count, ids - and +0x15c)
+    w.put(uint32_t(o.rubbleIds.size()));for(uint32_t id:o.rubbleIds)w.put(id);w.put(o.rubbleOf);
+  }
   else if(!unit && o.decoded && o.commonEnd && o.commonEnd<=o.payload.size()) {
     w.b.insert(w.b.end(),o.payload.begin()+o.commonEnd,o.payload.end());
   } else if(c=="fences"||c=="tankwall") {
@@ -995,7 +1020,6 @@ bool zooBodyOut(ZooOut &w,const ZooReader::ZooObject &o,uint32_t v) {
       w.put(o.filterBuilt); w.put(o.filterServiced); w.put(o.filterPeriod);
     }
   }
-  else if(c=="rubble")w.zeros(8);
   else if(c=="building") {
     w.zeros(16+4+4+16+8);
     if(v>=45&&v<=47)w.zeros(2);else if(v>=48&&v<=66)w.zeros(4);

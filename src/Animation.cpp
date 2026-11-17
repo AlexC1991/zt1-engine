@@ -48,6 +48,7 @@ Animation::Animation(std::unordered_map<std::string, AnimationData *> *data)
       renderer_flip(SDL_FLIP_NONE), has_background(false),
       frame_time_in_ms(100), frame_start_time(0) {
   liveAdd(this);
+  this->view_count = static_cast<int>(data->size());
   // (one view named for itself - the dust ball's "animation = dust" - is
   // its N: art the same from every side)
   static const char *compass[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW", "G", "H"};
@@ -137,6 +138,7 @@ Animation *Animation::recolouredCopy(const std::function<uint32_t(uint32_t)> &ma
   // (as a fresh load leaves it)
   c->last_direction = CompassDirection::S;
   c->anchor_offsets = this->anchor_offsets;
+  c->view_count = this->view_count;
   c->upscale = this->upscale;
   c->world_art = this->world_art;
   c->hd_dir = this->hd_dir;

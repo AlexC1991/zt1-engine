@@ -50,6 +50,11 @@ public:
     std::array<double, LineCount> lines{};
     double total() const;
     double rating = 0;
+    // The guests in the zoo (zoo.exe's books row 25: zooRatingUpdate
+    // 0x41f881 clears this month's at 0x41f8ad and adds 1 a guest it
+    // counts, 0x41f669) - the count at the month's last rating update,
+    // which Zoo Status' attendance graph shows (graphSeriesD 0x530bf2)
+    double guests = 0;
   };
 
   void start(double cash, double rating);
@@ -62,6 +67,14 @@ public:
   void count(Line line, int n) {
     if (!this->months.empty()) {
       this->months.back().lines[line] += n;
+      this->dirty = true;
+    }
+  }
+  // The rating update's guest count, this month's books row 25 (zoo.exe
+  // zooRatingUpdate 0x41f881: cleared, then 1 a guest)
+  void countGuests(int n) {
+    if (!this->months.empty()) {
+      this->months.back().guests = n;
       this->dirty = true;
     }
   }

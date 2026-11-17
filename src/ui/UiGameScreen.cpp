@@ -2,6 +2,7 @@
 #include "../Shows.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <functional>
 #include <set>
@@ -499,7 +500,7 @@ void UiGameScreen::setupBuyPanels() {
   const Def defs[] = {{3, 2023, 2043, 2014, 0, ""},        // buya.lyt
                       {4, 3061, 3058, 3016, 0, ""},        // buyobj.lyt
                       {8, 3261, 3263, 3207, 0, ""},        // buldhab.lyt
-                      {10, 0, 3620, 3611, 3613, "staff"}}; // personel.lyt
+                      {10, 0, 3620, 3611, 3613, "staff"}}; // personel.lyt (a pick: zoo.exe personel_Staff_click 0x4e69b8 - placed by the cursor, setPlaceItem)
   ItemCatalog &catalog = ItemCatalog::get();
   catalog.load(this->resource_manager);
 
@@ -1092,6 +1093,9 @@ void UiGameScreen::setupResearch() {
   if (!r.panel)
     return;
   Research::get().load(this->resource_manager);
+  // (its tabs: zoo.exe research_Research_click 0x470a71 and
+  // research_Conservation_click 0x47104b only refresh the page, 0x4eb270
+  // and 0x4eae69)
   r.researchTab = dynamic_cast<UiButton *>(r.panel->getElementById(4009));
   r.conservationTab = dynamic_cast<UiButton *>(r.panel->getElementById(4010));
 
@@ -1100,6 +1104,7 @@ void UiGameScreen::setupResearch() {
     b->setLabel(this->resource_manager->getString(22900));
   // Funding - and + (hidden in the layout until the page shows them): a
   // step through the branch's levels, kept to them (zoo.exe
+  // resrch2_Buttons_click 0x46c2b9: Less, 4003, 0x61a547; More
   // researchFundingStep 0x46c2e0: past the last, the last)
   auto funding = [this](int step) {
     ResearchBranch *b = Research::get().branch(this->research.shownBranch);
@@ -1363,6 +1368,17 @@ void UiGameScreen::refreshZooStatus() {
   text(4190, formatCents(adult));
   text(4193, formatCents(adult));
   text(4194, formatCents((adult + 1) / 2));
+  // The admission's arrows greyed at the ends (zoo.exe 0x530329, Zoo
+  // Status' first tab: the up arrow off - its slot 0x6c - once the price
+  // is no less than cMaxAdultAdmissionPrice, +0x1158; the down arrow once
+  // it's no more than cMinAdultAdmissionPrice, +0x1154; else on, 0x68)
+  {
+    const Original::Economy &e = Original::economy();
+    if (UiButton *up = dynamic_cast<UiButton *>(z->getElementById(4195)))
+      up->setDisabled(!(this->zoo.admission < e.maxAdmission));
+    if (UiButton *down = dynamic_cast<UiButton *>(z->getElementById(4191)))
+      down->setDisabled(this->zoo.admission <= e.minAdmission);
+  }
   for (int id : {4115, 4117, 4119, 4121, 4122, 4171})
     text(id, "0");
   text(4115, std::to_string(this->zoo.animalCount));
@@ -1441,15 +1457,22 @@ void UiGameScreen::refreshZooStatus() {
   money(3928, this->zoo.value >= 0 ? this->zoo.value                // zoo value (0x52fa39: the
                                    : std::lround(cash) + this->zoo.placedValue); // rating's, row 15)
 
-  // The graphs: a point a month
+  // The graphs: a point a month, this month's and the 11 before it at most
+  // (zoo.exe zooGraphsRefresh 0x52ff4d: graphSeriesA-D 0x52feef, 0x530a0e,
+  // 0x530aff, 0x530bf2 each walk 12 months from the month 11 back - the
+  // books' month +0x14c - leaving out those before the zoo's first year)
   if (history) {
     std::vector<UiGraph::Point> rating, donations, profit, attendance;
-    for (const ZooSim::Month &m : *history) {
+    const size_t first = history->size() > Original::graphMonths ? history->size() - Original::graphMonths : 0;
+    for (size_t i = first; i < history->size(); i++) {
+      const ZooSim::Month &m = (*history)[i];
       std::string label = this->resource_manager->getString(22101 + m.month);
       rating.push_back({std::floor(m.rating), label});
       donations.push_back({m.lines[ZooSim::Donations], label});
       profit.push_back({m.total(), label});
-      attendance.push_back({m.lines[ZooSim::Admissions], label});
+      // (13965: books row 25, the guests in the zoo - graphSeriesD 0x530bf2,
+      // 0x41dd64(25, 0, month) - not the month's admissions, row 4)
+      attendance.push_back({m.guests, label});
     }
     auto points = [&](int id, const std::vector<UiGraph::Point> &p) {
       if (UiGraph *g = dynamic_cast<UiGraph *>(z->getElementById(id)))
@@ -1936,19 +1959,26 @@ SDL_Rect UiGameScreen::panelRect(SDL_Renderer *renderer, const Entry &e,
         return e.layout->computeRect(renderer, &pr);
       }
   SDL_Rect r = e.layout->computeRect(renderer, &parent);
-  // An information window (animal, guest, staff, building) with a list
-  // open at the bottom right (Exhibit/Show List, Staff List: x=right,
-  // y=-366): just above the list, as the original stacks them
-  if (e.id == 6 || e.id == 9 || e.id == 17 || e.id == 20 || e.id == 21)
+  // An information window (animal, guest, staff, building, tank filter,
+  // DRT) with a list open at the bottom right (the Animal, Guest, Exhibit/
+  // Show and Staff Lists: x=right, y=-366): at its layout's altx / alty
+  // (right, -578), above the list (zoo.exe 0x4ef99b, from each list's
+  // Panel_show - mulguest_Panel_show 0x469cc8 - and Panel_hide 0x469d97:
+  // panels 6, 9, 17, 20, 21, 1400 and 46 to their second place and back,
+  // 0x4ef967)
+  if (IniReader *ei = e.layout->getIniReader(); ei && !ei->get("layoutinfo", "alty").empty())
     for (const Entry &o : this->entries) {
       if (!o.panel || !o.open || &o == &e)
         continue;
       IniReader *oi = o.layout->getIniReader();
       if (!oi || oi->get("layoutinfo", "x") != "right" || oi->get("layoutinfo", "y") != "-366")
         continue;
-      SDL_Rect lr = this->panelRect(renderer, o, screen);
-      r.x = parent.x + parent.w - r.w;
-      r.y = lr.y - r.h;
+      const std::string ax = ei->get("layoutinfo", "altx"), ay = ei->get("layoutinfo", "alty");
+      if (ax == "right")
+        r.x = parent.x + parent.w - r.w;
+      else if (!ax.empty())
+        r.x = ax[0] == '-' ? parent.x + parent.w + std::atoi(ax.c_str()) : parent.x + std::atoi(ax.c_str());
+      r.y = ay[0] == '-' ? parent.y + parent.h + std::atoi(ay.c_str()) : parent.y + std::atoi(ay.c_str());
       return r;
     }
   // A negative x or y counts from the right or bottom edge (the Exhibit
@@ -3387,7 +3417,9 @@ void UiGameScreen::setupExhibits() {
   UiLayout *z = this->exhibitPanel;
   if (UiText *name = dynamic_cast<UiText *>(z->getElementById(4304)))
     name->onCommit = [this](const std::string &typed) {
-      if (!this->fences || typed.empty())
+      // (zoo.exe mulhab_HabitatName_click 0x6107ef -> 0x5aedbd: kept only
+      // with something to see in it. Its name cheats are #235's)
+      if (!this->fences || !Original::nameTaken(typed))
         return;
       if (Fences::Exhibit *ex = this->fences->exhibit(this->shownExhibit))
         ex->name = typed;
@@ -3435,10 +3467,13 @@ void UiGameScreen::setupExhibits() {
                           : this->fences->canAdjustBase(id, s.step);
         if (!can)
           return;
-        // (the wall's price shown cut to dollars, charged rounded: $363.50
-        // shows $363 and takes $364, as the original)
-        int cost = s.wall ? static_cast<int>(std::lround(this->fences->wallStepCost(id)))
-                          : this->fences->baseStepCost(id);
+        // (the wall: zoo.exe tankModBuy 0x4691cd prices it from its height,
+        // 0x4ef687 - up to initialHeight free, down from above it money back
+        // - and books that float as it is; the base: tankBaseBuy 0x46937e,
+        // the step's price either way)
+        const Fences::Exhibit *ex = this->fences->exhibit(id);
+        double cost = s.wall ? (ex ? this->fences->wallChangeCost(id, ex->wallSub, ex->wallSub + s.step) : 0.0)
+                             : this->fences->baseStepCost(id);
         // (more than the zoo has: 10002, nothing done - zoo.exe 0x4691cd
         // the wall, 0x46937e the base)
         if (this->sim && !this->sim->canAfford(cost)) {
@@ -3449,7 +3484,7 @@ void UiGameScreen::setupExhibits() {
           this->fences->adjustWall(id, s.step);
         else
           this->fences->adjustBase(id, s.step);
-        if (this->sim && cost > 0)
+        if (this->sim && cost != 0)
           this->sim->spend(ZooSim::Construction, cost);
       };
 }
@@ -3498,7 +3533,8 @@ void UiGameScreen::setupFilterPanel() {
   UiLayout *z = this->filterPanel;
   if (UiText *name = dynamic_cast<UiText *>(z->getElementById(4904)))
     name->onCommit = [this](const std::string &typed) {
-      if (!this->fences || typed.empty())
+      // (zoo.exe filter_BuildingName_click 0x616076: setName, 0x449215)
+      if (!this->fences || !Original::nameTaken(typed))
         return;
       if (Fences::Filter *f = this->fences->filter(this->shownFilter))
         f->name = typed;
@@ -3507,8 +3543,9 @@ void UiGameScreen::setupFilterPanel() {
     sell->onClick = [this] {
       if (!this->fences || !this->fences->filter(this->shownFilter))
         return;
-      // (zoo.exe sellSelected 0x48d052 -> sellObject 0x50a432: its sell
-      // value, ZTTankFilter::sellValue 0x50c961, asked first - filter1.ai's
+      // (zoo.exe filter_SellFilter_click 0x616035: the zoo view's selected
+      // object, if any, sold - sellSelected 0x48d052 -> sellObject 0x50a432:
+      // its sell value, ZTTankFilter::sellValue 0x50c961, asked first - filter1.ai's
       // cNeedsConfirm - and booked on Recycling Benefit, bookRemovalRefund
       // 0x4f9329)
       const Fences::Filter *f = this->fences->filter(this->shownFilter);
@@ -3618,14 +3655,21 @@ void UiGameScreen::setupStaffPanels() {
       name->setHidden(false);
     if (UiButton *track = dynamic_cast<UiButton *>(z->getElementById(3515)))
       track->setToggledOn(false);
-    auto ask = [this](StaffRequest r) {
-      return [this, r] {
-        if (this->staffRequest && this->shownStaff >= 0)
-          this->staffRequest(r, this->shownStaff);
-      };
-    };
+    // Pick up (zoo.exe infostf_PickupStaff_click 0x618553): Assign off
+    // (uiTurnOff 3578), then 0x46ab75 - nothing selected, the panel shut,
+    // the member held; put down, the panel opens again (placeObject
+    // 0x4d923c, endPlacing 0x443df7: 0x5b0f93)
     if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3570)))
-      b->onClick = ask(StaffRequest::PickUp);
+      b->onClick = [this, z] {
+        const int id = this->shownStaff;
+        if (!this->staffRequest || id < 0)
+          return;
+        if (UiButton *assign = dynamic_cast<UiButton *>(z->getElementById(3578)))
+          assign->setToggledOn(false);
+        this->setPanelOpen(17, false);
+        this->shownStaff = -1;
+        this->staffRequest(StaffRequest::PickUp, id);
+      };
     if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3606)))
       b->onClick = [this] {
         // (asked first, as the original: "Are you sure you want to fire
@@ -3683,13 +3727,16 @@ void UiGameScreen::setupStaffPanels() {
       };
     if (UiText *name = dynamic_cast<UiText *>(z->getElementById(3502)))
       name->onCommit = [this](const std::string &typed) {
-        if (!this->staff || typed.empty())
+        // (zoo.exe infostf_StaffName_click 0x61847c: setName, 0x449215)
+        if (!this->staff || !Original::nameTaken(typed))
           return;
         if (Staff::Member *m = this->staff->member(this->shownStaff))
           m->name = typed;
         this->staffListCount = -1;
       };
-    // A maintenance worker's duties: ticks
+    // A maintenance worker's duties: ticks (zoo.exe infostf3_MwAssignList_click
+    // 0x6186f2: a row clicked flips its bit, staff +0x2a8, and the count of
+    // those ticked, +0x2bc)
     if (UiListBox *duties = dynamic_cast<UiListBox *>(z->getElementById(3587))) {
       duties->clear();
       for (int id : {3530, 3531, 3532, 3533})
@@ -4056,7 +4103,7 @@ void UiGameScreen::refreshLists() {
           list->setSelectedIndex(-1);
         }
         // A click on news about something: the view goes there and it's
-        // picked (zoo.exe 0x47fa78)
+        // picked (zoo.exe message_MessageList_click 0x618d5c -> 0x47fa78)
         int pick = list->getSelectedIndex() - offset;
         if (pick >= 0 && pick < static_cast<int>(this->messageLog.size())) {
           const LoggedMessage &m = this->messageLog[pick];
@@ -4158,6 +4205,11 @@ void UiGameScreen::refreshLists() {
       countColour(z, kGuestCounts[f], f == this->guestFilter);
     }
     text(z, 3727, this->resource_manager->getString(kGuestNames[this->guestFilter]));
+    // (the list 3705: a guest's row added as it arrives if it passes the
+    // filter, its name and its kind's list icon, zoo.exe 0x4f5eb2; the row
+    // of the guest selected lit, none if it isn't listed, 0x5b0199; a click
+    // - mulguest_list_click 0x46ab65 -> guestListGoTo 0x46aa89 - the
+    // bulldozer off, the guest selected and shown, the view taken to it)
     if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(3705))) {
       int picked = fill(list, ids, this->listedGuests, this->litGuest, this->guests->selected, [this](int id) {
         const Guests::Guest *g = this->guests->guest(id);
@@ -4228,6 +4280,8 @@ void UiGameScreen::setupAnimalPanel() {
       if (this->animalRequest && this->shownAnimal >= 0)
         this->animalRequest(AnimalRequest::PickUp, this->shownAnimal);
     };
+  // Exhibit Information (zoo.exe infoanm_HabitatInfoButton_click 0x618c02:
+  // an animal in an exhibit - its +0x2c clear - opens the exhibit's panel)
   if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3197)))
     b->onClick = [this] {
       const Animals::Member *m = this->animals ? this->animals->member(this->shownAnimal) : nullptr;
@@ -4262,7 +4316,9 @@ void UiGameScreen::setupAnimalPanel() {
     };
   if (UiText *name = dynamic_cast<UiText *>(z->getElementById(3102)))
     name->onCommit = [this](const std::string &typed) {
-      if (!this->animals || typed.empty())
+      // (zoo.exe infoanm_AnimalName_click 0x618b27: setName, 0x4e1d6b ->
+      // 0x449215; the lists sort by name again)
+      if (!this->animals || !Original::nameTaken(typed))
         return;
       if (Animals::Member *m = this->animals->member(this->shownAnimal))
         m->name = typed;
@@ -4286,6 +4342,16 @@ void UiGameScreen::showBuilding(int id) {
   int nameId = commerce ? 4502 : 4602;
   if (UiElement *n = z->getElementById(nameId))
     n->setHidden(false);
+  // Its name typed into (zoo.exe infocom_Buildingname_click 0x61750f,
+  // infoncom_Buildingname_click 0x617f1b: the selected object's setName,
+  // 0x449215 - kept only with something to see in it)
+  if (UiText *n = dynamic_cast<UiText *>(z->getElementById(nameId)))
+    n->onCommit = [this](const std::string &typed) {
+      if (!this->objects || !Original::nameTaken(typed))
+        return;
+      if (PlacedObjects::Object *b = this->objects->byId(this->shownBuilding))
+        b->label = typed;
+    };
   // (no move hand on a building's panel, as the original)
   for (int hid : commerce ? std::vector<int>{4580} : std::vector<int>{})
     if (UiElement *hand = z->getElementById(hid))
@@ -4334,8 +4400,21 @@ void UiGameScreen::showBuilding(int id) {
   }
   if(commerce)if(auto *price=dynamic_cast<UiText*>(z->getElementById(4555))) {
     price->onBeginEdit=[this]{auto *b=this->objects->byId(this->shownBuilding);return b?std::to_string(b->price):"0";};
+    // zoo.exe infocom_ItemcostCost_click 0x6176c1: the typed text's
+    // currency symbol taken out once (text 22100, initLocale 0x5359a0's
+    // 0x63b3c4: 0x5fe02d) and every thousands separator (0x63b3b8: 0x5fe0a9,
+    // ","), the rest
+    // read as a number (0x4b40ae); under the price, lowerPrice 0x5a5bbc by
+    // the difference (no less than $0 nor cLowCost), over it raisePrice
+    // 0x611b43 (no more than cBuildingUseCostMax nor cHighCost) - so a typed
+    // price is kept to the arrows' bounds, one way only
     price->onCommit=[this](const std::string &v) {
-      auto *b=this->objects->byId(this->shownBuilding);const float value=static_cast<float>(std::atof(v.c_str()));
+      auto *b=this->objects->byId(this->shownBuilding);
+      std::string text=v;
+      const std::string sign=this->resource_manager->getString(22100);
+      if(size_t at=sign.empty()?std::string::npos:text.find(sign);at!=std::string::npos)text.erase(at,sign.size());
+      for(size_t at;(at=text.find(','))!=std::string::npos;)text.erase(at,1);
+      const float value=static_cast<float>(std::atof(text.c_str()));
       if(!b || !std::isfinite(value))return;
       if(this->shows && this->shows->setStandAdmission(b->id,value))return;
       float lo=1,hi=1;
@@ -4343,7 +4422,8 @@ void UiGameScreen::showBuilding(int id) {
         lo=std::atof(ai->get("characteristics/floats","clowcost","1").c_str());
         hi=std::atof(ai->get("characteristics/floats","chighcost","1").c_str());delete ai;
       }
-      b->price=std::clamp(value,std::max(0.0f,lo),std::max(lo,std::min(hi,Original::economy().buildingUseCostMax)));
+      if(value<b->price)b->price=std::max({value,0.0f,lo});
+      else if(value>b->price)b->price=std::min({value,Original::economy().buildingUseCostMax,hi});
     };
   }
   if (UiButton *sell = dynamic_cast<UiButton *>(z->getElementById(commerce ? 4516 : 4616)))
@@ -4357,7 +4437,8 @@ void UiGameScreen::showBuilding(int id) {
           this->shownBuilding = -1;
         }
       };
-      // (zoo.exe sellSelected 0x48d052 -> removeSelected 0x48d065: the
+      // (zoo.exe infoSellOrFire_click 0x48d0b4, the info panels' Sell and
+      // Fire, -> sellSelected 0x48d052 -> removeSelected 0x48d065: the
       // view's selected thing, no longer the hovered one, sellObject 0x50a432
       // -> removeObject 0x50a0b0: a building
       // - cNeedsConfirm - asked first, "Are you sure you want to sell %s?
@@ -4579,6 +4660,10 @@ void UiGameScreen::refreshBuilding() {
               b->setIcon(pic);
               b->setToggledOn(k == o->program);
               int id = o->id;
+              // (zoo.exe infoncm2_Buttons_click 0x617ff2: setProgram 0x611b9f
+              // with the button less 4631 - +0x188 set only when under the
+              // type's program count, +0x168 - its button; then its upkeep
+              // again in 4642 and 4696, as the refresh below)
               b->onClick = [this, id, k] {
                 if (PlacedObjects::Object *h = this->objects ? this->objects->byId(id) : nullptr)
                   h->program = k;
@@ -4637,11 +4722,37 @@ void UiGameScreen::showGuest(int id) {
   this->guestThoughts = static_cast<size_t>(-1);
   if (UiElement *name = z->getElementById(3402))
     name->setHidden(false);
+  // Its name typed into (zoo.exe infogst_GuestName_click 0x618a35: the
+  // selected guest's setName, 0x449215 - kept only with something to see);
+  // setName (class slot 0x1c, 0x449515) runs the rename cheats too (0x44940b)
+  if (UiText *name = dynamic_cast<UiText *>(z->getElementById(3402)))
+    name->onCommit = [this](const std::string &typed) {
+      if (!this->guests || !Original::nameTaken(typed))
+        return;
+      if (Guests::Guest *g = this->guests->guest(this->shownGuest))
+        g->name = typed;
+      if (this->guestRenamed)
+        this->guestRenamed(this->shownGuest, typed);
+    };
   // (Track starts off: on, its yellow lit art filled the portrait's circle)
   if (UiButton *track = dynamic_cast<UiButton *>(z->getElementById(3415)))
     track->setToggledOn(false);
-  if (UiButton *tab = dynamic_cast<UiButton *>(z->getElementById(3462)))
-    tab->choose();
+  // Its tab: the one last picked (zoo.exe infogst_Panel_show 0x46a91b: the
+  // radio set 3460's current tab shown again; only after a zoo is loaded -
+  // 0x4c735c sets 0x63e47c - the one it had first, Status 3462, state=8 in
+  // infogst.lyt. ours: each loaded zoo has a new screen, its tabs as the
+  // layout has them)
+  // PickupGuest (zoo.exe infoPickUp_click 0x46af10 -> 0x46ab75): the panel
+  // shut, the guest held at the cursor
+  if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(3416)))
+    b->onClick = [this] {
+      const int id = this->shownGuest;
+      if (id < 0 || !this->guestPickUp)
+        return;
+      this->setPanelOpen(9, false);
+      this->shownGuest = -1;
+      this->guestPickUp(id);
+    };
   z->syncTabs();
   this->refreshGuest();
 }
@@ -4719,11 +4830,24 @@ void UiGameScreen::showAnimal(int id) {
               this->centreOn = centre;
             }
   this->animals->selected = id;
-  // It opens on Status
+  // It opens on Status (its tabs, zoo.exe infoanm_Buttons_click 0x4ee81b:
+  // the page changed and the panel refreshed, nothing more)
   if (UiButton *tab = dynamic_cast<UiButton *>(this->animalPanel->getElementById(3162)))
     tab->choose();
   this->animalPanel->syncTabs();
   this->refreshAnimal();
+}
+
+int UiGameScreen::animalBarValue(int elementId) const {
+  const UiStatusImage *e =
+      this->animalPanel ? dynamic_cast<const UiStatusImage *>(this->animalPanel->getElementById(elementId)) : nullptr;
+  return e ? e->getValue() : -1;
+}
+
+int UiGameScreen::animalBarBand(int elementId) const {
+  const UiStatusImage *e =
+      this->animalPanel ? dynamic_cast<const UiStatusImage *>(this->animalPanel->getElementById(elementId)) : nullptr;
+  return e ? static_cast<int>(e->band()) : -1;
 }
 
 void UiGameScreen::refreshAnimal() {
@@ -4764,10 +4888,33 @@ void UiGameScreen::refreshAnimal() {
       if (UiElement *e = z->getElementById(eid))
         e->chooseHelp(static_cast<size_t>(carer));
   }
-  bar(3104, static_cast<float>(Animals::shownHappiness(*m)));
-  bar(3108, m->food);
+  // zoo.exe animalInfoRefresh 0x4673b5: happiness (animalHappinessLevel
+  // 0x467366), 100 less the hunger level (animalHungerLevel 0x4678bf),
+  // health (animalHealthLevel 0x4679c5) - each (value - least) x 100 /
+  // (most - least) - and the exhibit's rating; an egg (+0x395) shows 100 for
+  // all but its health
+  bar(3104, m->egg ? 100.0f : static_cast<float>(Animals::shownHappiness(*m)));
+  bar(3108, m->egg ? 100.0f : m->food);
   bar(3106, static_cast<float>(this->animals->shownHealth(*m)));
-  bar(3110, this->animalSuitability ? static_cast<float>(this->animalSuitability(m->id)) : 0.0f);
+  bar(3110, m->egg ? 100.0f
+                   : this->animalSuitability ? static_cast<float>(this->animalSuitability(m->id)) : 0.0f);
+  // The exhibit bar's colours by the animal's own limits (0x4673b5 sets its
+  // two transitions through 0x467963, around the rating v): red while v x
+  // 100 is under cPctHabitat x cHabitatPreference (0x46790e) - v+1, v+2;
+  // else yellow while v is under cHabitatPreference (0x418b8c, not for an
+  // egg) - v-1, v+1; else green - v-2, v-1. An egg's bar shows 100 against
+  // the same transitions. (0x418b8c's +0x142/+0x143 not modelled)
+  if (UiStatusImage *e = dynamic_cast<UiStatusImage *>(z->getElementById(3110));
+      e && this->animalSuitability && m->type >= 0 && m->type < static_cast<int>(this->animals->types().size())) {
+    const Animals::Type &t = this->animals->types()[m->type];
+    const int v = this->animalSuitability(m->id);
+    if (v * 100 < t.pctHabitat * t.habitatPreference)
+      e->setTransitions({v + 1, v + 2});
+    else if (!m->egg && v < t.habitatPreference)
+      e->setTransitions({v - 1, v + 1});
+    else
+      e->setTransitions({v - 2, v - 1});
+  }
   if (UiImage *sex = dynamic_cast<UiImage *>(z->getElementById(3172))) {
     std::string want = m->female ? "ui/animal/icfemale.tga" : "ui/animal/icmale.tga";
     if (this->animalSexImage != want) {
@@ -5066,6 +5213,12 @@ void UiGameScreen::refreshExhibits() {
     name->setHidden(!ex);
   if (!ex)
     return;
+  // Its Status page (zoo.exe mulhab_StatusTab1_click 0x4681d0): popularity,
+  // the books (habitat +0xfc.. donations, +0x108.. upkeep), when it was
+  // built (4349, none for a habitat with +0x2c set), staff assigned. (Its
+  // 4353-4357, +0x114..+0x11c, are in no layout.) The tabs only switch the
+  // page and refresh it: Status 0x4699d2, Animals 0x469af2 (0x467fc8),
+  // Thoughts 0x46981e (0x467e76), Modify Tank 0x468c00 (0x5ae509)
   text(4304, ex->name);
   text(4349, this->resource_manager->getString(22101 + ex->constructedMonth) + " " +
                  std::to_string(ex->constructedDay) + ", Year " +
@@ -5147,7 +5300,8 @@ void UiGameScreen::refreshExhibits() {
         stars->setImage(set[frame]);
     }
   }
-  // Tank Adjustment: the wall and base arrows (greyed where they can go no
+  // Tank Adjustment (zoo.exe tankmod_Buttons_click 0x469128, its refresh
+  // 0x5ae509): the wall and base arrows (greyed where they can go no
   // further) and a step's price; filled, the water's salinity and Drain;
   // drained, Fill Tank with salt or fresh at their prices
   bool tank = ex->tank || ex->groundHeight != ex->floorHeight;
@@ -5166,14 +5320,22 @@ void UiGameScreen::refreshExhibits() {
   grey(4875, !this->fences->canAdjustWall(id, +1));
   grey(4879, !this->fences->canAdjustBase(id, -1));
   grey(4880, !this->fences->canAdjustBase(id, +1));
-  // (the amounts alone, as the original shows them)
-  text(4877, formatCost(static_cast<int>(this->fences->wallStepCost(id))));
+  // (the amounts alone, as the original shows them, cut to dollars:
+  // zoo.exe 0x5ae509 - 4877 the walls a step up from where they are,
+  // 0x4ef687, $0 under initialHeight; 4882 a base step, habitat +0x1a4.
+  // Its 4887, the water's price, is in no layout)
+  text(4877, formatCost(static_cast<int>(this->fences->wallChangeCost(id, ex->wallSub, ex->wallSub + 1))));
   text(4882, formatCost(this->fences->baseStepCost(id)));
   for (int eid : {4867, 4868, 4883, 4885})
     show(eid, full);
   for (int eid : {4881, 4869, 4870, 4891, 4893, 4871, 4872})
     show(eid, tank && !full);
   grey(4885, false);
+  // (Salt / Fresh only once the water's all gone: habitat +0x188, the
+  // water in height units, under 1 - zoo.exe 0x5ae509)
+  const bool wet = ex->water * static_cast<float>(ex->wallSub - 1) >= 1.0f;
+  grey(4869, wet);
+  grey(4870, wet);
   text(4868, this->resource_manager->getString(ex->salt ? 4888 : 4889));
   text(4871, formatCost(this->fences->fillCost(id, true)));
   text(4872, formatCost(this->fences->fillCost(id, false)));

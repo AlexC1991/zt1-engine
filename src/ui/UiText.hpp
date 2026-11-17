@@ -51,6 +51,8 @@ public:
   void setTextColor(SDL_Color c) { color_override = c; has_color_override = true; }
   // Back to the layout's forecolor
   void clearTextColor() { has_color_override = false; }
+  // ours: the layout's forecolor (as drawn without an override)
+  SDL_Color layoutColor() const;
 private:
   void drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect);
   SDL_Texture * text = nullptr;

@@ -39,6 +39,7 @@
 class World {
   friend class SaveGame; // (saving and loading a game)
   friend class Shows; // Shared marine-show tasks use the normal routes and animation queues.
+  friend std::string runParityChecks(class World &, class ResourceManager *); // (bulldozing rubble, #210)
 public:
     // The fence piece drawn at a window point
     bool pickFence(int x, int y, Fences::Edge &e);
@@ -130,8 +131,10 @@ public:
         int staff = -1;                // a staff member clicked (or hired)
         int animal = -1;               // an animal clicked
         int guest = -1;                // a guest clicked
+        int guestDown = -1;            // a held guest put down (its panel again)
         int building = -1;             // a building clicked (its id)
         int animalCost = 0;            // an animal adopted: its price
+        double tankWalls = 0;          // a tank's walls dragged: their price, negative for money back (zoo.exe 0x489f53)
     };
     // Where a world grid vertex is on the window (pixels), on the ground
     bool vertexToWindow(int vx, int vy, int &x, int &y);
@@ -144,6 +147,8 @@ public:
     bool isLayingLine() const { return line.active; }
     // A tank's walls being dragged up or down (no tool, as the original)
     bool isAdjustingTank() const { return wallDrag.tank >= 0; }
+    // The walls dragged come down from above where they started: money back
+    bool wallDragRefund() const { return wallDragPrice() < 0; }
     // What the cursor's over with no tool: a tank wall's hint, a diver
     // platform's tank
     const std::string &hoverTip() const { return hoverTipText; }
@@ -222,6 +227,10 @@ public:
     // (not water or path, nothing standing there, no fence through it)
     Fences::Fit objectFit(const std::string &file, float x, float y, int facing);
     int fitMessage = 0; // (objectFit refused it: the original's message, a lang string; 0 none)
+    // Whether an object is to show its dead look (zoo.exe 0x41038b), and
+    // every object's look brought up to date with it (0x4104cd)
+    bool objectShowsDead(const PlacedObjects::Object &o);
+    void updateDeadLooks();
     // Its footprint in half tiles (cFootprintX, cFootprintY)
     std::pair<int, int> footprint(const std::string &file) { return footprintOf(file); }
     // Adopting animals (a type of getAnimals().types(), male or female;
@@ -250,6 +259,16 @@ public:
     // A rampaging animal onto a tile (zoo.exe 0x437572): each thing standing
     // on it that can be (cRubbleable) turned to rubble (0x47c2ac); how many
     int rubbleTile(int tx, int ty);
+    // What a placed object sells for: rubble its own way (0x615a89), any
+    // other its catalog cost x sellFactor (objectSellValue 0x41ec7f); 0 not
+    // in the catalog
+    float sellValue(const PlacedObjects::Object &o) const;
+    // A rubble piece taken away: the rest of its group with it (ZTRubble's
+    // class slot 0x78, 0x48e50d); how many more went
+    int removeRubbleGroup(const PlacedObjects::Object &gone);
+    // A thing's type as its rubble keeps it; its pieces made one group
+    int nameIdOf(const PlacedObjects::Object &o) const;
+    void groupRubble(const std::vector<int> &group, int type);
     // (debug) routes, blocked tiles and goals drawn over the map
     bool debugPaths = false;
     // (debug) each bought building's footprint outlined
@@ -258,6 +277,9 @@ public:
     // Staff Information's Move (the member follows the cursor until a
     // click puts it down) and Assign (the next exhibit clicked)
     void pickUpStaff(int id);
+    // Guest Information's pick-up: the guest follows the cursor until a
+    // click puts it down (Guests::canPutDown)
+    void pickUpGuest(int id);
     void assignStaff(int id) { assigning = id; }
     bool isAssigning() const { return assigning >= 0; }
     // The camera follows a staff member (-1: none)
@@ -377,6 +399,7 @@ private:
     EntityManager entityManager;    // Entity tracking
     PlacedObjects placedObjects;    // The map's entrance, scenery
     Ambient ambient;                // Birds flying over
+    std::vector<int> ambientIds;    // the scenario's [ambients] (cNameID)
     Staff staff;                    // Keepers, maintenance workers, ...
     Animals animals;                // The zoo's animals
     Shows shows;                    // Marine Mania performances
@@ -532,6 +555,7 @@ private:
     ToolResult bulldozeClick(int x, int y);
     ToolResult bulldozeRectRelease();
     int wallDragCost() const;
+    double wallDragPrice() const;
     Fences fences;                  // Fences, exhibits and tanks
     int fenceTool = -1;
     bool filterTool = false;

@@ -11,10 +11,28 @@
 #include "WorldRenderer.hpp"
 
 namespace {
-constexpr float kPixelsPerTile = 36.0f; // a tile's step on screen (32 x 16)
-constexpr float kAltitude = 6.0f;       // height units above the ground
-constexpr int kMostAtOnce = 3;
+// measured (2026-11-16, the running original, Basic Grass, two bluejays
+// cSpeed 40 and two crows cSpeed 50 read at +0x114/+0x118/+0x11c over 21 s
+// of the world's clock +0x204): a unit's place is in 64ths of a tile; a flyer
+// goes cSpeed of them a second along each axis it moves on - straight 40 and
+// 50 a second, on a diagonal 40 or 50 on both axes, not slowed to the
+// diagonal; its height (+0x11c) stays 0, its art drawing it in the sky
+constexpr float kUnitsPerTile = 64.0f;
 } // namespace
+
+bool Ambient::allows(int kind) const {
+  if (kind < 0 || kind >= static_cast<int>(this->kinds.size()))
+    return false;
+  if (this->allowed.empty())
+    return true;
+  // (by cNameID. measured: ff02 lists 5050, bluejay and crow, and the
+  // running original's spawn list (world +0x20c) held only bluejay and
+  // crow - 5050, which bird.ai and hawk.ai share, finds no kind)
+  const int id = this->kinds[kind].nameId;
+  if (id == 5050)
+    return false;
+  return std::find(this->allowed.begin(), this->allowed.end(), id) != this->allowed.end();
+}
 
 void Ambient::load(ResourceManager *rm) {
   if (!this->kinds.empty() || !rm)
@@ -36,11 +54,15 @@ void Ambient::load(ResourceManager *rm) {
     Kind k;
     k.key = kv.first;
     const std::string ints = "characteristics/integers";
+    // (zoo.exe 0x4c2ec9: cSpeed type +0x108, cFrequency +0x10c, both 0
+    // without; cSoundLoop +0x110 only when 1, cSoundName. ours: a cSpeed of
+    // 50 without - every stock one has it)
     k.speed = static_cast<float>(ai->getInt(ints, "cspeed", 50));
     k.frequency = ai->getInt(ints, "cfrequency", 0);
+    k.nameId = ai->getInt(ints, "cnameid", 0);
     k.blackShadow = ai->getInt(ints, "cforceshadowblack", 1) != 0;
     k.idle = anim(ai->get("animations", "idle"));
-    k.loop = ai->getInt(ints, "csoundloop", 0) != 0;
+    k.loop = ai->getInt(ints, "csoundloop", 0) == 1;
     std::string scfg = ai->get("characteristics/strings", "csoundname");
     if (scfg.empty())
       scfg = ai->get(ints, "csoundname");
@@ -63,55 +85,148 @@ void Ambient::load(ResourceManager *rm) {
   SDL_Log("[Ambient] %zu flyers", this->kinds.size());
 }
 
-void Ambient::spawn(const WorldMap &map, int kind) {
+// zoo.exe 0x4fc160 (ZTAmbientAnimal setup): a side at random (rand % 4) -
+// the far y edge, the near y edge, the far x edge, the near x edge - a
+// place along it at random, and its way (+0x12c, of eight) straight in or
+// 45 degrees either side (rand % 3); its speed cSpeed (type +0x108 to unit
+// +0x154): cSpeed 64ths of a tile a second on each axis it goes along, from
+// a tile's corner (measured, above). Its flight ends (zoo.exe 0x434e9c,
+// its move, class slot 0x44: the place in 64ths, its tile the place / 64
+// rounded toward 0) once its tile is off the map - under 0 (a whole tile
+// past the near edges: -64 or less) or the map's width or height or more -
+// and it's taken away (slot 0xa8). Art with 4 views goes straight in only
+// (rand % 3 still drawn, then 1): 0x412ac4 gets the type's art set
+// (GXLLEAnimSet, its views +0x10, 0x1c bytes each; GXLLEAnimSet::attempt
+// 0x40b967 makes one a view its .ani lists) - no stock flyer's art has 4
+// (measured 2026-11-17: the bluejay type's art is animals/bluejay/m/idle/
+// idle.ani, 5 views). ours: -1 picks a kind it may send at random, for tests
+int Ambient::spawn(const WorldMap &map, int kind) {
   if (this->kinds.empty())
-    return;
+    return -1;
   if (kind < 0) {
-    int total = 0;
-    for (const Kind &k : this->kinds)
-      total += k.frequency;
-    if (total <= 0)
-      return;
-    int pick = std::uniform_int_distribution<int>(0, total - 1)(this->rng);
-    for (size_t i = 0; i < this->kinds.size(); i++) {
-      pick -= this->kinds[i].frequency;
-      if (pick < 0) {
-        kind = static_cast<int>(i);
-        break;
-      }
-    }
+    std::vector<int> any;
+    for (size_t i = 0; i < this->kinds.size(); i++)
+      if (this->kinds[i].frequency > 0 && this->allows(static_cast<int>(i)))
+        any.push_back(static_cast<int>(i));
+    if (any.empty())
+      return -1;
+    kind = any[std::uniform_int_distribution<size_t>(0, any.size() - 1)(this->rng)];
   }
   if (kind < 0 || kind >= static_cast<int>(this->kinds.size()))
-    return;
-  // From a point on one edge of the map to one on another
-  const float W = static_cast<float>(map.getWidth()), H = static_cast<float>(map.getHeight());
-  std::uniform_real_distribution<float> u(0.0f, 1.0f);
-  auto edgePoint = [&](int side, float &x, float &y) {
-    float t = u(this->rng);
-    switch (side) {
-    case 0: x = t * W; y = 0; break;
-    case 1: x = W; y = t * H; break;
-    case 2: x = t * W; y = H; break;
-    default: x = 0; y = t * H; break;
-    }
-  };
-  int from = std::uniform_int_distribution<int>(0, 3)(this->rng);
-  int to = (from + std::uniform_int_distribution<int>(1, 3)(this->rng)) % 4;
+    return -1;
+  const int W = map.getWidth(), H = map.getHeight();
+  if (W <= 0 || H <= 0)
+    return -1;
+  const int side = std::uniform_int_distribution<int>(0, 3)(this->rng);
+  int turn = std::uniform_int_distribution<int>(0, 2)(this->rng);
+  if (this->kinds[kind].idle && this->kinds[kind].idle->viewCount() == 4)
+    turn = 1;
+  // (the ways: 0 -y, 1 +x-y, 2 +x, 3 +x+y, 4 +y, 5 -x+y, 6 -x, 7 -x-y)
+  static const int ways[4][3] = {{1, 0, 7}, {3, 4, 5}, {7, 6, 5}, {1, 2, 3}};
+  static const int step[8][2] = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
   Flyer f;
   f.kind = kind;
-  float tx, ty;
-  edgePoint(from, f.x, f.y);
-  edgePoint(to, tx, ty);
-  float dx = tx - f.x, dy = ty - f.y, len = std::sqrt(dx * dx + dy * dy);
-  if (len < 1.0f)
-    return;
-  float speed = this->kinds[kind].speed / kPixelsPerTile;
-  f.vx = dx / len * speed;
-  f.vy = dy / len * speed;
-  f.life = len / speed;
+  int x = 0, y = 0;
+  switch (side) {
+  case 0: x = std::uniform_int_distribution<int>(0, W - 1)(this->rng); y = H - 1; break;
+  case 1: x = std::uniform_int_distribution<int>(0, W - 1)(this->rng); y = 0; break;
+  case 2: x = W - 1; y = std::uniform_int_distribution<int>(0, H - 1)(this->rng); break;
+  default: x = 0; y = std::uniform_int_distribution<int>(0, H - 1)(this->rng); break;
+  }
+  f.x = static_cast<float>(x);
+  f.y = static_cast<float>(y);
+  const int way = ways[side][turn];
+  const float speed = this->kinds[kind].speed / kUnitsPerTile;
+  f.vx = step[way][0] * speed;
+  f.vy = step[way][1] * speed;
+  // (till its tile is off the map: the far edges at the map's size, the
+  // near ones a whole tile past 0)
+  auto until = [](float pos, float v, float edge) {
+    return v > 0 ? (edge - pos) / v : v < 0 ? (pos + 1.0f) / -v : 1e9f;
+  };
+  f.life = std::min(until(f.x, f.vx, static_cast<float>(W)), until(f.y, f.vy, static_cast<float>(H)));
+  if (f.life <= 0 || f.life > 1e8f)
+    return -1;
   this->flyers.push_back(f);
+  this->sentCount++;
+  return static_cast<int>(this->flyers.size()) - 1;
 }
 
+// zoo.exe 0x4c6a3e (a zoo started or loaded): the sleigh's and the
+// biplane's sounds stopped and let go, the flyers they follow forgotten,
+// both once-a-day marks (0x63e256, 0x63e25c) cleared. ours: the flyers in
+// flight gone, the spawn clock from 0
+void Ambient::clear() {
+  for (Flyer &f : this->flyers)
+    this->ended(f);
+  this->flyers.clear();
+  this->clock = 0;
+  this->sentCount = 0;
+  for (Kind &k : this->kinds)
+    k.last = 0;
+  this->santaSent = this->biplaneSent = false;
+}
+
+// A flight over: its sounds stopped - its own (zoo.exe 0x41e1fd, from
+// taking a unit out of the world 0x41e1bc: the sleigh's or the biplane's
+// stopped, slot 0x60, and let go) and its call
+void Ambient::ended(Flyer &f) {
+  if (f.ownChannel >= 0)
+    Sound::get().stop(f.ownChannel);
+  f.ownChannel = -1;
+  if (f.channel >= 0)
+    Sound::get().stop(f.channel);
+  f.channel = -1;
+}
+
+// zoo.exe 0x4f7ebe, run for each guest that comes in at the gate (0x4f6e3c,
+// after the admission's paid): on 25 December (0x4f5f7a: that day and
+// month) Santa (5083), once that day (0x63e256, cleared on any other day);
+// on 31 October the witch (5084) - one for every guest that comes in; on 15
+// September the biplane (5082), once that day (0x63e25c). Each sent at once
+// (ambientSendNow 0x5a58ff). Santa's and the biplane's own sound (a DX8Sound,
+// slot 0x8): sounds/sleigh.wav, attenuation 0 more (slot 0x48), and
+// sounds/biplane.wav, 1000 more; played looped from where it is (slot 0x34,
+// 0x441797: not at all over 6000 off), then following it (0x435282, from
+// the world's update; updatePosition 0x44153b: stopped for good over 9000)
+void Ambient::guestArrived(const WorldMap &map) {
+  auto send = [&](int nameId, const char *own, int atten) {
+    const int kind = this->kindOf(nameId);
+    if (kind < 0)
+      return;
+    const int at = this->spawn(map, kind);
+    if (at < 0 || !own)
+      return;
+    Flyer &f = this->flyers[at];
+    f.own = own;
+    f.ownAtten = atten;
+    float dx = 0, dy = 0;
+    if (this->viewOffset && this->viewOffset(f.x, f.y, dx, dy))
+      f.ownChannel = Sound::get().loopAt(f.own, dx, dy, f.ownAtten);
+  };
+  if (this->month == 11 && this->day == 25) {
+    if (!this->santaSent) {
+      this->santaSent = true;
+      send(5083, "sounds/sleigh.wav", 0);
+    }
+  } else {
+    this->santaSent = false;
+  }
+  if (this->month == 9 && this->day == 31)
+    send(5084, nullptr, 0);
+  if (this->month == 8 && this->day == 15) {
+    if (!this->biplaneSent) {
+      this->biplaneSent = true;
+      send(5082, "sounds/biplane.wav", 1000);
+    }
+  } else {
+    this->biplaneSent = false;
+  }
+}
+
+// zoo.exe 0x43494e (ZTAmbientAnimal's update, class slot 0x28): it moves on
+// along its way (slots 0x10, 0x44) unless held. ours: a straight line at its
+// speed, its calls as before
 void Ambient::update(float seconds, const WorldMap &map) {
   for (Flyer &f : this->flyers) {
     f.x += f.vx * seconds;
@@ -143,34 +258,31 @@ void Ambient::update(float seconds, const WorldMap &map) {
           }
       }
     }
-    if (f.age >= f.life && f.channel >= 0) {
-      Sound::get().stop(f.channel);
-      f.channel = -1;
+    // Its own sound following it (zoo.exe 0x435282 -> updatePosition
+    // 0x44153b: stopped for good once over 9000 off)
+    if (f.ownChannel >= 0) {
+      float ox = 0, oy = 0;
+      if (!(this->viewOffset && this->viewOffset(f.x, f.y, ox, oy) &&
+            Sound::get().place(f.ownChannel, ox, oy, f.ownAtten)))
+        f.ownChannel = -1;
     }
+    if (f.age >= f.life)
+      this->ended(f);
   }
   this->flyers.erase(std::remove_if(this->flyers.begin(), this->flyers.end(),
                                     [](const Flyer &f) { return f.age >= f.life; }),
                      this->flyers.end());
-  // The witch on Halloween, Santa on Christmas Eve and Day: once a day
-  int special = -1;
+  // zoo.exe 0x435adf (from the world's update 0x435921, its clock +0x204
+  // in whole seconds): each kind the scenario lists, with a cFrequency, one
+  // when that many seconds have gone since its last - no cap
+  this->clock += seconds;
+  const double now = std::floor(this->clock);
   for (size_t i = 0; i < this->kinds.size(); i++) {
-    if (this->kinds[i].key == "witch" && this->month == 9 && this->day == 31)
-      special = static_cast<int>(i);
-    if (this->kinds[i].key == "santa" && this->month == 11 &&
-        (this->day == 24 || this->day == 25))
-      special = static_cast<int>(i);
-  }
-  if (special >= 0 && !this->specialFlown) {
-    this->spawn(map, special);
-    this->specialFlown = true;
-  } else if (special < 0) {
-    this->specialFlown = false;
-  }
-  this->nextIn -= seconds;
-  if (this->nextIn <= 0) {
-    if (static_cast<int>(this->flyers.size()) < kMostAtOnce)
-      this->spawn(map);
-    this->nextIn = std::uniform_real_distribution<float>(6.0f, 20.0f)(this->rng);
+    Kind &k = this->kinds[i];
+    if (k.frequency <= 0 || !this->allows(static_cast<int>(i)) || now - k.last < k.frequency)
+      continue;
+    k.last = now;
+    this->spawn(map, static_cast<int>(i));
   }
 }
 
@@ -217,7 +329,125 @@ void Ambient::drawFlyers(SDL_Renderer *renderer, const WorldRenderer &view,
     uint32_t ms = k.idle->frameTimeMs() ? k.idle->frameTimeMs() : 100;
     int frame = static_cast<int>(f.age * 1000.0f / ms);
     float sx, sy, d;
-    view.worldToScreenF(f.x, f.y, this->groundAt(map, f.x, f.y) + kAltitude, sx, sy, d);
+    view.worldToScreenF(f.x, f.y, this->groundAt(map, f.x, f.y), sx, sy, d);
     k.idle->drawAnchored(renderer, sx, sy, this->facing(view, f), nullptr, frame);
+  }
+}
+
+// zoo.exe ZTAmbientAnimal::load 0x450261: its speed (+0x154) and the step
+// left over (+0x158), then the unit's own part - its place and its way
+// (+0x12c, 0x434e9c's steps: 0 -y, 1 +x-y, 2 +x ... 7 -x-y). The step left
+// over is how far into its next 64th it is, in thousandths (0x434e9c: it
+// adds ms x cSpeed and takes a step a 1000 of it). ours: its flight till it's
+// off the map as spawn reckons it; a speed of 0 (written by our own saves
+// before version 21) its kind's cSpeed
+bool Ambient::resume(const WorldMap &map, const std::string &key, float x, float y, int way, float speed,
+                     int stepLeft) {
+  const int kind = this->kindIndex(key);
+  const int W = map.getWidth(), H = map.getHeight();
+  if (kind < 0 || W <= 0 || H <= 0)
+    return false;
+  static const int step[8][2] = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+  if (speed <= 0)
+    speed = this->kinds[kind].speed;
+  Flyer f;
+  f.kind = kind;
+  f.x = x;
+  f.y = y;
+  f.vx = step[way & 7][0] * speed / kUnitsPerTile;
+  f.vy = step[way & 7][1] * speed / kUnitsPerTile;
+  const float left = static_cast<float>(std::clamp(stepLeft, 0, 999)) / 1000.0f / kUnitsPerTile;
+  f.x += step[way & 7][0] * left;
+  f.y += step[way & 7][1] * left;
+  auto until = [](float pos, float v, float edge) {
+    return v > 0 ? (edge - pos) / v : v < 0 ? (pos + 1.0f) / -v : 1e9f;
+  };
+  f.life = std::min(until(f.x, f.vx, static_cast<float>(W)), until(f.y, f.vy, static_cast<float>(H)));
+  if (f.life <= 0 || f.life > 1e8f)
+    return false;
+  this->flyers.push_back(f);
+  return true;
+}
+
+// zoo.exe ZTAmbientAnimal::save 0x47a7fd: its place in whole 64ths - the
+// steps it has taken (0x434e9c), counted from where it came in - and the
+// step left over (+0x158), how far into the next one it is in thousandths.
+// ours: from where it is, toward the way it goes
+void Ambient::originalPlace(const Flyer &f, int32_t &x64, int32_t &y64, int32_t &stepLeft) {
+  auto whole = [](float pos, float v, double &into) {
+    const double p = static_cast<double>(pos) * kUnitsPerTile;
+    const double w = v > 0 ? std::floor(p + 1e-4) : v < 0 ? std::ceil(p - 1e-4) : std::round(p);
+    into = std::max(into, std::fabs(p - w));
+    return static_cast<int32_t>(w);
+  };
+  double into = 0;
+  x64 = whole(f.x, f.vx, into);
+  y64 = whole(f.y, f.vy, into);
+  stepLeft = std::clamp(static_cast<int32_t>(into * 1000.0), 0, 999);
+}
+
+// ours: the flyers in flight as the engine's part of a save keeps them
+std::vector<Ambient::Saved> Ambient::saveFlyers() const {
+  std::vector<Saved> out;
+  for (const Flyer &f : this->flyers) {
+    Saved s;
+    s.key = this->kinds[f.kind].key;
+    s.nameId = this->kinds[f.kind].nameId;
+    s.speed = this->kinds[f.kind].speed;
+    s.way = static_cast<int>((std::lround(std::atan2(f.vx, -f.vy) * 4 / 3.14159265358979) + 8) % 8);
+    s.x = f.x; s.y = f.y; s.vx = f.vx; s.vy = f.vy; s.age = f.age; s.life = f.life;
+    s.own = f.own; s.ownAtten = f.ownAtten;
+    originalPlace(f, s.x64, s.y64, s.stepLeft);
+    out.push_back(s);
+  }
+  return out;
+}
+
+// ours: back in flight, their own sounds started again from where they are
+void Ambient::loadFlyers(const std::vector<Saved> &saved) {
+  for (Flyer &f : this->flyers)
+    this->ended(f);
+  this->flyers.clear();
+  for (const Saved &s : saved) {
+    const int kind = this->kindIndex(s.key);
+    if (kind < 0)
+      continue;
+    Flyer f;
+    f.kind = kind;
+    f.x = s.x; f.y = s.y; f.vx = s.vx; f.vy = s.vy; f.age = s.age; f.life = s.life;
+    f.own = s.own; f.ownAtten = s.ownAtten;
+    float dx = 0, dy = 0;
+    if (!f.own.empty() && this->viewOffset && this->viewOffset(f.x, f.y, dx, dy))
+      f.ownChannel = Sound::get().loopAt(f.own, dx, dy, f.ownAtten);
+    this->flyers.push_back(f);
+  }
+}
+
+std::vector<std::pair<std::string, double>> Ambient::lasts() const {
+  std::vector<std::pair<std::string, double>> out;
+  for (const Kind &k : this->kinds)
+    out.push_back({k.key, k.last});
+  return out;
+}
+
+// zoo.exe 0x59148e (from applyStartSettings 0x58ed1f, which a saved zoo's
+// load runs again through resumeScript 0x58fb34): each listed kind added to
+// the spawn list (world +0x20c) as {last 0, type}, and the world's clock
+// (+0x204, whole seconds) carries on - not saved, not reset - so each comes
+// on the next update. measured (2026-11-17, the running original,
+// everything-ff02-units loaded by Continue Saved Game): the list held
+// bluejay and crow, both last 559 with the clock at 564, one more of each
+// flying than the file held. ours: due now, whatever our clock reads
+void Ambient::dueNow() {
+  const double now = std::floor(this->clock);
+  for (Kind &k : this->kinds)
+    k.last = now - k.frequency;
+}
+
+void Ambient::setLasts(const std::vector<std::pair<std::string, double>> &l) {
+  for (const auto &[key, last] : l) {
+    const int kind = this->kindIndex(key);
+    if (kind >= 0)
+      this->kinds[kind].last = last;
   }
 }

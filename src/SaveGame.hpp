@@ -54,6 +54,11 @@ public:
   // The Windows "Save a zoo..." / "Load a zoo..." dialogs (empty: cancelled)
   static std::string askSavePath();
   static std::string askLoadPath();
+  // zoo.ini [user] lastfile: the zoo last saved or loaded through the
+  // dialogs, which they start on and Continue Saved Game loads; a new zoo
+  // started from the menus clears it
+  static std::string lastFile();
+  static void setLastFile(const std::string &path);
 
 private:
   static bool encodeOriginal(World &world, ZooSim &sim, UiGameScreen &hud,
@@ -64,6 +69,7 @@ private:
   static bool getWorld(void *in, World &world, uint32_t version);
   static void restoreOriginalManagers(World &world, UiGameScreen &hud);
   static void restoreOriginalBooks(World &world, ZooSim &sim);
+  static void resumeAmbients(World &world);
 };
 
 #endif // SAVE_GAME_HPP

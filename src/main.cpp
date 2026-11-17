@@ -27,6 +27,7 @@
 #include "Input.hpp"
 #include "InputManager.hpp"
 #include "LoadScreen.hpp"
+#include "RenameCheats.hpp"
 #include "Research.hpp"
 #include "ResourceManager.hpp"
 #include "ScenarioManager.hpp"
@@ -756,6 +757,16 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
     world->getAnimals().markDirty();
     updateHudClock(rm);
   });
+  g_hud->guestPickUp = [world](int id) { world->pickUpGuest(id); };
+  g_hud->guestRenamed = [world](int id, const std::string &name) {
+    auto &list = world->getGuests().mutableGuests();
+    for (size_t i = 0; i < list.size(); i++)
+      if (list[i].id == id) {
+        list[i].name = name;
+        RenameCheats::guestRenamed(*world, static_cast<int>(i), name);
+        break;
+      }
+  };
   g_hud->setGuests(&world->getGuests(), [world, rm](int type) {
     const auto &types = world->getAnimals().types();
     return type >= 0 && type < static_cast<int>(types.size()) ? rm->getString(types[type].nameId) : std::string();
@@ -889,6 +900,9 @@ static int g_mouseX = 0, g_mouseY = 0;
 static void handleToolResult(const World::ToolResult &r, ResourceManager *rm) {
   if (r.cost > 0)
     g_sim.spend(ZooSim::Construction, r.cost);
+  // (a tank's walls dragged: their price, or money back - zoo.exe 0x489e6c)
+  if (r.tankWalls != 0)
+    g_sim.spend(ZooSim::Construction, r.tankWalls);
   // A new exhibit: exhibit.wav, then its name asked
   if (!r.newExhibits.empty())
     Sound::get().play("sounds/exhibit", 100);
@@ -906,6 +920,8 @@ static void handleToolResult(const World::ToolResult &r, ResourceManager *rm) {
       int gate = g_world->getFences().finishExhibit(id, n, g_world->getMap());
       if (gate > 0)
         g_sim.spend(ZooSim::Construction, gate);
+      // (then its staff access check: zoo.exe 0x44e4eb)
+      g_world->getStaff().exhibitAccess(id, g_world->getMap(), g_world->getFences());
     });
   }
   if (!r.askMerge.empty())
@@ -954,6 +970,10 @@ static void handleToolResult(const World::ToolResult &r, ResourceManager *rm) {
   // A building clicked: its Building Information
   if (r.building >= 0)
     g_hud->showBuilding(r.building);
+  // A held guest put down: selected, its panel open again (zoo.exe
+  // placeObject 0x4d923c: ui_main_4b2322(it, 1), 0x431712)
+  if (r.guestDown >= 0)
+    g_hud->showGuest(r.guestDown);
   // A guest clicked: its panel; a woman's "hello" (vofem3, as the original)
   if (r.guest >= 0) {
     g_hud->showGuest(r.guest);
@@ -1025,7 +1045,8 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
       g_sim.earn(ZooSim::ShowIncome, paid);
       updateHudClock(rm);
     }
-    for (const auto &message : g_world->getShows().takeMessages()) g_hud->postMessage(message);
+    for (const Shows::Message &m : g_world->getShows().takeMessages())
+      g_hud->postMessage(m.text, m.kind, m.animal >= 0 ? UiGameScreen::Subject::Animal : UiGameScreen::Subject::None, m.animal);
     if (double sold = gs.takeConcessions(); sold > 0) {
       g_sim.earn(ZooSim::Concessions, sold);
       updateHudClock(rm);
@@ -1081,10 +1102,9 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
       g_hud->setZooInfo(info);
     }
     // (the main bar's meters, zoo.exe ZTGameMgr::update 0x435055: once a
-    // second guest happiness, animal happiness and the rating, each -100
-    // to 100 shown 0 to 100 - the rating's through mainBarRating 0x41d22f)
-    if (auto *bar = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1013)))
-      bar->setValue(guests ? gs.averageHappiness() : 0);
+    // second animal happiness, guest happiness and the rating, each -100
+    // to 100 shown 0 to 100 - set below with the rating's counts they're
+    // read from)
   }
   // The zoo rating, every 4 s (zoo.exe 0x41f881 / 0x41fcc1), each term in
   // whole numbers: 15 x the healthy share of its animals; 10 x its kinds in
@@ -1141,6 +1161,14 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
             k++;
           }
         avgG = k ? static_cast<int>(sum / k) : 0;
+        // (the same count is this month's books row 25, the guests in the
+        // zoo: cleared, then 1 a guest, 0x41f8ad / 0x41f669)
+        g_sim.countGuests(k);
+        // The main bar's guest meter (zoo.exe ZTGameMgr::update 0x435055 ->
+        // 0x41d15d, GuestStatus 1013): this average (+0x70), (it + 100) x
+        // 100 / 200, 0 with no guests counted (+0x54)
+        if (auto *bar = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1013)))
+          bar->setValue(Original::mainBarMeter(avgG, k));
       }
       r += (avgG + 100) * 25 / 200;
       // Value: cash, the animals', every object's (the map's own too) and
@@ -1297,10 +1325,16 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
       }
       int rating = std::clamp(r, 0, 100);
       g_sim.setRating(rating);
+      // (the main bar's rating meter 1015, zoo.exe ZTGameMgr::update
+      // 0x435055 -> mainBarRating 0x41d22f, once a second)
       if (auto *zoo = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1015)))
         zoo->setValue(rating);
+      // (the main bar's animal meter, [AnimalStatus] 1011 in main.lyt:
+      // zoo.exe 0x41d08b sets 0x3f3 once a second from ZTGameMgr::update
+      // 0x435055 - game manager +0x6c, (h + 100) x 100 / 200, 0 with no
+      // animals, +0x30; the guests' 1013 is 0x41d15d from +0x70)
       if (auto *bar = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1011)))
-        bar->setValue(n ? static_cast<int>((sumH / n + 100) / 2) : 0);
+        bar->setValue(Original::mainBarMeter(n ? static_cast<int>(sumH / n) : 0, n));
       UiGameScreen::ZooInfo info = g_hud->zooInfo();
       if (info.rating != rating || info.value != zooValue) {
         info.rating = rating;
@@ -2371,7 +2405,10 @@ static void drawToolCost(SDL_Renderer *renderer, ResourceManager *rm) {
     return;
   // As the original: "$70" over a piece, "-$630" dragging (money going
   // out), "$0" where none can go
-  std::string label = ((g_world->isDraggingFence() || g_world->isDraggingPath() || g_world->getStaffTool() >= 0) &&
+  // (a tank's walls dragged: 0x489f53 passes the price negated - "-$206"
+  // up, money back coming down from above where they started)
+  std::string label = ((g_world->isDraggingFence() || g_world->isDraggingPath() || g_world->getStaffTool() >= 0 ||
+                        (g_world->isAdjustingTank() && !g_world->wallDragRefund())) &&
                           g_world->hoverCost() > 0
                       ? "-"
                       : "") +
@@ -2532,6 +2569,17 @@ static void hookMainMenu(UiLayout *layout, ResourceManager *rm) {
       if (g_menuOptions)
         g_menuOptions->open(false);
     };
+  // Continue Saved Game (zoo.exe 0x50ef37, from startup_Panel_show 0x50f1c8):
+  // only while zoo.ini [user] lastfile names a file that's there
+  // (GetFileAttributesA); otherwise off, and lastfile cleared
+  if (UiElement *c = layout->getElementById(static_cast<int>(UiAction::STARTUP_CONTINUE_GAME))) {
+    const std::string last = SaveGame::lastFile();
+    std::error_code ec;
+    const bool there = !last.empty() && std::filesystem::exists(last, ec);
+    if (!there && !last.empty())
+      SaveGame::setLastFile("");
+    c->setDisabled(!there);
+  }
 }
 
 static void updateScenarioDetails(UiLayout *layout,
@@ -2725,6 +2773,21 @@ static void populateFreeformList(UiLayout *layout,
   g_difficultyText = dynamic_cast<UiText *>(layout->getElementById(11531));
   loadStartingCash();
   showStartingCash();
+  // Typed in (zoo.exe mapselec_StartingCash_click 0x616414): the currency
+  // symbol taken out once (text 22100, 0x5fe02d) and every thousands
+  // separator (",", 0x5fe0a9), the rest read as a whole number (0x405218);
+  // at MSMaxCash or more, MSMaxCash; at MSMinCash or less, MSMinCash; kept
+  // and written back (0x4cb384)
+  if (g_startingCashText)
+    g_startingCashText->onCommit = [](const std::string &v) {
+      std::string text = v;
+      const std::string sign = g_cashStrings ? g_cashStrings->getString(22100) : std::string("$");
+      if (size_t at = sign.empty() ? std::string::npos : text.find(sign); at != std::string::npos)
+        text.erase(at, sign.size());
+      for (size_t at; (at = text.find(',')) != std::string::npos;)
+        text.erase(at, 1);
+      setStartingCash(std::atoi(text.c_str()));
+    };
 }
 
 // ============================================================================
@@ -3198,6 +3261,9 @@ static bool gameSave(const std::string &given = "") {
     return false; // (cancelled)
   bool ok = SaveGame::save(path, *g_world, g_sim, *g_hud, g_currentMapPath);
   SDL_Log("[Save] %s %s", ok ? "saved" : "couldn't save", path.c_str());
+  // (zoo.exe saveZooDialog 0x4769ac: the dialog's file kept as lastfile)
+  if (ok && given.empty())
+    SaveGame::setLastFile(path);
   g_hud->showMessage(ok ? "Zoo saved." : (SaveGame::lastError().empty()?"The zoo couldn't be saved.":SaveGame::lastError()),
                      ok ? SDL_Color{255, 255, 255, 255} : SDL_Color{255, 40, 40, 255});
   return ok;
@@ -8148,6 +8214,34 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         world->centreOn(an.member(id1)->x, an.member(id1)->y);
         capture("animal_panel");
         check("Animal Information open", g_hud->isPanelOpen(6) && g_hud->shownAnimalId() == id1);
+        // (zoo.exe animalInfoRefresh 0x4673b5: an egg shows full happiness,
+        // food and suitability bars)
+        {
+          Animals::Member *shown = an.member(id1);
+          const bool wasEgg = shown->egg;
+          shown->egg = true;
+          g_hud->refreshAnimal();
+          const bool full = g_hud->animalBarValue(3104) == 100 && g_hud->animalBarValue(3108) == 100 &&
+                            g_hud->animalBarValue(3110) == 100;
+          shown->egg = wasEgg;
+          g_hud->refreshAnimal();
+          check("an egg's Animal Information shows full happiness, food and suitability (0x4673b5)", full);
+          // (the exhibit bar's colour by the animal's own limits: red under
+          // cPctHabitat x cHabitatPreference / 100, yellow under
+          // cHabitatPreference, else green - 0x4673b5, 0x46790e, 0x418b8c)
+          Animals::Type &kind = an.mutableTypes()[shown->type];
+          const int keepPref = kind.habitatPreference, keepPct = kind.pctHabitat;
+          const int v = g_hud->animalBarValue(3110);
+          int bands[3];
+          kind.habitatPreference = 101; kind.pctHabitat = 100; g_hud->refreshAnimal(); bands[0] = g_hud->animalBarBand(3110);
+          kind.habitatPreference = v + 1; kind.pctHabitat = 1; g_hud->refreshAnimal(); bands[1] = g_hud->animalBarBand(3110);
+          kind.habitatPreference = 0; kind.pctHabitat = 0; g_hud->refreshAnimal(); bands[2] = g_hud->animalBarBand(3110);
+          kind.habitatPreference = keepPref; kind.pctHabitat = keepPct;
+          g_hud->refreshAnimal();
+          check(("the exhibit bar is red, yellow or green by the animal's own limits (0x4673b5: " + std::to_string(v) + " " +
+                 std::to_string(bands[0]) + std::to_string(bands[1]) + std::to_string(bands[2]) + ")").c_str(),
+                v >= 0 && bands[0] == 0 && bands[1] == 1 && bands[2] == 2);
+        }
         click(3164);
         capture("animal_panel_general");
         click(3162);
@@ -8801,6 +8895,27 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           click(4557);
           check("its price up a step ($2.25)", std::fabs(world->getObjects().objects().back().price - 2.25f) < 0.001f);
           click(4556);
+          // A price typed in (zoo.exe infocom_ItemcostCost_click 0x6176c1):
+          // "$" and "," taken out; up by raisePrice, down by lowerPrice, so
+          // kept to the arrows' bounds
+          if (UiText *typed = dynamic_cast<UiText *>(g_hud->getElementById(4555)); typed && typed->onCommit) {
+            const PlacedObjects::Object &bp = world->getObjects().objects().back();
+            const float lo = g_hud->shownLowCost, hi = g_hud->shownHighCost,
+                        most = Original::economy().buildingUseCostMax;
+            typed->onCommit("$3.50");
+            const float a = bp.price;
+            typed->onCommit("$1,000.00");
+            const float b = bp.price;
+            typed->onCommit("-5");
+            const float c = bp.price;
+            typed->onCommit("$2.00");
+            check(("a typed price kept to the arrows' bounds: $3.50 -> " + std::to_string(a) + ", $1,000 -> " +
+                   std::to_string(b) + ", -5 -> " + std::to_string(c) + " (0x6176c1)").c_str(),
+                  std::fabs(a - std::min({3.5f, most, hi})) < 0.001f && std::fabs(b - std::min({1000.0f, most, hi})) < 0.001f &&
+                      std::fabs(c - std::max({-5.0f, 0.0f, lo})) < 0.001f && std::fabs(bp.price - std::max(2.0f, lo)) < 0.5f);
+          } else {
+            check("a typed price (the price text 4555)", false);
+          }
           // Its paint tab: "Roof" in gold; the 24 colours (red, green, blue
           // order: sky first); sky picked, the stand is painted sky
           {
@@ -8839,6 +8954,25 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                 g_hud->isPanelOpen(9) && g.name.rfind("Guest ", 0) == 0);
           click(3465);
           capture("guest_thoughts");
+          g_hud->showPanel(0, "");
+          // Shown again: the tab last picked (infogst_Panel_show 0x46a91b);
+          // a name typed: taken with a letter in it, blanks not (0x618a35,
+          // 0x449215)
+          g_hud->showGuest(g.id);
+          const UiButton *thoughtsTab = dynamic_cast<UiButton *>(g_hud->getElementById(3465));
+          const bool keptTab = thoughtsTab && thoughtsTab->isToggledOn();
+          const std::string nameWas = g.name;
+          std::string blank = "?", named = "?";
+          if (UiText *typed = dynamic_cast<UiText *>(g_hud->getElementById(3402)); typed && typed->onCommit) {
+            typed->onCommit("   ");
+            blank = gs.guests().front().name;
+            typed->onCommit("Zoo Fan");
+            named = gs.guests().front().name;
+            typed->onCommit(nameWas);
+          }
+          check(("Guest Information: its last tab kept, renamed (blank: " + blank + ", typed: " + named + ") (0x46a91b, 0x618a35)").c_str(),
+                keptTab && blank == nameWas && named == "Zoo Fan" && gs.guests().front().name == nameWas);
+          click(3462);
           g_hud->showPanel(0, "");
         }
         // The Exhibit/Show List on the zebras' exhibit: each tab
@@ -10169,6 +10303,12 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
               gg.y = b->y;
               gg.path.clear();
               gg.pathAt = 0;
+              // (standing there through the chase: no pick of its own - one
+              // that rolls to go home, off the paths, has no way to the gate
+              // and is gone, and the bear has nobody to chase)
+              gg.animTime = 0;
+              gg.playFor = 60.0f;
+              gg.leaveCheck = 1000;
               for (int i = 0; i < 100 && !chased; i++) {
                 world->update(SDL_GetKeyboardState(nullptr), 0.1f);
                 b = an.member(bear);
@@ -10623,6 +10763,36 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       check(("a run-down filter serviced by a maintenance worker (health " + std::to_string(static_cast<int>(f.health)) + ")").c_str(),
             going && f.health >= fn.filterType().startHealth - 0.01f);
     }
+  }
+
+  // The main bar's guest meter (zoo.exe 0x435055 -> 0x41d15d): the
+  // rating's average of the guests in the zoo, in whole numbers, (it + 100)
+  // x 100 / 200 - an average of -1 shows 49 - and 0 with none (last: its
+  // guests and time would move the checks after it)
+  if (g_world && g_hud) {
+    std::vector<Input> none;
+    Guests &gs = g_world->getGuests();
+    const auto *meter = dynamic_cast<UiStatusImage *>(g_hud->getElementById(1013));
+    gs.clear();
+    SDL_Delay(4100);
+    worldInputs(renderer, rm, none);
+    const int empty = meter ? meter->getValue() : -1;
+    const bool noEntrance = !gs.hasEntrance();
+    if (noEntrance)
+      gs.setEntrance(40, 40);
+    for (int k = 0; k < 3; k++)
+      gs.admit(0);
+    SDL_Delay(4100);
+    worldInputs(renderer, rm, none);
+    const Guests::Census c = gs.census();
+    const int shown = meter ? meter->getValue() : -1;
+    SDL_Log("[Check] guest meter: empty %d, %d guests in the zoo averaging %d shows %d", empty, c.guests, c.happiness,
+            shown);
+    check("the guest meter: (the guests' whole-number average + 100) x 100 / 200, 0 with none (0x41d15d)",
+          empty == 0 && Original::mainBarMeter(-1, 1) == 49 && Original::mainBarMeter(0, 2) == 50 &&
+              Original::mainBarMeter(37, 0) == 0 && c.guests >= 1 && shown == Original::mainBarMeter(c.happiness, c.guests));
+    if (noEntrance)
+      gs.setEntrance(-1, -1);
   }
 
   if (timings)
@@ -11284,19 +11454,13 @@ int main(int argc, char *argv[]) {
     case UiAction::STARTUP_LOAD_GAME:
     case UiAction::STARTUP_CONTINUE_GAME: {
       std::string path;
-      if (action == UiAction::STARTUP_LOAD_GAME) {
-        path = SaveGame::askLoadPath();
-      } else {
-        std::filesystem::file_time_type newest{};
-        std::error_code ec;
-        for (const auto &e : std::filesystem::directory_iterator(SaveGame::folder(), ec))
-          if ((e.path().extension() == ".zt1save" || e.path().extension() == ".zoo") &&
-              (path.empty() || e.last_write_time() > newest)) {
-            newest = e.last_write_time();
-            path = e.path().string();
-          }
-      }
+      // (Continue: zoo.exe startup_ContinueGame_click 0x485c7e - the zoo
+      // zoo.ini [user] lastfile names, nothing when it names none)
+      const bool dialog = action == UiAction::STARTUP_LOAD_GAME;
+      path = dialog ? SaveGame::askLoadPath() : SaveGame::lastFile();
       if (!path.empty() && gameLoad(&resource_manager, path)) {
+        if (dialog)
+          SaveGame::setLastFile(path); // (loadZooDialog 0x4cc0d7)
         delete layout;
         layout = nullptr;
         g_currentState = LayoutState::GAME_LOOP;
@@ -11308,9 +11472,12 @@ int main(int argc, char *argv[]) {
       gameSave();
       break;
     // Load Game: "Load a zoo...", its map started afresh, then the save
-    case UiAction::GAME_LOAD:
-      gameLoad(&resource_manager);
+    case UiAction::GAME_LOAD: {
+      const std::string path = SaveGame::askLoadPath();
+      if (!path.empty() && gameLoad(&resource_manager, path))
+        SaveGame::setLastFile(path); // (zoo.exe loadZooDialog 0x4cc0d7)
       break;
+    }
     // The game menu: Exit Game quits; Main Menu leaves the game
     case UiAction::GAME_EXIT:
       running = false;
@@ -11369,6 +11536,7 @@ int main(int argc, char *argv[]) {
         if (info && !info->isLocked) {
           SDL_Log("Starting Scenario: %s", info->name.c_str());
           startScenario(&resource_manager, *info);
+          SaveGame::setLastFile(""); // (zoo.exe 0x4c9bc9)
 
           delete layout;
           layout = nullptr; // the in-game HUD replaces the menus
@@ -11385,6 +11553,7 @@ int main(int argc, char *argv[]) {
           SDL_Log("Starting Freeform: %s", map->name.c_str());
           g_world->loadFreeform(map->path);
           g_currentMapPath = map->path;
+          SaveGame::setLastFile(""); // (zoo.exe mapselec_PlayMap_click -> 0x4ca1f0)
           createHud(&resource_manager, g_world, g_currentStartingCash);
           startGoals(&resource_manager, map->path);
 
@@ -11556,7 +11725,14 @@ int main(int argc, char *argv[]) {
         if (months != g_world->getFences().month()) {
           if (g_world->getFences().month() > 0) {
             g_world->getFences().newMonth();
-            // Staff are paid every month
+            // The shows' months roll too (zoo.exe monthlyUpkeep 0x483f11 -
+            // rollAllMonthly 0x4842a2 - rollMonthlyB 0x48b57e)
+            g_world->getShows().newMonth();
+            // Staff are paid every month (zoo.exe monthlyUpkeep 0x483f11:
+            // each one's wage, booked by kind - keepers and the DRT on
+            // bookExpense360 0x5ad038, tour guides on 0x48bd8b,
+            // maintenance workers on bookUpkeep 0x483d34 - all Employee
+            // Wages on Finances)
             if (int wages = g_world->getStaff().monthlyWages())
               g_sim.spend(ZooSim::Wages, wages);
             // Members: each may lapse (rand 0-100 less cMembershipJoinFactor
@@ -11576,7 +11752,9 @@ int main(int argc, char *argv[]) {
                 g_sim.earn(ZooSim::Donations, stay * (e.endowmentGiftLow + (std::rand() % 101) *
                                                       (e.endowmentGiftHigh - e.endowmentGiftLow) * 0.01));
             }
-            // And every building's upkeep (its cUpkeep, Zoo Upkeep Cost)
+            // And every building's upkeep (its cUpkeep, Zoo Upkeep Cost:
+            // zoo.exe monthlyUpkeep 0x483f11 sums buildingMonthlyUpkeep
+            // 0x59e17c and books it once, bookExpense690 0x49bd80, row 28)
             for (PlacedObjects::Object &o : g_world->objectsMutable().all()) {
               if (o.label.empty())
                 continue;

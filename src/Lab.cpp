@@ -3296,7 +3296,7 @@ std::string LabApp::selJson() {
     o.str("need", g->need).str("watching", exName(g->target)).num("x", g->x).num("y", g->y).str("doing", g->anim);
     o.num("happiness", g->happiness).num("hunger", g->hunger).num("thirst", g->thirst).num("bathroom", g->bathroom);
     o.num("tired", g->tired).flag("souvenir", g->souvenir).flag("trash", g->trash).flag("leaving", g->leaving);
-    o.num("seen", static_cast<double>(g->seen.size())).add("thoughts", "[" + thoughts + "]");
+    o.num("seen", static_cast<double>(g->visits.size())).num("visitCount", g->visitCount).add("thoughts", "[" + thoughts + "]");
     o.num("guide", g->guide).flag("tourHeard", g->tourHeard);
     o.add("route", routeJson("guest", g->id, g->path, g->pathAt));
     {

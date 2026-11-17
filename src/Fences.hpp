@@ -366,7 +366,17 @@ public:
   // it, its floor staying below the ground. Filling: the water's price
   // (saltWater / freshWater per unit, tiles x depth).
   double wallStepCost(int id) const;
+  // The walls from one height to another: free up to initialHeight, money
+  // back (negative) coming down from above it (zoo.exe 0x4ef687)
+  double wallChangeCost(int id, int from, int to) const;
   int baseStepCost(int id) const;
+  // The lowest the walls may go: 2, or a unit over the deepest thing in it
+  // (zoo.exe 0x5af226)
+  int minWallHeight(int id) const;
+  // The deepest thing in a tank, in height units: an object's cDepth
+  // (zoo.exe 0x5af392); an animal's cDepth, or more where an object on its
+  // tile has a greater cHeight (0x5af19b); the world fills it in
+  std::function<int(int exhibit)> tankDepth;
   bool canAdjustWall(int id, int step) const;
   void adjustWall(int id, int step);
   bool canAdjustBase(int id, int step) const;
@@ -381,6 +391,10 @@ public:
   // (zoo.exe 0x49340d: 10549 "Guests can not see the animals inside %s
   // because the water is too murky.")
   std::vector<int> takeMurkyTanks() { return std::move(this->murkyTanks); }
+  // zoo.exe 0x49340d (a tank's purity set, +0x1a8): kept to 0..100
+  // (0x63af00, tanks.cfg's purity); from over the lowest band (0x6390b0) to
+  // at or under it, the tank goes on the murky list above
+  void setPurity(int tank, float purity);
   // The (named) exhibit a tile is in, or a piece walls (-1: none)
   int exhibitAt(int x, int y) const;
   int exhibitOf(const Edge &e) const;

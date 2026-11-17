@@ -2,6 +2,7 @@
 #include "Goals.hpp"
 #include "Features.hpp"
 #include "ItemCatalog.hpp"
+#include "Settings.hpp"
 #include "Utils.hpp"
 
 #include <algorithm>
@@ -34,7 +35,7 @@
 namespace {
 constexpr uint32_t kMagic = 0x5A543153; // "S1TZ"
 constexpr uint32_t kMapMagic = 0x504D3153; // "S1MP": a map design (saveMap)
-constexpr uint32_t kVersion = 18; // 18: guests' recent-species lists. // 17: tank filters' built and serviced days and months in operation. // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
+constexpr uint32_t kVersion = 22; // 22: guests attacked by a predator. // 21: the flyers in flight, their spawn clock and special days' marks; rubble pieces' groups and types. // 20: guests' visited lists as tiles and their visit counts. // 19: each month's guests in the zoo (books row 25). // 18: guests' recent-species lists. // 17: tank filters' built and serviced days and months in operation. // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
 
 // A little binary writer and reader: numbers as they are, strings with
 // their length, vectors with their count
@@ -224,9 +225,16 @@ static std::string fileDialog(bool saving) {
                              "Zoo Tycoon Saved Game (*.zt1save)\0*.zt1save\0"
                              "The original game's saved zoos (*.zoo)\0*.zoo\0"
                              "All files (*.*)\0*.*\0";
+  // (zoo.exe saveZooDialog 0x4769ac, loadZooDialog 0x4cc0d7: the file box
+  // starts on zoo.ini [user] lastfile; only with none, in the saved games'
+  // folder - 0x4cb6b6)
+  const std::string last = SaveGame::lastFile();
+  if (!last.empty() && last.size() < MAX_PATH)
+    std::memcpy(file, last.c_str(), last.size() + 1);
   ofn.lpstrFile = file;
   ofn.nMaxFile = MAX_PATH;
-  ofn.lpstrInitialDir = dir.c_str();
+  if (last.empty())
+    ofn.lpstrInitialDir = dir.c_str();
   ofn.lpstrDefExt = saving ? "zoo" : "zt1save";
   ofn.lpstrTitle = saving ? "Save a zoo..." : "Load a zoo...";
   ofn.Flags = OFN_NOCHANGEDIR | (saving ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
@@ -245,6 +253,14 @@ static std::string fileDialog(bool saving) {
 
 std::string SaveGame::askSavePath() { return fileDialog(true); }
 std::string SaveGame::askLoadPath() { return fileDialog(false); }
+
+// zoo.exe: [user] lastfile - written with the path by saveZooDialog 0x4769ac
+// once the zoo's written and by loadZooDialog 0x4cc0d7 once it's loaded,
+// read by both for their file box and by startup_ContinueGame_click
+// 0x485c7e; set to "" (0x638084) by mapselec_PlayMap_click's 0x4ca1f0 and
+// a scenario's start from its menu (0x4c9bc9)
+std::string SaveGame::lastFile() { return Settings::get("user", "lastfile", ""); }
+void SaveGame::setLastFile(const std::string &path) { Settings::set("user", "lastfile", path); }
 
 // ----------------------------------------------------------------------------
 // The original game's own saved zoos (.zoo, read by ZooReader in zoo.exe's
@@ -394,6 +410,9 @@ void SaveGame::restoreOriginalBooks(World &world, ZooSim &sim) {
     // Row 14 is the net total, already represented by these income/expense
     // rows; adding it would count every transaction twice.
     entry.rating = sim.zooRating;
+    // (row 25: the guests in the zoo at the month's last rating update)
+    if (books.monthly.size() > 25 && std::isfinite(books.monthly[25][entry.month]))
+      entry.guests = books.monthly[25][entry.month];
     sim.months.push_back(entry);
   }
   const auto *d = z.getDate();
@@ -489,6 +508,28 @@ static std::string originalThoughtText(const ZooReader &z,const ZooReader::Thoug
   return text;
 }
 
+// zoo.exe: a saved zoo's flyers - its load runs its scenario's start again
+// (resumeScript 0x58fb34 -> applyStartSettings 0x58ed1f), so the spawn list
+// (world +0x20c) is made again from the [ambients] of the scenario its
+// scenario block names (gameMgrLoad 0x5948c6), each kind due at once
+// (0x59148e: last 0). measured (2026-11-17): everything-ff02-units, which
+// flies all nine kinds, loaded with bluejay and crow listed - ff02.scn's.
+// ours: a block naming no script we have keeps the map's list
+void SaveGame::resumeAmbients(World &world) {
+  const std::string &scn = world.zooReader.getScenarioName();
+  if (!scn.empty() && world.resourceManager->hasResource(scn))
+    if (IniReader *ini = world.resourceManager->getIniReader(scn)) {
+      std::vector<int> ids;
+      for (const std::string &id : ini->getList("ambients", "id"))
+        if (std::atoi(id.c_str()) > 0)
+          ids.push_back(std::atoi(id.c_str()));
+      delete ini;
+      world.ambientIds = ids;
+      world.ambient.setAllowed(ids);
+    }
+  world.ambient.dueNow();
+}
+
 bool SaveGame::loadOriginalWorld(World &world) {
   saveFailure.clear();
   const ZooReader &z = world.zooReader;
@@ -513,6 +554,13 @@ bool SaveGame::loadOriginalWorld(World &world) {
       break;
     }
   if (!z.isExact()) return false;
+  // Its flyers in flight (zoo.exe ZTAmbientAnimal::load 0x450261)
+  for (const auto &record : z.getObjects())
+    if (record.decoded && record.className == "ambient")
+      world.ambient.resume(world.worldMap, record.typeName, record.x / 64.0f, record.y / 64.0f,
+                           static_cast<int>(record.direction), static_cast<float>(record.ambientSpeed),
+                           record.ambientStep);
+  resumeAmbients(world);
   for (const auto &record : z.getObjects()) {
     if (!record.decoded) continue;
     std::string required;
@@ -786,6 +834,7 @@ bool SaveGame::loadOriginalWorld(World &world) {
     g.trashCheck = o.guest.checks[6]; g.viewCheck = o.guest.checks[8];
     g.chaseCheck = o.guest.chaseCheck;
     g.leaving = o.guest.leaving; g.sawEscape = o.guest.afraid; g.sick = o.guest.sick;
+    g.attacked = o.guest.attacked; // (+0x33b)
     std::copy(o.guest.items.begin(), o.guest.items.end(), g.inventory);
     for (size_t k = 0; k < an.typeList.size(); ++k)
       if (stockSpecies[k]>0&&stockSpecies[k] == o.guest.favourite)
@@ -796,14 +845,12 @@ bool SaveGame::loadOriginalWorld(World &world) {
       for(size_t k=0;k<an.typeList.size();++k)
         if(stockSpecies[k]>0&&uint32_t(stockSpecies[k])==id) {g.recentSpecies.push_back(an.typeList[k].nameId);break;}
     if(g.recentSpecies.size()>5)g.recentSpecies.erase(g.recentSpecies.begin(),g.recentSpecies.end()-5);
-    for(auto [x,y]:o.guest.visited) {
-      bool building=false;
-      for(const auto &record:z.getObjects())if(record.tileX()==x&&record.tileY()==y&&
-          record.className=="building"&&world.placedObjects.byId(int(record.id))) {
-        g.visited.insert(int(record.id));building=true;
-      }
-      if(!building) {const int exhibit=f.exhibitAt(x,y);if(exhibit>=0)g.seen.insert(exhibit);}
-    }
+    // Its visited list (zoo.exe +0x260, saved as grid positions) and its
+    // visit count (+0x334)
+    for(auto [x,y]:o.guest.visited)g.visits.push_back({x,y});
+    if(g.visits.size()>Original::guestVisitedPlaces)
+      g.visits.erase(g.visits.begin(),g.visits.end()-Original::guestVisitedPlaces);
+    g.visitCount=o.guest.visitCount;
     g.happiness = static_cast<float>(std::clamp(o.guest.happiness, -100, 100));
     g.hunger = static_cast<float>(std::clamp(o.guest.hunger, 0, 100));
     g.thirst = static_cast<float>(std::clamp(o.guest.thirst, 0, 100));
@@ -813,10 +860,12 @@ bool SaveGame::loadOriginalWorld(World &world) {
       g.colours[k] = o.colours[k];
     for(const auto &thought:z.getThoughts())if(thought.owner==o.id) {
       const auto text=originalThoughtText(z,thought,world.resourceManager);
-      if(text.empty()||std::find(g.thoughts.begin(),g.thoughts.end(),text)!=g.thoughts.end())continue;
+      // (Guest Information: the guest's newest 5 of the zoo's list, repeats
+      // and all - zoo.exe 0x46a7c8)
+      if(text.empty())continue;
       if(g.thoughts.empty())g.lastThought=int(thought.text);
       g.thoughts.push_back(text);
-      if(g.thoughts.size()==10)break;
+      if(g.thoughts.size()==static_cast<size_t>(Original::guestInfoThoughts))break;
     }
     g.playFor = 0.5f;
     gs.nextId = std::max(gs.nextId, g.id + 1);
@@ -908,14 +957,9 @@ std::string SaveGame::checkOriginalImport(World &world) {
       if(thoughts.size()==10)break;
     }
     check(o.name+" original thoughts restore newest first",g->thoughts==thoughts);
-    std::set<int> visited,seenExhibits;
-    for(auto [x,y]:o.guest.visited) {
-      bool building=false;
-      for(const auto &record:z.getObjects())if(record.className=="building"&&record.tileX()==x&&record.tileY()==y&&
-          world.placedObjects.byId(int(record.id))) {visited.insert(int(record.id));building=true;}
-      if(!building) {const int ex=world.fences.exhibitAt(x,y);if(ex>=0)seenExhibits.insert(ex);}
-    }
-    check(o.name+" recent visit coordinates map to existing targets",g->visited==visited&&g->seen==seenExhibits);
+    std::vector<std::pair<int,int>> visits(o.guest.visited.begin(),o.guest.visited.end());
+    if(visits.size()>Original::guestVisitedPlaces)visits.erase(visits.begin(),visits.end()-Original::guestVisitedPlaces);
+    check(o.name+" visited list and visit count restore (+0x260, +0x334)",g->visits==visits&&g->visitCount==o.guest.visitCount);
     std::vector<int> recent;
     for(uint32_t id:o.guest.seen)
       for(const auto &type:world.animals.typeList)
@@ -1243,7 +1287,7 @@ std::string SaveGame::checkOriginalImport(World &world) {
               copy->arrived == g.arrived && copy->favourite == g.favourite &&
               copy->leaving == g.leaving && copy->sick == g.sick &&
               std::equal(std::begin(g.inventory), std::end(g.inventory), copy->inventory) &&
-              copy->hungerCheck == g.hungerCheck && copy->visited == g.visited && copy->seen==g.seen && copy->thoughts==g.thoughts &&
+              copy->hungerCheck == g.hungerCheck && copy->visits == g.visits && copy->visitCount==g.visitCount && copy->thoughts==g.thoughts &&
               copy->recentSpecies==g.recentSpecies);
       }
       if(!world.guests.list.empty()&&world.animals.typeList.size()>1) {
@@ -1855,6 +1899,7 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
     o.raw(m.year);
     o.raw(m.lines);
     o.raw(m.rating);
+    o.raw(m.guests);
   }
   o.raw(static_cast<uint32_t>(sim.importedAnnual.size()));
   for (const auto &row : sim.importedAnnual) {
@@ -1988,16 +2033,20 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
     o.raw(g.fx); o.raw(g.fy); o.raw(g.inventory); o.raw(g.sick); o.raw(g.sawEscape); o.raw(g.souvenir);
     for (int value : {g.hungerCheck, g.thirstCheck, g.bathroomCheck, g.leaveCheck, g.souvenirCheck,
                       g.energyCheck, g.trashCheck, g.viewCheck, g.chaseCheck}) o.raw(value);
-    o.raw(static_cast<uint32_t>(g.visited.size()));
-    for (int value : g.visited) o.raw(value);
+    // Its visited list (zoo.exe +0x260: tiles, oldest first; version 20)
+    o.raw(static_cast<uint32_t>(g.visits.size()));
+    for (auto [x, y] : g.visits) { o.raw(x); o.raw(y); }
     o.raw(static_cast<uint32_t>(g.thoughts.size()));
     for (const auto &thought : g.thoughts) o.str(thought);
     o.str(g.favourite>=0&&g.favourite<int(an.typeList.size())?an.typeList[g.favourite].file:std::string());
-    o.raw(static_cast<uint32_t>(g.seen.size()));
-    for(int exhibit:g.seen)o.raw(exhibit);
+    // Its visit count (zoo.exe +0x334; version 20)
+    o.raw(g.visitCount);
     // Its recent-species list (zoo.exe +0x278: cNameIDs, oldest first)
     o.raw(static_cast<uint32_t>(g.recentSpecies.size()));
     for(int id:g.recentSpecies)o.raw(id);
+    // Attacked by a predator (zoo.exe +0x33b: ZTGuest::save 0x47873e at
+    // 0x478bc4, load 0x455fa2 at 0x456976; version 22)
+    o.raw(g.attacked);
   }
   o.raw(gs.nextId);
   o.raw(gs.clock);
@@ -2029,6 +2078,37 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
   const auto &original = world.zooReader.originalBytes();
   o.raw(static_cast<uint32_t>(original.size()));
   o.b.insert(o.b.end(), original.begin(), original.end());
+  // Version 21: the flyers in flight (the original keeps them as units,
+  // ZTAmbientAnimal::save 0x47a7fd), the spawn clock and each kind's last
+  // (world +0x204, +0x20c), the special days' once-a-day marks (0x63e256,
+  // 0x63e25c); each rubble piece's group and type (ZTRubble::save 0x6159c0)
+  {
+    const Ambient &am = world.ambient;
+    const auto flyers = am.saveFlyers();
+    o.raw(static_cast<uint32_t>(flyers.size()));
+    for (const auto &fl : flyers) {
+      o.str(fl.key);
+      for (float v : {fl.x, fl.y, fl.vx, fl.vy, fl.age, fl.life}) o.raw(v);
+      o.str(fl.own);
+      o.raw(fl.ownAtten);
+    }
+    o.raw(am.worldClock());
+    const auto lasts = am.lasts();
+    o.raw(static_cast<uint32_t>(lasts.size()));
+    for (const auto &[key, last] : lasts) { o.str(key); o.raw(last); }
+    o.raw(static_cast<uint8_t>(am.santaSent));
+    o.raw(static_cast<uint8_t>(am.biplaneSent));
+    uint32_t rubble = 0;
+    for (const auto &x : world.placedObjects.list) rubble += !x.rubbleGroup.empty() || x.rubbleOf;
+    o.raw(rubble);
+    for (const auto &x : world.placedObjects.list)
+      if (!x.rubbleGroup.empty() || x.rubbleOf) {
+        o.raw(x.id);
+        o.raw(x.rubbleOf);
+        o.raw(static_cast<uint32_t>(x.rubbleGroup.size()));
+        for (int id : x.rubbleGroup) o.raw(id);
+      }
+  }
 
   std::string extension=std::filesystem::path(path).extension().string();
   std::transform(extension.begin(),extension.end(),extension.begin(),::tolower);
@@ -2088,6 +2168,8 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
     i.get(m.year);
     i.get(m.lines);
     i.get(m.rating);
+    if (version >= 19) i.get(m.guests);
+    if (!std::isfinite(m.guests)) return false;
     if (m.month < 0 || m.month > 11 || m.year < 1 || m.year > 9999 ||
         !std::isfinite(m.rating) || std::any_of(m.lines.begin(), m.lines.end(),
           [](double value) { return !std::isfinite(value); })) return false;
@@ -2282,18 +2364,36 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
       for (int *value : {&g.hungerCheck, &g.thirstCheck, &g.bathroomCheck, &g.leaveCheck, &g.souvenirCheck,
                          &g.energyCheck, &g.trashCheck, &g.viewCheck, &g.chaseCheck}) i.get(*value);
       uint32_t nv = i.raw<uint32_t>(); if (nv > 100000) return false;
-      while (nv-- && !i.bad) g.visited.insert(i.raw<int>());
+      if (version >= 20) {
+        while (nv-- && !i.bad) {
+          const int x = i.raw<int>(), y = i.raw<int>();
+          g.visits.push_back({x, y});
+        }
+      } else {
+        // (before 20: the attractions it had been to, object ids - each as
+        // its tile)
+        while (nv-- && !i.bad)
+          if (const auto *o = world.placedObjects.byId(i.raw<int>()))
+            g.visits.push_back({int(std::floor(o->x)), int(std::floor(o->y))});
+      }
       uint32_t nt = i.raw<uint32_t>(); if (nt > 10) return false;
       while (nt-- && !i.bad) g.thoughts.push_back(i.str());
     }
     if(version>=14) {
       const auto favourite=i.str();
       g.favourite=favourite.empty()?-1:an.typeOfFile(favourite);
-      for(uint32_t n=i.count(10000,4);n>0&&!i.bad;--n)g.seen.insert(i.raw<int>());
+      if(version>=20)i.get(g.visitCount);
+      else // (before 20: the exhibits it had seen - each as a tile of it)
+        for(uint32_t n=i.count(10000,4);n>0&&!i.bad;--n)
+          if(const auto *ex=world.fences.exhibit(i.raw<int>());ex&&!ex->tiles.empty())g.visits.push_back(*ex->tiles.begin());
+      if(g.visits.size()>Original::guestVisitedPlaces)
+        g.visits.erase(g.visits.begin(),g.visits.end()-Original::guestVisitedPlaces);
     }
     if(version>=18)
       for(uint32_t n=i.count(5,4);n>0&&!i.bad;--n)g.recentSpecies.push_back(i.raw<int>());
+    if(version>=22)i.get(g.attacked);
     g.playFor = 0.5f;
+    g.eatAfterLoad = g.inventory[0] != 0; // (ours: Guest::eatAfterLoad)
     if (g.type >= 0 && g.type < static_cast<int>(gs.typeList.size()))
       gs.list.push_back(g);
   }
@@ -2341,6 +2441,40 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
     } else world.zooReader = ZooReader();
     i.at += size;
   }
+  if (version >= 21 && !i.bad) {
+    Ambient &am = world.ambient;
+    std::vector<Ambient::Saved> flyers(i.count(100000, 8));
+    for (auto &fl : flyers) {
+      fl.key = i.str();
+      for (float *v : {&fl.x, &fl.y, &fl.vx, &fl.vy, &fl.age, &fl.life}) i.get(*v);
+      fl.own = i.str();
+      i.get(fl.ownAtten);
+    }
+    const double clock = i.raw<double>();
+    std::vector<std::pair<std::string, double>> lasts(i.count(10000, 12));
+    for (auto &[key, last] : lasts) { key = i.str(); i.get(last); }
+    am.santaSent = i.raw<uint8_t>() != 0;
+    am.biplaneSent = i.raw<uint8_t>() != 0;
+    if (!i.bad) {
+      am.loadFlyers(flyers);
+      am.setWorldClock(clock);
+      am.setLasts(lasts);
+    }
+    for (uint32_t n = i.count(1000000, 12); n > 0 && !i.bad; n--) {
+      const int id = i.raw<int>();
+      const int type = i.raw<int>();
+      std::vector<int> group(i.count(100000, 4));
+      for (int &g : group) i.get(g);
+      if (auto *x = world.placedObjects.byId(id)) {
+        x->rubbleOf = type;
+        x->rubbleGroup = group;
+      }
+    }
+  }
+  // (the flyers' list and lasts as the original makes them on a load; the
+  // lasts saved since version 21 are ours and give way)
+  if (!i.bad)
+    resumeAmbients(world);
   if (!i.bad) {
     gs.entranceX = gs.entranceY = -1;
     world.findEntrance();
@@ -2446,9 +2580,17 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
     const CatalogItem *listed=ItemCatalog::get().find(PlacedObjects::fileOf(object));
     const std::string section=listed?listed->registrySection:"";
     const bool building=object.className=="building" || section=="building";
-    auto o=source(building?"building":object.className,object.id);
+    // (rubble: its own class, rubble/other/<kind> as rubble01.cfg lists it -
+    // ZTRubble, with its group and type after its scenery part. As objects/
+    // other the original found no such scenery and dropped it)
+    const bool rubble=!building && (object.className=="rubble" || !object.rubbleGroup.empty() || object.rubbleOf);
+    auto o=source(building?"building":rubble?"rubble":object.className,object.id);
     if(o.className.empty()){error="An object has no original entity class.";return false;}
-    o.subClass=building?"building":section.empty()?object.subClass:section;o.typeName=object.typeName;
+    o.subClass=building?"building":rubble?object.subClass:section.empty()?object.subClass:section;o.typeName=object.typeName;
+    if(rubble) {
+      o.rubbleOf=object.rubbleOf;o.rubbleIds.clear();
+      for(int id:object.rubbleGroup)o.rubbleIds.push_back(uint32_t(id)); // (our ids: made the original's below)
+    }
     o.id=identity(object.id,!o.payload.empty());objectIds[object.id]=o.id;
     o.name=object.label.empty()?object.name:object.label;
     // (at the ground under it, as it's drawn - PlacedObjects keeps no height
@@ -2488,6 +2630,13 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
       }
     }
     z.objects.push_back(std::move(o));
+  }
+  // (each rubble group by the original ids its pieces were given; pieces
+  // gone left out)
+  for(auto &o:z.objects)if(o.className=="rubble") {
+    std::vector<uint32_t> ids;
+    for(uint32_t id:o.rubbleIds){auto found=objectIds.find(int(id));if(found!=objectIds.end())ids.push_back(found->second);}
+    o.rubbleIds=ids;
   }
   auto make=[&](const std::string &cls,const std::string &sub,const std::string &type,float x,float y,float h) {
     ZooReader::ZooObject o;o.className=cls;o.subClass=sub;o.typeName=type;
@@ -2706,7 +2855,7 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
     o.colours.clear();for(int n:g.colours)o.colours.push_back(uint8_t(n));
     o.hasGuest=true;o.movementMode=2;auto &a=o.guest;
     a.happiness=int(g.happiness);a.hunger=int(g.hunger);a.thirst=int(g.thirst);a.energy=int(g.tired);a.bathroom=int(g.bathroom);
-    a.sick=g.sick;a.leaving=g.leaving;a.afraid=g.sawEscape;a.arrived=dateTime(world.guests.clock-g.arrived);
+    a.sick=g.sick;a.leaving=g.leaving;a.afraid=g.sawEscape;a.attacked=g.attacked;a.arrived=dateTime(world.guests.clock-g.arrived);
     a.favourite=g.favourite>=0&&g.favourite<int(world.animals.typeList.size())?
         stockSpecies[world.animals.typeList[g.favourite].file]:-1;
     if(a.favourite==0)a.favourite=-1;
@@ -2719,11 +2868,8 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
     for(int id:g.recentSpecies)
       for(const auto &type:world.animals.typeList)
         if(type.nameId==id&&stockSpecies[type.file]>0) {a.seen.push_back(uint32_t(stockSpecies[type.file]));break;}
-    a.visited.clear();
-    for(int id:g.seen)if(const auto *ex=world.fences.exhibit(id);ex&&!ex->tiles.empty())
-      a.visited.push_back(*ex->tiles.begin());
-    for(int id:g.visited)if(objectIds.count(id))if(const auto *object=world.placedObjects.byId(id))
-      a.visited.emplace_back(int(std::floor(object->x)),int(std::floor(object->y)));
+    a.visited.assign(g.visits.begin(),g.visits.end());
+    a.visitCount=g.visitCount;
     if(a.seen.size()>5)a.seen.erase(a.seen.begin(),a.seen.end()-5);
     if(a.visited.size()>10)a.visited.erase(a.visited.begin(),a.visited.end()-10);
     a.guide=0;a.chaseCheck=g.chaseCheck;
@@ -2731,8 +2877,19 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
               g.trashCheck,a.checks[7],g.viewCheck,a.checks[9]};
     z.objects.push_back(std::move(o));
   }
-  // Ambient scenery is not editable in the live engine yet; retain it exactly.
-  for(const auto &o:old)if(o.className=="ambient"){auto copy=o;copy.id=identity(o.id,!o.payload.empty());z.objects.push_back(std::move(copy));}
+  // The flyers in flight, each as the original's own record (zoo.exe
+  // ZTAmbientAnimal::save 0x47a7fd: ambient/ambient/<its key>; +0x154 its
+  // cSpeed, +0x158 the step left over (thousandths of its next 64th,
+  // 0x434e9c), then the unit's own part: its place in whole 64ths, height 0
+  // (measured, #202), its way as its facing)
+  for(const auto &fl:world.ambient.saveFlyers()) {
+    if(!originalAsset("ambient/"+fl.key+".ai"))continue;
+    ZooReader::ZooObject o;o.className="ambient";o.subClass="ambient";o.typeName=fl.key;o.decoded=true;
+    o.id=identity(0);position(o,fl.x,fl.y,0);o.x=fl.x64;o.y=fl.y64;o.direction=uint32_t(fl.way);
+    o.name=world.resourceManager->getString(fl.nameId);
+    o.ambientSpeed=int32_t(std::lround(fl.speed));o.ambientStep=fl.stepLeft;
+    z.objects.push_back(std::move(o));
+  }
   Out showDefinitions;
   std::vector<std::vector<uint8_t>> programs;
   // Every live habitat's schedule is rebuilt below. Carrying the old table
@@ -2942,6 +3099,10 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
       }
     }
   }
+  // Row 25, the guests in the zoo (zoo.exe zooRatingUpdate 0x41f881: a
+  // count, set not added, so in the monthly table only)
+  if(financeRows>25)for(const auto &month:sim.months)
+    if((month.year-1)*12+month.month>latestSerial-12)z.books.monthly[25][month.month]=float(month.guests);
   z.books.month=uint32_t(sim.month()+1);z.books.year=uint32_t(yearSlot(sim.year()));
   // Original thought references must never point to deleted or omitted
   // engine-only actors. Surviving original records keep their native ids.

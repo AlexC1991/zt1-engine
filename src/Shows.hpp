@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include "Fences.hpp"
+#include "Guests.hpp"
 
 class World;
 class ResourceManager;
@@ -43,9 +44,17 @@ public:
     int completed = 0, cancelled = 0, lastScore = 0, tricksDone = 0, tricksSkipped = 0;
     int visitors = 0;
     double income = 0;
+    // Show Finances by month (zoo.exe's show record, rolled by rollMonthlyB
+    // 0x48b57e, shown by 0x473b61): attendance +0x7c this month, +0x80 last
+    // (visitors is +0x84, the total); income +0x94, +0x98 (income is +0x9c);
+    // upkeep +0x88 this month - its stands' monthly upkeep (0x59e8f0) -,
+    // +0x8c last, +0x90 the total with this month's in it
+    int visitorsNow = 0, visitorsLast = 0;
+    double incomeNow = 0, incomeLast = 0;
+    double upkeepNow = 0, upkeepLast = 0, upkeepTotal = 0;
+    double openedDay = -1; // the zoo's day the show tank formed (-1: not yet known)
     std::string status;
-    float audienceCheck = 0; // transient, staggered attendance decisions
-    size_t audienceCursor = 0;
+    bool sent = false;       // transient: 11491 posted for this gathering (zoo.exe 0x5a3de4)
   };
   struct Settings {
     int interval[3] = {65, 90, 120};
@@ -75,7 +84,14 @@ public:
   int standShow(int object) const;
   bool isStand(int object) const {return standLinks.count(object)!=0;}
   bool setStandAdmission(int object,double price);
-  struct AudienceStats { size_t considered=0,routeAttempts=0,admitted=0; } audienceStats;
+  struct AudienceStats { size_t admitted=0; } audienceStats;
+  // zoo.ini [AI] maxDistToGoToShow (zoo.exe 0x440f0c, read once in init)
+  int maxDistToGoToShow = 150;
+  // A guest's show pick (zoo.exe 0x440f0c, chooseTask at 0x440eb7): true
+  // when it's off to a grandstand
+  bool pickShow(Guests::Guest &g);
+  // A grandstand open to guests (its +0x19c): its show started and not over
+  bool standOpen(int object) const;
   bool start(int tank, std::string &why);
   void cancel(int tank, const std::string &why);
   int benefit(int tank);
@@ -83,8 +99,16 @@ public:
   std::string command(const std::vector<std::string> &words);
   std::string snapshot(bool actors = true) const;
   bool restore(const std::string &text);
-  std::vector<std::string> takeMessages() { auto out=messages;messages.clear();return out; }
+  // A line for the message bar: the original's text, its kind (messageBarAdd
+  // 0x49c6d7: kinds 0-2 dropped as repeats, colour kind % 3) and the animal
+  // it's about (-1: none)
+  struct Message { std::string text; int kind = 0; int animal = -1; };
+  std::vector<Message> takeMessages() { auto out=messages;messages.clear();return out; }
   double takeIncome() { double v=incomePending;incomePending=0;return v; }
+  // The month's end: each show's month rolled (zoo.exe rollMonthlyB 0x48b57e)
+  void newMonth();
+  // Months in operation and the averages' divisor (zoo.exe 0x474d1f)
+  int monthsOpen(const Show &s) const;
 
 private:
   World *world = nullptr;
@@ -94,9 +118,10 @@ private:
   double incomePending = 0;
   float refreshIn = 0;
   std::map<int,int> standLinks; // derived from the stand's facing, never shared between shows
-  std::map<int,float> guestShowRetry; // guest id -> next decision time (game clock)
+  std::map<std::string,double> standUpkeep; // a stand's cUpkeep by its file
+  void countUpkeep();
   void linkStands();
-  std::vector<std::string> messages;
+  std::vector<Message> messages;
   const Trick *find(const std::string &species, const std::string &key);
   std::vector<std::pair<Fences::Edge, int>> links(int tank) const;
   std::vector<Trick> resolved(Show &s, std::vector<int> *benefits = nullptr);
@@ -109,6 +134,7 @@ private:
   void finish(Show &s);
   void releaseAudience(Show &s, bool cancelled);
   void notice(Show &s, const std::string &text);
+  void post(int id, int kind, int animal, const std::vector<std::string> &values);
 };
 
 #endif

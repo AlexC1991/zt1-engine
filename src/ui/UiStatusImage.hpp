@@ -2,6 +2,7 @@
 #define UI_STATUS_IMAGE_HPP
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -24,6 +25,16 @@ public:
   // 0-100
   void setValue(int value) { this->value = value < 0 ? 0 : (value > 100 ? 100 : value); }
   int getValue() const { return this->value; }
+  // Its transitions set from the code, replacing the layout's (zoo.exe
+  // 0x467963, Animal Information's exhibit bar)
+  void setTransitions(std::vector<int> t) { this->transitions = std::move(t); }
+  // The image it shows: 0 red, 1 yellow, 2 green
+  size_t band() const {
+    size_t pick = 0;
+    while (pick < transitions.size() && value >= transitions[pick])
+      pick++;
+    return pick;
+  }
 
 private:
   std::vector<std::string> image_paths;

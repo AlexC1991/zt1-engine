@@ -39,8 +39,11 @@ class Guests {
   friend std::string runShowManagementChecks(class World &, ResourceManager *);
   friend class SaveGame; // (saving and loading a game)
   friend std::string runParityChecks(class World &, ResourceManager *);
+  friend std::string runGuestPickupChecks(class World &, ResourceManager *, int &, int &);
   friend class Shows; // Shared marine-show tasks use the normal routes and animation queues.
   friend std::string runShowPolishChecks(class World &, ResourceManager *, bool);
+  friend int runShowChecks(class World &, class UiGameScreen &, class ZooSim &, const std::string &,
+                           const std::string &, const std::function<void(const char *)> &);
 public:
   enum class Kind { Man, Woman, Boy, Girl };
   struct Type {
@@ -70,6 +73,9 @@ public:
     // A price judged (zoo.exe 0x619245 / 0x533480: guest type +0x244
     // cPriceHappy1Change, +0x248 cPriceAngry1Change - guestTypeLoad 0x4c5102)
     int priceHappy = 0, priceAngry = 0;
+    // Eating standing up, no seat found (zoo.exe Task6d_EatStanding::begin
+    // 0x52dd30: guest type +0x2ac, cStandAndEatChange)
+    int standAndEat = 0;
     // Its bTapTank set: [<kind>\BehaviorSet\bTapTank] f = fPlay(<anim>), in
     // order (guests.ai: tap, peek, map; the children no map)
     std::vector<std::string> tapSet;
@@ -112,6 +118,7 @@ public:
   // building's water door (guestGoToBuilding 0x43b2f6 on a ride), 0x83 in
   // the water, making for land (Task83_InWater), 0x84 drowning
   // (Task84_Drown), 0x7f in the water and not on a ride: out (Task7f)
+  static constexpr int kEatWalkAbout = -2;
   static constexpr int kRideTask = 0x82, kRideBackTask = 0x66, kInWaterTask = 0x83, kDrownTask = 0x84,
                        kOutOfWaterTask = 0x7f;
   struct Guest {
@@ -125,7 +132,12 @@ public:
     size_t pathAt = 0;
     float speed = 0.55f;
     int target = -1;          // the exhibit it's going to or watching
-    std::set<int> seen;       // exhibits seen this round
+    // Where it has been (zoo.exe +0x260, guestRecordVisit 0x4a840e): the
+    // last 10 places, oldest first, each a tile - one of an exhibit's, a
+    // building's, a scenery object's - and its visits since the list was
+    // last emptied (+0x334, a word: Task64's "seen everything")
+    std::vector<std::pair<int, int>> visits;
+    int visitCount = 0;
     int favourite = -1;       // an animal type
     // -100..100 happiness; 0..100 hunger, thirst, bathroom, tiredness;
     // changes wait for the next tick
@@ -156,15 +168,29 @@ public:
     // id, +0x22c); ticks to its next calming down (+0x314, cSawAnimalReset)
     bool sawPredator = false;
     bool puking = false; // being sick (Task79: bSick, its puke animation)
+    // Eating standing up (Task6d_EatStanding: its bEatStanding set - 0 the
+    // eatstanding play, 1 the idle after; -1 not); kEatWalkAbout: no seat
+    // for its food, on its walk about first (Task6c_Eat)
+    int eatStep = -1;
+    // ours: loaded holding food (our saves keep no task: a guest holding
+    // food in the original is inside the stand or off to eat it - Task6b),
+    // so it goes to eat it at its first pick. Not saved
+    bool eatAfterLoad = false;
+    // The slot it took at a building (zoo.exe +0x24d, guestGoToBuilding's
+    // 0x42c02b), -1 none; in a building's b<name><goal><slot> set (a bench,
+    // a picnic table, the swing, the ring toss ...), the line it's at (the
+    // play under way; -1 not); taken in as its user yet (the set's
+    // fEnterBuilding, 0x5ad3a6); playing it backwards (fPlayReverse)
+    int slot = -1;
+    int sitStep = -1;
+    bool takenIn = false, reverse = false;
     int predator = -1;
     int sawResetCheck = 20;
     bool souvenir = false;    // has one
     // wants one: set when a souvenir check decides so (10090), cleared at the
     // next check or when a gift's bought (zoo.exe +0x33c)
     bool wantsSouvenir = false;
-    std::set<int> visited;    // attractions this round (object ids)
     int gawkObject = -1;      // the scenery it's going to look at (object id)
-    std::set<std::string> gawkedKinds; // scenery kinds looked at this round (.ai files)
     float gawkSeconds = 0;    // how long it's been watching
     // Watching an exhibit (Task70_ViewAnimals): the way of its tile's slot
     // that holds its viewing area (zoo.exe +0x328, -1 none: 0x43b8a2); when
@@ -250,6 +276,17 @@ public:
   void releaseTour(int guide);
   void tourTalk(int guide, int bonus);
   std::function<bool(int guide)> guideSpeaking;
+  // A guest come in at the gate (zoo.exe 0x4f6e3c ends with 0x4f7ebe, the
+  // special days' flyers)
+  std::function<void()> onArrive;
+  // A building wrecked (zoo.exe buildingPutGuestsOut 0x5ae745, from
+  // ZTBuilding::toRubble 0x611bd6): every guest inside put out now, as if
+  // its time inside were over (guestBuy 0x42d858 with 1: paid, judged, its
+  // effects; one about to go out on its water ride doesn't go). ours: by the
+  // placed objects' index - the ones heading for it look again, those after
+  // it move down one (it's taken out of the list next); how many were put out
+  int buildingGone(int index);
+  int putOut(int index); // (0x5ae745: those inside only)
   std::function<int(int guide)> guideBonusOf;    // its cTourGuideBonus
   std::function<int(int exhibit)> tourBonusAt;   // a guide on the exhibit's viewing tiles
   // An exhibit's viewing areas (zoo.exe: the habitat's +0x34 list - World's
@@ -318,8 +355,10 @@ public:
     return m;
   }
   const std::vector<Guest> &guests() const { return this->list; }
+  std::vector<Guest> &mutableGuests() { return this->list; } // (the rename cheats)
   const std::vector<Type> &types() const { return this->typeList; }
   const Guest *guest(int id) const;
+  Guest *guest(int id) { return const_cast<Guest *>(static_cast<const Guests *>(this)->guest(id)); }
   // Average happiness, 0..100 as the HUD's bar shows it
   int averageHappiness() const;
   // The guests counted for the advisor (zoo.exe zooRatingUpdate 0x41f881):
@@ -332,6 +371,11 @@ public:
   };
   Census census() const;
   int uiThreshold = 75;
+  // zoo.ini [AI] useAttractionAttractiveness (zoo.exe 0x4bc8f8: read once
+  // as the game starts, into [0x63b088]; 0 when it's not there, and the
+  // game's zoo.ini doesn't have it): a 'fun' building picked by its score
+  // (Original::attractionScore, the furthest), not the one drawn
+  bool useAttractionAttractiveness = false;
   // The day's messages ("The entrance fee is a really good value"), taken
   std::vector<int> takeMessages() {
     std::vector<int> m;
@@ -362,6 +406,19 @@ public:
   bool sounds = true;
 
   int hovered = -1, selected = -1;
+  // Picked up with the guest panel's PickupGuest (ZUPDATE1's infogst.lyt):
+  // the one held, -1 none; whether it can be put down where it is now, and
+  // the message a click there gives (0 none)
+  int carried = -1;
+  bool carriedFit = false;
+  int carriedMessage = 0;
+  float carriedFromX = 0, carriedFromY = 0; // where it was picked up
+  void pickUp(int id);
+  bool canPutDown(float x, float y, int &message) const;
+  void putDown(int id, float x, float y);
+  // The holding given up (a right click, another tool): put back down where
+  // it was picked up (zoo.exe endPlacing 0x443df7)
+  void putBack();
   // Every guest thought with what it's about (ZTThoughtMgr): newest first
   struct Thought {
     std::string text;
@@ -383,6 +440,16 @@ public:
   std::vector<std::string> labAnims(int id) const;
   void labSet(int id, const std::string &field, float value);
   void labLeave(int id);
+  // Its visited list (zoo.exe +0x260): a place pushed on, the last 10 kept,
+  // its visit count up by 1 (guestRecordVisit 0x4a840e); an exhibit on it
+  // (guestVisitedHabitat 0x42281c: a tile of it); a building or scenery on
+  // it - that one or one of its kind (0x4285e2); and the places there are
+  // to visit, the exhibits with animals plus the 'fun' buildings (0x4281fd)
+  void recordVisit(Guest &g, int x, int y);
+  void recordVisit(Guest &g, const PlacedObjects::Object &o);
+  bool visitedExhibit(const Guest &g, int exhibit) const;
+  bool visitedObject(const Guest &g, const PlacedObjects::Object &o) const;
+  int placesToVisit() const;
 
 private:
   ResourceManager *rm = nullptr;
@@ -403,6 +470,9 @@ private:
   struct BuildingInfo {
     std::set<std::string> satisfies;
     std::string item;          // the first thing it sells
+    // all it sells ([Sells], ZTBuildingType +0x200: one drawn at random a
+    // sale, zoo.exe 0x42d234)
+    std::vector<std::string> sells;
     float price = 0, priceFactor = 1, low = 0, high = 30;
     // cCommerce (ZTBuildingType +0x23d, loadConfig 0x4c1058): its users pay
     // (guestBuy 0x42d858) and its price is judged at the door (0x42c8af)
@@ -410,10 +480,22 @@ private:
     int capacity = 1;
     float timeInside = 3;
     bool hideUser = false;
+    // cHideBuilding (ZTBuildingType +0x1a5, loadConfig 0x4c1431): not drawn
+    // while it has a user (ZTBuilding::draw 0x433aaf at 0x4413a5)
+    bool hideBuilding = false;
+    // cUserStaysOutside (ZTBuildingType +0x1a6; +0x194 is cHideUser,
+    // loadConfig 0x4c1402/0x4c144c) and its type's name (+0xa4, its .ai's:
+    // "bench", "picnic" - Task68's behaviour set is named from it)
+    bool staysOutside = false;
+    std::string typeName;
     float adultChange = 0, childChange = 0, hunger = 0, thirst = 0, bathroom = 0, energy = 0;
     // its item's
     float itemAdult = 0, itemChild = 0, itemHunger = 0, itemThirst = 0, itemBathroom = 0, itemEnergy = 0;
     bool itemTrash = false;
+    // (its nameID, what a guest's hands hold - ZTGuest +0x26c; consumenow,
+    // item +0x1c; removewhenconsumed, +0x1e: ZTShopItem's loader 0x464f00)
+    uint32_t itemId = 0;
+    bool itemNow = true, itemRemove = true;
     int usedThought = 0, consumedThought = 0;
     // scenery guests come to look at: cEstheticWeight (over 0: one of them),
     // cGawkOnlyFromFront, and [EstheticBonus] by the guest kind's cNameID
@@ -438,8 +520,14 @@ private:
     bool returnBuilding = false, idler = false, viewer = false, tracker = false;
     struct Slot {
       int ex = 0, ey = 0, xx = 0, xy = 0;
+      // slotpos (the spot inside where the user plays its set, 64 a tile)
+      // and facing (0-7, turned with the building: 0x5ad288)
+      int sx = 0, sy = 0, facing = 0;
       bool exitOnWater = false, entranceOnWater = false, isReturn = false;
       std::vector<int> ids;
+      // all its entrpos pairs (the swing's and the bounce house's slot has
+      // two, either side; ex, ey is the first)
+      std::vector<std::pair<int, int>> entrances;
     };
     std::vector<Slot> slots;
   };
@@ -451,6 +539,7 @@ private:
     std::string anim, sound;
     int speed = 0;
     float seconds = 0;
+    std::string fn; // the line's function (fplay, fenterbuilding ...)
   };
   std::vector<Move> behaviour(const Guest &g, const std::string &set) const;
   std::vector<Notice> notices;
@@ -470,9 +559,17 @@ private:
   void inWater(Guest &g);
   void drown(Guest &g);
   void outOfWater(Guest &g);
+  void enterWater(Guest &g);
+  void landed(Guest &g);
+  bool nearNeedBuilding(Guest &g);
   void waterNext(Guest &g);
   void endRide(Guest &g);
   mutable std::map<std::string, BuildingInfo> buildingInfo;
+  // An item (items/<name>.cfg; its fields the item* ones), and its nameID to
+  // its name (what a held item is)
+  mutable std::map<std::string, BuildingInfo> itemInfo;
+  mutable std::map<uint32_t, std::string> itemNames;
+  const BuildingInfo &itemOf(const std::string &name) const;
   const BuildingInfo &infoOf(const std::string &file) const;
   // Scenery to look at (zoo.exe guestPickAttraction 0x4282e1's third
   // group): how much it weighs in the guest's choice, the one it picks and
@@ -480,11 +577,47 @@ private:
   int sceneryWeight(const Guest &g) const;
   int pickScenery(Guest &g, int &tx, int &ty);
   void gawkScenery(Guest &g);
-  bool seekBuilding(Guest &g, const std::string &need, int radius);
+  // (only: that building alone - the one drawn - with no room or radius look)
+  bool seekBuilding(Guest &g, const std::string &need, int radius, bool crowdedThought = true, int only = -1);
   void useBuilding(Guest &g);
+  // Taken in as a building's user (zoo.exe buildingAddUser 0x42ce0a): its
+  // visitors counted, the building's cUsedThought, and what it buys, wins
+  // or eats there
+  void addUser(Guest &g, PlacedObjects::Object &o, const BuildingInfo &b);
+  // What a guest buys or holds (zoo.exe holdItem 0x42d54e, guestConsumeItem
+  // 0x42d380, 0x42d6aa): the hand an item kind goes in; into its hands;
+  // eaten, drunk or used; going off to eat what it holds (Task6b_GoEat)
+  static int handFor(const std::string &kind);
+  bool holdItem(Guest &g, const BuildingInfo &b, const std::string &kind = std::string());
+  void consumeItem(Guest &g, const BuildingInfo &item);
+  const BuildingInfo *heldItem(uint32_t id) const;
+  void goEat(Guest &g);
+  // No seat for it: eats standing up where its walk about ended
+  // (Task6d_EatStanding::begin 0x52dd30)
+  void eatStanding(Guest &g);
+  // A show to go to, at chooseTask's place (zoo.exe 0x440eb7 -> 0x440f0c):
+  // set by Shows::init; true when the guest is off to a grandstand
+  std::function<bool(Guest &)> showPick;
+  // A guest's walk about (zoo.exe unitWalkAbout 0x43d948, its passable
+  // test ZTGuest's class slot 0x168): false when no route was made
+  bool walkAbout(Guest &g);
+  // Out of the building it was in; true: gone on at once (its ride, to eat)
+  bool outNow(Guest &g);
+  bool forcedOut = false; // (buildingGone: put out, guestBuy 0x42d858 with 1)
   // A building's name as a thought gives it (its own, else its kind's
   // cNameID text)
   std::string buildingName(const PlacedObjects::Object &o) const;
+  // A building's set for a goal and slot (zoo.exe 0x5ad535): its name,
+  // b<name><goal><slot> ("bbencheat0", "bswingfun0"); empty where the
+  // building hides its user or keeps it outside, or the kind hasn't it
+  std::string buildingSet(const Guest &g, const BuildingInfo &b, const std::string &goal, int slot) const;
+  // Its building set's lines from g.sitStep on: true while one plays; false
+  // when the set is over (fExitBuilding: out at the slot's exitpos)
+  bool buildingSetLine(Guest &g);
+  // The buildings hidden while used (cHideBuilding) last frame
+  std::vector<int> usedHidden;
+  // A point of a building's (64 a tile, across and along it), in the world
+  static void buildingPoint(const PlacedObjects::Object &o, int px, int py, float &x, float &y);
   // The price it charges a guest (its +0x1ac: its own, else the type's
   // default) and the default it's judged against (cDefaultCost, +0x178)
   float priceOf(const PlacedObjects::Object &o, const BuildingInfo &b) const;

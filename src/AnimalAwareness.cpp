@@ -65,7 +65,10 @@ void Animals::consumeFood(Member &m) {
   float got=items->eat(m.foodItem,static_cast<float>(t.foodEaten));
   if(got<=0){m.foodItem=-1;return;}
   float was=m.hunger;
-  m.mealTaken=true;m.noFoodSeen=false;
+  // (eating, zoo.exe +0x3a9, set by animalEatFood 0x4fd951 at its food -
+  // not for a cKeepMoving kind, type +0x44c: its task set to 1 instead,
+  // slot 0x1d8(1, 0), the trip to the food over)
+  m.mealTaken=true;m.noFoodSeen=false;m.eating=!t.keepMoving;
   m.hunger=std::max(0.0f,m.hunger-got*t.foodUnitValue);
   m.food=std::clamp(100.0f-m.hunger,0.0f,100.0f);m.lastAte=now;
   ZT_STEP("","Eats a mouthful",{"hunger",was,m.hunger},{"food eaten",got});

@@ -51,6 +51,22 @@ int ZooItems::addDung(int exhibit, float x, float y, bool dino, int size) {
   return id;
 }
 
+// zoo.exe: a dirt object's type slot 0x20, its type's cNameID
+int ZooItems::dirtType(const Item &i) const {
+  const std::string file = dinoDung(i) ? "scenery/other/dinopoo.ai" : "scenery/other/poo.ai";
+  auto it = this->dirtIds.find(file);
+  if (it != this->dirtIds.end())
+    return it->second;
+  int id = 0;
+  if (this->rm && this->rm->hasResource(file))
+    if (IniReader *ai = this->rm->getIniReader(file)) {
+      id = ai->getInt("characteristics/integers", "cnameid", 0);
+      delete ai;
+    }
+  this->dirtIds[file] = id;
+  return id;
+}
+
 static bool marineFood(const std::string &food) {
   return food == "krill" || food == "fish" || food == "chum" || food == "seagrass" || food == "urchin";
 }
@@ -105,6 +121,14 @@ float ZooItems::foodIn(int exhibit) const {
   float n = 0;
   for (const Item &i : this->list)
     if (i.kind == Kind::Food && i.exhibit == exhibit)
+      n += i.units;
+  return n;
+}
+
+float ZooItems::foodIn(int exhibit, const std::string &food) const {
+  float n = 0;
+  for (const Item &i : this->list)
+    if (i.kind == Kind::Food && i.exhibit == exhibit && i.food == food)
       n += i.units;
   return n;
 }

@@ -42,7 +42,8 @@ const LIVE = {
 const leHex = (hex, i, n) => parseInt(hex.slice(i * 2, (i + n) * 2).match(/../g).reverse().join(''), 16);
 async function livePointer(global) {
   const r = await ACTIONS.memPeek(global.toString(16) + ' 4');
-  return r.error ? 0 : leHex(r.bytes, 0, 4);
+  // (a read with no bytes - the original still loading a big zoo: not there yet)
+  return r.error || !r.bytes ? 0 : leHex(r.bytes, 0, 4);
 }
 async function liveText(at) {
   const s = await ACTIONS.memStrs(at.toString(16) + ' 4');
@@ -56,7 +57,7 @@ async function liveRead() {
   const date = await ACTIONS.memPeek(`${(gm + 0x1194).toString(16)} 16`);
   const map = await ACTIONS.memPeek(`${(w + 0x34).toString(16)} 8`);
   const list = await ACTIONS.memEach(`${(w + 0x80).toString(16)} 0 128 2a8`);
-  if (money.error || date.error || map.error) return null;
+  if (money.error || date.error || map.error || !money.bytes || !date.bytes || !map.bytes) return null;
   const buf = new DataView(new Uint8Array(money.bytes.match(/../g).map((b) => parseInt(b, 16))).buffer);
   const out = {
     cash: buf.getFloat32(0, true),

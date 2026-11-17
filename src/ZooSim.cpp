@@ -78,6 +78,17 @@ void Original::loadEconomy(ResourceManager *rm, const std::string &scenario) {
     num("cZooDooRecyclingAmount", e.zooDooRecycling);
     num("cAdmissionMultiple", e.admissionMultiple);
     num("cItemCheap", e.itemCheap);
+    // (guestArrivalCheck's: loadConfig 0x591a1f copies cAdultAdmission only
+    // when it has five; the chances one by one)
+    if (const auto list = ini->getList("characteristics", "cAdultAdmission"); list.size() == 5)
+      for (size_t k = 0; k < 5; k++)
+        e.adultAdmission[k] = static_cast<float>(std::atof(list[k].c_str()));
+    {
+      const char *keys[5] = {"cCreateGuestChanceVeryLow", "cCreateGuestChanceLow", "cCreateGuestChanceMed",
+                             "cCreateGuestChanceHigh", "cCreateGuestChanceVeryHigh"};
+      for (int k = 0; k < 5; k++)
+        whole(keys[k], e.createGuestChance[k]);
+    }
     num("cItemExpensive", e.itemExpensive);
     num("cPctSick", e.pctSick);
     num("cPctProtestors", e.pctProtestors);
@@ -165,6 +176,18 @@ int ZooSim::foundationTick(int &amount) {
   return 15002;
 }
 
+// The original's books (ZTGameMgr+0x10; laid out by gameMgrLoadSettings
+// 0x59497f): 31 rows, each a month table (+0x150 + row x 0x30 + month x 4,
+// the month +0x14c counted 1-12), a year table (+0x724 + row x 0x50 + year x
+// 4, 20 years, +0x150) and a lifetime total (+0x10d4 + row x 4); row 14 is
+// the net. Each booking adds to its row and takes it off the net - for
+// costs: ledgerAdd 0x4d9250 (row 3, Construction), bookExpense360 0x5ad038
+// (row 11: keepers' and the DRT's wages, and their hiring), 0x48bd8b (row
+// 12, tour guides' wages), bookUpkeep 0x483d34 (row 13, maintenance
+// workers' wages), bookExpense690 0x49bd80 (row 28, the buildings' upkeep).
+// Finances (0x52f820) shows each line as the sum of its rows (the tables at
+// 0x635a90: Zoo Upkeep rows 0, 1, 28; Employee Wages rows 11-13...) times
+// its sign, so here a line holds that sum (SaveGame::restoreOriginalBooks)
 void ZooSim::spend(Line line, double amount) {
   if (this->months.empty() || amount == 0)
     return;

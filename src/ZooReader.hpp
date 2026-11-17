@@ -74,6 +74,15 @@ public:
     uint64_t filterBuilt = 0, filterServiced = 0; // +0x178, +0x180 (FILETIMEs)
     uint32_t filterPeriod = 1;                     // +0x188: months in operation
     int32_t food = 0;                // scenery's food counter (food, poo)
+    // An ambient flyer's speed and the part of a step it has gone (zoo.exe
+    // ZTAmbientAnimal::save 0x47a7fd: +0x154 cSpeed, +0x158 the ms x speed
+    // left over, under 1000)
+    int32_t ambientSpeed = 0, ambientStep = 0;
+    // A rubble piece's group: the ids of every piece the same thing left,
+    // and that thing's type (its cNameID) - ZTRubble::save 0x6159c0: its
+    // scenery part, then the list (count, ids), then +0x15c
+    std::vector<uint32_t> rubbleIds;
+    int32_t rubbleOf = 0;
     std::vector<uint8_t> colours;    // colour choices, from version 67
     bool hasCondition = false;       // fences and tank walls, from 55
     uint32_t strength = 0, life = 0; // (life under 1: broken)
@@ -82,6 +91,9 @@ public:
     struct Animal {
       int32_t happiness = 0, hunger = 0, health = 0, energy = 0;
       bool female = false;
+      // +0x378: 1 from ZTAnimal::setup 0x453e59 (animalCheckKeepers 0x438d31
+      // posts "Not enough keepers" while it's under the type's +0x28c, 1)
+      int32_t keepers = 1;
       int32_t dung = 0;
       std::array<int32_t, 10> checks{}; // hunger, health, energy, other, keeper, captivity, habitat, bored, social, reproduction
       int32_t chaseCheck = 0, grow = 0, ready = 0, life = 0, hatchIn = 0, rampageTicks = 0;
@@ -101,8 +113,10 @@ public:
       uint64_t arrived = 0;
       std::array<uint32_t, 5> items{};
       std::vector<uint32_t> seen; // last five viewed species name ids, not unit ids
-      std::vector<std::pair<int32_t,int32_t>> visited; // recent visited grid coordinates
+      std::vector<std::pair<int32_t,int32_t>> visited; // recent visited grid coordinates (+0x260)
+      uint16_t visitCount = 0; // visits since the list was emptied (+0x334, v42+)
       bool leaving = false, afraid = false, sick = false;
+      bool attacked = false; // attacked by a predator (+0x33b)
       uint32_t guide = 0;
     };
     bool hasGuest = false;

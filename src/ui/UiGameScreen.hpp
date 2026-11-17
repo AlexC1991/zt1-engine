@@ -147,6 +147,9 @@ public:
   bool guestPasses(const Guests::Guest &g, int filter) const;
   int shownAnimalId() const { return this->shownAnimal; }
   void refreshAnimal();
+  // ours: a bar's value in Animal Information (for the checks), -1 if none
+  int animalBarValue(int elementId) const;
+  int animalBarBand(int elementId) const; // its colour: 0 red, 1 yellow, 2 green
   // Zookeeper Recommendations (ui/keprinfo.lyt): what would make an
   // animal happier, each line's text and whether it's a warning (red)
   std::function<std::vector<std::pair<std::string, bool>>(int)> animalAdvice;
@@ -160,6 +163,10 @@ public:
     this->animalName = animalName;
   }
   void showGuest(int id);
+  // Its PickupGuest (3416, ZUPDATE1's infogst.lyt): the guest held
+  std::function<void(int)> guestPickUp;
+  // A guest's name typed (its id, the name): set, then the rename cheats
+  std::function<void(int, const std::string &)> guestRenamed;
   // Building Information: a stand's (infocom.lyt: price, sell, totals and
   // averages, items sold) or another building's (infoncm.lyt: visitors)
   void setObjects(PlacedObjects *objects, std::function<void(int)> sell) {

@@ -65,10 +65,19 @@ public:
     std::string baseFile;
     Animation *base = nullptr, *baseUsed = nullptr;
     int footX = 1, footY = 1; // tiles
-    float padX = -1, padY = 0, padZ = 5, approachZ = 10;
-    float flightHeight = 8, flightSpeed = 2.5f, weaponRange = 5;
+    // its slot0's slotpos (where it sits) and exitpos (where take-off ends
+    // and the way home aims): tiles from the base's middle, heights in
+    // levels (16 a level)
+    float padX = -1, padY = 0, padZ = 5, exitX = -1, exitY = 0, exitZ = 10;
+    float weaponRange = 5;
+    // cMinHeight / cMaxHeight (16 a level) and the rates of its fFly
+    // behaviour sets (bAscend, bDescend, bFly, bChaseAnimal)
+    int minHeight = 128, maxHeight = 256;
+    int ascendRate = 150, descendRate = 150, flyRate = 150, chaseRate = 250;
     int padFacing = 7;
     std::string rotorSound, fireSound;
+    // (ZTHelicopterType::loadConfig 0x4c42ff: cLoopSoundAtten, +0x1f8)
+    int rotorAtten = 0;
     // Tour guides (tour.ai): cTourGuideBonus (guests' happiness at a talk,
     // and the viewing area's donation bonus), cFollowChance, cMaxGroupSize,
     // cCrowdCheck (ticks between looks for followers), cCrowdRadius (tiles),
@@ -87,6 +96,18 @@ public:
     // A marine specialist's tank sweep: cCleanTankPct cleaner each, until
     // cCleanTankThreshold (ZTKeeperType +0x204, +0x208; setDefaults 0x4c32bd)
     int cleanTankPct = 10, cleanTankThreshold = 100;
+    // The dirt types it cleans up, by their cNameID: its cDirt list
+    // (ZTKeeperType::loadConfig 0x4c34ae, +0x20c; no default - keeper.ai
+    // 6062 poo and 6093 small zoo doo, scient.ai 6094 dinopoo alone,
+    // trainer.ai none)
+    std::vector<int> dirt;
+    // cChaseCheck: status ticks between its looks for an animal that would
+    // hunt it (ZTStaffType +0x1b8, loadConfig 0x4c3783; setDefaults 0x4c3081
+    // 2); running from one, its bRunFromPredator: fRun (run, cFastRate) or
+    // fMove(0,0,<anim>,<rate>) - maint.ai's run at 55
+    int chaseCheck = 2;
+    std::string fleeAnim = "run";
+    int fleeRate = -1; // -1: cFastRate
     // Its work's behaviour sets from its .ai ([BehaviorSet\bHeal] and the
     // rest, by lower-case name): the animations played in turn - fPlay,
     // fPlayWithSound with its [Sounds] key, fPlayReverse backwards
@@ -142,9 +163,18 @@ public:
   //   Filter: 0x1a Job26_GoToFilter 0x5958b4 0x59591f 0x5ae362 0x5ae320
   //     0x5ae33e 0x596000; 0x1b Job27_FixFilter 0x595f06 0x595dbb 0x4a23c0
   //     0x595e11 0x595d17
-  // Not modelled: 0x12 Job18_Defend (bDefense, bPreattack), 0x13 Job19 (a
-  // tank job, tankEntryPoint), the class at table 0x63244c.
-  enum class Job { None, Fence, Filter, Litter, Visit, Catch, Tour, Trash, Dung };
+  // Not here: 0x12 Job18_Defend is an animal's (bDefense, bPreattack: see
+  // Animals::standingOff); 0x13 Job19 (a marine specialist at a tank's
+  // surface, tankEntryPoint) isn't modelled (an issue in "Base game
+  // playable"). Table 0x63244c is the base job (set by 0x413a43, every
+  // job's destructor puts it back; its own destructor 0x6041a3): ours, the
+  // Job value.
+  enum class Job { None, Fence, Filter, Litter, Visit, Catch, Tour, Trash, Dung, Flee };
+  // The helicopter's behaviour set playing (helicopt.ai), each in one of
+  // the original's tasks: Parked - 0x6a waiting at base (bIdleGround);
+  // SpinUp, Ascend - 0x69 take-off (bSpinup, bAscend); Chase, Fire - 0x6f
+  // tranquilizing (bChaseAnimal, bFireWeapon); Return - 0x67 back to base
+  // (bFly); Descend, SpinDown - 0x68 landing (bDescend, bSpindown)
   enum class HeliStage { Parked, SpinUp, Ascend, Chase, Fire, Return, Descend, SpinDown };
   struct Member {
     int id = 0, type = 0;
@@ -152,6 +182,8 @@ public:
     // already store those coordinates; flight jobs restart safely on load.
     HeliStage heliStage = HeliStage::Parked;
     float heliX = 0, heliY = 0, heliZ = 0;
+    // the tile middle its chase flies to (Job13's route, 0x422238); -1 none
+    float heliToX = -1, heliToY = -1;
     int rotorChannel = -1;
     double baseAnimTime = 0;
     bool female = false;
@@ -197,6 +229,19 @@ public:
     int access = -1, visit = -1, phase = 0;
     float outX = 0, outY = 0, inX = 0, inY = 0;
     float dropX = 0, dropY = 0; // where it's putting the food down
+    // The animal its food duty is for, and that animal's keeper food, what it
+    // puts down (zoo.exe keeperFoodDuty 0x49efa6: unit +0x2a4; -1 / empty
+    // when none was chosen, as after a load: the exhibit's first animal's)
+    int feedAnimal = -1;
+    std::string dropFood;
+    // An animal that would hunt it (zoo.exe ZTStaff::tick 0x440602): its
+    // status ticks (as a guest's, [AI] mStatusPeriod), the countdown to its
+    // next look (+0x28c), "saw escaped animal" (+0x24c) and the one seen
+    // (+0x22c)
+    float statusMs = 0;
+    int chaseCount = 0;
+    bool sawThreat = false;
+    int predator = -1;
     // Marine specialists in a tank (zoo.exe unit+0x258): 0 on land, 1
     // climbing, 2 at the water's surface, 3 under it; the tank; its height
     // over the ground under it (the tank's floor)
@@ -360,7 +405,7 @@ private:
   bool tourWork(Member &m, const WorldMap &map, Fences &fences);
   void gatherFollowers(Member &m);
   bool catchWork(Member &m, const WorldMap &map, const Fences &fences);
-  void helicopterStep(Member &m, float seconds, const WorldMap &map);
+  void helicopterStep(Member &m, float seconds, const WorldMap &map, const Fences &fences);
   void releaseCatch(Member &m);
   // What an exhibit's animals eat: the chow its keeper puts down, and
   // whether it's carnchow (feedc, else feedh: zoo.exe 0x5084b3)
@@ -371,6 +416,12 @@ private:
   double upkeep = 0;
   std::vector<Notice> notices;
   void pathTrouble(const Member &m, const std::string &exhibit, bool blocked);
+public:
+  // A new exhibit's staff access check (zoo.exe exhibitAccessCheck
+  // 0x44e4eb, after OK on its name): 0, or the message posted - 11000 "%s
+  // is inaccessible to zoo staff.", 11001 "The entrance to %s is blocked..."
+  int exhibitAccess(int exhibit, const WorldMap &map, const Fences &fences);
+private:
   void catchStep(Member &m, float seconds, const WorldMap &map, const Fences &fences);
   WorldIndex *index = nullptr;
   const Walkways *walkways = nullptr;
@@ -391,11 +442,36 @@ private:
   bool keeperWork(Member &m, const WorldMap &map, Fences &fences);
   void visitStep(Member &m, const WorldMap &map, Fences &fences);
   bool needsVisit(const Member &m, int exhibit, const Fences &fences) const;
+  // The other keepers at an exhibit: at their duties in it (the habitat's
+  // +0xf0, +0x132 when any) and headed for it (+0xf4)
+  void keepersAt(int exhibit, int self, const Fences &fences, int &inDuties, int &headed) const;
+  // Whether this staff member looks after an animal type (zoo.exe 0x423f00)
+  bool caresFor(const Member &m, int animalType) const;
+  // The animal its food duty feeds next, -1 none (zoo.exe 0x49f01a)
+  int animalToFeed(const Member &m, int exhibit);
+  // The animal that would hunt it, -1 none (zoo.exe animalFindPredator
+  // 0x4369b9, a staff member's slot 0x2fc, with its slot 0x304 0x4391a2)
+  int findThreat(const Member &m, const Fences &fences) const;
+  // Off away from it (task 0x75, Task75_AvoidPredator): what it was doing
+  // dropped, to a tile on the ring cPredatorRadius + 2 away (slot 0x30c,
+  // animalFleeTarget 0x4a639e)
+  bool flee(Member &m, const WorldMap &map, Fences &fences);
+  int predatorRadius = 7; // ztunit.ai cPredatorRadius (0x6394f4)
+  // Whether it cleans up this dung pile (ZTKeeper class slot 0x324,
+  // 0x42404e: the pile type's id on its type's cDirt list)
+  bool cleans(const Member &m, const ZooItems::Item &dung) const;
+  // The dung piles in an exhibit it cleans up
+  std::vector<int> dungFor(const Member &m, int exhibit) const;
   void face(Member &m, float x, float y);
   // A path over the tiles from a member to a goal (tile); empty: none
   bool findPath(Member &m, int gx, int gy, const WorldMap &map, const Fences &fences,
                 float endX, float endY);
   void wander(Member &m, const WorldMap &map, const Fences &fences);
+  bool walkAbout(Member &m, const WorldMap &map, const Fences &fences);
+  // The original's staff with nothing to do (#243): who keeps to it, and
+  // its step when standing (work on arrival, the keeper's stand, the walk)
+  bool idleOriginal(const Member &m) const;
+  void idleStep(Member &m, const WorldMap &map, Fences &fences);
   bool findWork(Member &m, const WorldMap &map, Fences &fences);
   void play(Member &m, const std::string &anim, int times);
   void playSet(Member &m, const std::string &set, const std::string &anim, int times);

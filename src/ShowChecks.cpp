@@ -5,6 +5,7 @@
 #include "ui/UiGameScreen.hpp"
 #include "ui/UiListBox.hpp"
 #include "ui/UiButton.hpp"
+#include "ui/UiText.hpp"
 #include <fstream>
 #include <filesystem>
 #include <sstream>
@@ -13,6 +14,8 @@
 #include <set>
 #include <cmath>
 #include "Animation.hpp"
+#include "OriginalConstants.hpp"
+#include <climits>
 
 // Lab-only real-time soak setup. Uses stock definitions and ordinary needs;
 // it changes the initial zoo, never keeps animals healthy during the run.
@@ -87,6 +90,15 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   auto &f=world.getFences();auto &map=world.getMap();auto &a=world.getAnimals();auto &st=world.getStaff();auto &shows=world.getShows();auto &gs=world.getGuests();
   shows.clear();a.clear();st.clear();
   auto &guests=const_cast<std::vector<Guests::Guest>&>(gs.guests());guests.clear();
+  // ours: the flat test zoo has nothing to visit (no exhibit with animals, no
+  // 'fun' building), so every guest's pick would roll cLeaveChanceDone
+  // (chooseTask 0x43a6e4 at 0x440ee2) and the spectators would walk out: off
+  // for these checks, as the parity checks do, and put back at the end
+  struct LeaveDoneOff {
+    Guests &g; std::vector<int> was;
+    explicit LeaveDoneOff(Guests &gs):g(gs){for(auto &t:g.typeList){was.push_back(t.leaveDone);t.leaveDone=0;}}
+    ~LeaveDoneOff(){for(size_t k=0;k<was.size()&&k<g.typeList.size();++k)g.typeList[k].leaveDone=was[k];}
+  } leaveDoneOff(gs);
   auto run=[&](float seconds){for(int k=0;k<static_cast<int>(seconds*20);++k)world.update(SDL_GetKeyboardState(nullptr),0.05f);};
   int drag=10;
   auto rectangle=[&](int x,int y,int w,int h,int type) {
@@ -130,6 +142,15 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   check("player can reorder script",shows.show(tank)->script.front()=="spit");
   if(auto *b=dynamic_cast<UiButton*>(hud.getElementById(11105)))if(b->onClick)b->onClick();
   check("player admission spinner works",std::abs(shows.show(tank)->admission-5.75)<0.01);
+  // A typed admission (zoo.exe show_AdmissionCost_click 0x61536b): "$" and
+  // "," taken out, kept to min/maxShowAdmission, stored as it is - $3.10
+  // stays $3.10, not rounded to a step
+  if(auto *t=dynamic_cast<UiText*>(hud.getElementById(11104));t && t->onCommit) {
+    t->onCommit("$3.10");const double typed=shows.show(tank)->admission;
+    t->onCommit("$1,000");const double most=shows.show(tank)->admission;
+    check("a typed admission: $3.10 kept as it is, $1,000 the most (0x61536b)",
+          std::abs(typed-3.1)<0.001 && std::abs(most-shows.settings.admissionMax)<0.001);
+  } else check("a typed admission (the admission text 11104)",false);
   shows.setAdmission(tank,5.5);shows.setFrequency(tank,2);
   hud.showPanel(0,"");
   check("grandstand placed",world.objectsMutable().add("scenery/building/gstand.ai",55.5f,29.5f,6));
@@ -146,16 +167,22 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
     }
   }
   world.reindex();
+  shows.takeMessages();
   bool started=shows.start(tank,why);report<<"Start reason: "<<why<<"\n";report<<shows.describe();
+  std::vector<Shows::Message> barLines=shows.takeMessages();
   for(const auto &[edge,p]:f.pieces())if(p.gate)report<<"Gate "<<edge.x<<","<<edge.y<<" tank="<<p.tank<<" tank2="<<p.tank2<<"\n";
   check("show starts",started);
   int completedBefore=shows.show(tank)->completed;
   float pausedClock=shows.show(tank)->elapsed;shows.update(0);check("zero time leaves show paused",shows.show(tank)->elapsed==pausedClock);
   bool sawPerformance=false,saved=false,loaded=false,seated=false;int inShow=0;
+  std::set<int> trickThoughts; // (the seated guests' thoughts, each second of the performance)
+  std::string conducting;
   for(int sec=0;sec<170;sec++) {
     run(1);auto *s=shows.show(tank);if(!s)break;
+    for(auto &m:shows.takeMessages())barLines.push_back(m);
     if(s->phase==Shows::Phase::Performing) {
       if(!sawPerformance){sawPerformance=true;capture("show_performing");}
+      if(const auto *sm=st.member(specialist))if(sm->showTank==tank)conducting=st.dutyText(*sm);
       // (ZT_SHOW_FRAMES=1: a picture each second of the performance, to see
       // the performers against the tank's walls)
       if(std::getenv("ZT_SHOW_FRAMES")){
@@ -165,6 +192,7 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
         for(const auto &m:a.members())report<<"     "<<n<<" animal "<<m.id<<" anim "<<m.anim<<" trick "<<m.showTrick
           <<" exhibit "<<m.exhibit<<" at "<<m.x<<","<<m.y<<" swimZ "<<m.swimZ<<"\n";}
       for(const auto &g:guests)if(g.showTank==tank && g.showSeat>=0){seated=true;inShow++;}
+      for(const auto &g:guests)if(g.showTank==tank && g.showSeat>=0)trickThoughts.insert(g.lastThought);
       if(!saved) {
         saved=SaveGame::save(out+"/active-show.zt1save",world,sim,hud,mapPath);
         loaded=saved && SaveGame::load(out+"/active-show.zt1save",world,sim,hud);s=shows.show(tank);
@@ -174,15 +202,64 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   }
   auto *s=shows.show(tank);
   check("show reaches performing phase",sawPerformance);
+  // zoo.exe 0x59f21b / 0x5a3de4 / 0x5a85e9: 11490 (kind 1) as the specialist
+  // is found, 11491 (kind 4) as the animals are sent, 11492 (kind 4) at the
+  // end, each naming the show tank - and no other show line
+  {
+    const std::string tankName=f.exhibit(tank)?f.exhibit(tank)->name:"?";
+    bool shape=barLines.size()==3;
+    for(size_t i=0;shape && i<3;i++)shape=barLines[i].kind==(i==0?1:4) && barLines[i].animal<0 &&
+      barLines[i].text.find(tankName)!=std::string::npos && barLines[i].text.find('%')==std::string::npos;
+    for(const auto &m:barLines)report<<"  bar: kind "<<m.kind<<" \""<<m.text<<"\"\n";
+    check("show messages are the original's 11490, 11491, 11492 with their kinds",shape);
+  }
   check("spectators sit in grandstand",seated);
+  // A trick's thought (ZTGuest::handleEvents 0x43a698): a bad one 10610, a
+  // good one 10612, a great one 10613 (the orcas' tricks are good or better)
+  {
+    std::string seen;for(int t:trickThoughts)seen+=" "+std::to_string(t);
+    report<<"  seated guests' thoughts:"<<seen<<"\n";
+    check("the audience thinks of a good or great trick: 10612 or 10613 (0x43a698)",
+          trickThoughts.count(10612)>0 || trickThoughts.count(10613)>0);
+  }
   check("save during performance",saved && loaded);
   check("show completes after reload",s && s->completed==completedBefore+1 && s->phase==Shows::Phase::Waiting);
   check("all six visible tricks completed",s && s->tricksDone==6 && s->tricksSkipped==0);
   check("orcas return home unboxed",a.member(one) && a.member(two) && a.member(one)->exhibit==home && a.member(two)->exhibit==home && !a.member(one)->boxed && !a.member(two)->boxed);
   check("specialist released",st.member(specialist) && st.member(specialist)->showTank<0);
+  // (#218) zoo.exe ZTKeeper::statusText 0x471399, job 0x13: in the show
+  // tank, 10326 "Conducting the %s show" with the show species' name
+  // (cNameID); once released, not that line any more
+  {
+    const int orca=a.typeOfFile("animals/orca.ai");
+    Staff::Member line;if(const auto *sm=st.member(specialist))line=*sm;
+    line.dutyId=10326;line.dutyArg=orca>=0?a.types()[orca].displayName:"";
+    const std::string want=st.dutyText(line);
+    report<<"  specialist in the show: \""<<conducting<<"\" (want \""<<want<<"\")\n";
+    check("the specialist's line in a show is 10326 with the species' name (ZTKeeper::statusText 0x471399, job 0x13)",
+          !line.dutyArg.empty() && want.find(line.dutyArg)!=std::string::npos && conducting==want &&
+          st.member(specialist) && st.member(specialist)->dutyId!=10326);
+  }
   report<<shows.describe();
   double earned=shows.takeIncome();check("show admissions charged once",s && s->visitors==4 && std::abs(s->income-22)<0.01 && std::abs(earned-22)<0.01);
   check("income drain cannot charge twice",shows.takeIncome()==0);
+  // zoo.exe rollMonthlyB 0x48b57e / 0x59e725 / 0x473b61: this month's
+  // attendance and income, the stand's cUpkeep as this month's upkeep; the
+  // month's end moves them to last month's and puts the upkeep on again;
+  // they're kept in a save (SHOWS3)
+  if(s) {
+    const double upkeep=s->upkeepNow;
+    const bool now=s->visitorsNow==4 && std::abs(s->incomeNow-22)<0.01 && upkeep>0 && std::abs(s->upkeepTotal-upkeep)<0.01;
+    shows.newMonth();s=shows.show(tank);
+    const bool rolled=s && s->visitorsLast==4 && s->visitorsNow==0 && std::abs(s->incomeLast-22)<0.01 && s->incomeNow==0 &&
+      std::abs(s->upkeepLast-upkeep)<0.01 && std::abs(s->upkeepNow-upkeep)<0.01 && std::abs(s->upkeepTotal-2*upkeep)<0.01 &&
+      s->visitors==4 && shows.monthsOpen(*s)>=1;
+    const std::string kept=shows.snapshot();
+    const bool restored=shows.restore(kept) && (s=shows.show(tank)) && s->visitorsLast==4 && std::abs(s->incomeLast-22)<0.01 &&
+      std::abs(s->upkeepTotal-2*upkeep)<0.01;
+    report<<"Show finances: upkeep "<<upkeep<<" now "<<now<<" rolled "<<rolled<<" restored "<<restored<<"\n";
+    check("show finances: this month, last month and the stand's upkeep roll at the month's end",now && rolled && restored);
+  }
   sim.earn(ZooSim::ShowIncome,earned);
   run(10);
   bool released=true;for(const auto &g:guests)if(g.showTank==tank)released=false;
@@ -193,6 +270,24 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   while(shows.remove(tank,0)){}
   for(int i=0;i<20;i++)shows.add(tank,"finswim");
   check("20-trick script limit",s->script.size()==20 && !shows.add(tank,"spit"));
+  // zoo.exe show1_AvailableTrickList_click 0x4743cf / show1_AddButton_click
+  // 0x47594f: Add stays on at the limit, and pressed it adds nothing and
+  // posts 11493 on the message bar
+  {
+    hud.showExhibit(tank);hud.refreshShow();
+    if(auto *l=dynamic_cast<UiListBox*>(hud.getElementById(11111)))for(int k=0;k<static_cast<int>(l->getItemCount());++k) {
+      l->setSelectedIndex(k);if(l->getSelectedData()=="finswim")break;
+    }
+    hud.refreshShow();
+    auto *add=dynamic_cast<UiButton*>(hud.getElementById(11113));
+    const bool on=add && !add->isDisabled();
+    const size_t said=hud.messageCount();
+    if(add && add->onClick)add->onClick();
+    const bool posted=hud.messageCount()>said && !hud.messageText(0).empty() && hud.messageText(0).find('%')==std::string::npos;
+    report<<"  full script: Add "<<(on?"on":"off")<<", bar \""<<(hud.messageCount()?hud.messageText(0):std::string())<<"\"\n";
+    check("a full script's Add stays on and says so on the message bar (11493, 0x47594f)",on && posted && s->script.size()==20);
+    hud.showPanel(0,"");
+  }
   check("repetition reduces benefit",shows.benefit(tank)<40);
   while(shows.remove(tank,0)){}shows.add(tank,"finswim");
   // A too-shallow tank and research/object requirements remain gameplay constraints.
@@ -250,6 +345,47 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   }
   check("orca beach behavior animates",sawStage);
   check("one stage shows: the orca is exactly on it while its art carries a stage",sawStage && !offStage);
+  // zoo.exe 0x5a3afa (Task85 GoToShowTank's start, 0x5e94af): an animal
+  // that can't get to the show tank gives up as it's sent, not after a
+  // wait - 11005 "...being healed and can't make it to the show in %s."
+  // for one frozen (+0x20d: here darted), 11004 "...having trouble getting
+  // to %s." for one with no route (here: out on the land by its tank) -
+  // kind 2, about the animal (#208)
+  {
+    while(shows.remove(tank,0)){}shows.add(tank,"finswim");
+    st.moveTo(specialist,54.5f,24.5f);
+    auto *frozenOrca=a.member(one);auto *strandedOrca=a.member(two);
+    if(frozenOrca)a.tranquilise(one);
+    float keepX=0,keepY=0;
+    if(strandedOrca){keepX=strandedOrca->x;keepY=strandedOrca->y;strandedOrca->x=26.5f;strandedOrca->y=40.5f;strandedOrca->path.clear();strandedOrca->pathAt=0;}
+    shows.takeMessages();
+    const bool sent=shows.start(tank,why);
+    // (sent once the specialist is up on the platform, 11491: within 60 s)
+    std::vector<Shows::Message> lines;
+    float waited=0;
+    for(;sent && waited<60;waited+=0.5f) {
+      run(0.5f);
+      for(auto &m:shows.takeMessages())lines.push_back(m);
+      if(std::count_if(lines.begin(),lines.end(),[](const Shows::Message &m){return m.kind==2;})>=2)break;
+    }
+    report<<"  give-up after "<<waited<<" s\n";
+    const std::string tankName=f.exhibit(tank)?f.exhibit(tank)->name:"?";
+    auto said=[&](int animal,int id) {
+      for(const auto &m:lines)if(m.kind==2 && m.animal==animal && m.text.find(tankName)!=std::string::npos &&
+        m.text.find(id==11005?"healed":"trouble")!=std::string::npos)return true;
+      return false;
+    };
+    for(const auto &m:lines)report<<"  give-up bar: kind "<<m.kind<<" animal "<<m.animal<<" \""<<m.text<<"\"\n";
+    check("a show animal that can't reach the show tank gives up as it's sent: 11005 for a frozen one, 11004 with no route (0x5a3afa)",
+      sent && said(one,11005) && said(two,11004) && a.member(one) && a.member(one)->showTank<0 &&
+      a.member(two) && a.member(two)->showTank<0);
+    shows.cancel(tank,"check over");
+    for(int k=0;k<120 && shows.show(tank) && shows.show(tank)->phase!=Shows::Phase::Waiting;++k)run(1);
+    if(auto *m=a.member(one)){m->tranquilised=false;}
+    if(auto *m=a.member(two)){m->boxed=false;m->x=keepX;m->y=keepY;m->exhibit=home;m->path.clear();m->pathAt=0;}
+    if(auto *m=st.member(specialist)){m->water=false;m->climbing=false;m->job=Staff::Job::None;m->showTank=-1;m->x=54.5f;m->y=24.5f;}
+    run(1);
+  }
   for(const char *file:{"animals/dolphin.ai","animals/sealion.ai","animals/seaotter.ai","animals/gwshark.ai","animals/jellyfsh.ai"}) {
     while(shows.remove(tank,0)){}
     a.clear();st.moveTo(specialist,54.5f,24.5f);
@@ -272,6 +408,23 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   if(restarted){f.drainExhibit(tank);run(0.1f);}
   check("draining tank cancels safely",s->phase==Shows::Phase::Waiting && st.member(specialist)->showTank<0);
   check("drained tank refuses next show",!shows.start(tank,why));
+  // A rampage wrecks the grandstand while its show gathers (zoo.exe
+  // ZTBuilding::toRubble 0x611bd6 -> 0x6127b8): the show is over (0x612d20)
+  // and its audience let go (0x50c813 -> 0x5ae745); the stand rubble (#210)
+  if(s) {
+    s->phase=Shows::Phase::Gathering;
+    const int cancelledBefore=s->cancelled;
+    int booked=0;
+    for(auto &g:guests)if(booked<2){g.showTank=tank;g.showStand=stand;g.showSeat=-1;g.showDoorX=g.x;g.showDoorY=g.y;++booked;}
+    const auto *o=world.objectsMutable().byId(stand);
+    const int wrecked=o?world.rubbleTile(static_cast<int>(std::floor(o->x)),static_cast<int>(std::floor(o->y))):0;
+    int still=0;for(const auto &g:guests)still+=g.showTank==tank;
+    report<<"WRECKED STAND "<<stand<<": booked "<<booked<<", still "<<still<<", phase "<<static_cast<int>(s->phase)
+          <<", cancelled "<<cancelledBefore<<" -> "<<s->cancelled<<"\n";
+    check("a wrecked show stand ends its show and lets its audience go (0x6127b8, #210)",
+      wrecked>0 && !world.objectsMutable().byId(stand) && booked>0 && still==0 && s->phase==Shows::Phase::Waiting &&
+      s->cancelled==cancelledBefore+1);
+  }
   hud.showExhibit(tank);hud.refreshShow();capture("show_after_cancel");
   report<<checks<<" checks, "<<failures<<" failures\n";
   return failures?1:0;
@@ -737,31 +890,75 @@ std::string runShowManagementChecks(World &world,ResourceManager *rm) {
   const std::string snapshot=shows.snapshot(false);shows.restore(snapshot);s=shows.show(tank);
   check("show prices and stand links rebuild after restore",s && s->admission==9 && shows.standShow(stands[0])==tank && objects.byId(stands[1])->price==9);
 
-  // 1,000 guests, including hungry, distant and already busy guests. No synchronized crowd rush.
-  shows.setAdmission(tank,5.5);s->phase=Shows::Phase::Gathering;s->audienceCheck=0;s->audienceCursor=0;
-  g.clear();shows.audienceStats={};shows.guestShowRetry.clear();
+  // A guest's show pick (#237: zoo.exe 0x440f0c, chooseTask 0x43a6e4 at
+  // 0x440eb7, before the attraction pick): the open grandstands (+0x19c:
+  // its show started, not over - 0x434cca), Manhattan tiles + rand % 15,
+  // the smallest unless its show's tank is on the visited list (0x5a2bcd),
+  // none past zoo.ini [AI] maxDistToGoToShow (150)
+  shows.setAdmission(tank,5.5);g.clear();
   const auto doors=g.doorTiles(*objects.byId(stands[0]));if(doors.empty())return out.str();
-  for(auto [x,y]:doors)map.setPath(x,y,"path");world.reindex();g.rng.seed(2001);
-  for(int i=0;i<1000;++i) {
-    g.admit(0);auto &guest=g.list.back();guest.x=doors[0].first+0.5f;guest.y=doors[0].second+0.5f;
-    guest.state=Guests::State::Walking;guest.building=-1;guest.hunger=guest.thirst=guest.bathroom=guest.tired=0;
-    if(i%4==0)guest.hunger=95;
-    if(i%4==1){guest.x=110;guest.y=110;}
-    if(i%4==2){guest.building=0;guest.need="food";}
+  for(auto [x,y]:doors)map.setPath(x,y,"path");
+  // (a path to the show's other grandstand's door too: rand % 15 can make
+  // it the pick)
+  if(const auto doors1=g.doorTiles(*objects.byId(stands[1]));!doors1.empty()) {
+    for(auto [x,y]:doors1)map.setPath(x,y,"path");
+    const int x0=doors[0].first,y0=doors[0].second,x1=doors1[0].first,y1=doors1[0].second;
+    for(int x=std::min(x0,x1);x<=std::max(x0,x1);++x)map.setPath(x,y0,"path");
+    for(int y=std::min(y0,y1);y<=std::max(y0,y1);++y)map.setPath(x1,y,"path");
   }
-  const Uint64 begin=SDL_GetPerformanceCounter();
-  for(int i=0;i<240;++i)shows.audiences(*s,1.0f/60);
-  const double ms=1000.0*(SDL_GetPerformanceCounter()-begin)/SDL_GetPerformanceFrequency();
-  bool protectedNeeds=true;int reservations=0;std::set<std::pair<int,int>> seats;
-  bool unique=true;
-  for(size_t i=0;i<g.list.size();++i) {
-    const auto &guest=g.list[i];if(i%4!=3)protectedNeeds &= guest.showTank<0;
-    if(guest.showTank==tank){++reservations;if(guest.showSeat>=0)unique &= seats.insert({guest.showStand,guest.showSeat}).second;}
+  world.reindex();g.rng.seed(2001);
+  {
+    g.admit(0);const int qid=g.list.back().id;
+    auto place=[&]()->Guests::Guest& {
+      Guests::Guest &q=*std::find_if(g.list.begin(),g.list.end(),[&](const Guests::Guest &u){return u.id==qid;});
+      q.x=doors[0].first+0.5f;q.y=doors[0].second+0.5f;q.state=Guests::State::Walking;q.building=-1;q.need.clear();
+      q.showTank=q.showStand=q.showSeat=-1;q.target=-1;q.gawkObject=-1;q.path.clear();q.pathAt=0;q.leaving=false;
+      q.visits.clear();q.visitCount=0;q.hidden=false;q.guide=-1;return q;
+    };
+    const int gx=doors[0].first,gy=doors[0].second;
+    int nearest=INT_MAX;
+    for(int id:{stands[0],stands[1]})if(const auto *st0=objects.byId(id))
+      nearest=std::min(nearest,std::abs(static_cast<int>(std::floor(st0->x))-gx)+std::abs(static_cast<int>(std::floor(st0->y))-gy));
+    const Shows::Phase otherWas=shows.show(other)?shows.show(other)->phase:Shows::Phase::Waiting;
+    if(shows.show(other))shows.show(other)->phase=Shows::Phase::Waiting;
+    s->phase=Shows::Phase::Waiting;
+    {Guests::Guest &q=place();g.decide(q);}
+    const bool closed=g.guest(qid)->showTank<0;
+    bool gathering=true,performing=true;
+    for(int k=0;k<20;++k) {
+      s->phase=Shows::Phase::Gathering;
+      {Guests::Guest &q=place();g.decide(q);}
+      const Guests::Guest &q=*g.guest(qid);
+      gathering=gathering&&q.showTank==tank&&q.need=="show"&&(q.showStand==stands[0]||q.showStand==stands[1]);
+      s->phase=Shows::Phase::Performing;
+      {Guests::Guest &p=place();g.decide(p);}
+      performing=performing&&g.guest(qid)->showTank==tank;    }
+    bool seen=true;
+    if(const auto *pool=f.exhibit(tank);pool&&!pool->tiles.empty())
+      for(int k=0;k<20;++k) {
+        Guests::Guest &q=place();g.recordVisit(q,pool->tiles.begin()->first,pool->tiles.begin()->second);g.decide(q);
+        seen=seen&&g.guest(qid)->showTank<0;
+      }
+    const int maxWas=shows.maxDistToGoToShow;
+    bool beyond=true,within=true;
+    for(int k=0;k<20;++k) {
+      shows.maxDistToGoToShow=nearest-1;
+      {Guests::Guest &q=place();g.decide(q);}
+      beyond=beyond&&g.guest(qid)->showTank<0;
+      shows.maxDistToGoToShow=nearest+14;
+      {Guests::Guest &q=place();g.decide(q);}
+      within=within&&g.guest(qid)->showTank==tank;
+    }
+    shows.maxDistToGoToShow=maxWas;
+    if(shows.show(other))shows.show(other)->phase=otherWas;
+    out<<"SHOW PICK nearest "<<nearest<<" tiles: closed "<<closed<<", gathering "<<gathering<<", performing "<<performing
+       <<", seen "<<seen<<", past maxDistToGoToShow "<<beyond<<", within "<<within<<" (maxDistToGoToShow "<<maxWas<<")\n";
+    check("a grandstand whose show hasn't started isn't picked (+0x19c, 0x434cca)",closed);
+    check("a guest picks the open grandstand near it while the show gathers or performs (0x440f0c)",gathering&&performing);
+    check("a show whose tank the guest has visited is passed over (0x5a2bcd)",seen);
+    check("no show past zoo.ini [AI] maxDistToGoToShow: tiles + rand % 15 against it (0x440f0c)",beyond&&within);
+    check("maxDistToGoToShow is 150 with the game's zoo.ini (no [AI] section)",maxWas==Original::maxDistToGoToShow);
   }
-  check("hungry, distant and busy guests keep their existing priorities",protectedNeeds);
-  check("show pathfinding is bounded instead of routing the whole crowd at once",shows.audienceStats.considered<=120 && shows.audienceStats.routeAttempts<=40);
-  check("seat reservations respect stand capacity and never duplicate seats",reservations<=24 && unique);
-  out<<"CROWD 1000 guests; 240 updates; "<<shows.audienceStats.considered<<" decisions; "<<shows.audienceStats.routeAttempts<<" routes; "<<ms<<" ms\n";
   shows.cancel(tank,"Management fixture complete");g.clear();
   // An old pile is removed without waiting for it to be eaten, including restore.
   world.getItems().clear();

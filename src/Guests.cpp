@@ -3,6 +3,7 @@
 #include "LabTrace.hpp"
 #include "OriginalConstants.hpp"
 #include "Research.hpp"
+#include "Settings.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -52,7 +53,10 @@ void Guests::load(ResourceManager *rm) {
   }
   // (what counts as hungry, thirsty... for the lists and the advisor)
   this->uiThreshold = ai->getInt("characteristics/integers", "cuithreshold", 75);
-  // (zoo.exe ZTGuestType::loadClassConfig 0x52196e: these into globals)
+  // (zoo.exe 0x4bc8f8: zoo.ini [AI] useAttractionAttractiveness, default 0)
+  this->useAttractionAttractiveness = Settings::getInt("AI", "useAttractionAttractiveness", 0) != 0;
+  // (zoo.exe ZTGuestType::loadClassConfig 0x4c57d4, read once - its body
+  // 0x52196e: these into globals)
   this->searchRadius = ai->getInt("characteristics/integers", "csearchradius", this->searchRadius);
   this->randomStatNth = ai->getInt("characteristics/integers", "crandomstatnth", this->randomStatNth);
   {
@@ -157,6 +161,7 @@ void Guests::load(ResourceManager *rm) {
     read("cstinkthreshold", t.stinkThreshold), read("csickchange", t.sickChange);
     read("csawanimalreset", t.sawReset);
     read("csickchance", t.sickChance);
+    read("cstandandeatchange", t.standAndEat);
     read("cmimicchance", t.mimicChance);
     read("csickanimalchange", t.sickAnimalChange), read("chappyanimalchange1", t.happyAnimal1);
     read("chappyanimalchange2", t.happyAnimal2), read("cangryanimalchange1", t.angryAnimal1);
@@ -253,16 +258,23 @@ void Guests::load(ResourceManager *rm) {
   // The water's behaviour sets (Marine Mania): each ride's
   // [<kind>\BehaviorSet\bReturn<building><program>] (zoo.exe 0x597028 makes
   // the name: "bReturn", the building type's name, its program +0x188),
-  // [BehaviorSet\bInWater], bSuitIdle, and a man's bSuitDrown, bSurfDrown
+  // [BehaviorSet\bInWater], bSuitIdle, and a man's bSuitDrown, bSurfDrown;
+  // and the buildings' sets, those with an fEnterBuilding (the benches' and
+  // picnic tables' [BehaviorSet\bbencheat0] ..., the playground's and games'
+  // per kind: [boy\BehaviorSet\bswingfun0], [man\BehaviorSet\bdinoputtfun0])
   for (const std::string &sec : ai->getSections()) {
     const std::string low = lower(sec);
     const size_t at = low.find("behaviorset\\");
     if (at == std::string::npos)
       continue;
     const std::string name = low.substr(at + 12);
+    const std::vector<std::string> lines = ai->getList(sec, "f");
+    bool enters = false;
+    for (const std::string &f : lines)
+      enters = enters || lower(f).find("fenterbuilding") != std::string::npos;
     if (name.rfind("breturn", 0) == 0 || name == "binwater" || name == "bsuitidle" || name == "bsuitdrown" ||
-        name == "bsurfdrown")
-      this->behaviourSets[low] = ai->getList(sec, "f");
+        name == "bsurfdrown" || enters)
+      this->behaviourSets[low] = lines;
   }
   delete ai;
   delete cfg;
@@ -273,6 +285,8 @@ void Guests::load(ResourceManager *rm) {
 
 void Guests::clear() {
   this->list.clear();
+  this->carried = -1;
+  this->thoughtLog.clear(); // (a zoo's own ZTThoughtMgr)
   this->notices.clear();
   this->nextId = 1;
   this->income = 0;
@@ -301,6 +315,8 @@ int Guests::averageHappiness() const {
 // ----------------------------------------------------------------------------
 // Art: each guest's animations in its own colours
 // ----------------------------------------------------------------------------
+// (its colours; smell-sick, +0x336, its skin - the palette's 4th, +0xc - is
+// its type's cSickPalName, +0x2cc: ZTGuest::guestDrawPalette 0x43408c)
 void Guests::wornColours(const Guest &g, int out[4]) const {
   std::copy(std::begin(g.colours), std::end(g.colours), out);
   if (g.smelled && g.type >= 0 && g.type < static_cast<int>(this->typeList.size()) &&
@@ -602,11 +618,13 @@ bool Guests::walkTo(Guest &g, int tx, int ty, float speed, bool emergency) {
     return false;
   g.anim = !walking && speed > this->typeList[g.type].speed * 1.2f ? "run_terror" : "walk";
   g.animTime = 0;
+  g.reverse = false;
   return true;
 }
 
 void Guests::play(Guest &g, const std::string &anim, float seconds) {
   g.tapStep = -1; // (another set replaces its bTapTank: tapPlay sets it again)
+  g.reverse = false;
   g.anim = anim;
   g.animTime = 0;
   g.playFor = seconds;
@@ -627,16 +645,15 @@ std::vector<std::string> Guests::thoughtsAbout(int animal, int exhibit, size_t m
 
 // zoo.exe thoughtAdd 0x4231c1 -> thoughtPush 0x42311a: a thought about an
 // animal that's still an egg (+0x395) is "Look at that %s egg! How cool is
-// that?" (10250) instead; the newest first. ours: one it had last, with the
-// same %s, isn't thought again, and one it already has moves to the top
-// (the original keeps repeats, dropping the oldest past its list's cap,
-// +0xc - not read; ours keeps 10)
+// that?" (10250) instead; always onto the front of the zoo's list (the
+// ZTThoughtMgr, [0x639090]), repeats kept, the oldest dropped past its cap
+// (+0xc: Original::thoughtListCap). Guest Information shows the guest's
+// newest 5 of that list (0x46a7c8): ours keeps them on the guest, one
+// dropped with the zoo's oldest when it was among them
 void Guests::think(Guest &g, int stringId, const std::string &arg, int animal, int exhibit) {
   if (animal >= 0 && this->animals)
     if (const Animals::Member *m = this->animals->member(animal); m && m->egg)
       stringId = 10250;
-  if (g.lastThought == stringId && g.thoughtArg == arg)
-    return;
   g.lastThought = stringId;
   g.thoughtArg = arg;
   if (!this->rm)
@@ -645,15 +662,25 @@ void Guests::think(Guest &g, int stringId, const std::string &arg, int animal, i
   size_t at = s.find("%s");
   if (at != std::string::npos)
     s.replace(at, 2, arg);
-  // (a thought it already has moves to the top: no repeats)
   this->thoughtLog.insert(this->thoughtLog.begin(), {s, g.id, animal, exhibit});
-  if (this->thoughtLog.size() > 500)
-    this->thoughtLog.resize(500);
-  ZT_STEP("", "Thinks", {"thought", s}, {"string id", stringId});
-  g.thoughts.erase(std::remove(g.thoughts.begin(), g.thoughts.end(), s), g.thoughts.end());
+  ZT_STEP("0x42311a", "Thinks", {"thought", s}, {"string id", stringId});
   g.thoughts.insert(g.thoughts.begin(), s);
-  if (g.thoughts.size() > 10)
-    g.thoughts.resize(10);
+  if (g.thoughts.size() > static_cast<size_t>(Original::guestInfoThoughts))
+    g.thoughts.resize(Original::guestInfoThoughts);
+  if (this->thoughtLog.size() > static_cast<size_t>(Original::thoughtListCap)) {
+    const Thought old = this->thoughtLog.back();
+    this->thoughtLog.pop_back();
+    // (its guest's own list: the dropped one was among its newest 5 if it
+    // has 5 or fewer left in the zoo's list with it)
+    int left = 0;
+    for (const Thought &t : this->thoughtLog)
+      if (t.guest == old.guest && ++left >= Original::guestInfoThoughts)
+        break;
+    if (left < Original::guestInfoThoughts)
+      for (Guest &o : this->list)
+        if (o.id == old.guest && static_cast<int>(o.thoughts.size()) > left)
+          o.thoughts.resize(static_cast<size_t>(left));
+  }
 }
 
 int Guests::timeInParkText(const Guest &g) const {
@@ -684,6 +711,13 @@ const Guests::BuildingInfo &Guests::infoOf(const std::string &file) const {
       b.capacity = std::max(1, ai->getInt(ints, "ccapacity", 1));
       b.timeInside = static_cast<float>(ai->getInt(ints, "ctimeinside", 3));
       b.hideUser = ai->getInt(ints, "chideuser", 0) != 0;
+      b.hideBuilding = ai->getInt(ints, "chidebuilding", 0) != 0;
+      b.staysOutside = ai->getInt(ints, "cuserstaysoutside", 0) == 1;
+      {
+        const size_t slash = file.find_last_of('/'), dot = file.find_last_of('.');
+        const size_t from = slash == std::string::npos ? 0 : slash + 1;
+        b.typeName = lower(file.substr(from, dot == std::string::npos || dot < from ? std::string::npos : dot - from));
+      }
       b.adultChange = static_cast<float>(ai->getInt(ints, "cadultchange", 0));
       b.childChange = static_cast<float>(ai->getInt(ints, "cchildchange", 0));
       b.hunger = static_cast<float>(ai->getInt(ints, "chungerchange", 0));
@@ -715,12 +749,18 @@ const Guests::BuildingInfo &Guests::infoOf(const std::string &file) const {
         std::vector<int> x = ai->getIntList(slot, "exitpos");
         if (e.size() >= 2)
           s.ex = e[0], s.ey = e[1];
+        for (size_t k = 0; k + 1 < e.size(); k += 2)
+          s.entrances.push_back({e[k], e[k + 1]});
         if (x.size() >= 2)
           s.xx = x[0], s.xy = x[1];
         s.exitOnWater = ai->getInt(slot, "exitonwater", 0) != 0;
         s.entranceOnWater = ai->getInt(slot, "entranceonwater", 0) != 0;
         s.isReturn = ai->getInt(slot, "isreturnslot", 0) != 0;
         s.ids = ai->getIntList(slot, "id");
+        std::vector<int> sp = ai->getIntList(slot, "slotpos");
+        if (sp.size() >= 2)
+          s.sx = sp[0], s.sy = sp[1];
+        s.facing = ai->getInt(slot, "facing", 0);
         b.slots.push_back(s);
       }
       b.nameId = ai->getInt(ints, "cnameid", 0);
@@ -768,13 +808,35 @@ const Guests::BuildingInfo &Guests::infoOf(const std::string &file) const {
           continue;
         if (section == "satisfies")
           b.satisfies.insert(line);
-        else if (section == "sells" && b.item.empty())
-          b.item = line;
+        else if (section == "sells") {
+          if (b.item.empty())
+            b.item = line;
+          b.sells.push_back(line);
+        }
       }
     }
   }
-  if (!b.item.empty() && this->rm)
-    if (IniReader *it2 = this->rm->getIniReader("items/" + b.item + ".cfg")) {
+  if (!b.item.empty()) {
+    const BuildingInfo &it = itemOf(b.item);
+    b.itemAdult = it.itemAdult, b.itemChild = it.itemChild, b.itemHunger = it.itemHunger;
+    b.itemThirst = it.itemThirst, b.itemBathroom = it.itemBathroom, b.itemEnergy = it.itemEnergy;
+    b.itemTrash = it.itemTrash, b.consumedThought = it.consumedThought;
+    b.itemId = it.itemId, b.itemNow = it.itemNow, b.itemRemove = it.itemRemove;
+  }
+  return this->buildingInfo[file] = b;
+}
+
+// An item's items/<name>.cfg (zoo.exe ZTShopItem's loader 0x464f00: nameID,
+// the six deltas, consumenow, trashwhenconsumed, removewhenconsumed,
+// consumedThoughtID) into the item* fields
+const Guests::BuildingInfo &Guests::itemOf(const std::string &name) const {
+  auto found = this->itemInfo.find(name);
+  if (found != this->itemInfo.end())
+    return found->second;
+  BuildingInfo b;
+  b.item = name;
+  if (this->rm)
+    if (IniReader *it2 = this->rm->getIniReader("items/" + name + ".cfg")) {
       const std::string c = "characteristics";
       b.itemAdult = static_cast<float>(it2->getInt(c, "adulthappydelta", 0));
       b.itemChild = static_cast<float>(it2->getInt(c, "childhappydelta", 0));
@@ -784,9 +846,14 @@ const Guests::BuildingInfo &Guests::infoOf(const std::string &file) const {
       b.itemEnergy = static_cast<float>(it2->getInt(c, "energydelta", 0));
       b.itemTrash = it2->getInt(c, "trashwhenconsumed", 0) != 0;
       b.consumedThought = it2->getInt(c, "consumedthoughtid", 0);
+      b.itemId = static_cast<uint32_t>(it2->getInt(c, "nameid", 0));
+      b.itemNow = it2->getInt(c, "consumenow", 1) != 0;
+      b.itemRemove = it2->getInt(c, "removewhenconsumed", 1) != 0;
       delete it2;
     }
-  return this->buildingInfo[file] = b;
+  if (b.itemId)
+    this->itemNames.emplace(b.itemId, name);
+  return this->itemInfo[name] = b;
 }
 
 std::vector<std::pair<int, int>> Guests::doorTiles(const PlacedObjects::Object &o) const {
@@ -819,24 +886,27 @@ bool Guests::positionShowSeat(Guest &g,const PlacedObjects::Object &stand,int se
 }
 
 // The nearest building for a need it can walk to (in cSearchRadius tiles;
-// not full): off to its door (a path tile beside it)
-bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
+// not full): off to its door (a path tile beside it). only: that building
+// alone, its room not looked at (zoo.exe guestPickAttraction 0x4282e1 sends
+// the guest to the one drawn, task 0x66; Task66's atTarget 0x4a830c looks
+// for room at the door - ours, useBuilding's look at the entrance)
+bool Guests::seekBuilding(Guest &g, const std::string &need, int radius, bool crowdedThought, int only) {
   this->seekFull = false;
   if (!this->objects)
     return false;
   const auto &objs = this->objects->objects();
-  int best = -1, bx = -1, by = -1, fullAt = -1;
+  int best = -1, bx = -1, by = -1, fullAt = -1, bestSlot = -1;
   float bestD = 1e9f, fullD = 1e9f;
   bool full = false;
   for (size_t i = 0; i < objs.size(); i++) {
     const PlacedObjects::Object &o = objs[i];
-    if (o.fence)
+    if (o.fence || (only >= 0 && static_cast<int>(i) != only))
       continue;
     const BuildingInfo &b = infoOf(PlacedObjects::fileOf(o));
     if (!b.satisfies.count(need))
       continue;
     float d = std::hypot(o.x - g.x, o.y - g.y);
-    if (d > radius)
+    if (d > radius && only < 0)
       continue;
     // (a full trash can: none of its rubbish taken)
     if (need == "trash" && o.trashCan && o.fill >= 24)
@@ -854,7 +924,7 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
     int users = 0;
     for (const Guest &o2 : this->list)
       users += o2.building == static_cast<int>(i) ? 1 : 0;
-    if (users >= b.capacity) {
+    if (users >= b.capacity && only < 0) {
       full = true;
       if (d < fullD)
         fullD = d, fullAt = static_cast<int>(i);
@@ -864,7 +934,7 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
     // water against its capacity (zoo.exe 0x59fe9e: its users list, +0x158,
     // against +0x1c8 - 0x59398a: cStrictBuildingCapacity, else the lake's
     // size from its water door + 7 over 10, 10 at most)
-    if (b.tracker && b.returnBuilding) {
+    if (b.tracker && b.returnBuilding && only < 0) {
       int riders = 0;
       for (const Guest &o2 : this->list)
         riders += o2.ride && o2.rideFrom == o.id ? 1 : 0;
@@ -883,6 +953,50 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
         full = true;
         continue;
       }
+    }
+    // A building with a b<name><goal><slot> set (a bench, a picnic table,
+    // the playground and games): a free slot - each holds one - the one
+    // whose entrance is nearest the guest (zoo.exe 0x42c02b: the slots in
+    // turn, each with room (0x42ac87), their entrances' squared distance
+    // from it, the nearest it has a route to)
+    if (!buildingSet(g, b, need, 0).empty()) {
+      int slotAt = -1, sx = -1, sy = -1;
+      float nearest = 1e30f;
+      for (size_t k = 0; k < b.slots.size(); k++) {
+        if (buildingSet(g, b, need, static_cast<int>(k)).empty())
+          continue;
+        bool taken = false;
+        for (const Guest &o2 : this->list)
+          taken = taken || (&o2 != &g && o2.building == static_cast<int>(i) && o2.slot == static_cast<int>(k));
+        if (taken)
+          continue;
+        std::vector<std::pair<int, int>> entrances = b.slots[k].entrances;
+        if (entrances.empty())
+          entrances.push_back({b.slots[k].ex, b.slots[k].ey});
+        for (const auto &[px, py] : entrances) {
+          float ex, ey;
+          buildingPoint(o, px, py, ex, ey);
+          const int tx = static_cast<int>(std::floor(ex)), ty = static_cast<int>(std::floor(ey));
+          const float d2 = (ex - g.x) * (ex - g.x) + (ey - g.y) * (ey - g.y);
+          if (walkable(tx, ty) && d2 < nearest) {
+            nearest = d2;
+            slotAt = static_cast<int>(k);
+            sx = tx;
+            sy = ty;
+          }
+        }
+      }
+      if (slotAt >= 0 && d < bestD) {
+        bestD = d;
+        best = static_cast<int>(i);
+        bx = sx;
+        by = sy;
+        bestSlot = slotAt;
+      }
+      // (the one a pick drew with every slot taken: walked to all the same,
+      // its room looked at at the door - Task66's atTarget 0x4a830c)
+      if (slotAt >= 0 || only < 0)
+        continue;
     }
     // Its door: the tile at its entrpos (one on a path); a building with no
     // entrpos (a bin), a path tile touching its footprint
@@ -904,6 +1018,7 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
         best = static_cast<int>(i);
         bx = x;
         by = y;
+        bestSlot = -1;
       }
   }
   ZT_STEP("", "Looks for a building for a need", {"need", need}, {"search radius", radius},
@@ -914,18 +1029,121 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius) {
     // building - thoughtAdd(0x2803, building). ours: its own name, else its
     // kind's cNameID text)
     this->seekFull = full;
-    if (full)
+    if (full && crowdedThought)
       think(g, 10243, fullAt >= 0 ? buildingName(objs[static_cast<size_t>(fullAt)]) : std::string()); // "%s is too crowded."
     return false;
   }
+  // (Task67_GoToBuilding::whileGoing 0x42a0ab: a route to the entrance
+  // point, cNonPathCost its cost off the paths; none, the task over)
   if (!walkTo(g, bx, by, this->typeList[g.type].speed))
     return false;
   g.guide = -1; g.tourHeard = false;
   g.building = best;
+  g.slot = bestSlot;
+  g.sitStep = -1;
+  g.takenIn = false;
   g.need = need;
   g.state = State::Walking;
   g.target = -1;
   return true;
+}
+
+// zoo.exe Task68_EnterBuilding::atTarget 0x42cd39: a building with neither
+// cHideUser (type +0x194) nor cUserStaysOutside (+0x1a6) gets the guest's
+// class slot 0x2b4 (0x5ad535): the behaviour set "b" + the type's name +
+// its goal kind (+0x24e, 0x42aeaf) + its slot (+0x24d) started (0x43c6c5) -
+// guests.ai's bbencheat0..1, bbenchenergy0..1, bpicniceat0..3 and the
+// rest: fPlay(<it>), fEnterBuilding(), fPlayTime(<it>, 30), fPlay(idle),
+// fExitBuilding(); the playground's and games', per kind (boy and girl:
+// bswingfun0, bdslidefun0, bbouncefun0, baqbouncefun0, bringtossfun0; man
+// and woman: bdinoputtfun0 - those slots' id lists take only those kinds).
+// The set as the kind has it, its own section first (0x43c6c5 finds it by
+// name in the kind's sets). ours: where it has such a set
+std::string Guests::buildingSet(const Guest &g, const BuildingInfo &b, const std::string &goal, int slot) const {
+  if (b.hideUser || b.staysOutside || b.typeName.empty() || goal.empty() || slot < 0 ||
+      g.type < 0 || g.type >= static_cast<int>(this->typeList.size()))
+    return std::string();
+  const std::string set = "b" + b.typeName + goal + std::to_string(slot);
+  if (this->behaviourSets.count(this->typeList[g.type].key + "\\behaviorset\\" + set) ||
+      this->behaviourSets.count("behaviorset\\" + set))
+    return set;
+  return std::string();
+}
+
+// A building's set run from line g.sitStep (zoo.exe's behaviour runner,
+// 0x436065 / 0x437ccd, over the set startSetNow 0x43c6c5 began):
+// - fPlay(<a>): <a> played once (fPlay 0x440b92); fPlayReverse(<a>) the
+//   same, last frame first (0x440c82: the swing's getting off);
+//   fPlayWithSound(<a>, <sound>) with its [Sounds] sound (0x438399: the
+//   dino putt's puttwin, puttlose); fPlayTime(<a>, <s>) whole plays to <s>
+//   seconds or more (0x424e7f, playTimeWholeLoops 0x424ee7: a bench's 30)
+// - fEnterBuilding(): taken in as the building's user (0x5ad42c -> slot
+//   0x2a8 0x5ad3a6 -> buildingAddUser 0x42ce0a: counted, cUsedThought, the
+//   held food eaten, the ring toss's prize), at once on to the next line
+// - fExitBuilding(): the set over (0x4a777e -> slot 0x2ac 0x4a7705: out,
+//   guestBuy 0x42d858) - at the slot's exitpos. Task6a_InsideBuilding
+//   (checkArrived 0x42a1db) never ends a visit to such a building itself:
+//   cTimeInside counts only where the building hides its user or keeps it
+//   outside - the set's own plays are the visit's length
+// An animation the kind hasn't fails the set there (0x440b92, 0x440c82,
+// 0x4383bb, 0x424e7f). ours: then out as at fExitBuilding (the original's
+// guest would stay in Task6a)
+bool Guests::buildingSetLine(Guest &g) {
+  const auto &objs = this->objects->objects();
+  if (g.building < 0 || g.building >= static_cast<int>(objs.size())) {
+    g.sitStep = -1;
+    return false;
+  }
+  PlacedObjects::Object &bo = this->objects->all()[g.building];
+  const BuildingInfo &b = infoOf(PlacedObjects::fileOf(bo));
+  const std::string name = buildingSet(g, b, g.need, g.slot);
+  const std::vector<Move> set = name.empty() ? std::vector<Move>() : behaviour(g, name);
+  const Type &t = this->typeList[g.type];
+  for (; g.sitStep >= 0 && g.sitStep < static_cast<int>(set.size()); g.sitStep++) {
+    const Move &m = set[static_cast<size_t>(g.sitStep)];
+    if (m.fn == "fenterbuilding") {
+      if (!g.takenIn) {
+        g.takenIn = true;
+        ZT_STEP("0x5ad3a6", "fEnterBuilding: taken in as the building's user", {"set", name}, {"line", g.sitStep});
+        addUser(g, bo, b);
+        if (!b.useSound.empty() && this->sounds)
+          Sound::get().play(b.useSound, b.useAtten + 600);
+      }
+      continue;
+    }
+    if (m.fn == "fexitbuilding")
+      break;
+    Animation *a = t.anims.count(m.anim) ? this->art(g, m.anim) : nullptr;
+    if (!a) {
+      ZT_STEP("0x440b92", "An animation the kind hasn't: the set fails", {"set", name}, {"anim", m.anim});
+      break;
+    }
+    const float loop = a->frameTimeMs() > 0 && a->frameCount() > 0 ? a->frameCount() * a->frameTimeMs() / 1000.0f : 1.0f;
+    float secs = loop;
+    if (m.fn == "fplaytime")
+      while (m.seconds - secs >= 0.001f)
+        secs += loop;
+    ZT_STEP("0x440b92", "The set's next play", {"set", name}, {"line", g.sitStep}, {"fn", m.fn}, {"anim", m.anim},
+            {"seconds", secs});
+    play(g, m.anim, secs);
+    g.reverse = m.fn == "fplayreverse";
+    if (!m.sound.empty() && this->sounds && this->soundFile.count(m.sound))
+      Sound::get().play(this->soundFile[m.sound], this->soundAtten[m.sound] + 600);
+    return true;
+  }
+  g.sitStep = -1;
+  g.reverse = false;
+  if (g.slot >= 0 && g.slot < static_cast<int>(b.slots.size()))
+    buildingPoint(bo, b.slots[static_cast<size_t>(g.slot)].xx, b.slots[static_cast<size_t>(g.slot)].xy, g.x, g.y);
+  return false;
+}
+
+void Guests::buildingPoint(const PlacedObjects::Object &o, int px, int py, float &x, float &y) {
+  const float angle = o.facing * 3.14159265f / 4.0f;
+  const float fwdX = std::sin(angle), fwdY = -std::cos(angle);
+  const float acrossX = -std::cos(angle), acrossY = -std::sin(angle);
+  x = o.x + (px * acrossX + py * fwdX) / 64.0f;
+  y = o.y + (px * acrossY + py * fwdY) / 64.0f;
 }
 
 std::string Guests::buildingName(const PlacedObjects::Object &o) const {
@@ -980,7 +1198,13 @@ void Guests::useBuilding(Guest &g) {
   // cItemExpensive x its default (economy.cfg; [0x638048]+0x118) when it
   // stands on its entrance (0x4373eb): "The prices at the %s are too high"
   // (10073) of it, cPriceAngry1Change (0x533480), and it doesn't go in or
-  // pay - the task over (slot 0x178). Else in (task 0x68)
+  // pay - the task over (slot 0x178). Else in (task 0x68). (Before it, the
+  // walk there: guestGoToBuilding 0x43b2f6 makes task 0x66 for a building
+  // without cHoldsOntoUser (type +0x1a4: only the grandstands have it), and
+  // Task66's atTarget 0x4a830c looks again for room - none: "%s is too
+  // crowded." of it, facing it, the task over; room: task 0x67 to the
+  // entrance. ours: one walk to the entrance and this one look - the same
+  // look, the same thought)
   if (g.ride == 0) {
     int users = 0;
     for (const Guest &o2 : this->list)
@@ -993,6 +1217,9 @@ void Guests::useBuilding(Guest &g) {
             {"cItemExpensive", Original::economy().itemExpensive}, {"commerce", b.commerce ? 1 : 0},
             {"verdict", full ? "full" : tooDear ? "too dear: not in" : "in"});
     if (full || tooDear) {
+      // (either way, on its door square (0x4373eb), the building onto its
+      // visited list: 0x4a840e)
+      recordVisit(g, o);
       if (full) {
         think(g, 10243, buildingName(o));
       } else {
@@ -1007,14 +1234,294 @@ void Guests::useBuilding(Guest &g) {
   }
   g.state = State::Using;
   g.hidden = b.hideUser;
-  {
-    PlacedObjects::Object &in = this->objects->all()[g.building];
-    in.visitorsNow++;
-    in.visitorsTotal++;
+  // (Task68_EnterBuilding: begin 0x42cc04, whileGoing 0x42a7cf walks it in
+  // from the door - with cUserStaysOutside it stays where it is -
+  // checkArrived 0x42a789 one tick in 15 looks for the building again, gone:
+  // the task over. ours: from the door straight to its spot)
+  // A building with a b<name><goal><slot> set (a bench, a picnic table,
+  // the swing, slide, bounce houses, ring toss, dino putt): the set run
+  // from its first line (buildingSetLine) at its slot (0x42ce0a,
+  // fEnterBuilding: placed at the slotpos, facing the building's turn plus
+  // the slot's facing, 0x5ad288 - ours from the set's start: the art runs
+  // on unbroken over fEnterBuilding, the dino putt's puttentr's last frame
+  // where puttwin's first is); taken in as its user at the set's
+  // fEnterBuilding. Any other building takes it in at the door
+  // (Task68_EnterBuilding::atTarget 0x42cd39: cHideUser or
+  // cUserStaysOutside -> 0x42ce0a there and then). ours: one with neither
+  // flag and no set for the kind alike, at the door
+  if (g.slot >= 0 && g.slot < static_cast<int>(b.slots.size()) && !buildingSet(g, b, g.need, g.slot).empty()) {
+    const BuildingInfo::Slot &s = b.slots[static_cast<size_t>(g.slot)];
+    buildingPoint(o, s.sx, s.sy, g.x, g.y);
+    const float angle = ((o.facing + s.facing) & 7) * 3.14159265f / 4.0f;
+    g.fx = std::sin(angle);
+    g.fy = -std::cos(angle);
+    g.sitStep = 0;
+    g.takenIn = false;
+    ZT_STEP("0x5ad535", "At its slot: the building's set begins (b<name><goal><slot>)",
+            {"set", buildingSet(g, b, g.need, g.slot)}, {"slot", g.slot});
+    if (buildingSetLine(g))
+      return;
+    if (g.takenIn) { // (its set over at once, after fEnterBuilding: out next)
+      play(g, "stand", 0.0f);
+      return;
+    }
   }
+  addUser(g, this->objects->all()[g.building], b);
   play(g, g.need == "energy" ? "stand" : "stand", std::max(0.5f, b.timeInside));
   if (!b.useSound.empty() && this->sounds)
     Sound::get().play(b.useSound, b.useAtten + 600);
+}
+
+// zoo.exe ZTBuilding::buildingAddUser 0x42ce0a, its guest's part: the
+// building's visitors (+0x190 this month, +0x198 in all) counted for a guest
+// not on its ride (class slot 0x264, 0x43a837: +0x284 set). That guest then
+// gets the type's cUsedThought (type slot 0x54), and: at a building on the
+// "fungift" list (0x41239d with the string 0x63b040 - 0x566f0a: the ring
+// toss) one of its Sells at random into its hands, no price judged
+// (0x59cd02); anywhere else guestJudgePrice 0x42d1e2 - Sells empty, the
+// held item of its goal kind eaten if the building satisfies that kind
+// (0x42d74e -> guestConsumeItem 0x42d380: a bench's food); else one of its
+// Sells at random (itemTypeByName 0x4a84f3), the price against its default:
+// at or over cItemExpensive times it 10073 and cPriceAngry1Change (0x533480),
+// nothing bought; at or under cItemCheap times it 10072 and
+// cPriceHappy1Change (0x619245); into its hands (holdItem 0x42d54e) and
+// consumed there and then if consumenow (item +0x1c). What the building does
+// for it (0x42dd23) and the payment come as it leaves (guestBuy 0x42d858).
+// (Its litter, trashCanAddLitter 0x42d181: a bin's - ours: useBuilding's
+// "trash" kind)
+void Guests::addUser(Guest &g, PlacedObjects::Object &bo, const BuildingInfo &b) {
+  if (g.ride != 0)
+    return;
+  bo.visitorsNow++;
+  bo.visitorsTotal++;
+  if (b.usedThought)
+    think(g, b.usedThought);
+  const bool funGift = b.satisfies.count("fungift") > 0;
+  ZT_STEP("0x42ce0a", "Taken in as the building's user: cUsedThought, then what it buys or eats", {"building", bo.typeName},
+          {"cUsedThought", b.usedThought}, {"fungift", funGift ? 1 : 0}, {"sells", static_cast<int>(b.sells.size())});
+  if (funGift) {
+    if (!b.sells.empty()) {
+      const BuildingInfo &won = itemOf(b.sells[std::uniform_int_distribution<size_t>(0, b.sells.size() - 1)(this->rng)]);
+      ZT_STEP("0x59cd02", "A fun gift: one of its Sells, no price judged", {"item", won.item});
+      bo.sold[won.item]++;
+      holdItem(g, won, "fungift"); // (0x59cd02: the kind 0x63b040, "fungift")
+    }
+    return;
+  }
+  if (b.sells.empty()) {
+    if (b.satisfies.count(g.need) && handFor(g.need) >= 0 && g.inventory[handFor(g.need)])
+      if (const BuildingInfo *held = heldItem(g.inventory[handFor(g.need)]))
+        consumeItem(g, *held);
+    return;
+  }
+  const BuildingInfo &sold = itemOf(b.sells[std::uniform_int_distribution<size_t>(0, b.sells.size() - 1)(this->rng)]);
+  const float price = priceOf(bo, b);
+  const Type &gt = this->typeList[g.type];
+  const bool tooDear = b.price * Original::economy().itemExpensive <= price;
+  const bool cheap = !tooDear && price <= Original::economy().itemCheap * b.price;
+  ZT_STEP("0x42d1e2", "What it buys: one of the building's Sells at random, the price judged", {"item", sold.item},
+          {"of", static_cast<int>(b.sells.size())}, {"price", price}, {"default", b.price},
+          {"verdict", tooDear ? "too dear: nothing" : cheap ? "a bargain" : "fair"}, {"consumenow", sold.itemNow ? 1 : 0});
+  if (tooDear) {
+    think(g, 10073, buildingName(bo));
+    g.dHappy += static_cast<float>(gt.priceAngry);
+    return;
+  }
+  if (cheap) {
+    think(g, 10072, buildingName(bo));
+    g.dHappy += static_cast<float>(gt.priceHappy);
+  }
+  bo.sold[sold.item]++;
+  if (g.need == "gift") {
+    g.souvenir = true;
+    g.wantsSouvenir = false; // (holdItem 0x42d54e clears +0x33c)
+  }
+  if (holdItem(g, sold) && sold.itemNow)
+    consumeItem(g, sold);
+}
+
+// zoo.exe 0x42d6aa (and holdItem 0x42d54e, releaseItem 0x42d533): a kind's
+// hand, ZTGuest +0x26c[]: "food" and "eat" 0, "drink" 1, "fungift" 2,
+// "gift" 3, "trash" 4; -1 none
+int Guests::handFor(const std::string &kind) {
+  if (kind == "food" || kind == "eat")
+    return 0;
+  if (kind == "drink")
+    return 1;
+  if (kind == "fungift")
+    return 2;
+  if (kind == "gift")
+    return 3;
+  if (kind == "trash")
+    return 4;
+  return -1;
+}
+
+// zoo.exe ZTGuest::holdItem 0x42d54e (and holdItemRest 0x42d617, its other
+// kinds; from 0x42d1e2, its kind empty: the
+// guest's goal kind, +0x24e): the item's nameID into that kind's hand - a
+// food, drink, fun gift or gift over what it held; trash only into an empty
+// hand; true if it took it
+bool Guests::holdItem(Guest &g, const BuildingInfo &b, const std::string &kind) {
+  const int hand = handFor(kind.empty() ? g.need : kind);
+  if (hand < 0 || (hand == 4 && g.inventory[4]))
+    return false;
+  g.inventory[hand] = b.itemId;
+  return true;
+}
+
+// zoo.exe guestConsumeItem 0x42d380: its consumedThoughtID (item +0x20,
+// thoughtAdd); the item's six deltas - its loader 0x464f00 - pending by
+// addPendingHappiness 0x42a98f, slot 0x1fc: adult or child happiness,
+// hunger, thirst, the restroom, and energydelta onto +0x2c4, the tiredness
+// pending; removewhenconsumed (+0x1e): out of its hand (releaseItem
+// 0x42d533), then trashwhenconsumed (+0x1d): the wrapper or cup in hand
+// (holdTrash 0x59d2c9)
+void Guests::consumeItem(Guest &g, const BuildingInfo &item) {
+  if (item.consumedThought)
+    think(g, item.consumedThought);
+  g.dHappy += this->typeList[g.type].child ? item.itemChild : item.itemAdult;
+  g.dHunger += item.itemHunger;
+  g.dThirst += item.itemThirst;
+  g.dBathroom += item.itemBathroom;
+  g.dTired += item.itemEnergy;
+  ZT_STEP("0x42d380", "Consuming Item: what it does to them", {"item", item.item}, {"dHappy", g.dHappy},
+          {"dHunger", g.dHunger}, {"dThirst", g.dThirst});
+  if (!item.itemRemove) {
+    g.trash = g.trash || item.itemTrash;
+    return;
+  }
+  for (uint32_t &held : g.inventory)
+    if (item.itemId && held == item.itemId) {
+      held = 0;
+      g.trash = g.trash || item.itemTrash;
+      break;
+    }
+}
+
+// zoo.exe itemTypeById 0x449f50: a held item's nameID back to its item (the
+// items/ files read first if not all known yet)
+const Guests::BuildingInfo *Guests::heldItem(uint32_t id) const {
+  if (!id)
+    return nullptr;
+  auto it = this->itemNames.find(id);
+  if (it == this->itemNames.end() && this->rm) {
+    for (const std::string &f : this->rm->listResources("items/", ".cfg")) {
+      std::string n = f.substr(6, f.size() - 10);
+      if (n.find('/') == std::string::npos)
+        itemOf(n);
+    }
+    it = this->itemNames.find(id);
+  }
+  return it == this->itemNames.end() ? nullptr : &itemOf(it->second);
+}
+
+// Off to eat what it holds (zoo.exe Task6b_GoEat: begin 0x59d580,
+// checkArrived 0x59d479, atTarget 0x52dbfe): the nearest 'eat' building
+// within cSearchRadius (a bench, a picnic table - findNearestOfKindB
+// 0x4290f3) with room (guestGoToBuilding 0x43b2f6) - there, task 0x66 to
+// it, its goal "eat". None: the task over, its goal "eat" and +0x33f set,
+// so chooseTask (0x43a6e4 at 0x52dc3d) makes task 0x6c (Task6c_Eat): a
+// walk about first (whileGoing 0x52d955: with no target tile yet, slot
+// 27, its route list +0x154 emptied and unitWalkAbout 0x43d948 - every
+// tick until one is made; then 0x422127(0, 1)), arrived when it stands on
+// the walk's tile (checkArrivedOnTile 0x412603), and then (atTarget
+// 0x52d9b8) task 0x6d - eatStanding
+void Guests::goEat(Guest &g) {
+  const bool seat = seekBuilding(g, "eat", this->searchRadius, false);
+  ZT_STEP("0x59d479", "Food in hand: a seat to eat it at (cSearchRadius)?", {"found", seat ? "yes" : "no"});
+  if (seat)
+    return;
+  g.state = State::Walking;
+  g.target = -1;
+  g.gawkObject = -1;
+  g.eatStep = kEatWalkAbout;
+  const bool walk = walkAbout(g);
+  ZT_STEP("0x52d955", "No seat: a walk about first (Task6c_Eat), then it eats standing",
+          {"walk about", walk ? "yes" : "none yet"});
+  // ours: none made - it stands an update (Original::updateMs) and tries
+  // again (whileGoing tries every tick)
+  if (!walk)
+    play(g, "stand", static_cast<float>(Original::updateMs) / 1000.0f);
+}
+
+// zoo.exe 0x43d948 (unitWalkAbout), for a guest: a tile on a ring round the
+// tile it stands on, half widths rand % mRandomXGuest + 1 + BaseX across
+// and rand % mRandomYGuest + 1 + BaseY down (2..10, OriginalConstants), one
+// passable for it picked at random and routed to; no route, its four
+// neighbours from a random one on, not wrapping round (tileNeighbours4
+// 0x4171a1), the first passable it can step to; none, false.
+// Passable for a guest (ZTGuest's class slot 0x168, 0x428f76, called with
+// 1): the tile's +0x83 & 0x40 (0x40fb8d(0)) and a quarter of it free or
+// its object passable (slot 0xb4); the guest's +0x1bc 3, or it off a path
+// (its tile's +0x83 & 8 clear), or the tile a path; its own habitat not a
+// tank (habitatAt slot 0x248, the habitat's slot 0x20), and it in an
+// exhibit (habitat +0x2c 0) or the tile on zoo ground (+0x2c set).
+// ours: on a path, walkable() (a path out of the exhibits); off one,
+// fleeGround() (zoo ground, not blocked, not water); +0x1bc not read
+bool Guests::walkAbout(Guest &g) {
+  if (!this->map || !this->fences)
+    return false;
+  const int W = this->map->getWidth(), H = this->map->getHeight();
+  const int sx = static_cast<int>(std::floor(g.x)), sy = static_cast<int>(std::floor(g.y));
+  const int here = this->fences->exhibitAt(sx, sy);
+  if (const Fences::Exhibit *in = this->fences->exhibit(here); in && in->tank)
+    return false;
+  auto rnd = [&](int n) { return std::uniform_int_distribution<int>(0, n - 1)(this->rng); };
+  const int rx = rnd(Original::aiWalkRandomGuest) + 1 + Original::aiWalkBase;
+  const int ry = rnd(Original::aiWalkRandomGuest) + 1 + Original::aiWalkBase;
+  const bool onPath = walkable(sx, sy);
+  auto passable = [&](int x, int y) {
+    if (x < 0 || y < 0 || x >= W || y >= H)
+      return false;
+    if (onPath)
+      return walkable(x, y);
+    return here >= 0 ? this->fences->exhibitAt(x, y) == here || fleeGround(x, y) : fleeGround(x, y);
+  };
+  std::vector<std::pair<int, int>> ring;
+  for (int dx = -rx; dx <= rx; dx++)
+    for (int dy = -ry; dy <= ry; dy++)
+      if ((dx == rx || dx == -rx || dy == ry || dy == -ry) && passable(sx + dx, sy + dy))
+        ring.push_back({sx + dx, sy + dy});
+  ZT_STEP("0x43d948", "Walk about: a tile on a ring round it, at random", {"half width", rx},
+          {"half height", ry}, {"tiles", static_cast<int>(ring.size())});
+  const float speed = this->typeList[g.type].speed;
+  if (!ring.empty()) {
+    auto [gx, gy] = ring[static_cast<size_t>(rnd(static_cast<int>(ring.size())))];
+    if (walkTo(g, gx, gy, speed))
+      return true;
+  }
+  const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+  for (int i = rnd(4); i < 4; i++) {
+    const int nx = sx + d[i][0], ny = sy + d[i][1];
+    if (passable(nx, ny) && canStep(sx, sy, nx, ny) && walkTo(g, nx, ny, speed))
+      return true;
+  }
+  return false;
+}
+
+// Eating standing up (Task6d_EatStanding::begin 0x52dd30): the held food
+// consumed (0x42d6aa "food", 0x42d380), cStandAndEatChange (guest type
+// +0x2ac) onto its pending happiness, and its bEatStanding set played -
+// fPlay(eatstanding), fPlay(idle); done when the set is (checkArrived
+// 0x52d9c4)
+void Guests::eatStanding(Guest &g) {
+  if (const BuildingInfo *held = heldItem(g.inventory[0]))
+    consumeItem(g, *held);
+  else
+    g.inventory[0] = 0;
+  g.dHappy += static_cast<float>(this->typeList[g.type].standAndEat);
+  ZT_STEP("0x52dd30", "No seat: eats standing up (cStandAndEatChange, bEatStanding)",
+          {"cStandAndEatChange", this->typeList[g.type].standAndEat});
+  g.state = State::Walking;
+  g.target = -1;
+  g.gawkObject = -1;
+  g.eatStep = 0;
+  float secs = 1.0f;
+  if (Animation *a = this->art(g, "eatstanding"))
+    if (a->frameTimeMs() > 0 && a->frameCount() > 0)
+      secs = a->frameCount() * a->frameTimeMs() / 1000.0f;
+  play(g, "eatstanding", secs);
 }
 
 // ----------------------------------------------------------------------------
@@ -1068,7 +1575,11 @@ int Guests::waterSize(int x, int y) const {
 
 std::vector<Guests::Move> Guests::behaviour(const Guest &g, const std::string &set) const {
   // A behaviour set as its kind has it (its own section first, then the
-  // shared one: [man\BehaviorSet\bReturnchroom0] over [BehaviorSet\...])
+  // shared one: [man\BehaviorSet\bReturnchroom0] over [BehaviorSet\...];
+  // zoo.exe ZTGuestType slot 0x38, 0x4223d3: the kind's name +0x98, then
+  // +0x10, then none - guests.ai has only the kinds' and the shared
+  // sections; bWalk and bZooRoutine kept from the shared ones at load,
+  // loadGuestSettings 0x521c12)
   std::vector<Move> out;
   const std::string s = lower(set);
   auto it = this->behaviourSets.find(this->typeList[g.type].key + "\\behaviorset\\" + s);
@@ -1107,11 +1618,12 @@ std::vector<Guests::Move> Guests::behaviour(const Guest &g, const std::string &s
     } else if (fn == "fplaywithsound" && args.size() >= 2) {
       m.anim = args[0];
       m.sound = args[1];
-    } else if (fn == "fplay" && !args.empty()) {
+    } else if ((fn == "fplay" || fn == "fplayreverse") && !args.empty()) {
       m.anim = args[0];
-    } else {
+    } else if (fn != "fenterbuilding" && fn != "fexitbuilding") {
       continue;
     }
+    m.fn = fn;
     out.push_back(m);
   }
   return out;
@@ -1399,7 +1911,9 @@ void Guests::drown(Guest &g) {
 void Guests::outOfWater(Guest &g) {
   // Task7f_GuestInWater::begin (0x49a7ae): out, to the way out (a tank's
   // edge - ours: the nearest path tile it can swim to, 20 tiles round at
-  // most), swimming (bInWater); none: in the water (Task83)
+  // most), swimming (bInWater); none: in the water (Task83). Its whileGoing
+  // (0x4994c3): the set it runs (+0x54) over, started again (slot 0x48) -
+  // ours: the set's swim played the whole way (waterTo)
   g.guide = -1;
   g.tourHeard = false;
   g.building = -1;
@@ -1563,6 +2077,10 @@ double Guests::admit(double admission) {
   // (the max itself never: rand % (max - min) + min), when that range is
   // whole (min below max); the rest start at nothing
   g.happiness = static_cast<float>(t.initialHappiness);
+  // Its name (ZTGuest::defaultName 0x4f70e4, made by ZTGuestType::create
+  // 0x4f6060): text 9507 "Guest", a space and the next number of the
+  // guests' one counter (0x4f6cc5: a count per class, 0x63e260 - from 1 on
+  // a new map, startMap; kept in the save, saveEntities)
   g.name = (this->rm ? this->rm->getString(9507) : std::string("Guest")) + " " + std::to_string(g.id);
   g.arrived = this->clock;
   if (this->randomStatNth > 0 && std::uniform_int_distribution<int>(0, this->randomStatNth - 1)(this->rng) == 0) {
@@ -1622,7 +2140,91 @@ double Guests::admit(double admission) {
   this->list.push_back(g);
   this->income += fee;
   this->arrivals++;
+  if (this->onArrive)
+    this->onArrive();
   return fee;
+}
+
+// ----------------------------------------------------------------------------
+// Where it has been (zoo.exe +0x260, +0x334)
+// ----------------------------------------------------------------------------
+// zoo.exe guestRecordVisit 0x4a840e: the place (a tile, +0x34: its grid
+// position) pushed onto the end of its visited list, its visit count +0x334
+// up by 1, and past 10 places the oldest dropped. Called when it starts
+// watching an exhibit (Task70's begin 0x42e527: a random tile of the habitat,
+// 0x44149f), is done inside a building (Task6a_InsideBuilding::checkArrived 0x42a1db at 0x42a38a -> class
+// slot 0x2ec, 0x42aa88), is turned away at its door (Task67 0x42c8af, Task68
+// 0x42cd39, Task66 0x4a830c), and reaches scenery to look at (Task80 0x4406a4)
+void Guests::recordVisit(Guest &g, int x, int y) {
+  g.visits.push_back({x, y});
+  g.visitCount++;
+  if (g.visits.size() > Original::guestVisitedPlaces)
+    g.visits.erase(g.visits.begin());
+}
+
+// (ours: a building or scenery by its own tile - the tile the original's
+// saved objects give (and ours write back), inside its footprint)
+void Guests::recordVisit(Guest &g, const PlacedObjects::Object &o) {
+  recordVisit(g, static_cast<int>(std::floor(o.x)), static_cast<int>(std::floor(o.y)));
+}
+
+// zoo.exe guestVisitedHabitat 0x42281c: a place on its list in the habitat
+// (0x410bf9: the habitat a grid position is in)
+bool Guests::visitedExhibit(const Guest &g, int exhibit) const {
+  if (!this->fences)
+    return false;
+  for (auto [x, y] : g.visits)
+    if (this->fences->exhibitAt(x, y) == exhibit)
+      return true;
+  return false;
+}
+
+// zoo.exe 0x4285e2: a place on its list where that object stands, or one of
+// its kind (the type's class slot 0x20 alike) - a guest that has been to one
+// burger stand of late passes over the others, and looks at one kind of
+// scenery once
+bool Guests::visitedObject(const Guest &g, const PlacedObjects::Object &o) const {
+  if (!this->objects || g.visits.empty())
+    return false;
+  const std::string file = PlacedObjects::fileOf(o);
+  for (auto [x, y] : g.visits)
+    for (const PlacedObjects::Object &p : this->objects->objects()) {
+      if (p.fence)
+        continue;
+      const BuildingInfo &b = infoOf(PlacedObjects::fileOf(p));
+      int w = std::max(1, (b.fx + 1) / 2), h = std::max(1, (b.fy + 1) / 2);
+      if ((p.facing & 6) == 2 || (p.facing & 6) == 6)
+        std::swap(w, h);
+      const int x0 = static_cast<int>(std::floor(p.x - w / 2.0f)), y0 = static_cast<int>(std::floor(p.y - h / 2.0f));
+      const bool on = (x >= x0 && x < x0 + w && y >= y0 && y < y0 + h) ||
+                      (x == static_cast<int>(std::floor(p.x)) && y == static_cast<int>(std::floor(p.y)));
+      if (on && (p.id == o.id || PlacedObjects::fileOf(p) == file))
+        return true;
+    }
+  return false;
+}
+
+// zoo.exe 0x4281fd: the habitats with animals (0x412167(0): +0x94, over the
+// habitat manager's list - its tanks too, show tanks with them: read live
+// 2026-11-16) plus the 'fun' buildings (0x427f43: the buildings of that
+// kind, 0x413db8)
+int Guests::placesToVisit() const {
+  int n = 0;
+  if (this->fences && this->animals)
+    for (const Fences::Exhibit &ex : this->fences->exhibits()) {
+      if (!ex.named)
+        continue;
+      for (const Animals::Member &m : this->animals->members())
+        if (m.exhibit == ex.id) {
+          n++;
+          break;
+        }
+    }
+  if (this->objects)
+    for (const PlacedObjects::Object &o : this->objects->objects())
+      if (!o.fence && infoOf(PlacedObjects::fileOf(o)).satisfies.count("fun"))
+        n++;
+  return n;
 }
 
 // ----------------------------------------------------------------------------
@@ -1633,8 +2235,11 @@ double Guests::admit(double admission) {
 int Guests::pickExhibit(Guest &g, int &vx, int &vy) {
   int best = -1;
   float bestScore = -1e30f;
+  // (zoo.exe 0x427b08: the habitats with animals, tanks among them, less a
+  // tank with a show - class slot 0x20 true, a tank, and its +4, its show,
+  // set: ours, a show tank)
   for (const Fences::Exhibit &ex : this->fences->exhibits()) {
-    if (!ex.named || ex.tank || g.seen.count(ex.id))
+    if (!ex.named || (ex.tank && ex.show) || visitedExhibit(g, ex.id))
       continue;
     float attract = 0;
     bool any = false, favourite = false;
@@ -1780,7 +2385,6 @@ bool Guests::joinTour(int guest, int guide, int exhibit, int tx, int ty) {
     g.guide = guide;
     g.tourHeard = false;
     g.target = exhibit;
-    g.seen.erase(exhibit);
     return true;
   }
   return false;
@@ -1811,6 +2415,9 @@ bool Guests::fleeGround(int x, int y) const {
 int Guests::findPredator(const Guest &g) const {
   if (!this->animals || !this->fences)
     return -1;
+  // (a predator of guests: ZTGuest::guestPreyOf 0x4302ea -> 0x4138f0 - an
+  // animal, its +0x394 clear, its cPrey listing the man (9503, 0x41391d), not
+  // an egg (+0x395). ours: +0x394 taken as a baby - not read; not boxed)
   auto hunts = [&](const Animals::Member &m) {
     return !m.boxed && !m.baby && !m.egg && this->animals->types()[m.type].eatsPeople;
   };
@@ -2077,22 +2684,53 @@ void Guests::wander(Guest &g) {
 void Guests::decide(Guest &g) {
   ZT_FN("", "Decides where to go next");
   const Type &t = this->typeList[g.type];
+  // Attacked by a predator (+0x33b, set by animalCaughtTarget 0x4a6043):
+  // leaving, from its next behaviour set on (ZTGuest::startBehaviour
+  // 0x422498, class slot 0x48: +0x339 set, then ZTUnit's 0x43ca83)
+  if (g.attacked && !g.leaving) {
+    ZT_STEP("0x422498", "Attacked by a predator: leaving the zoo");
+    g.leaving = true;
+  }
+  // Eating standing up (Task6d_EatStanding): its bEatStanding set's
+  // fPlay(idle) after the eatstanding play, then done (checkArrived
+  // 0x52d9c4: the set over)
+  if (g.eatStep == 0 && !g.leaving) {
+    g.eatStep = 1;
+    float secs = 1.0f;
+    if (Animation *a = this->art(g, "idle"))
+      if (a->frameTimeMs() > 0 && a->frameCount() > 0)
+        secs = a->frameCount() * a->frameTimeMs() / 1000.0f;
+    play(g, "idle", secs);
+    return;
+  }
+  // No seat for its food (Task6c_Eat): no walk about made yet - whileGoing
+  // 0x52d955 tries again
+  if (g.eatStep == kEatWalkAbout && !g.leaving && g.inventory[0]) {
+    if (!walkAbout(g))
+      play(g, "stand", static_cast<float>(Original::updateMs) / 1000.0f);
+    return;
+  }
+  g.eatStep = -1;
   // Leaving (Task71: begin 0x4a67eb, whileGoing 0x4233ea -> guestLeaveZoo
   // 0x4a6889): to the gate; afraid (+0x33a), "I'm leaving the zoo.  Animals
   // are running free!" (10247) and running there (bRunFromPredator, the
-  // emergency off-path cost - "Leaving Zoo - Saw Escaped Animal")
+  // emergency off-path cost - "Leaving Zoo - Saw Escaped Animal"); attacked
+  // (+0x33b), running there too, the thought only when afraid (0x4a67eb)
   if (g.leaving) {
     g.guide = -1; g.tourHeard = false;
-    ZT_STEP("0x4a6889", "Leaving: off to the gate", {"happiness", g.happiness}, {"afraid", g.sawEscape ? "yes" : "no"});
+    ZT_STEP("0x4a6889", "Leaving: off to the gate", {"happiness", g.happiness}, {"afraid", g.sawEscape ? "yes" : "no"},
+            {"attacked", g.attacked ? "yes" : "no"});
     g.state = State::Leaving;
     if (g.sawEscape)
       think(g, 10247);
-    const bool run = g.sawEscape;
+    const bool run = g.sawEscape || g.attacked;
     if (!walkTo(g, this->entranceX, this->entranceY, run ? t.runSpeed : t.speed, run))
       g.x = -1000; // (nowhere to walk: gone)
     return;
   }
-  // Done being sick (Task79_GuestSick::atTarget 0x5b0621: +0x33e set)
+  // Done being sick (Task79_GuestSick: checkArrived 0x5b05e4 waits while the
+  // set it runs is still bSick - its one fPlayWithSound; atTarget 0x5b0621:
+  // +0x33e set)
   if (g.puking) {
     g.puking = false;
     g.recheck = true;
@@ -2127,30 +2765,114 @@ void Guests::decide(Guest &g) {
   }
   g.state = State::Walking;
   g.gawkObject = -1;
-  // Where next (zoo.exe guestPickAttraction 0x4282e1): an exhibit it
-  // hasn't seen, an attraction ("fun" buildings) it hasn't been to, or
-  // scenery to look at - drawn by weight: the unseen exhibits' count, the
-  // attractions' count, and the scenery's (its cEstheticWeight / 100, at
-  // least 1: 0x428039)
+  // A show (zoo.exe chooseTask 0x43a6e4 at 0x440eb7: unless its task is
+  // Task64's, stopped (slot 0x174) and 0x440f0c asked for the nearest open
+  // grandstand - before the attraction pick and "nothing to pick").
+  // ours: no Task64 kept, so it's asked at every pick
+  if (this->showPick && this->showPick(g))
+    return;
+  // Seen everything (zoo.exe guestSeenEverything 0x4a6acc: a guest not
+  // leaving (task 0x71) nor on the water (0x410fe0: its tile's +0x83 & 3),
+  // rand % 100 under cLeaveChanceDone (type +0x258): leaving (+0x339) and
+  // "I've seen everything in the zoo; I have to leave now." (10238). ours: a
+  // leaving or swimming guest never gets here)
+  auto seenEverything = [&]() {
+    const int roll = std::uniform_int_distribution<int>(0, 99)(this->rng);
+    ZT_STEP("0x4a6acc", "Seen everything: leaves? (cLeaveChanceDone)", {"roll", roll},
+            {"cLeaveChanceDone", this->typeList[g.type].leaveDone});
+    if (roll >= this->typeList[g.type].leaveDone)
+      return false;
+    think(g, kSeenAll);
+    g.leaving = true;
+    decide(g);
+    return true;
+  };
+  // Where next (zoo.exe guestPickAttraction 0x4282e1): an exhibit with
+  // animals not on its visited list (0x427b08: habitatsWithAnimals 0x440d9a,
+  // less guestVisitedHabitat 0x42281c), a 'fun' building whose kind isn't on
+  // it (0x427d5c: 0x427f43, less 0x4285e2), or scenery to look at - drawn by
+  // weight: the exhibits' count, the buildings' count, and the scenery's (its
+  // cEstheticWeight / 100, at least 1: 0x428039)
   if (this->objects) {
     std::vector<int> fun;
+    int unseen = 0, scenery = 0, total = 0;
+    auto weigh = [&]() {
+      fun.clear();
+      const auto &objs = this->objects->objects();
+      for (size_t i = 0; i < objs.size(); i++)
+        if (!objs[i].fence && infoOf(PlacedObjects::fileOf(objs[i])).satisfies.count("fun") &&
+            !visitedObject(g, objs[i]))
+          fun.push_back(static_cast<int>(i));
+      unseen = 0;
+      for (const Fences::Exhibit &e : this->fences->exhibits()) {
+        if (!e.named || (e.tank && e.show) || visitedExhibit(g, e.id)) // (0x427b08: show tanks left out)
+          continue;
+        for (const Animals::Member &m : this->animals->members())
+          if (m.exhibit == e.id) {
+            unseen++;
+            break;
+          }
+      }
+      scenery = sceneryWeight(g);
+      total = unseen + static_cast<int>(fun.size()) + scenery;
+    };
+    weigh();
+    // Nothing to pick (zoo.exe chooseTask 0x43a6e4 at 0x440ee2: 0x427c88,
+    // the same three weights, 0 or less): its visit count +0x334 back to 0
+    // (its list kept), guestSeenEverything - not leaving, a walk (task 1)
+    if (total <= 0) {
+      ZT_STEP("0x43a6e4", "Nothing left to pick: its visit count back to 0", {"visits", g.visitCount});
+      g.visitCount = 0;
+      if (seenEverything())
+        return;
+      g.target = -1;
+      wander(g);
+      return;
+    }
+    // Task64_PickAttraction::whileGoing (zoo.exe 0x4281be): the places to
+    // visit (0x4281fd: the habitats with animals plus the 'fun' buildings) at
+    // or under its visit count +0x334 - the visited list emptied, the count
+    // back to 0, the task over (class slot 0x60) and guestSeenEverything;
+    // else, any places at all, guestPickAttraction. ours: not leaving, it
+    // picks at once from its emptied list, as chooseTask's next Task64 would
+    const int places = placesToVisit();
+    ZT_STEP("0x4281be", "Places to visit against its visit count", {"places", places}, {"visits", g.visitCount});
+    if (places <= g.visitCount) {
+      g.visits.clear();
+      g.visitCount = 0;
+      if (seenEverything())
+        return;
+      weigh();
+    }
     const auto &objs = this->objects->objects();
-    for (size_t i = 0; i < objs.size(); i++)
-      if (!objs[i].fence && !g.visited.count(objs[i].id) &&
-          infoOf(PlacedObjects::fileOf(objs[i])).satisfies.count("fun"))
-        fun.push_back(static_cast<int>(i));
-    int unseen = 0;
-    for (const Fences::Exhibit &e : this->fences->exhibits())
-      unseen += e.named && !e.tank && !g.seen.count(e.id) ? 1 : 0;
-    const int scenery = sceneryWeight(g);
-    const int total = unseen + static_cast<int>(fun.size()) + scenery;
     const int roll = total > 0 ? std::uniform_int_distribution<int>(0, total - 1)(this->rng) : 0;
     if (total > 0 && roll >= unseen && roll < unseen + static_cast<int>(fun.size())) {
-      const PlacedObjects::Object &o = objs[fun[std::uniform_int_distribution<size_t>(0, fun.size() - 1)(this->rng)]];
-      ZT_STEP("0x4282e1", "Picks an attraction it hasn't been to", {"attraction", o.typeName},
-              {"attractions left", static_cast<int>(fun.size())}, {"exhibits unseen", unseen});
-      g.visited.insert(o.id);
-      if (seekBuilding(g, "fun", 1000))
+      // (zoo.exe 0x42c775: the one drawn - the roll less the exhibits'
+      // count, an index into the unvisited list - goal kind +0x24e, task
+      // 0x66 to it. With zoo.ini [AI] useAttractionAttractiveness
+      // ([0x63b088], read at 0x4bc8f8; not in the game's zoo.ini, so 0)
+      // the one scoring highest instead (0x42c77c -> 0x5cfc48:
+      // attractionHighestScore 0x60b086 over the unvisited list from the
+      // guest's tile, Original::attractionScore - the furthest)
+      int drawn = fun[static_cast<size_t>(roll - unseen)];
+      if (this->useAttractionAttractiveness) {
+        const int gx = static_cast<int>(std::floor(g.x)), gy = static_cast<int>(std::floor(g.y));
+        int bestScore = -1;
+        for (int i : fun) {
+          const PlacedObjects::Object &f = objs[static_cast<size_t>(i)];
+          const int s = Original::attractionScore(static_cast<int>(std::floor(f.x)) - gx,
+                                                  static_cast<int>(std::floor(f.y)) - gy);
+          if (s > bestScore)
+            bestScore = s, drawn = i;
+        }
+      }
+      const PlacedObjects::Object &o = objs[static_cast<size_t>(drawn)];
+      ZT_STEP("0x4282e1",
+              this->useAttractionAttractiveness ? "Picks the attraction scoring highest (the furthest)"
+                                                : "Picks an attraction it hasn't been to (the one drawn)",
+              {"attraction", o.typeName}, {"index", roll - unseen}, {"attractions left", static_cast<int>(fun.size())},
+              {"exhibits unseen", unseen});
+      if (seekBuilding(g, "fun", 1000, true, drawn))
         return;
     } else if (total > 0 && roll >= unseen + static_cast<int>(fun.size())) {
       int sx = -1, sy = -1;
@@ -2164,31 +2886,17 @@ void Guests::decide(Guest &g) {
       }
     }
   }
+  // (ours: the exhibit drawn, or the attraction or scenery drawn not
+  // reached - the original's Task64 draws again next tick - an exhibit not
+  // on its list, else a walk)
   int vx = -1, vy = -1;
   int ex = pickExhibit(g, vx, vy);
-  ZT_STEP("", "Picks an exhibit it hasn't seen (attractiveness, favourite, distance)", {"exhibit", ex},
-          {"seen", static_cast<int>(g.seen.size())}, {"to x", vx}, {"to y", vy});
+  ZT_STEP("0x428917", "Picks an exhibit it hasn't seen (attractiveness, favourite, distance)", {"exhibit", ex},
+          {"visits", g.visitCount}, {"to x", vx}, {"to y", vy});
   if (ex >= 0 && walkTo(g, vx, vy, t.speed)) {
     g.target = ex;
     return;
   }
-  // Nothing (more) to see
-  bool anyExhibit = false;
-  for (const Fences::Exhibit &e : this->fences->exhibits())
-    anyExhibit = anyExhibit || (e.named && !e.tank);
-  if (!g.seen.empty() && ex < 0) {
-    g.seen.clear();
-    g.visited.clear();
-    g.gawkedKinds.clear();
-    if (std::uniform_int_distribution<int>(0, 99)(this->rng) < this->typeList[g.type].leaveDone) {
-      ZT_STEP("", "Seen it all: leaves (cLeaveChanceDone)");
-      think(g, kSeenAll);
-      g.leaving = true;
-      decide(g);
-      return;
-    }
-  }
-  (void)anyExhibit;
   g.target = -1;
   wander(g);
 }
@@ -2289,10 +2997,13 @@ bool Guests::viewBegin(Guest &g) {
     g.target = -1;
     return false;
   }
-  if (g.seen.count(g.target)) {
-    ZT_STEP("0x42e527", "Been to this exhibit: its visit list cleared", {"exhibit", g.target});
-    g.seen.clear();
-    g.visited.clear();
+  // (on a tour, Task76_GuestFollowGuide: no visited list looked at or
+  // added to)
+  const bool tour = g.guide >= 0;
+  if (!tour && visitedExhibit(g, g.target)) {
+    ZT_STEP("0x42e527", "Been to this exhibit: its visited list emptied, its visit count 0", {"exhibit", g.target});
+    g.visits.clear();
+    g.visitCount = 0;
     g.target = -1;
     return false;
   }
@@ -2314,11 +3025,22 @@ bool Guests::viewBegin(Guest &g) {
   const int secs = gawkSeconds(g);
   g.viewStart = this->clock;
   g.viewEnd = this->clock + secs;
-  g.seen.insert(g.target);
+  // (0x42e655: a random tile of the habitat, 0x44149f, onto its visited list)
+  if (!tour)
+    if (const Fences::Exhibit *ex = this->fences->exhibit(g.target); ex && !ex->tiles.empty()) {
+      auto it = ex->tiles.begin();
+      std::advance(it, std::uniform_int_distribution<size_t>(0, ex->tiles.size() - 1)(this->rng));
+      recordVisit(g, it->first, it->second);
+    }
   ZT_STEP("0x42e527", "Viewing animals (its area, the gawk time, the kinds it sees)", {"exhibit", g.target},
           {"way", g.viewWay}, {"seconds", secs}, {"kinds seen", k}, {"recent kinds", static_cast<int>(recent.size())});
   playGawk(g);
   // A follower there while its guide talks: cheered by the guide's bonus
+  // (Task76_GuestFollowGuide::atTarget 0x58d0cf: not yet heard (+0x338),
+  // its guide (+0x2e4) on task 0x77 - speaking - and its +0x1a8 clear: it
+  // faces the guide, its viewing area's guide bonus (0x58a8dc -> 0x426236,
+  // +0x58) onto its pending adult and child happiness, heard. whileGoing
+  // 0x58ce6c: no route, the task over)
   if (g.guide >= 0 && !g.tourHeard && this->guideSpeaking && this->guideSpeaking(g.guide)) {
     g.dHappy += static_cast<float>(this->guideBonusOf ? this->guideBonusOf(g.guide) : 30);
     g.tourHeard = true;
@@ -2495,7 +3217,7 @@ void Guests::viewDone(Guest &g) {
 // Scenery to look at (zoo.exe guestPickAttraction 0x4282e1, its third
 // group). The zoo's list of it (0x639098, filled by 0x451785 from
 // 0x4f40af): objects whose kind has a cEstheticWeight over 0, standing
-// inside the zoo; a guest looks at one kind only once (0x4285e2)
+// inside the zoo; none of a kind on its visited list (0x4285e2)
 // ----------------------------------------------------------------------------
 int Guests::sceneryWeight(const Guest &g) const {
   if (!this->objects || !this->fences)
@@ -2506,7 +3228,7 @@ int Guests::sceneryWeight(const Guest &g) const {
       continue;
     const std::string file = PlacedObjects::fileOf(o);
     const BuildingInfo &b = infoOf(file);
-    if (b.estheticWeight <= 0 || g.gawkedKinds.count(file) ||
+    if (b.estheticWeight <= 0 || visitedObject(g, o) ||
         !this->fences->insideZoo(static_cast<int>(std::floor(o.x)), static_cast<int>(std::floor(o.y))))
       continue;
     sum += b.estheticWeight;
@@ -2532,7 +3254,7 @@ int Guests::pickScenery(Guest &g, int &tx, int &ty) {
     const std::string file = PlacedObjects::fileOf(o);
     const BuildingInfo &b = infoOf(file);
     const int ox = static_cast<int>(std::floor(o.x)), oy = static_cast<int>(std::floor(o.y));
-    if (b.estheticWeight <= 0 || g.gawkedKinds.count(file) || !this->fences->insideZoo(ox, oy))
+    if (b.estheticWeight <= 0 || visitedObject(g, o) || !this->fences->insideZoo(ox, oy))
       continue;
     const int d2 = (ox - gx) * (ox - gx) + (oy - gy) * (oy - gy);
     if (d2 >= 1000)
@@ -2570,17 +3292,20 @@ int Guests::pickScenery(Guest &g, int &tx, int &ty) {
   auto spot = from[std::uniform_int_distribution<size_t>(0, from.size() - 1)(this->rng)];
   tx = spot.first;
   ty = spot.second;
-  g.gawkedKinds.insert(PlacedObjects::fileOf(*best));
   return best->id;
 }
 
-// There (Task81_GawkObject, zoo.exe 0x4a6d68): it faces the object and
+// There (Task80::atTarget 0x4a6d59: task 0x81 - Task81_GawkObject, zoo.exe
+// begin 0x4a6d68): it faces the object and
 // plays bGawkObject1..6 by the object's EstheticBonus for its kind (<0,
 // 0-5, 6-10, 11-15, 16-25, 26-100; over 100 nothing - 0x4a6ebd), each a
 // draw of gawk, camera or stand, once; and it has the kind's cUsedThought
 void Guests::gawkScenery(Guest &g) {
   const int id = g.gawkObject;
   g.gawkObject = -1;
+  // (no set played: its task over at once - checkArrived 0x44118f, atTarget
+  // 0x441290: +0x33e, its needs looked at next tick)
+  g.recheck = true;
   if (!this->objects)
     return;
   const PlacedObjects::Object *obj = nullptr;
@@ -2589,6 +3314,9 @@ void Guests::gawkScenery(Guest &g) {
       obj = &o;
   if (!obj)
     return;
+  // (Task80's checkArrived 0x4406a4: the object's tile onto its visited
+  // list, 0x4a840e)
+  recordVisit(g, *obj);
   const Type &t = this->typeList[g.type];
   const BuildingInfo &b = infoOf(PlacedObjects::fileOf(*obj));
   auto it = b.estheticBonus.find(t.nameId);
@@ -2614,6 +3342,7 @@ void Guests::gawkScenery(Guest &g) {
   play(g, anim, secs);
   g.state = State::Gawking;
   g.target = -1;
+  g.recheck = false; // (set when the play is over)
   if (b.usedThought)
     think(g, b.usedThought);
   if (anim == "camera" && this->sounds)
@@ -2784,6 +3513,9 @@ const Guests::Block *Guests::blockAt(float x, float y) const {
 // bad!" (10241)
 void Guests::surroundings(Guest &g) {
   const Type &t = this->typeList[g.type];
+  // (its 5x5 block, tile / 5: ZTGuest::blockEsthetic 0x43b6c0 - the block's
+  // map at +4 by the kind's cNameID, none 0 - and blockStink 0x43b84a, the
+  // block's +0x10)
   const Block *b = blockAt(g.x, g.y);
   float esthetic = 0, stink = 0;
   int crowd = 0;
@@ -2870,6 +3602,7 @@ void Guests::tick(Guest &g) {
         else
           think(g, kRun, near->name);
         // Off its tour, out of its errand
+        g.eatStep = -1;
         g.guide = -1;
         g.tourHeard = false;
         g.building = -1;
@@ -2929,20 +3662,28 @@ void Guests::tick(Guest &g) {
   // only
   auto need = [&](int &check, int period, float &delta, float value, int increment, int threshold, int limit,
                   int angry, int wantThought, int noneThought, const char *what) {
+    // (off for it already - its goal +0x24e that kind, or "eat" for food:
+    // no increment and no anger at its limit; zoo.exe 0x43bb49)
+    const bool goingFor = g.need == what || (std::string(what) == "food" && g.need == "eat");
     if (!g.recheck) {
       if (--check >= 0)
         return;
       check = period - 1;
-      if (g.need != what)
+      if (!goingFor) {
         delta += static_cast<float>(increment);
-      if (value >= limit)
-        g.dHappy += static_cast<float>(angry);
+        if (value >= limit)
+          g.dHappy += static_cast<float>(angry);
+      }
     }
     ZT_STEP("", "A need check", {"need", what}, {"value", value}, {"just done with something", g.recheck ? "yes" : "no"},
-            {"increment", !g.recheck && g.need != what ? increment : 0},
-            {"at its limit: happiness", !g.recheck && value >= limit ? angry : 0}, {"threshold", threshold});
+            {"increment", !g.recheck && !goingFor ? increment : 0},
+            {"at its limit: happiness", !g.recheck && !goingFor && value >= limit ? angry : 0}, {"threshold", threshold});
+    // (food or a drink in its hands: not off for more - 0x43bbb5, 0x43bd3b)
+    const int hand = handFor(what);
+    if (hand >= 0 && hand <= 1 && g.inventory[hand])
+      return;
     if (value >= threshold && g.building < 0 && !g.leaving && g.state != State::Fleeing && !g.puking &&
-        g.state != State::Water) {
+        g.eatStep == -1 && g.state != State::Water) {
       think(g, wantThought);
       const bool seat = std::string(what) == "energy";
       if (!seekBuilding(g, what, seat ? this->searchRadius : 1000)) {
@@ -3023,17 +3764,250 @@ void Guests::tick(Guest &g) {
     surroundings(g);
   }
   // In the water and not on a ride (zoo.exe chooseTask 0x43a6e4 at
-  // 0x59cbb8: in a tank - "Hey! I don't want to be in the water!" and
-  // Task7f, out; ours: a lake tile alike - a zoo loaded with a guest out on
-  // the water, the ground made water under it)
+  // 0x59cbb8: in a tank - its tile's habitat, ZTUnit::habitat 0x410642,
+  // slot 0x20 - "Hey! I don't want to be in the water!" and Task7f, out;
+  // ours: an exhibit's water alike - a guest put down in a tank comes this
+  // way). Lake water, out of the exhibits: guestEnterWater 0x46b6a3 (task
+  // 0x83, no longer leaving) - the original's way there is putting one down
+  // (putDown); ours also looks here, as our saves keep no task: a zoo loaded
+  // with a guest out on the water, or the ground made water under it
   if (g.state != State::Water && !g.hidden && g.showTank < 0 && g.x > -999 && this->map) {
     const int gx = static_cast<int>(std::floor(g.x)), gy = static_cast<int>(std::floor(g.y));
     const MapTile *t = this->map->getTile(gx, gy);
-    if (t && (t->terrainType == 9 || t->terrainType == 10)) {
-      think(g, 10568);
-      outOfWater(g);
+    const int ex = this->fences ? this->fences->exhibitAt(gx, gy) : -1;
+    const Fences::Exhibit *e = ex >= 0 ? this->fences->exhibit(ex) : nullptr;
+    if (t && ((e && e->tank) || t->terrainType == 9 || t->terrainType == 10)) {
+      if (swimmable(gx, gy)) {
+        enterWater(g);
+      } else {
+        think(g, 10568);
+        outOfWater(g);
+      }
     }
   }
+}
+
+// zoo.exe ZTGuest::guestEnterWater 0x46b6a3 (class slot 0xc8: a guest put
+// down - placeObject 0x4d923c, endPlacing 0x443df7 - picked up with the
+// guest panel's PickupGuest, ZUPDATE1's infogst.lyt): out of every
+// building's users (0x46b5bf -> 0x5a08ac), off its ride (slot 0x294(0):
+// +0x284 = 0) and its ride's set (slot 0x29c: +0x288); then, not on a
+// tank's tile (slot 0x268, onTankTile 0x4106c4: tile +0x85 & 0x20) and on
+// water (tile +0x83 & 3): no longer leaving (+0x339 = 0), task 0x83
+// (Task83_InWater, priority 1: making for land - a man who can't, drowns)
+// and "Hey! I don't want to be in the water!" (10568). (On land: its needs
+// looked at next tick, +0x33e, unless slots 0x28c and 0x290 - landed)
+void Guests::enterWater(Guest &g) {
+  g.ride = 0;
+  g.rideSet.clear();
+  g.leaving = false;
+  inWater(g);
+  think(g, 10568);
+  ZT_STEP("0x46b6a3", "In the lake: no longer leaving, making for land (task 0x83)", {"tries", g.tries});
+}
+
+// zoo.exe 0x46b6a3's land branch: its needs looked at on the next tick
+// (+0x33e) - unless its class slots 0x28c (ZTGuest::guestOverAThreshold
+// 0x58d5eb: hunger, thirst, energy or bathroom at its c<Need>Threshold or
+// more) and 0x290 (guestNearNeedBuilding 0x46b7d6: a building within 10
+// tiles, gone to) both hold
+void Guests::landed(Guest &g) {
+  g.state = State::Walking;
+  play(g, "stand", 0.0f);
+  const Type &t = this->typeList[g.type];
+  const bool inNeed = g.hunger >= t.hungerThreshold || g.thirst >= t.thirstThreshold ||
+                      g.tired >= t.energyThreshold || g.bathroom >= t.bathroomThreshold;
+  if (inNeed && nearNeedBuilding(g)) {
+    ZT_STEP("0x46b6a3", "Put down on land in need, a building near: straight there", {"goal", g.need});
+    return;
+  }
+  g.recheck = true;
+  ZT_STEP("0x46b6a3", "Put down on land: its needs looked at next tick (+0x33e)", {"in need", inNeed ? "yes" : "no"});
+}
+
+// zoo.exe ZTGuest::guestNearNeedBuilding 0x46b7d6 (class slot 0x290) ->
+// guestFindNearBuilding 0x46b818 (slot 0x280, radius 10): every building
+// (the kind named "building", 0x646390 - 0x551561) in the guest's habitat
+// (slot 0x248, habitatAt 0x41060e: both out of the exhibits, or in the same
+// one) with room (buildingHasRoom 0x429330 -> 0x42ac87: ours, its users
+// under its cCapacity), its tile's squared distance from the guest's
+// (0x4118b1: tile +0x34/+0x38) 10 x 10 or less, serving one of a guest's
+// kinds (slot 0x27c, 0x618f29: drink, food, bathroom, energy - the first it
+// has, 0x41239d - that kind's index its goal, +0x24e); the nearest, a
+// random one among ties (0x40f103). Found: its tile the guest's target
+// (slot 0x2e4, setField244 0x43e6b3: +0x244; +0x214..+0x21c its point in
+// the tile), and the next chooseTask (0x43a6e4 at 0x43b248) sends it there
+// (guestGoToBuilding 0x43b2f6). Not by which need: a hungry guest put down
+// by a restroom goes in it. ours: sent at once (seekBuilding, that building
+// alone); no way to its door, its needs looked at next tick instead
+bool Guests::nearNeedBuilding(Guest &g) {
+  if (!this->objects || !this->fences)
+    return false;
+  static const char *const kinds[] = {"drink", "food", "bathroom", "energy"};
+  const int gx = static_cast<int>(std::floor(g.x)), gy = static_cast<int>(std::floor(g.y));
+  const int habitat = this->fences->exhibitAt(gx, gy);
+  const auto &objs = this->objects->objects();
+  int best = Original::guestPutDownBuildingRadius * Original::guestPutDownBuildingRadius;
+  std::vector<std::pair<int, const char *>> nearest;
+  for (size_t i = 0; i < objs.size(); i++) {
+    const PlacedObjects::Object &o = objs[i];
+    if (o.fence)
+      continue;
+    const BuildingInfo &b = infoOf(PlacedObjects::fileOf(o));
+    const char *kind = nullptr;
+    for (const char *k : kinds)
+      if (!kind && b.satisfies.count(k))
+        kind = k;
+    if (!kind)
+      continue;
+    const int ox = static_cast<int>(std::floor(o.x)), oy = static_cast<int>(std::floor(o.y));
+    if (this->fences->exhibitAt(ox, oy) != habitat)
+      continue;
+    int users = 0;
+    for (const Guest &o2 : this->list)
+      users += o2.building == static_cast<int>(i) ? 1 : 0;
+    if (users >= b.capacity)
+      continue;
+    const int d = (ox - gx) * (ox - gx) + (oy - gy) * (oy - gy);
+    if (d > best)
+      continue;
+    if (d < best)
+      nearest.clear();
+    best = d;
+    nearest.push_back({static_cast<int>(i), kind});
+  }
+  ZT_STEP("0x46b818", "Put down in need: buildings within 10 tiles in its habitat with room",
+          {"nearest", static_cast<int>(nearest.size())}, {"squared distance", nearest.empty() ? 0 : best});
+  if (nearest.empty())
+    return false;
+  const auto &[at, kind] =
+      nearest[std::uniform_int_distribution<size_t>(0, nearest.size() - 1)(this->rng)];
+  return seekBuilding(g, kind, 1000, false, at);
+}
+
+// zoo.exe infoPickUp_click 0x46af10 -> 0x46ab75 (the guest panel's
+// PickupGuest, shared with Staff Information's): the panel shut (nothing
+// selected, ui_main_4b2322(0,1)), a guest off its ride (slot 0x294(0):
+// +0x284 = 0), held (+0x143 = 1) and out of the world until it's put down
+// (setPlaceItem 0x4f189a: the zoo view places it, +0x40c) - so nothing it
+// does goes on meanwhile. (The type's pickupsound: guests.ai has no
+// [Sounds], so none)
+void Guests::pickUp(int id) {
+  Guest *g = nullptr;
+  for (Guest &x : this->list)
+    if (x.id == id)
+      g = &x;
+  if (!g || g->x <= -999)
+    return;
+  g->ride = 0;
+  g->path.clear();
+  g->pathAt = 0;
+  g->hidden = false; // (shown at the cursor; still a building's user till put down)
+  this->carried = id;
+  this->carriedFromX = g->x;
+  this->carriedFromY = g->y;
+  if (this->selected == id)
+    this->selected = -1;
+  int message = 0;
+  this->carriedFit = canPutDown(g->x, g->y, message);
+  this->carriedMessage = message;
+}
+
+// Where a held guest may be put down (zoo.exe zooViewMouse 0x4ded90, its
+// guest branch at 0x4e6922, then placementCheck 0x4f885e):
+// - in the zoo (0x40fb8d: 10311 "Zoo objects can only be placed inside the
+//   main zoo wall.");
+// - nothing on the tile: its four quarters' objects (tile +4..+0x10) none,
+//   nor anything standing across it (0x427360: the tile's things whose box
+//   crosses the guest's, a path alone not counted) - ours, the placed
+//   objects' footprints (WorldIndex); over one, 10555 (0x293b, the thing
+//   in the way lit red: 0x4dfc95);
+// - its ground flat or a path's slope (tile +0x81 0, 'A', 'P', 0x14 or 5:
+//   two corners side by side a step up - WorldMap::pathShapeOk);
+// - in a tank (tankCheckPlacement 0x4df688): guests go in (slot 0xc4, the
+//   type's +0x50: guests.ai cUnderwater = 1, "Can go into a tank"), not
+//   a show tank (10561, 0x2941: the type's +0x6f not set).
+// Water out of the exhibits is no bar (its slope aside): it swims.
+// measured: Play original 2026-11-17 (sweep3.zoo): held green over open
+// sand, a path, another guest, inside a walled enclosure and a tank's open
+// water; red over a building and a tank toy; put down in the tank it swam,
+// "Hey! I don't want to be in the water!", its panel open again
+bool Guests::canPutDown(float x, float y, int &message) const {
+  message = 0;
+  if (!this->map || !this->fences)
+    return false;
+  const int tx = static_cast<int>(std::floor(x)), ty = static_cast<int>(std::floor(y));
+  if (!this->map->getTile(tx, ty))
+    return false;
+  if (!this->fences->insideZoo(tx, ty)) {
+    message = 10311;
+    return false;
+  }
+  if (this->index && this->index->blocked(tx, ty)) {
+    message = 10555;
+    return false;
+  }
+  if (!this->map->pathShapeOk(tx, ty))
+    return false;
+  const int ex = this->fences->exhibitAt(tx, ty);
+  if (const Fences::Exhibit *e = ex >= 0 ? this->fences->exhibit(ex) : nullptr)
+    if (e->tank && e->show) {
+      message = 10561;
+      return false;
+    }
+  return true;
+}
+
+// A held guest put down (zoo.exe placeObject 0x4d923c, the picked thing
+// placed again: +0x143 = 0; on water or a tank's tile - tile +0x83 & 3,
+// +0x85 & 0x20 - in the water, slot 0x274(1): +0x284 |= 0x80000; then
+// its class slot 0xc8, ZTGuest::guestEnterWater 0x46b6a3: out of every
+// building's users (0x46b5bf -> 0x5a08ac), off its ride (0x294(0)) and its
+// ride's set (0x29c); on lake water, not a tank, making for land (task 0x83
+// - enterWater); else landed. Then it's selected, its panel open again
+// (ui_main_4b2322(it, 1), 0x431712 -> ui_infogst_41a78a))
+void Guests::putDown(int id, float x, float y) {
+  Guest *g = nullptr;
+  for (Guest &k : this->list)
+    if (k.id == id)
+      g = &k;
+  if (this->carried == id)
+    this->carried = -1;
+  if (!g)
+    return;
+  g->x = x;
+  g->y = y;
+  g->path.clear();
+  g->pathAt = 0;
+  g->building = -1;
+  g->need.clear();
+  g->hidden = false;
+  g->slot = g->sitStep = g->eatStep = -1;
+  g->ride = 0;
+  g->rideSet.clear();
+  g->waterTask = 0;
+  const int tx = static_cast<int>(std::floor(x)), ty = static_cast<int>(std::floor(y));
+  const MapTile *t = this->map ? this->map->getTile(tx, ty) : nullptr;
+  const bool water = t && (t->terrainType == 9 || t->terrainType == 10);
+  const int ex = this->fences ? this->fences->exhibitAt(tx, ty) : -1;
+  const Fences::Exhibit *e = ex >= 0 ? this->fences->exhibit(ex) : nullptr;
+  const bool tank = e && e->tank;
+  g->inWater = water || tank;
+  ZT_STEP("0x4d923c", "Put down", {"x", x}, {"y", y}, {"water", water ? 1 : 0}, {"tank", tank ? 1 : 0});
+  if (!tank && water && swimmable(tx, ty))
+    enterWater(*g);
+  else
+    landed(*g);
+  this->selected = id;
+}
+
+// zoo.exe endPlacing 0x443df7 (the zoo view's placing ended, +0x40c, by
+// setPlaceItem 0x4f189a and others): the picked thing back where it was
+// (+0x410..), held no more (+0x143 = 0) and its class slot 0xc8 - for a
+// guest, guestEnterWater 0x46b6a3, as putting it down there
+void Guests::putBack() {
+  if (this->carried >= 0)
+    putDown(this->carried, this->carriedFromX, this->carriedFromY);
 }
 
 // ----------------------------------------------------------------------------
@@ -3049,6 +4023,23 @@ void Guests::update(float seconds, int zooRating, double admission) {
     for (const Guest &g : this->list)
       if (g.state == State::Using && g.building >= 0 && g.building < static_cast<int>(this->objects->all().size()))
         this->objects->all()[g.building].inUse = true;
+    // A cHideBuilding building (the bounce houses) isn't drawn while it has
+    // a user - taken in at its set's fEnterBuilding, its users list (+0x164)
+    // not empty (ZTBuilding::draw 0x433aaf at 0x4413a5; 0x4a7972 at
+    // 0x59df98 alike)
+    for (int id : this->usedHidden)
+      if (PlacedObjects::Object *o = this->objects->byId(id))
+        o->showHidden = false;
+    this->usedHidden.clear();
+    for (const Guest &g : this->list)
+      if (g.state == State::Using && g.takenIn && g.building >= 0 &&
+          g.building < static_cast<int>(this->objects->all().size())) {
+        PlacedObjects::Object &o = this->objects->all()[g.building];
+        if (infoOf(PlacedObjects::fileOf(o)).hideBuilding) {
+          o.showHidden = true;
+          this->usedHidden.push_back(o.id);
+        }
+      }
   }
   // Who comes: the zoo's rating against how much it costs to get in
   this->clock += seconds;
@@ -3072,19 +4063,31 @@ void Guests::update(float seconds, int zooRating, double admission) {
       if (!any)
         continue;
     }
-    int cat = admission > 49 ? 0 : admission > 29 ? 1 : admission > 19 ? 2 : admission > 9 ? 3 : 4;
-    const int VL = 3, L = 5, M = 25, H = 30, VH = 40;
-    static const int table[4][5] = {{VL, M, H, H, VH}, {0, L, M, H, VH}, {0, VL, M, M, H}, {0, 0, VL, L, M}};
-    static const bool good[4][5] = {{false, false, false, true, true}, {false, false, false, false, true},
-                                    {false, false, false, false, true}, {false, false, false, false, false}};
-    int band = zooRating >= 81 ? 0 : zooRating >= 60 ? 1 : zooRating >= 30 ? 2 : 3;
-    int chance = table[band][cat];
-    if (good[band][cat] && std::uniform_int_distribution<int>(0, 199)(this->rng) == 0)
-      this->messages.push_back(kGoodValue);
-    if (std::uniform_int_distribution<int>(0, 99)(this->rng) < chance)
+    // (zoo.exe guestArrivalCheck 0x424375: the admission band, this+0x48 -
+    // the price over economy.cfg's cAdultAdmission in turn; the rating's
+    // band; their cell's chance of cCreateGuestChance*, chancePercent
+    // 0x4244ab: rand % 100 under it - guestArriveTry 0x4164bd - and a guest
+    // made at the gate, 0x4f6e3c; an arrival in a "good value" cell with
+    // more than 10 guests in the zoo posts 10017 - 0x429d68)
+    const Original::Economy &e = Original::economy();
+    const int cat = admission > e.adultAdmission[0] ? 0 : admission > e.adultAdmission[1] ? 1
+                  : admission > e.adultAdmission[2] ? 2 : admission > e.adultAdmission[3] ? 3 : 4;
+    const int band = zooRating >= 81 ? 0 : zooRating >= 60 ? 1 : zooRating >= 30 ? 2 : 3;
+    const int which = Original::guestArrivalChance[band][cat];
+    const int chance = which >= 0 ? e.createGuestChance[which] : 0;
+    const int roll = std::uniform_int_distribution<int>(0, 99)(this->rng);
+    ZT_STEP("0x424375", "A guest at the gate? (admission and rating bands, cCreateGuestChance)", {"admission", admission},
+            {"admission band", cat}, {"rating", zooRating}, {"chance", chance}, {"roll", roll});
+    if (chance > 0 && roll < chance) {
       admit(admission);
+      if (Original::guestArrivalGoodValue[band][cat] && static_cast<int>(this->list.size()) > Original::goodValueGuests)
+        this->messages.push_back(kGoodValue);
+    }
   }
   for (Guest &g : this->list) {
+    // (held: out of the world until put down - zoo.exe 0x46ab75)
+    if (g.id == this->carried)
+      continue;
     ZT_WHO("guest", g.id);
     g.animTime += seconds;
     g.tickMs += seconds * 1000.0f;
@@ -3118,6 +4121,9 @@ void Guests::update(float seconds, int zooRating, double admission) {
           // (its leg done: the next frame says what next - waterNext)
           g.playFor = 0;
         } else if (g.state == State::Leaving) {
+          // (Task71's checkArrived 0x4233c4: its walk's end on the tile
+          // 0x410d04 gives of [0x63805c] - taken as the gate's, not read;
+          // elsewhere, a new route, slot 0x4c)
           g.x = -1000; // out of the gate
           // Happy as it goes (over cMembershipJoinHappiness): may join the
           // zoo (cMembershipJoinChance percent): zoo.exe 0x4fa85d, at the
@@ -3126,17 +4132,29 @@ void Guests::update(float seconds, int zooRating, double admission) {
               std::uniform_int_distribution<int>(0, 99)(this->rng) < Original::economy().membershipJoinChance)
             this->members++;
         } else if (g.building >= 0 && g.state == State::Walking) {
+          // (Task66/Task67's checkArrived, checkArrivedPathCost 0x4124b1:
+          // the path's end - arrived - and a guest's off-path cost +0x230
+          // back to cNonPathCost; ours keeps none on the guest: walkTo
+          // takes it per route)
           useBuilding(g);
         } else if (g.state == State::Walking && g.gawkObject >= 0) {
-          // (there: Task81_GawkObject's atTarget 0x441290 stops it and sets
-          // +0x33e - its needs looked at on the next tick)
-          g.recheck = true;
+          // (there: Task81_GawkObject plays its bGawkObject; the task over
+          // once the set is - checkArrived 0x44118f - then atTarget
+          // 0x441290 stops it and sets +0x33e: below, when the play ends)
           gawkScenery(g);
         } else if (g.state == State::Walking && g.target >= 0 && this->fences->exhibit(g.target)) {
-          // (at its viewing tile: Task70_ViewAnimals begins - it can't, and
+          // (at its viewing tile - Task65_Guest: whileGoing 0x43aab4 routes
+          // it when it has no route, checkArrived 0x43aa96 arrived on the
+          // target's tile, its off-path cost back to cNonPathCost; and
+          // Task65's atTarget 0x42612f makes task
+          // 0x70: Task70_ViewAnimals begins - it can't, and
           // it picks again)
           if (!viewBegin(g))
             play(g, "stand", 0.0f);
+        } else if (g.state == State::Walking && g.eatStep == kEatWalkAbout && !g.leaving) {
+          // (no seat for its food: on the walk about's tile - Task6c_Eat's
+          // checkArrivedOnTile 0x412603 - atTarget 0x52d9b8: task 0x6d)
+          eatStanding(g);
         } else {
           if (g.state == State::Fleeing)
             g.state = State::Walking;
@@ -3192,120 +4210,27 @@ void Guests::update(float seconds, int zooRating, double admission) {
       decide(g);
       continue;
     }
-    if (g.state == State::Using) {
-      // Out again: what the building did, and what they bought
-      const auto &objs = this->objects->objects();
-      if (g.building >= 0 && g.building < static_cast<int>(objs.size())) {
-        const BuildingInfo &b = infoOf(PlacedObjects::fileOf(objs[g.building]));
-        bool child = this->typeList[g.type].child;
-        float adultChange = b.adultChange, childChange = b.childChange;
-        // (an animal house: its program's instead)
-        {
-          const PlacedObjects::Object &house = objs[g.building];
-          if (house.nameId) {
-            std::vector<const ResearchProgram *> shows = Research::get().collectionFor(house.nameId);
-            if (!shows.empty()) {
-              const ResearchProgram *p = shows[std::clamp(house.program, 0, static_cast<int>(shows.size()) - 1)];
-              adultChange = static_cast<float>(p->effectVal[1]);
-              childChange = static_cast<float>(p->effectVal[2]);
-            }
-          }
-        }
-        // A water ride (cReturnBuilding): through it onto the water first, what
-        // it does for them only once back in (zoo.exe guestBuy 0x42d858: the
-        // price both times; 0x42dd23, its effects, only for a guest on its
-        // ride - +0x284 set, 0x43a837)
-        const bool goingOut = b.returnBuilding && g.ride == 0;
-        if (!goingOut) {
-          g.dHappy += child ? childChange : adultChange;
-          g.dHunger += b.hunger;
-          g.dThirst += b.thirst;
-          g.dBathroom += b.bathroom;
-          g.dTired += b.energy;
-        }
-        if (g.need == "energy")
-          g.dTired -= g.tired; // (a sit down: rested)
-        PlacedObjects::Object &bo = this->objects->all()[g.building];
-        // The price against its default (cDefaultCost): at or over
-        // cItemExpensive times it too dear - "The prices at the %s are too
-        // high" (10073), cPriceAngry1Change; else at or under cItemCheap
-        // times it a bargain - 10072, cPriceHappy1Change. A seller judges it
-        // inside, over the item (zoo.exe 0x42d1e2: too dear, no item - though
-        // too dear it was turned away at the door, 0x42c8af, unless the
-        // price went up while it was in); a cCommerce building that sells
-        // nothing as it comes out (guestBuy 0x42d858). Then a cCommerce
-        // building's users pay its price x cPriceFactor (type +0x188) into
-        // its takings (+0x1a0, +0x1a8) and the zoo's (0x42df22, 0x40f018);
-        // one without cCommerce (restrooms, shelters, the bounce house)
-        // charges nothing, whatever its price
-        const float price = priceOf(bo, b);
-        const Type &gt = this->typeList[g.type];
-        const bool judged = b.commerce || !b.item.empty();
-        bool tooDear = judged && b.price * Original::economy().itemExpensive <= price;
-        bool cheap = judged && !tooDear && price <= Original::economy().itemCheap * b.price;
-        if (b.commerce) {
-          double take = price * b.priceFactor;
-          this->concessions += take;
-          bo.income += take;
-        }
-        ZT_STEP("0x42d858", "The price: too dear (cItemExpensive) or a bargain (cItemCheap)? Paid if cCommerce",
-                {"price", price}, {"default", b.price}, {"cItemCheap", Original::economy().itemCheap},
-                {"cItemExpensive", Original::economy().itemExpensive}, {"commerce", b.commerce ? 1 : 0},
-                {"verdict", tooDear ? "too dear" : cheap ? "a bargain" : "fair"});
-        if (tooDear) {
-          think(g, 10073, buildingName(bo));
-          g.dHappy += static_cast<float>(gt.priceAngry);
-        } else if (cheap) {
-          think(g, 10072, buildingName(bo));
-          g.dHappy += static_cast<float>(gt.priceHappy);
-        }
-        ZT_STEP("0x42d858", "Out of the building: what it did to them", {"building", bo.typeName}, {"need", g.need},
-                {"dHappy", g.dHappy}, {"dHunger", g.dHunger}, {"dThirst", g.dThirst}, {"dBathroom", g.dBathroom},
-                {"dTired", g.dTired}, {"bought", !b.item.empty() && !tooDear ? b.item : std::string("nothing")});
-        if (goingOut) {
-          rideOut(g, bo, b);
-          continue;
-        }
-        if (!b.item.empty() && !tooDear) {
-          bo.sold[b.item]++;
-          if (g.need == "gift") {
-            g.souvenir = true;
-            g.wantsSouvenir = false; // (holdItem 0x42d54e clears +0x33c)
-          }
-          g.dHappy += child ? b.itemChild : b.itemAdult;
-          g.dHunger += b.itemHunger;
-          g.dThirst += b.itemThirst;
-          g.dBathroom += b.itemBathroom;
-          // (guestConsumeItem 0x42d380: the item's six deltas - its loader
-          // 0x464f00 - pending by addPendingHappiness 0x42a98f, slot 0x1fc:
-          // adult or child happiness, hunger, thirst, the restroom, and
-          // energydelta onto +0x2c4, the tiredness pending)
-          g.dTired += b.itemEnergy;
-          g.trash = g.trash || b.itemTrash;
-          if (b.consumedThought)
-            think(g, b.consumedThought);
-        } else if (b.usedThought) {
-          think(g, b.usedThought);
-        }
-        // Back from the ride: off the water at the return slot's exitpos, on
-        // land (guestBuy 0x596f10: +0x284 and its behaviour cleared, out of
-        // the water - 0x274(0))
-        if (b.returnBuilding && g.ride) {
-          for (const BuildingInfo::Slot &s : b.slots)
-            if (s.isReturn)
-              slotPoint(bo, s.xx, s.xy, g.x, g.y);
-          endRide(g);
-        }
-      }
-      g.building = -1;
-      g.need.clear();
-      g.hidden = false;
-      g.state = State::Walking;
-      // (out again: Task69_ExitBuilding::atTarget 0x42dddf - guestBuy
-      // 0x42d858 for the building at its exit square, seen again (slot
-      // 0xcc), the task over (slot 0x174) and +0x33e set: its needs looked
-      // at next tick)
+    // A building's set, on (0x5ad535's b<name><goal><slot>): its play
+    // done, the next line (buildingSetLine); its fExitBuilding: out
+    if (g.state == State::Using && g.sitStep >= 0) {
+      g.sitStep++;
+      if (buildingSetLine(g))
+        continue;
+    }
+    if (g.state == State::Using && this->outNow(g))
+      continue;
+    // Done looking at scenery (Task81_GawkObject: its bGawkObject over -
+    // checkArrived 0x44118f - atTarget 0x441290 sets +0x33e)
+    if (g.state == State::Gawking && g.target < 0)
       g.recheck = true;
+    // ours: loaded holding food (Guest::eatAfterLoad) - off to eat it, as
+    // out of the stand (chooseTask 0x43a6e4 at 0x42a8b7)
+    if (g.eatAfterLoad) {
+      g.eatAfterLoad = false;
+      if (g.inventory[0] && g.state == State::Walking && g.building < 0) {
+        goEat(g);
+        continue;
+      }
     }
     decide(g);
   }
@@ -3342,9 +4267,165 @@ void Guests::update(float seconds, int zooRating, double admission) {
   }
 }
 
+// Out of the building it was in (its time inside over: Task6a_InsideBuilding
+// - whileGoing 0x42a2b0 does nothing, atTarget 0x42aa41 makes task 0x69 -
+// then Task69_ExitBuilding: whileGoing 0x42a899 walks to one of the slot's
+// exit points at random (ours: placed at its exitpos - each stock slot has
+// one), checkArrived 0x42a84f, atTarget 0x42dddf -> guestBuy 0x42d858): true
+// when it has gone on at once (out on its water ride, off to eat what it
+// bought)
+bool Guests::outNow(Guest &g) {
+  // Out again: what the building did, and what they bought
+  const auto &objs = this->objects->objects();
+  if (g.building >= 0 && g.building < static_cast<int>(objs.size())) {
+    // (its time inside done, Task6a_InsideBuilding::checkArrived 0x42a1db at 0x42a38a -> class
+    // slot 0x2ec, 0x42aa88: the building onto its visited list)
+    recordVisit(g, objs[g.building]);
+    const BuildingInfo &b = infoOf(PlacedObjects::fileOf(objs[g.building]));
+    bool child = this->typeList[g.type].child;
+    float adultChange = b.adultChange, childChange = b.childChange;
+    // (an animal house: its program's instead)
+    {
+      const PlacedObjects::Object &house = objs[g.building];
+      if (house.nameId) {
+        std::vector<const ResearchProgram *> shows = Research::get().collectionFor(house.nameId);
+        if (!shows.empty()) {
+          const ResearchProgram *p = shows[std::clamp(house.program, 0, static_cast<int>(shows.size()) - 1)];
+          adultChange = static_cast<float>(p->effectVal[1]);
+          childChange = static_cast<float>(p->effectVal[2]);
+        }
+      }
+    }
+    // A water ride (cReturnBuilding): through it onto the water first, what
+    // it does for them only once back in (zoo.exe guestBuy 0x42d858: the
+    // price both times; 0x42dd23, its effects, only for a guest on its
+    // ride - +0x284 set, 0x43a837)
+    const bool goingOut = b.returnBuilding && g.ride == 0;
+    if (!goingOut) {
+      g.dHappy += child ? childChange : adultChange;
+      g.dHunger += b.hunger;
+      g.dThirst += b.thirst;
+      g.dBathroom += b.bathroom;
+      g.dTired += b.energy;
+    }
+    if (g.need == "energy")
+      g.dTired -= g.tired; // (a sit down: rested)
+    PlacedObjects::Object &bo = this->objects->all()[g.building];
+    // The price against its default (cDefaultCost): at or over
+    // cItemExpensive times it too dear - "The prices at the %s are too
+    // high" (10073), cPriceAngry1Change; else at or under cItemCheap
+    // times it a bargain - 10072, cPriceHappy1Change. A seller judged it
+    // as it was taken in, over the item (addUser: 0x42ce0a -> 0x42d1e2);
+    // a cCommerce building that sells nothing judges it as it comes out
+    // (guestBuy 0x42d858: type +0x200, its Sells, empty -> 0x42c53f).
+    // Then a cCommerce
+    // building's users pay its price x cPriceFactor (type +0x188) into
+    // its takings (+0x1a0, +0x1a8) and the zoo's (0x42df22, 0x40f018);
+    // one without cCommerce (restrooms, shelters, the bounce house)
+    // charges nothing, whatever its price
+    const float price = priceOf(bo, b);
+    const Type &gt = this->typeList[g.type];
+    const bool judged = b.commerce && b.sells.empty();
+    bool tooDear = judged && b.price * Original::economy().itemExpensive <= price;
+    bool cheap = judged && !tooDear && price <= Original::economy().itemCheap * b.price;
+    if (b.commerce) {
+      double take = price * b.priceFactor;
+      this->concessions += take;
+      bo.income += take;
+    }
+    ZT_STEP("0x42d858", "The price: too dear (cItemExpensive) or a bargain (cItemCheap)? Paid if cCommerce",
+            {"price", price}, {"default", b.price}, {"cItemCheap", Original::economy().itemCheap},
+            {"cItemExpensive", Original::economy().itemExpensive}, {"commerce", b.commerce ? 1 : 0},
+            {"verdict", tooDear ? "too dear" : cheap ? "a bargain" : "fair"});
+    if (tooDear) {
+      think(g, 10073, buildingName(bo));
+      g.dHappy += static_cast<float>(gt.priceAngry);
+    } else if (cheap) {
+      think(g, 10072, buildingName(bo));
+      g.dHappy += static_cast<float>(gt.priceHappy);
+    }
+    ZT_STEP("0x42d858", "Out of the building: what it did to them", {"building", bo.typeName}, {"need", g.need},
+            {"dHappy", g.dHappy}, {"dHunger", g.dHunger}, {"dThirst", g.dThirst}, {"dBathroom", g.dBathroom},
+            {"dTired", g.dTired});
+    if (goingOut && !this->forcedOut) {
+      rideOut(g, bo, b);
+      return true;
+    }
+    // (what it bought, won or ate - the burger, hot dog, pizza and the
+    // like held, to be eaten later: Task6b_GoEat - came as it was taken
+    // in: addUser, 0x42ce0a)
+    // Back from the ride: off the water at the return slot's exitpos, on
+    // land (guestBuy 0x596f10: +0x284 and its behaviour cleared, out of
+    // the water - 0x274(0))
+    if (b.returnBuilding && g.ride) {
+      for (const BuildingInfo::Slot &s : b.slots)
+        if (s.isReturn)
+          slotPoint(bo, s.xx, s.xy, g.x, g.y);
+      endRide(g);
+    }
+  }
+  g.building = -1;
+  g.need.clear();
+  g.hidden = false;
+  g.state = State::Walking;
+  // (out again: Task69_ExitBuilding::atTarget 0x42dddf - guestBuy
+  // 0x42d858 for the building at its exit square, seen again (slot
+  // 0xcc), the task over (slot 0x174); then chooseTask 0x43a6e4 at
+  // 0x42a8b7: food in its hands (+0x26c[0]), off to eat it (task 0x6b,
+  // priority 4); else +0x33e set: its needs looked at next tick)
+  if (g.inventory[0]) {
+    goEat(g);
+    return true;
+  }
+  g.recheck = true;
+  return false;
+}
+
+// zoo.exe 0x5ae745: the guests inside a building (its +0x164 list) put out
+// (guestBuy 0x42d858 with 1); those on their way there aren't told
+int Guests::putOut(int index) {
+  int out = 0;
+  for (Guest &g : this->list)
+    if (g.building == index && g.state == State::Using) {
+      g.sitStep = -1;
+      g.reverse = false;
+      this->forcedOut = true;
+      this->outNow(g);
+      this->forcedOut = false;
+      out++;
+    }
+  return out;
+}
+
+int Guests::buildingGone(int index) {
+  int out = 0;
+  for (Guest &g : this->list)
+    if (g.building == index && g.state == State::Using) {
+      g.sitStep = -1;
+      g.reverse = false;
+      this->forcedOut = true;
+      this->outNow(g);
+      this->forcedOut = false;
+      out++;
+    }
+  for (Guest &g : this->list) {
+    if (g.building == index) {
+      g.building = -1;
+      g.need.clear();
+      g.path.clear();
+      g.pathAt = 0;
+      g.recheck = true;
+    } else if (g.building > index) {
+      g.building--;
+    }
+  }
+  return out;
+}
+
 void Guests::addToIndex(WorldIndex &index) const {
   for (const Guest &g : this->list)
-    index.addMover(WorldIndex::Kind::Guest, g.id, g.x, g.y);
+    if (g.id != this->carried)
+      index.addMover(WorldIndex::Kind::Guest, g.id, g.x, g.y);
 }
 
 // ----------------------------------------------------------------------------
@@ -3448,8 +4529,19 @@ void Guests::collect(const WorldRenderer &view, const WorldMap &map, std::vector
       // seated occupants belong above those strips, not behind the steps.
       depth=front+0.02f+depth*0.00001f;
     }
+    // Held: its likeness at the cursor, green where it can be put down, red
+    // where not (measured: the original's, Play original 2026-11-17)
+    if (g.id == this->carried) {
+      Fences::Drawable h{depth, sx, sy, a, facing(view, g),
+                         this->carriedFit ? SDL_Color{0, 255, 0, 255} : SDL_Color{255, 60, 60, 255}, true};
+      h.frame = 0;
+      out.push_back(h);
+      continue;
+    }
     Fences::Drawable d{depth, sx, sy, a, facing(view, g), SDL_Color{255, 255, 110, 255}, g.id == this->hovered};
     d.frame = static_cast<int>(g.animTime * 1000.0f / ms);
+    if (g.reverse && a->frameCount() > 0) // (fPlayReverse: last frame first)
+      d.frame = a->frameCount() - 1 - d.frame % a->frameCount();
     out.push_back(d);
     if (g.id == this->selected && this->selectArrow)
       out.push_back({depth + 0.0001f, sx, sy - 36.0f, this->selectArrow, CompassDirection::N,
@@ -3464,6 +4556,8 @@ int Guests::pick(float px, float py, const WorldRenderer &view, const WorldMap &
   int found = -1;
   float best = 1e9f;
   for (const Guest &g : this->list) {
+    if (g.id == this->carried)
+      continue;
     float sx, sy, depth;
     view.worldToScreenF(g.x, g.y, groundAt(g.x, g.y) + g.showZ, sx, sy, depth);
     if (px < sx - 7 || px > sx + 7 || py < sy - 26 || py > sy + 3)

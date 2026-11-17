@@ -29,7 +29,14 @@ void UiGameScreen::setupShows() {
     for(int id:{11195,11194,11193,11192})l->addItem(resource_manager->getString(id));
     l->setSelectionAction(static_cast<UiAction>(71002));
   }
-  button(11113,[this,list]{if(shows)if(auto *l=list(11111)) {shows->add(shownShow,l->getSelectedData());showListSignature.clear();refreshShow();}});
+  // (Add: zoo.exe show1_AddButton_click 0x47594f - a script already
+  // maxLength long takes no more, and the message bar says so, 11493 as
+  // kind 3; else the trick's added and picked in the script)
+  button(11113,[this,list]{if(shows)if(auto *l=list(11111)) {
+    if(const auto *s=shows->show(shownShow);s && static_cast<int>(s->script.size())>=shows->settings.maxLength) {
+      postMessage(resource_manager->getString(11493),3);return;
+    }
+    shows->add(shownShow,l->getSelectedData());showListSignature.clear();refreshShow();}});
   button(11114,[this,list]{if(shows)if(auto *l=list(11115)) {shows->remove(shownShow,l->getSelectedIndex());showListSignature.clear();refreshShow();}});
   for(auto [id,by]:{std::pair<int,int>{11117,-1},{11118,1}})button(id,[this,list,by]{
     if(shows)if(auto *l=list(11115))if(shows->move(shownShow,l->getSelectedIndex(),by)) {
@@ -46,7 +53,17 @@ void UiGameScreen::setupShows() {
   });
   if(auto *t=dynamic_cast<UiText*>(z->getElementById(11104))) {
     t->onBeginEdit=[this]{auto *s=shows?shows->show(shownShow):nullptr;return s?std::to_string(s->admission):"0";};
-    t->onCommit=[this](const std::string &v){if(shows)shows->setAdmission(shownShow,std::atof(v.c_str()));};
+    // (zoo.exe show_AdmissionCost_click 0x61536b: the typed text's currency
+    // symbol taken out once (text 22100, 0x5fe02d) and every thousands
+    // separator (",", 0x5fe0a9), the rest read as a number, 0x4b40ae)
+    t->onCommit=[this](const std::string &v){
+      if(!shows)return;
+      std::string text=v;
+      const std::string sign=resource_manager->getString(22100);
+      if(size_t at=sign.empty()?std::string::npos:text.find(sign);at!=std::string::npos)text.erase(at,sign.size());
+      for(size_t at;(at=text.find(','))!=std::string::npos;)text.erase(at,1);
+      shows->setAdmission(shownShow,std::atof(text.c_str()));
+    };
   }
   z->syncTabs();
 }
@@ -128,8 +145,13 @@ void UiGameScreen::refreshShow() {
   }
   if(auto *l=dynamic_cast<UiListBox*>(z->getElementById(11111)))if(auto *b=button(11113)) {
     bool available=false;for(const auto &t:shows->tricks(s->species))if(t.key==l->getSelectedData())available=shows->unavailable(shownShow,s->species,t).empty();
-    b->setDisabled(active || !available || static_cast<int>(s->script.size())>=shows->settings.maxLength);
+    // (zoo.exe show1_AvailableTrickList_click 0x4743cf: on for an available
+    // trick picked while no show runs - not off at the script's length)
+    b->setDisabled(active || !available);
   }
+  // (zoo.exe show1_TrickListInShow_click 0x474350: with a trick picked and
+  // no show running, Remove on, Up on but for the first, Down on but for the
+  // last; else all off)
   if(auto *l=dynamic_cast<UiListBox*>(z->getElementById(11115))) {
     int selected=l->getSelectedIndex();
     for(auto [id,disabled]:{std::pair<int,bool>{11114,selected<0},{11117,selected<=0},{11118,selected<0 || selected+1>=static_cast<int>(s->script.size())}})
@@ -137,7 +159,28 @@ void UiGameScreen::refreshShow() {
   }
   int score=shows->benefit(shownShow);
   if(auto *image=dynamic_cast<UiImage*>(z->getElementById(11121)))image->setImage(score>0?"ui/show/pos/pos":score<0?"ui/show/neg/neg":"ui/show/mid/mid");
-  text(11143,std::to_string(s->visitors));text(11147,showMoney(std::lround(s->income*100)));
-  // The total column is available now; monthly columns are maintained by the controller.
-  for(int id:{11140,11141,11142,11144,11145,11146,11148,11149,11150,11151,11152,11153,11154,11155})text(id,"-");
+  // zoo.exe 0x473b61 (Show Finances, show2.lyt): this month, last month,
+  // the average a month (0x474e76, 0x474e4a, 0x474ea0: the total over the
+  // months, 0x474d1f) and the total, for attendance (whole numbers,
+  // 0x417879), income, upkeep (shown as costs, less than nothing) and profit
+  // (income less upkeep) in money (formatMoney 0x4ef4d4, two decimals); the
+  // months in operation under them (11173, 0x2ba5)
+  const int months=shows->monthsOpen(*s);
+  text(11140,std::to_string(s->visitorsNow));text(11141,std::to_string(s->visitorsLast));
+  text(11142,std::to_string(s->visitors/months));text(11143,std::to_string(s->visitors));
+  auto money=[&](int id,double v){text(id,v<0?"-"+showMoney(std::lround(-v*100)):showMoney(std::lround(v*100)));};
+  money(11144,s->incomeNow);money(11145,s->incomeLast);money(11146,s->income/months);money(11147,s->income);
+  money(11148,-s->upkeepNow);money(11149,-s->upkeepLast);money(11150,-(s->upkeepTotal/months));money(11151,-s->upkeepTotal);
+  // A profit takes the colour of the upkeep's row when under nothing, of
+  // the attendance's at nothing, of the income's above (the rows' own
+  // forecolors, read by 0x473b61 from 11148, 11140 and 11144)
+  auto colourOf=[z](int id){auto *t=dynamic_cast<UiText*>(z->getElementById(id));return t?t->layoutColor():SDL_Color{255,228,173,255};};
+  const double perMonth=s->income/months-s->upkeepTotal/months;
+  const std::pair<int,double> profits[]={{11152,s->incomeNow-s->upkeepNow},{11153,s->incomeLast-s->upkeepLast},
+                                         {11154,perMonth},{11155,s->income-s->upkeepTotal}};
+  for(const auto &[id,v]:profits) {
+    money(id,v);
+    if(auto *t=dynamic_cast<UiText*>(z->getElementById(id)))t->setTextColor(colourOf(v<0?11148:v==0?11140:11144));
+  }
+  text(11173,std::to_string(months));
 }

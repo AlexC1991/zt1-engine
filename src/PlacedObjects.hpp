@@ -109,6 +109,25 @@ public:
     // Rubble just made: its explode played once (seconds in; -1 done)
     Animation *explodeArt = nullptr;
     float exploding = -1;
+    // Rubble: the ids of every piece the same thing left (ZTRubble +0x158,
+    // filled by 0x612820 as each piece is made; this one too), and that
+    // thing's type (its cNameID, +0x15c) - toRubble 0x611bd6 and
+    // objectToRubble 0x47c2ac
+    std::vector<int> rubbleGroup;
+    int rubbleOf = 0;
+    // Its dead look (zoo.exe showDead 0x44a6ae: its kind's [Animations]
+    // idledead, the object's +0x11 set; 0x410540 idle again and +0x11
+    // cleared), while World::objectShowsDead (0x41038b) holds. Not saved:
+    // the original works it out again as a zoo loads
+    Animation *deadArt = nullptr;
+    bool dead = false, deadChecked = false;
+    // Its kind's rules for it (sceneryTypeLoad 0x4ba5b0, each "== 1"):
+    // cDeadOnLand +0x136, cDeadOnFlatWater +0x137, cDeadUnderwater +0x138,
+    // cSurface +0x131; cHeight +0x64 (default 0)
+    bool deadOnLand = false, deadOnFlatWater = false, deadUnderwater = false, deadSurface = false;
+    int height = 0;
+    // Its kind's [Member] lists "structures" (Hide Buildings takes it)
+    bool structure = false;
   };
   // Its [Animations] explode played once, from its first frame (rubble
   // made by a rampage); then it lies there as it is
@@ -117,6 +136,8 @@ public:
   void tick(float seconds);
   static int animationFrame(const Object &o, const Animation *art);
   static Animation *displayArt(const Object &o) {
+    if (o.dead && o.deadArt)
+      return o.deadArt; // (showDead 0x44a6ae: idledead in place of idle)
     return (o.inUse || o.randomActive) && o.used ? o.used : o.art;
   }
 
@@ -127,10 +148,11 @@ public:
     if(o.showHidden)return true;
     if (this->hideFoliage && o.subClass == "foliage")
       return true;
-    if (!this->hideBuildings || o.subClass != "building")
-      return false;
-    const std::string &t = o.typeName;
-    return !(t.size() >= 4 && t.compare(t.size() - 4, 4, "gate") == 0);
+    // (zoo.exe ZTBuilding::draw 0x433aaf, the world's +0x3e bit 1: only a
+    // building whose kind's [Member] lists "structures" - the zoo's
+    // entrance, animal shelters and the like stay. ours: the one the zoo
+    // view holds, +0x36c's first, isn't kept drawn)
+    return this->hideBuildings && o.subClass == "building" && o.structure;
   }
 
   ~PlacedObjects();

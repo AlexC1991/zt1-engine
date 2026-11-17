@@ -341,7 +341,41 @@ int runEverythingZoo(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       g.y = walk[at].second + 0.5f;
       g.state = Guests::State::Walking;
     }
-    note("staff hired: " + std::to_string(hired) + ", guests: " + std::to_string(people.size()));
+    // Some hold what they bought (ZTGuest +0x26c, its hands: food in [0], a
+    // gift in [3] - each the item's nameID, holdItem 0x42d54e), so the shared
+    // .zoo carries held items for the original to load
+    auto itemId = [&](const char *name) {
+      uint32_t id = 0;
+      if (IniReader *ini = rm ? rm->getIniReader(std::string("items/") + name + ".cfg") : nullptr) {
+        id = static_cast<uint32_t>(ini->getInt("characteristics", "nameid", 0));
+        delete ini;
+      }
+      return id;
+    };
+    int holding = 0;
+    for (size_t k = 0; k < people.size(); k += 3) {
+      people[k].inventory[0] = itemId("burger");
+      if (k % 2 == 0)
+        people[k].inventory[3] = itemId("stufpand");
+      holding += people[k].inventory[0] != 0;
+    }
+    note("staff hired: " + std::to_string(hired) + ", guests: " + std::to_string(people.size()) +
+         ", holding food: " + std::to_string(holding));
+    // Flyers in flight, one of every kind, about the middle of the map, so
+    // the shared .zoo carries the original's ambient records (#219)
+    {
+      Ambient &amb = world.getAmbient();
+      int flying = 0, k = 0;
+      for (const char *key : {"bird", "bluejay", "crow", "seagull", "parrot", "vulture", "biplane", "witch", "santa"}) {
+        const float x = map.getWidth() / 2.0f - 8 + 2 * k, y = map.getHeight() / 2.0f - 4 + k;
+        if (amb.resume(map, key, x, y, k % 8, 0.0f)) {
+          ++flying;
+          placed[std::string("ambient/ambient/") + key]++;
+        }
+        ++k;
+      }
+      note("flyers in flight: " + std::to_string(flying));
+    }
   } else {
     // 4. Every building and scenery item: on land, underwater ones in the
     // sea, show toys in the show tank
@@ -385,6 +419,27 @@ int runEverythingZoo(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       placed[(building ? "building/building/" : "objects/" + item.registrySection + "/") + lower(item.registryKey)]++;
     }
     note("buildings and scenery placed: " + std::to_string(sceneryPlaced));
+    // A building a rampage wrecked (#210): its rubble pieces, each with the
+    // group's ids and the stand's type - the original's rubble records
+    {
+      const std::string stand = "scenery/building/bgrstnd.ai";
+      auto [fx, fy] = world.footprint(stand);
+      const int tw = std::max(1, (fx + 1) / 2), th = std::max(1, (fy + 1) / 2);
+      int x = 0, y = 0;
+      if (lot.take(tw, th, x, y) && objects.add(stand, x + tw / 2.0f, y + th / 2.0f, 0)) {
+        const size_t before = objects.objects().size() - 1;
+        world.reindex();
+        world.rubbleTile(x, y);
+        int pieces = 0;
+        for (size_t i = before; i < objects.objects().size(); ++i)
+          if (!objects.objects()[i].rubbleGroup.empty()) {
+            placed["rubble/other/" + objects.objects()[i].typeName]++;
+            ++pieces;
+          }
+        note("wrecked burger stand: " + std::to_string(pieces) + " rubble pieces");
+      } else
+        didNotFit.push_back(stand + " (to wreck)");
+    }
     // 5. Every path, four tiles each
     for (const auto &item : catalog.all()) {
       if (item.registrySection != "paths") continue;

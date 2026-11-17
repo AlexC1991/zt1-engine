@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <set>
 #include "ui/UiGameScreen.hpp"
+#include "ui/UiGraph.hpp"
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -127,6 +128,29 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
               std::to_string(e.endowmentGiftLow) + "-$" + std::to_string(e.endowmentGiftHigh),
           e.speciesAvailable == 20 && e.membershipJoinHappiness == 80 && e.membershipJoinChance == 15 &&
               e.membershipJoinFactor == 10 && e.endowmentGiftLow == 100 && e.endowmentGiftHigh == 300);
+  }
+
+  // Guest arrivals (zoo.exe guestArrivalCheck 0x424375, #207): economy.cfg's
+  // cAdultAdmission bands over the exe's 50/20/10/5 (loadConfig 0x591a1f)
+  // and its cCreateGuestChance* - measured live in a new freeform zoo:
+  // 49, 29, 19, 9 and 3, 5, 25, 30, 40
+  {
+    const Original::Economy &e = Original::economy();
+    std::string bands, chances;
+    for (float v : e.adultAdmission) bands += " " + std::to_string(static_cast<int>(v));
+    for (int v : e.createGuestChance) chances += " " + std::to_string(v);
+    check("economy.cfg: admission bands" + bands + "; arrival chances" + chances,
+          e.adultAdmission[0] == 49 && e.adultAdmission[1] == 29 && e.adultAdmission[2] == 19 &&
+              e.adultAdmission[3] == 9 && e.adultAdmission[4] == 0 && e.createGuestChance[0] == 3 &&
+              e.createGuestChance[1] == 5 && e.createGuestChance[2] == 25 && e.createGuestChance[3] == 30 &&
+              e.createGuestChance[4] == 40);
+    // (the decoded table: a $60 ticket at rating 85 rolls VeryLow, $22 at
+    // 85 High, $5 at 85 VeryHigh; nothing over $49 under 81; a $22 ticket
+    // under 30 VeryLow)
+    check("arrival table cells (0x42456c, 0x42457c, 0x42458c, 0x42452e)",
+          Original::guestArrivalChance[0][0] == 0 && Original::guestArrivalChance[0][2] == 3 &&
+              Original::guestArrivalChance[0][4] == 4 && Original::guestArrivalChance[1][0] < 0 &&
+              Original::guestArrivalChance[2][0] < 0 && Original::guestArrivalChance[3][2] == 0);
   }
 
   // A private foundation (zoo.exe 0x4351a9, 0x613e4a): only Tutorial 2's
@@ -370,18 +394,31 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       };
       const int sub0 = ex->wallSub;
       World::ToolResult r = dragUp(1, 3);
-      check("tank walls dragged up with $1: they don't move, nothing charged ($" + std::to_string(r.cost) + ")",
-            r.cost == 0 && f.exhibit(tank)->wallSub == sub0);
+      // (the walls' price on tankWalls: zoo.exe 0x489f53, 0x4ef687 - from
+      // initialHeight up, a step each; the tank starts at it)
+      check("tank walls dragged up with $1: they don't move, nothing charged ($" + money(r.tankWalls) + ")",
+            r.tankWalls == 0 && f.exhibit(tank)->wallSub == sub0);
       r = dragUp(step * 1.5, 3);
-      check("with one step's price and a half: one step, that step charged ($" + std::to_string(r.cost) + ", a step $" +
+      check("with one step's price and a half: one step, that step charged ($" + money(r.tankWalls) + ", a step $" +
                 money(step) + ")",
-            r.cost == std::lround(step) && f.exhibit(tank)->wallSub == sub0 + 1);
+            std::abs(r.tankWalls - step) < 0.001 && f.exhibit(tank)->wallSub == sub0 + 1);
       const int sub1 = f.exhibit(tank)->wallSub;
       r = dragUp(1e6, 2);
       const int moved = f.exhibit(tank)->wallSub - sub1;
       check("with the money: as far as the mouse goes, each step charged (" + std::to_string(moved) + " steps, $" +
-                std::to_string(r.cost) + ")",
-            moved > 1 && r.cost == moved * std::lround(step));
+                money(r.tankWalls) + ")",
+            moved > 1 && std::abs(r.tankWalls - moved * step) < 0.001);
+      // Down again from above initialHeight: a step's price back each
+      // (0x4ef687's negative price, spent as it is - tankModBuy 0x4691cd)
+      world.cash = 1;
+      world.beginWallDrag(tank, pressY);
+      world.mouseMove(px, pressY + 200);
+      r = world.mouseUp(px, pressY + 200);
+      const int from = sub1 + moved, to = f.exhibit(tank)->wallSub;
+      const int backSteps = std::max(from, 5) - std::max(to, 5); // (initialHeight 5: under it free)
+      check("dragged back down with $1: a step's price back for each above initialHeight ($" + money(r.tankWalls) +
+                ", " + std::to_string(from) + " -> " + std::to_string(to) + ")",
+            to < from && backSteps > 0 && std::abs(r.tankWalls + backSteps * step) < 0.001);
     }
   }
 
@@ -828,6 +865,111 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       report << "LOAD ERROR " << SaveGame::lastError() << "\n";
     std::error_code ec;
     std::filesystem::remove(file, ec);
+  }
+
+  // Zoo Status' graphs (zoo.exe zooGraphsRefresh 0x52ff4d): this month and
+  // the 11 before it, never more - after 15 months, 12 points each; after
+  // 3, 3
+  {
+    auto pointsAfter = [&](int months) {
+      ZooSim books;
+      books.start(1000, 50);
+      while (static_cast<int>(books.history().size()) < months)
+        books.update(ZooSim::kSecondsPerDay);
+      hud.setSim(&books);
+      hud.setZooInfo(hud.zooInfo());
+      size_t least = 99, most = 0;
+      for (int id : {4150, 13978, 13967, 13965})
+        if (const UiGraph *g = dynamic_cast<const UiGraph *>(hud.getElementById(id))) {
+          least = std::min(least, g->pointCount());
+          most = std::max(most, g->pointCount());
+        }
+      hud.setSim(&sim);
+      hud.setZooInfo(hud.zooInfo());
+      return least == most ? static_cast<int>(least) : -1;
+    };
+    const int fifteen = pointsAfter(15), three = pointsAfter(3);
+    check("Zoo Status' graphs show the last 12 months at most (" + std::to_string(fifteen) + " after 15 months, " +
+              std::to_string(three) + " after 3)",
+          fifteen == 12 && three == 3);
+  }
+
+  // Zoo Status' attendance graph (13965, graphSeriesD 0x530bf2) is books
+  // row 25, the guests in the zoo at the month's last rating update
+  // (zooRatingUpdate 0x41f881) - not the month's admissions (row 4); a
+  // month's count is kept in a save (v19) (#209)
+  {
+    ZooSim books;
+    books.start(1000, 50);
+    books.count(ZooSim::Admissions, 40);
+    books.countGuests(12);
+    books.countGuests(9); // (set, not added: the last update's count)
+    while (books.history().size() < 2)
+      books.update(ZooSim::kSecondsPerDay);
+    books.count(ZooSim::Admissions, 5);
+    books.countGuests(21);
+    hud.setSim(&books);
+    hud.setZooInfo(hud.zooInfo());
+    std::string seen;
+    bool plotted = false;
+    if (const UiGraph *g = dynamic_cast<const UiGraph *>(hud.getElementById(13965))) {
+      const auto &p = g->pointList();
+      for (const auto &point : p)
+        seen += std::to_string(std::lround(point.value)) + " ";
+      plotted = p.size() == 2 && p[0].value == 9 && p[1].value == 21;
+    }
+    hud.setSim(&sim);
+    hud.setZooInfo(hud.zooInfo());
+    check("Zoo Status' attendance graph plots the guests in the zoo, not those admitted (" + seen + "; want 9 21)",
+          plotted);
+    // (saved: our months keep it, and the original's own row 25 has it)
+    sim.countGuests(17);
+    const int month = sim.month();
+    const std::string file = out + "/guests-row25.zoo";
+    const bool written = SaveGame::save(file, world, sim, hud, "freeform/ff03.scn");
+    double inOriginal = -1;
+    if (written) {
+      std::ifstream in(file, std::ios::binary);
+      std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      AssetBuffer buffer;
+      buffer.data = bytes.data();
+      buffer.size = bytes.size();
+      ZooReader z;
+      if (z.load(buffer) && z.getBooks().monthly.size() > 25)
+        inOriginal = z.getBooks().monthly[25][month];
+      buffer.data = nullptr;
+    }
+    sim.countGuests(0);
+    const bool loaded = written && SaveGame::load(file, world, sim, hud);
+    const double back = loaded && !sim.history().empty() ? sim.history().back().guests : -1;
+    check("a month's guests in the zoo are saved (ours " + std::to_string(back) + ", the original's row 25 " +
+              std::to_string(inOriginal) + "; want 17)",
+          back == 17 && inOriginal == 17);
+    if (written && !loaded)
+      report << "LOAD ERROR " << SaveGame::lastError() << "\n";
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
+  }
+
+  // Zoo Status' admission arrows (zoo.exe 0x530329): the up arrow greyed at
+  // cMaxAdultAdmissionPrice, the down arrow at cMinAdultAdmissionPrice, both
+  // on in between
+  {
+    const UiGameScreen::ZooInfo before = hud.zooInfo();
+    const Original::Economy &e = Original::economy();
+    auto arrows = [&](double price, bool upOff, bool downOff) {
+      UiGameScreen::ZooInfo info = before;
+      info.admission = price;
+      hud.setZooInfo(info);
+      const UiElement *up = hud.getElementById(4195), *down = hud.getElementById(4191);
+      return up && down && up->isDisabled() == upOff && down->isDisabled() == downOff;
+    };
+    const bool top = arrows(e.maxAdmission, true, false), bottom = arrows(e.minAdmission, false, true),
+               middle = arrows((e.minAdmission + e.maxAdmission) / 2, false, false);
+    hud.setZooInfo(before);
+    check("the admission arrows grey out at the highest and lowest price (top " + std::to_string(top) + ", bottom " +
+              std::to_string(bottom) + ", between " + std::to_string(middle) + ")",
+          top && bottom && middle);
   }
 
   // The message bar's repeats and its 25 (zoo.exe 0x49c6d7, the bar's

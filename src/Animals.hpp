@@ -13,6 +13,7 @@
 
 #include "Animation.hpp"
 #include "Fences.hpp"
+#include "OriginalConstants.hpp"
 #include "WorldIndex.hpp"
 #include "ZooItems.hpp"
 
@@ -42,6 +43,7 @@ class WorldRenderer;
 class Animals {
   friend class SaveGame; // (saving and loading a game)
   friend std::string runParityChecks(class World &, ResourceManager *);
+  friend std::string runPanelMessageChecks(class World &, ResourceManager *, int &, int &);
   friend class Shows; // Shared marine-show tasks use the normal routes and animation queues.
   friend std::string runShowPolishChecks(class World &, ResourceManager *, bool);
 public:
@@ -132,6 +134,15 @@ public:
     // -1)
     int crowd = 40, crowdHappinessChange = -1;
     bool needShelter = false, needToys = false;
+    // cStaySick (zoo.exe type +0x44d, loadConfig 0x4b6c51): healed, it
+    // starts bDoneSick at once (Job4_HealAnimal::atTarget 0x5eccd0) - the
+    // sharks and big fish, whose sick sets end in fKeepControl
+    bool staySick = false;
+    // cKeepMoving (zoo.exe type +0x44c, loadConfig 0x4b6c51, key 0x64017c):
+    // "perpetual movement" - the sharks and big fish. animalEatFood 0x4fd951
+    // eats one mouthful as it gets to the food and neither sets eating
+    // (+0x3a9) nor asks for bEat again
+    bool keepMoving = false;
     // [Sounds]: name -> its file and attenuation (placesound, pickupsound,
     // and those fPlayWithSound plays)
     std::map<std::string, std::pair<std::string, int>> sounds;
@@ -163,6 +174,9 @@ public:
     // (zoo.exe 0x4e2cf8, 0x60da6b) that hatches after cTimeToHatch ticks
     // with at least cMinHatchHits health (0: 60% of cMaxHits - cMinHits)
     bool laysEggs = false, eatsEggs = false;
+    // cBabiesAttack (type +0x3d4, loadConfig 0x4b6c51): its young hunt as
+    // its adults do (zoo.exe 0x4391a2)
+    bool babiesAttack = false;
     int timeToHatch = 0, minHatchHits = 0, minHits = 0;
     bool eatsPeople = false; // cPrey lists people (9503): guests run from it
     // cPreattack (ZTAnimalType+0x3d6; the dinosaurs, Smilodon, Macrauchenia):
@@ -188,6 +202,13 @@ public:
     int maxHits = 500, pctHits = 20, sickChange = -20, otherSickChange = -10, sickChance = 10;
     int hungryHealthChange = 5, sickTime = 5, keeperArrivesChange = 25;
     int dirtyIncrement = 15, dirtyThreshold = 70, energyThreshold = 70;
+    // cMaxDirty, cMinDirty (the dung meter's limits, type +0x250/+0x254), cPooWaterImpact
+    // (+0x448): zoo.exe's type defaults (0x4b659e), no stock file sets the first two
+    int maxDirty = 100, minDirty = 0, pooWaterImpact = 1;
+    // cSlowAnimSpeed, cMediumAnimSpeed, cFastAnimSpeed and their Water ones
+    // (type +0x10c..+0x110, +0x154..+0x158; 100 - 0x4b5de3, 0x4b5c71): the
+    // walk's, trot's and run's animation rates in percent
+    int animSpeed[3] = {100, 100, 100}, animSpeedWater[3] = {100, 100, 100};
     bool dinoDung = false; // cDinoZoodoo: its dung is dinopoo
     int dungSize = 0, youngDungSize = 0; // cSmallZoodoo 1, cGiantZoodoo 2 (the pile's art: small, giant)
     int timeDeath = 5001, deathChance = 100;
@@ -214,6 +235,8 @@ public:
     int id = 0, type = 0;
     bool female = false, baby = false;
     std::string name;
+    // Its exhibit (zoo.exe ZTAnimal::habitat 0x410685, class slot 0x24c:
+    // +0x388), -1 none
     int exhibit = -1;
     int showTank = -1, showHome = -1;
     bool showTrick = false, showDone = false;
@@ -237,7 +260,22 @@ public:
     size_t pathAt = 0;
     std::string moveAnim = "walk";
     float speed = 0.5f;
+    // Its move's animation rate in percent (zoo.exe unit +0x1fc, set by
+    // 0x413754 as each move starts; 0x435bbe runs the animation at it while
+    // it moves) and the move animation it's for (transient)
+    int animRate = 100;
+    std::string animRateFor;
+    // fMove with a time (zoo.exe 0x43646e): the move's own animation's
+    // playing left, in seconds of it, before its plain move animation; -1
+    // for the whole move (transient), and that plain move's animation (slot
+    // 0x134 -> 0x4a9bb9: walk, trot or run by the line's speed)
+    float moveAnimLeft = -1;
+    std::string moveAnimAfter = "walk";
     bool mealTaken = false; // transient: bEat has already consumed its mouthful
+    // Eating (zoo.exe ZTAnimal +0x3a9: set by animalEatFood 0x4fd951 at its
+    // food, cleared by animalStopEating 0x4fd86e). Not saved: a loaded
+    // animal at its food starts again with its next mouthful
+    bool eating = false;
     int foodItem = -1; // the food it's gone to eat
     float awarenessWait = 0, awarenessCheck = 0; // transient local steering timers
     // Happiness, -100 to 100 (the panel shows it as 0-100); changes wait
@@ -275,6 +313,10 @@ public:
     bool eaten = false;
     // A shelter or toy it's off to (object id) or in; hidden inside
     int building = -1, buildingCheck = 0;
+    // The building it means to use, not yet set off for (zoo.exe its goal,
+    // +0x214..+0x21c with the kind +0x24e, which chooseTask takes up -
+    // goToBuilding), and the building's slot it's going to or in (+0x24d)
+    int buildingGoal = -1, restSlot = -1;
     // In the water (swimmers: where it wanders), the water and drink checks
     bool waterMode = false;
     int waterCheck = -1, boredCheck = -1;
@@ -301,7 +343,8 @@ public:
     // In its exhibit (zoo.exe 0x43954c, 0x4369b9, 0x4a6043): the animal it's
     // chasing (a prey it lists, or one of its own kind at play - tag), since
     // when; the one it's running from; caught (frozen under the dust ball,
-    // by whom); the one it's caught and the dust ball's time left
+    // by whom); the one it's caught and the dust ball's time left. (Its prey,
+    // +0x2e4, forgotten by ZTAnimal::clearPrey 0x4163ae, slot 0x258: -1)
     int huntAnimal = -1, fleeFrom = -1, caughtBy = -1, victim = -1, huntCheck = 0;
     bool tag = false;
     // This chase's stand-off is done (zoo.exe's chase state: once a chase)
@@ -369,6 +412,12 @@ public:
   void loadTypes(ResourceManager *rm);
   void clear();
   const std::vector<Type> &types() const { return this->typeList; }
+  // A species' keeper food, the food item's name (its cKeeperFoodType,
+  // type +0x3c8, in food.cfg's order; an enabled mod's cKeeperFood)
+  std::string keeperFoodOf(int type) const;
+  // Whether a food item is the animal's own kind (zoo.exe: the food's +0x168
+  // against the species' +0x3c8 - 0x49fe15, 0x4a0025, 0x4a01f9, 0x4a85da)
+  bool ownFood(const Member &m, const ZooItems::Item &i) const;
   // (research changes a species' characteristics)
   std::vector<Type> &mutableTypes() { return this->typeList; }
   std::vector<Member> &mutableMembers() { return this->list; }
@@ -430,6 +479,9 @@ public:
     n.swap(this->notices);
     return n;
   }
+  // A message about one of them by text number, its name filled in - a
+  // female's from the number + 30000 (zoo.exe unitMessageText 0x49cfeb)
+  std::string unitText(const Member &m, int textId) const;
   // Babies born and the old dying (in update), done by the world: false
   // when nothing happened
   void lifeEvents(const WorldMap &map, const Fences &fences);
@@ -437,9 +489,10 @@ public:
   void keeperArrives(int exhibit);
   // A keeper heals one: health full, not sick
   void heal(int id);
-  // Needs a keeper's care: health at 85% or less
+  // Needs a keeper's care (zoo.exe animalIsSickly 0x4a88cf): health x 100
+  // at or under cMaxHits (type +0x234) x (100 - cSicklyAnimalPct, 15)
   bool needsHealing(const Member &m) const {
-    return m.health * 100 <= this->typeList[m.type].maxHits * 85;
+    return m.health * 100 <= this->typeList[m.type].maxHits * (100 - Original::sicklyAnimalPct);
   }
   // Health as the panel shows it (0-100)
   int shownHealth(const Member &m) const {
@@ -507,6 +560,9 @@ public:
   mutable int onlyTank = -2; // (collect: -2 all but tanks', else that tank's alone)
   // A tank's water depth over its floor (height units)
   std::function<float(int tank)> tankDepth;
+  // A tank's water purity set (Fences::setPurity, zoo.exe 0x49340d) and read
+  std::function<void(int tank, float purity)> setTankPurity;
+  std::function<float(int tank)> tankPurity;
   // A tank's animals, in its two passes: under the water's surface and on it.
   // Marine Mania's art comes in layers: an animation whose art is F has
   // "under" + F beside it, its half below the water; the animation's own art
@@ -573,6 +629,9 @@ public:
   // A rampaging animal onto a tile (zoo.exe 0x437572): what stands on it
   // that can be (cRubbleable) turned to rubble; how many were
   std::function<int(int tileX, int tileY, const Member &by)> rubbleAt;
+  // The guests using a building (object id) - its users with the animals
+  // in it (zoo.exe building +0x18c)
+  std::function<int(int building)> buildingGuests;
   // A water tile (fresh or salt water; a waterfall is land)
   static bool isWater(const WorldMap &map, int x, int y);
   // (the ZT1 Lab) A route for one of them from where it stands to a tile, by
@@ -615,11 +674,14 @@ private:
   void separateIdle(Member &m, float seconds, const WorldMap &map, const Fences &fences);
   const WorldMap *mapRef = nullptr; // (the map, for the art: swimmers' swim / water idle)
   bool onWater(const Member &m) const;
+  bool dropDung(Member &m, const Fences &fences);
+  void setAnimRate(Member &m, int pace, int fMoveRate = 100);
   void waterTick(Member &m, const WorldMap &map, const Fences &fences);
   ResourceManager *rm = nullptr;
   ZooItems *items = nullptr;
   const PlacedObjects *objects = nullptr;
   bool useShelter(Member &m, const WorldMap &map, const Fences &fences);
+  int shelterUsers(int building) const;
   void leaveShelter(Member &m);
   // What an object is to an animal: its name id and habitat (the keys of
   // cSuitableObjects), its footprint, and what kind of thing it is
@@ -630,9 +692,28 @@ private:
     bool rest = false, hideUser = false; // animals use it (animalrest), out of sight
     float adultChange = 0, childChange = 0, hungerChange = 0, energyChange = 0;
     int timeInside = 10;
+    // Its [slots] (zoo.exe ZTBuildingType::loadConfig 0x4c0b4d, 0x88 a
+    // slot): the id list (+0x18, the kinds' cNameIDs), capacity (+0x30),
+    // filter (+0x3c, the m/f/y letters it turns away), isreturnslot (+0x45)
+    // and its entrpos pairs (64 a tile, turned with the building)
+    struct Slot {
+      std::vector<int> ids;
+      int capacity = 0;
+      std::string filter;
+      bool isReturn = false;
+      std::vector<std::pair<int, int>> entrances;
+    };
+    std::vector<Slot> slots;
   };
   mutable std::map<std::string, ObjectInfo> objectInfo;
   const ObjectInfo &infoOf(const std::string &file) const;
+  // A building's slot with room for it (zoo.exe buildingSlotHasRoom
+  // 0x42ac87), any slot (buildingHasRoom 0x429330); the animals in a slot
+  bool slotHasRoom(int building, const ObjectInfo &info, int slot, const Member &m) const;
+  bool buildingHasRoom(int building, const ObjectInfo &info, const Member &m) const;
+  int slotUsers(int building, int slot) const;
+  // Off to the building it means to use (zoo.exe guestGoToBuilding 0x43b2f6)
+  bool goToBuilding(Member &m, const WorldMap &map, const Fences &fences);
   struct Evaluation {
     float timerMs = 0;
     bool dirty = true;
@@ -710,6 +791,8 @@ private:
   // A set asked for next (zoo.exe 0x4301b7 -> setBehaviourSet 0x4300f6):
   // not when it's the set it's in, nor over one asked for already
   bool requestSet(Member &m, const std::string &name);
+  // Stops eating (zoo.exe animalStopEating 0x4fd86e)
+  void stopEating(Member &m);
   // The tiredness check's body (zoo.exe 0x4384ba, past its countdown)
   void tirednessCheck(Member &m);
   void chooseBehaviour(Member &m);

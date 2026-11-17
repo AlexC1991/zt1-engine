@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 #include "Features.hpp"
 #include "IniReader.hpp"
@@ -27,7 +28,12 @@ constexpr float kEnergyPerHalfDay = 1.0f;
 // animals.ai: cHabitatCheck 20, cCaptivityCheck 20, cSocialCheck 30,
 // cOtherCheck 40, cHungerCheck 30, cZapCheck 5, cEnergyCheck 30, cHealthCheck
 // 30); an exhibit is rated again
-// every 7 s
+// every 7 s. (zoo.exe loadAnimalSettings 0x45f98b reads each key into its
+// global, over its own defaults - 5 for cCaptivityCheck, cOtherCheck,
+// cSocialCheck, cHungerCheck, cBreathCheck, cMurkyWaterCheck, cBoredCheck,
+// cZapCheck, cBuildingUseCheck; 10 for cKeeperCheck, cHealthCheck,
+// cReproductionCheck; 3 for cEnergyCheck, cHabitatCheck, cMatePickDelay -
+// so a key animals.ai doesn't have keeps the default: cMurkyWaterCheck 5)
 constexpr float kTickMs = 1000.0f;
 constexpr int kHabitatCheck = 20, kCaptivityCheck = 20, kSocialCheck = 30, kOtherCheck = 40,
               kHungerCheck = 30, kZapCheck = 5, kEnergyCheck = 30, kHealthCheck = 30;
@@ -232,6 +238,16 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.keeperArrivesChange = num("ckeeperarriveschange", 25);
     t.dirtyIncrement = num("cdirtyincrement", 15);
     t.dirtyThreshold = num("cdirtythreshold", 70);
+    t.maxDirty = num("cmaxdirty", 100);
+    t.minDirty = num("cmindirty", 0);
+    t.pooWaterImpact = num("cpoowaterimpact", 1);
+    // (the anim speeds: zoo.exe 0x4b5faf, 0x4b5681 - kept only where the file has them)
+    const char *paces[3] = {"slow", "medium", "fast"};
+    for (int k = 0; k < 3; k++) {
+      const std::string key = std::string("c") + paces[k] + "animspeed", wet = key + "water";
+      t.animSpeed[k] = num(key.c_str(), 100);
+      t.animSpeedWater[k] = num(wet.c_str(), 100);
+    }
     // Its dung (zoo.exe 0x4a8f89, the type's +0x3cf, +0x3ce, +0x3d0):
     // cDinoZoodoo, dinopoo rather than poo; cSmallZoodoo its small art,
     // cGiantZoodoo its giant one, the giant winning (each key's last line
@@ -327,6 +343,8 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.crowd = num("ccrowd", 40);
     t.crowdHappinessChange = num("ccrowdhappinesschange", -1);
     t.needShelter = num("cneedshelter", 0) != 0;
+    t.staySick = num("cstaysick", 0) != 0;
+    t.keepMoving = num("ckeepmoving", 0) != 0;
     t.needToys = num("cneedtoys", 0) != 0;
     // Its lists: v = key, v = value in turn
     auto pairs = [&](const char *section, std::map<int, int> &out) {
@@ -377,6 +395,7 @@ void Animals::loadTypes(ResourceManager *rm) {
     }
     t.laysEggs = num("clayseggs", 0) != 0;
     t.eatsEggs = num("ceatseggs", 0) != 0;
+    t.babiesAttack = num("cbabiesattack", 0) == 1;
     t.timeToHatch = num("ctimetohatch", 0);
     t.minHatchHits = num("cminhatchhits", 0);
     t.minHits = num("cminhits", 0);
@@ -590,17 +609,35 @@ void Animals::rehome(const WorldMap &map, const Fences &fences) {
     m.foodItem = -1;
     if (ex < 0 && !m.escaped && !m.boxed) {
       m.escaped = true;
-      if (this->rm) {
-        std::string s = this->rm->getString(10007); // "%s has escaped."
-        size_t at = s.find("%s");
-        if (at != std::string::npos)
-          s.replace(at, 2, m.name);
-        this->messages.push_back(s);
-      }
+      if (this->rm)
+        this->messages.push_back(this->unitText(m, 10007)); // "%s has escaped." (escapeAlert 0x58cbf4)
     } else if (ex >= 0) {
       m.escaped = false;
     }
   }
+}
+
+// zoo.exe unitMessageText 0x49cfeb: the text by number, the unit's name
+// (+0x108) through sprintf - when its type's +0xa4 starts with 'f' (an
+// animal type is one per species and sex: 'm' / 'f', measured 2026-11-17)
+// the number + 30000 (0x49d066), the female wording where a language has
+// one. Every animal message goes through it: postUnitMessage 0x49d18e
+// (10028 not happy, 10029 very sick, 10030 no food, 10031 its exhibit,
+// 10032 given birth, 15000 / 15001 ill, 10322 hatched), 0x4807c2 (10010
+// taken away, 10242 old age) and escapeAlert 0x58cbf4 (10007).
+// ours: where the + 30000 text isn't in the game's language files (40322)
+// the original's buffer is left unfilled; the number's own text instead
+std::string Animals::unitText(const Member &m, int textId) const {
+  if (!this->rm)
+    return {};
+  std::string s;
+  if (m.female)
+    s = this->rm->getString(textId + 30000);
+  if (s.empty())
+    s = this->rm->getString(textId);
+  if (size_t at = s.find("%s"); at != std::string::npos)
+    s.replace(at, 2, m.name);
+  return s;
 }
 
 // Getting out of its exhibit (zoo.exe 0x446088, 0x43e363): a fence on
@@ -697,6 +734,12 @@ void Animals::standOff(Member &hunter, Member &other) {
   pushSet(other, "bdefense");
 }
 
+// The stand-off is the original's Job18_Defend (job 0x12, jobId 0x61b2a7;
+// ctor 0x61b25b - an animal's only -, dtor 0x61b2ad): each tick its
+// checkArrived (0x61b4c6) keeps it while the animal's set is still its
+// bPreattack (the hunter, +0x3a4) or bDefense (the other, +0x24c); then
+// atTarget (0x61b5d9) lets both go (+0x20d) and the job ends - here, the
+// set off the stack
 bool Animals::standingOff(const Member &m) const {
   for (const auto &s : m.stack)
     if (s.first == "bpreattack" || s.first == "bdefense")
@@ -732,7 +775,8 @@ bool Animals::busy(const Member &m) const {
 
 // The original's water state 4 (unit +0x258, set by 0x410857 from where it
 // is in its tank; read by the breath check 0x4389f7, the surfacing test
-// 0x43750c and the underwater mood list 0x43ca83). ours: under the water as
+// 0x43750c and the underwater mood list 0x43ca83 through unitWaterState
+// 0x410919, class slot 0x2c8, which returns it). ours: under the water as
 // the mood sets take it - in a tank, below its surface band
 bool Animals::underwaterNow(const Member &m) const {
   const int tank = this->tankAt ? this->tankAt(m.x, m.y) : -1;
@@ -815,13 +859,18 @@ void Animals::runFrom(Member &m, const Member &threat, const WorldMap &map, cons
       m.stack.clear();
       m.moveAnim = anim;
       m.speed = speed;
+      setAnimRate(m, 2); // (bRunFromPredator's fRun - 0x4a5194)
       if (walkTo(m, x + 0.5f, y + 0.5f, map, fences))
         return;
     }
 }
 
 // After it (zoo.exe 0x4a5b4d): where it is, or a step or two along where
-// it's going, at its bChasePrey pace
+// it's going, at its bChasePrey pace. Task 0x74: begin 0x4a4ef2 ("Started
+// chasing", the prey +0x2e4, its start time +0x138); whileGoing 0x4a4d6c
+// routes it (an egg: to its tile, 0x49f6e8) and plays bChasePrey - every
+// stock one fMove(prey,0,"run",76) - "Chasing"; no way there: 0x4a5e00(1),
+// "Stopped catching prey", the chase flags (+0x3a4, +0x3a5) cleared
 void Animals::chase(Member &m, const WorldMap &map, const Fences &fences) {
   const Member *p = this->member(m.huntAnimal);
   if (!p)
@@ -852,6 +901,7 @@ void Animals::chase(Member &m, const WorldMap &map, const Fences &fences) {
   m.stack.clear();
   m.moveAnim = anim;
   m.speed = speed;
+  setAnimRate(m, -1); // (bChasePrey's fMove(prey,0,run,76): no 5th, 100 - 0x425533)
   if (!walkTo(m, gx, gy, map, fences))
     m.huntAnimal = -1; // (no way to it: given up)
 }
@@ -1418,6 +1468,18 @@ bool Animals::requestSet(Member &m, const std::string &name) {
   return true;
 }
 
+// zoo.exe animalStopEating 0x4fd86e: eating (+0x3a9) cleared, its goal - the
+// food (+0x38c) - cleared (slot 0x174), and the set asked for next (+0xdc)
+// emptied and made replaceable (+0xe8 = 1): the bEat its meal kept asking for,
+// or a bSleep or bSick asked for before the meal. "Stopped Eating". The set
+// it's in plays on to its end
+void Animals::stopEating(Member &m) {
+  m.eating = false;
+  m.foodItem = -1;
+  m.nextSet.clear();
+  ZT_STEP("0x4fd86e", "Stopped Eating", {"hunger", m.hunger});
+}
+
 // zoo.exe 0x4384ba past its countdown (cEnergyCheck), awake: where it may
 // lie down (0x440a37), not loose unless darted (+0x3a3, +0x393) and not
 // chasing (+0x3a4 - ours: a guest or an animal it's after), and at
@@ -1460,13 +1522,36 @@ void Animals::faceToward(Member &m, float x, float y) {
   }
 }
 
+// zoo.exe 0x5080ee's table (0x64e6ec): cKeeperFoodType in food.cfg's
+// order, then Dinosaur Digs' food01.cfg and Marine Mania's food02.cfg
+std::string Animals::keeperFoodOf(int type) const {
+  static const char *chows[14] = {"herbchow", "carnchow", "fruichow", "bambchow", "graschow",
+                                  "fishchow", "inschow",  "dinocarn", "dinogras", "krill",
+                                  "fish",     "chum",     "seagrass", "urchin"};
+  if (type < 0 || type >= static_cast<int>(this->typeList.size()))
+    return chows[0];
+  const Type &t = this->typeList[type];
+  if (!t.customFood.empty())
+    return t.customFood;
+  return chows[std::clamp(t.keeperFood, 0, 13)];
+}
+
+// zoo.exe 0x49fe15 / 0x4a0025 / 0x4a01f9 and 0x4a85da: a food object counts
+// for an animal only when its kind (+0x168) is the species' keeper food
+// (+0x3c8)
+bool Animals::ownFood(const Member &m, const ZooItems::Item &i) const {
+  return i.kind == ZooItems::Kind::Food && i.food == keeperFoodOf(m.type);
+}
+
+// Its own food in its exhibit, the nearest (hungry with none: zoo.exe
+// habitatKeeperFoodCheck 0x4a8624 counts only its keeper food, 0x4a85da)
 int Animals::nearestFood(const Member &m) const {
   if (!this->items)
     return -1;
   int found = -1;
   float best = 1e9f;
   for (const ZooItems::Item &i : this->items->items()) {
-    if (i.kind != ZooItems::Kind::Food || i.exhibit != m.exhibit || i.units <= 0)
+    if (i.kind != ZooItems::Kind::Food || i.exhibit != m.exhibit || i.units <= 0 || !ownFood(m, i))
       continue;
     float d = std::hypot(i.x - m.x, i.y - m.y);
     if (d < best) {
@@ -1481,15 +1566,14 @@ int Animals::nearestFood(const Member &m) const {
 // off): three times in four the nearest (0x49fe15 - tile to tile, the first
 // of equals), else three in four of the rest the one with the fewest units
 // left (0x4a0025), else any one of them at random (0x4a01f9). Each takes only
-// food of its own kind (the food's +0x168 against the species' +0x3c8) -
-// ours not yet: our keeper drops one exhibit's food, the first animal's
-// (Staff::foodFor), where the original's drops each species' own
+// food of its own kind (the food's +0x168 against the species' +0x3c8), and
+// the keeper puts down each species' own (keeperFoodDuty 0x49efa6)
 int Animals::chooseFood(Member &m) {
   if (!this->items)
     return -1;
   std::vector<const ZooItems::Item *> foods;
   for (const ZooItems::Item &i : this->items->items())
-    if (i.kind == ZooItems::Kind::Food && i.exhibit == m.exhibit && i.units > 0)
+    if (i.kind == ZooItems::Kind::Food && i.exhibit == m.exhibit && i.units > 0 && ownFood(m, i))
       foods.push_back(&i);
   if (foods.empty())
     return -1;
@@ -1554,6 +1638,12 @@ void Animals::chooseBehaviour(Member &m) {
             {"cHungerThreshold", t.hungerThreshold});
     return;
   }
+  // Its building goal (zoo.exe chooseTask 0x436f5c: after its food and
+  // drink, 0x43735c -> guestGoToBuilding 0x43b2f6), unless already in a
+  // building's task (0x437392)
+  if (m.buildingGoal >= 0 && m.building < 0 && !m.escaped && this->mapRef && this->fencesRef &&
+      goToBuilding(m, *this->mapRef, *this->fencesRef))
+    return;
   // Out of air: up for it (zoo.exe chooseTask 0x436f5c, after its food and
   // drink: 0x43750c - under the water, water state 4, with its breath at
   // cBreathThreshold - Task 0x7c, Task7c_SurfaceForAir)
@@ -1804,6 +1894,8 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
     if(!mayPerform(m) && ((moving && t.showAnimations.count(arg(2))) ||
         (playing && t.showAnimations.count(arg(0)))))continue;
     if (command == Command::EndTrick) {
+      // zoo.exe fEndTrick 0x5a6a22 -> 0x5a69e6: the unit's class slot 0x2bc
+      // (its trick over), the line done - every stock show set's last line
       if(!mayPerform(m))continue;
       m.showDone = true; m.showTrick = false; m.stack.clear();
       play(m, "surfidle", Member::Mode::Loop, 1.0f);
@@ -1885,10 +1977,11 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       play(m, arg(0), Member::Mode::Loop, 1.0f);
       continue;
     } else if (command == Command::KeepControl) {
-      // Keeps this set going on its base while it's sick (behaviourRunFnMoves
-      // 0x4a751e: the step isn't done while its condition holds) - healed,
-      // or dying, something else takes control
-      if (m.sick && !m.dying) {
+      // Keeps this set going on its base (behaviourRunFnMoves 0x4a751e:
+      // true while it has a unit, its line never done) till a set is
+      // started over it - healed, a cStaySick animal's bDoneSick
+      // (Job4_HealAnimal::atTarget 0x5eccd0 -> 0x43c6c5); dying, its bDie
+      if (!m.dying) {
         m.stack.back().second--;
         play(m, m.anim, Member::Mode::Loop, 1.0f);
         ZT_STEP("0x4a751e", "Keeps control: lies sick on its base", {"anim", m.anim});
@@ -1909,9 +2002,17 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       pushSet(m, arg(0));
       continue;
     } else if (command == Command::PlaySetTank) {
-      // (the first at the surface, else the second)
-      bool top = this->tankDepth && m.swimZ >= this->tankDepth(this->tankAt(m.x,m.y)) - 0.35f;
-      pushSet(m, top ? arg(0) : arg(1));
+      // zoo.exe fPlaySetTank 0x5b2be5: exactly two arguments, else the
+      // line fails; the second while it's under the water (its water state,
+      // +0x258, is 4 - ours: underwaterNow), the first anywhere else, out
+      // of a tank too; a set it hasn't plays nothing and the line fails
+      // (0x43ddc1)
+      const std::string pick = s.args.size() == 2 ? (underwaterNow(m) ? arg(1) : arg(0)) : "";
+      if (pick.empty() || !this->set(m, pick)) {
+        failLine("0x5b2be5");
+        return;
+      }
+      pushSet(m, pick);
       continue;
     } else if (command == Command::PlaySetProb) {
       // Weighted: set, chance, set, chance ... (zoo.exe 0x43df67, its roll
@@ -1952,16 +2053,34 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       pushSet(m, picked);
       continue;
     } else if (command == Command::PlaySetTerrain) {
-      // One of four sets by where it is: on land, in water, in a tank at the
-      // surface, in a tank below it (sleep, sick, die, after a catch: every
-      // species' .ai, Marine Mania's update)
-      bool inTank = this->tankAt && this->tankAt(m.x, m.y) >= 0;
-      bool top = inTank && this->tankDepth && m.swimZ >= this->tankDepth(this->tankAt(m.x,m.y)) - 0.35f;
-      std::string pick = inTank ? (top ? arg(2) : arg(3)) : onWater(m) ? arg(1) : arg(0);
-      ZT_STEP("", "A set by where it is (fPlaySetTerrain)", {"where", inTank ? (top ? "tank surface" : "tank, under") : onWater(m) ? "water" : "land"},
-              {"set", pick});
-      if (!pick.empty())
-        pushSet(m, pick);
+      // zoo.exe fPlaySetTerrain: the behaviour runner's own class slot 0x14
+      // (behaviourRunFnMoves 0x431632; the runner is the one manager
+      // 0x525961 makes, class table 0x635324, so the slot is 0x4314d6).
+      // Four arguments: by its water state (+0x258) under the water (4) the
+      // fourth, at a tank's surface (3) the third, else on a water tile
+      // (tile +0x83 & 3) the second, on land the first. Any other count
+      // goes to the base's slot 0x14 (table 0x63536c: 0x601d2d): exactly
+      // two, the second on a water tile and the first anywhere else - in a
+      // tank too - and any other count fails the line. A set it hasn't
+      // plays nothing and the line fails (0x43ddc1). (ours: water state 3/4
+      // is in a tank above/below underwaterNow's line)
+      const bool inTank = this->tankAt && this->tankAt(m.x, m.y) >= 0;
+      const bool under = underwaterNow(m);
+      const size_t n = s.args.size();
+      std::string pick, where;
+      if (n == 4) {
+        where = inTank ? (under ? "tank, under" : "tank surface") : onWater(m) ? "water" : "land";
+        pick = inTank ? (under ? arg(3) : arg(2)) : onWater(m) ? arg(1) : arg(0);
+      } else if (n == 2) {
+        where = onWater(m) ? "water" : "not water";
+        pick = onWater(m) ? arg(1) : arg(0);
+      }
+      ZT_STEP(n == 4 ? "0x4314d6" : "0x601d2d", "A set by where it is (fPlaySetTerrain)", {"where", where}, {"set", pick});
+      if (pick.empty() || !this->set(m, pick)) {
+        failLine(n == 4 ? "0x4314d6" : "0x601d2d");
+        return;
+      }
+      pushSet(m, pick);
       continue;
     } else if (command == Command::Walk || command == Command::Move || command == Command::Run || command == Command::Trot || command == Command::MoveWithSound ||
                command == Command::MoveReverse) {
@@ -1995,6 +2114,44 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
                 : command == Command::Trot ? t.forAge(m.baby).medium
                 : asMove && !arg(3).empty() ? Original::unitTilesPerSecond(std::atoi(arg(3).c_str()))
                                             : t.forAge(m.baby).slow;
+      // (its animation's rate: fMove's 5th argument, 100 without -
+      // 0x425533; ours: fMoveWithSound's 100 too; fWalk/fSwim, fTrot and
+      // fRun the type's own)
+      if (command == Command::Move || command == Command::MoveReverse || command == Command::MoveWithSound)
+        setAnimRate(m, -1, command != Command::MoveWithSound && !arg(4).empty() ? std::atoi(arg(4).c_str()) : 100);
+      else
+        setAnimRate(m, command == Command::Run ? 2 : command == Command::Trot ? 1 : 0);
+      // fMove's 2nd argument, a time (zoo.exe 0x425533 reads it x 1000, in
+      // ms; 0x43646e): with none, the move's animation is the whole move's
+      // (its queue one entry, looped). With one, two queues: the move's
+      // animation (class slot 0x130 by its name) once, then again while
+      // the time less one play (0x42514c: its length) is still over 0 -
+      // so ceil(time / length) plays, at least one (0x49c3a6..0x49c4b5,
+      // 0x5aa019) - and after them (0x42296d puts the second queue after
+      // the first) its plain move animation, slot 0x134 (0x4a9871 through
+      // slot 0x12c, 0x4a9bb9), for the rest of the way; the move's rate
+      // (slot 0x1c4) stays. Every stock one is a sea animal's fMove(level,
+      // N, ...) - a shark's bEat, an orca's bSubroll. The plain one is by
+      // the line's speed (0x4a9bb9 asks the AI manager, table 0x635324:
+      // slot 0x28 0x4a9b17 - fMoveSlow, fWalk or fMove(.., "walk") - slot
+      // 0x120's walk; slot 0x2c 0x4a9f38 - fMoveMedium, fTrot or fMove(..,
+      // "trot"), moveFnBySpeed 0x4a9f7d its tail - slot 0x124 0x4a30da's
+      // trot; slot 0x30 0x4aa05a -
+      // fMoveFast, fRun or fMove(.., "run") - slot 0x128's run; none of
+      // them, the walk). ours: a play is the animation's frames at their
+      // frame time (0x42514c not measured); a trot without trot art, run
+      m.moveAnimLeft = -1;
+      m.moveAnimAfter = command == Command::Move && arg(2) == "run" ? "run"
+                        : command == Command::Move && arg(2) == "trot" ? (hasTrot ? "trot" : "run")
+                                                                       : "walk";
+      if (asMove && std::atoi(arg(1).c_str()) > 0) {
+        const float len = animSeconds(m, m.moveAnim);
+        const float time = static_cast<float>(std::atoi(arg(1).c_str()));
+        const int plays = len > 0 ? std::max(1, static_cast<int>(std::ceil(time / len - 1e-6f))) : 1;
+        m.moveAnimLeft = plays * len;
+        ZT_STEP("0x43646e", "fMove with a time: its animation for whole plays, then its plain move", {"anim", m.moveAnim},
+                {"seconds", static_cast<double>(time)}, {"plays", plays});
+      }
       if (command == Command::MoveWithSound && !arg(4).empty())
         playSound(m, arg(4));
       bool walking = false;
@@ -2027,8 +2184,13 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
           m.swimTo = this->tankTargetHeight(m, target);
         walking = walkSomewhere(m, map, fences);
       } else if ((target == "level" || target == "floor") && arg(1) == "1" && m.foodItem >= 0 && this->items &&
-                 this->items->item(m.foodItem)) {
-        // (at the food: its eating move there, down by it)
+                 this->items->item(m.foodItem) && !t.keepMoving) {
+        // (at the food: its eating move there, down by it. Not a cKeepMoving
+        // kind - every stock fMove(level, 1, submerged_eat): its food task,
+        // 0x72, is replaced by Task 1 at the food before its bEat
+        // (Task72_FindKeeperFood::atTarget 0x4fd66a, slot 0x1d8(1, 0)), so
+        // its "level" is somewhere else in the tank at its height, below.
+        // ours: kept for a mod's non-cKeepMoving kind)
         const ZooItems::Item *food = this->items->item(m.foodItem);
         m.swimTo = this->tankTargetHeight(m, target);
         walking = feedingPlace(m, food->x, food->y, map, fences);
@@ -2047,13 +2209,19 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       if (!walking)
         continue;
     } else if (command == Command::FaceTowardFood) {
+      // zoo.exe fFaceTowardFood 0x426665 -> 0x42662c: an animal faces its
+      // goal (+0x38c - its food; ours: the water it drinks at, for Task
+      // 0x7a) through 0x42661b -> 0x426d1a; none, nothing. The line done
       if (const ZooItems::Item *food = m.foodItem >= 0 && this->items ? this->items->item(m.foodItem) : nullptr)
         faceToward(m, food->x, food->y);
       else if (m.drinkX >= 0)
         faceToward(m, m.drinkX, m.drinkY);
       continue;
     } else if (command == Command::FaceTowardTarget) {
-      // 0x42fa2c faces the current target unit, not an arbitrary direction.
+      // zoo.exe fFaceTowardTarget 0x426ed9 -> 0x426e50: an animal faces
+      // its target unit (0x42fa2c: unitTarget 0x4a4b53, +0x178 -> faceToward
+      // 0x426d4d) - ours: the animal or guest it hunts or caught, else the
+      // building it's after; staff and guests their +0x234 (0x426f21)
       if (const Member *target = member(m.huntAnimal >= 0 ? m.huntAnimal : m.victim))
         faceToward(m, target->x, target->y);
       else if (m.prey >= 0 && preyAt) {
@@ -2064,6 +2232,10 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       }
       continue;
     } else if (command == Command::CaughtPrey) {
+      // zoo.exe fCaughtPrey 0x5a593f -> 0x588c2d: its prey (its chase's,
+      // 0x4a4b53, else slot 0x25c) eaten - the message (0x50e648), the
+      // prey's +0x22c its hunter, the prey's slot 0x254; none, its prey
+      // forgotten (slot 0x258); the line done either way.
       // 0x588c2d removes the victim once. Our dust-ball completion already
       // queues that removal before starting bCaughtPrey; never kill twice.
       if (m.victim >= 0) {
@@ -2072,14 +2244,45 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       }
       continue;
     } else if (command == Command::TargetBuilding) {
+      // zoo.exe fTargetBuilding 0x5a5b71: rampaging (+0x3b0) it goes for
+      // its building (animalGoToTargetBuilding); not, the line is done and
+      // its target (+0x3b1) cleared
       if (!m.rampaging || !objects) { m.rampageBuilding = -1; continue; }
-      // 0x5a5a90 selects a nearby reachable building. Approach its footprint
-      // before using the same rubble operation as stepping onto its tile.
+      // Its target (zoo.exe animalGoToTargetBuilding 0x5a5b0a ->
+      // animalFindTargetBuilding 0x5a5a90 -> findNearestOfKindB 0x4290f3):
+      // of the 'building' kind, in the same habitat as itself (class slot
+      // 0x248, ZTUnit::habitatAt 0x41060e - ours Fences::exhibitAt: the
+      // building's tile against its own - a loose one
+      // the zoo's grounds, a rampage in its exhibit its own buildings), the
+      // nearest by whole tiles, ties at random; then a way to it (0x422238)
+      // or no target at all - not the next nearest. Only one with a slot
+      // with room for it (0x429330 -> 0x42ac87: a building with slots whose
+      // id list holds its kind, under its capacities). (ours: rubbleable
+      // ones only.) Then it approaches its footprint and rubbles it as
+      // stepping onto its tile
       std::vector<std::pair<float, int>> targets;
-      for (const auto &o : objects->objects())
-        if (o.className == "building" && infoOf(PlacedObjects::fileOf(o)).rubbleable)
-          targets.push_back({std::hypot(o.x - m.x, o.y - m.y), o.id});
-      std::sort(targets.begin(), targets.end());
+      const int here = fences.exhibitAt(static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y)));
+      int nearest = std::numeric_limits<int>::max();
+      for (const auto &o : objects->objects()) {
+        if (o.className != "building" || !infoOf(PlacedObjects::fileOf(o)).rubbleable ||
+            !buildingHasRoom(o.id, infoOf(PlacedObjects::fileOf(o)), m))
+          continue;
+        const int ox = static_cast<int>(std::floor(o.x)), oy = static_cast<int>(std::floor(o.y));
+        if (fences.exhibitAt(ox, oy) != here)
+          continue;
+        const int dx = ox - static_cast<int>(std::floor(m.x)), dy = oy - static_cast<int>(std::floor(m.y));
+        const int d2 = dx * dx + dy * dy;
+        if (d2 < nearest) {
+          nearest = d2;
+          targets.clear();
+        }
+        if (d2 == nearest)
+          targets.push_back({0.0f, o.id});
+      }
+      if (targets.size() > 1) {
+        const auto keep = targets[std::uniform_int_distribution<size_t>(0, targets.size() - 1)(this->rng)];
+        targets = {keep};
+      }
       bool routed = false;
       for (auto [distance, id] : targets) {
         const auto *o = objectById(id); if (!o) continue;
@@ -2121,16 +2324,13 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       // hatched", priority 4 as a birth's - good news)
       m.egg = false;
       this->markDirty(m.exhibit);
-      if (this->rm) {
-        std::string s = this->rm->getString(10322);
-        if (size_t at = s.find("%s"); at != std::string::npos)
-          s.replace(at, 2, m.name);
-        this->notices.push_back({s, 1, m.id});
-      }
+      if (this->rm)
+        this->notices.push_back({this->unitText(m, 10322), 1, m.id});
       ZT_STEP("0x437860", "Hatched: a baby", {"name", m.name});
       continue;
     } else if (command == Command::Dustball) {
-      // (bCaughtPrey's: the catch already showed it - the ball by where the
+      // zoo.exe fDustBall 0x588f69 -> animalDustBallEnd 0x588d47: the ball
+      // played, then the prey eaten (0x588c2d). ours: (bCaughtPrey's: the catch already showed it - the ball by where the
       // hunter is, zoo.exe 0x588d47 - and its set runs on after it)
       continue;
     } else if (command == Command::EnterBuilding || command == Command::ExitBuilding) {
@@ -2138,13 +2338,43 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
         if(auto *o=const_cast<PlacedObjects*>(this->objects)->byId(m.building))
           o->showHidden=s.fn=="fenterbuilding" && infoOf(PlacedObjects::fileOf(*o)).hideBuilding;
       }
-      // (an object's animalrest set - an ice floe's, driftwood's: zoo.exe's
-      // fEnterBuilding 0x5ad3a6 finds the building on its tile and sends it
-      // message 0x2722, then stops. Ours: in it from arriving at it, out
-      // when the set's done - leaveShelter)
+      // (an object's animalrest set - an ice floe's, driftwood's. zoo.exe
+      // fEnterBuilding 0x5ad42c -> 0x5ad3f2 -> class slot 0x2a8, 0x5ad3a6:
+      // the building at its goal tile (+0x214, slot 0x2e8 0x42a5af); with
+      // its goal kind (+0x24e) that one, message 0x2722 to itself (slot
+      // 0x2c0, 0x50c2ae); then it stops (slot 0x198, 0x427664) - the line
+      // done. fExitBuilding 0x4a777e -> 0x4a7744 -> slot 0x2ac, 0x4a7705:
+      // that building again, slot 0x2ec, then guestBuy 0x42d858 - its use
+      // of it, the building's changes to it. Ours: in it from arriving,
+      // stopped there; the changes as it leaves - leaveShelter)
       continue;
     } else {
-      // (not yet: fFollow, ...)
+      // zoo.exe behaviourRunFn 0x436065 compares the line's name with each
+      // handler's in turn, then behaviourRunFnMoves 0x437ccd with the rest;
+      // a name neither knows is false - the line fails (0x435f0a). The
+      // stock fFollow(keeper) (bCaught) and the misspelt fPlayWithSoud /
+      // fPlayWith are such names. ours: names the original does know that
+      // we don't run yet are passed over
+      static const std::set<std::string> known = {
+          "fwalk", "fswim", "ftrot", "frun", "fspray", "fkeeperroutine", "fguestroutine", "fguideroutine",
+          "fmaintroutine", "ffacetowardfood", "ffacetowardtarget", "fshowpredator", "fhidepredator",
+          "fenterbuilding", "fexitbuilding", "fdustball", "fkillprey", "fcaughtprey", "fdie", "ftargetbuilding",
+          "fhatch", "fendtrick", "freturntobuilding", "fplaysettank", "fplay", "fsetbase", "fplaywithbase",
+          "fmoveentitydelta", "fmoveentityspecial", "fplaytime", "fplaysound", "fplayspecial", "fplaysp",
+          "fplaysetprob", "fplaysetterrain", "fplayreverse", "fplaypingpong", "fpingpong", "fplaywithsound",
+          "fplaysfx", "fplaystopatend", "fplayset", "fmoveslow", "fmovemedium", "fmovefast", "fmove",
+          "fmovereverse", "fmovewithsound", "ffacedirection", "ffly", "fflyreverse", "fkeepcontrol", "fhalt"};
+      if (!known.count(s.fn)) {
+        failLine("0x437ccd");
+        return;
+      }
+      // zoo.exe fFaceDirection 0x601dbc: exactly one argument, not empty,
+      // to 0x60cac6 - which does nothing (true), the line done; otherwise
+      // the line fails. fSpray 0x60caad: 0x60cac6 whatever its arguments
+      if (s.fn == "ffacedirection" && (s.args.size() != 1 || s.args[0].empty())) {
+        failLine("0x601dbc");
+        return;
+      }
       continue;
     }
     return;
@@ -2334,6 +2564,56 @@ bool Animals::onWater(const Member &m) const {
 }
 
 // Into or out of the water; a drink
+// zoo.exe 0x4a8f89 (animalDropDung): on a tank's tile (tile +0x85 & 0x20)
+// with its habitat (slot 0x24c, its exhibit) a tank, no pile: the tank's
+// purity less the type's cPooWaterImpact (+0x448, set through 0x49340d); on
+// water (tile +0x83 & 3 - terrain 9 or 10, as habitatNearestWater reads it)
+// nothing, and it says so (0: the meter stays full); else a pile - poo, or
+// dinopoo for cDinoZoodoo, sized by cSmallZoodoo/cGiantZoodoo. ours: on a
+// tank's tile whose habitat isn't that tank (the land part of a habitat
+// joined to it) nothing either, as on water
+// A move's animation rate (zoo.exe 0x413754 sets unit +0x1fc as the move
+// starts; 0x435bbe plays the move's animation at it, in percent): fMove's
+// own (0x425533, pace -1), else the walk's cSlowAnimSpeed (0x4136bf), the
+// trot's cMediumAnimSpeed (0x4a319c), the run's cFastAnimSpeed (0x4a5194) -
+// their Water ones on a tank's tile (slot 0x268) or water (0x410fe0, tile
+// +0x83 & 3; the walk's in a tank, water state 3 or 4)
+void Animals::setAnimRate(Member &m, int pace, int fMoveRate) {
+  const Type &t = this->typeList[m.type];
+  if (pace < 0) {
+    m.animRate = fMoveRate;
+  } else {
+    const bool wet = (this->tankAt && this->tankAt(m.x, m.y) >= 0) || onWater(m);
+    m.animRate = (wet ? t.animSpeedWater : t.animSpeed)[std::clamp(pace, 0, 2)];
+  }
+  m.animRateFor = m.moveAnim;
+  m.moveAnimLeft = -1; // (a new move: its animation for the whole of it, unless fMove's time says otherwise)
+}
+
+bool Animals::dropDung(Member &m, const Fences &fences) {
+  const Type &t = this->typeList[m.type];
+  const int tank = this->tankAt ? this->tankAt(m.x, m.y) : -1;
+  const Fences::Exhibit *home = m.exhibit >= 0 ? fences.exhibit(m.exhibit) : nullptr;
+  if (tank >= 0 && home && home->tank) {
+    if (!this->setTankPurity || !this->tankPurity)
+      return false;
+    const float was = this->tankPurity(m.exhibit);
+    this->setTankPurity(m.exhibit, was - float(t.pooWaterImpact));
+    ZT_STEP("0x4a8f89", "Dung in the tank's water: no pile, the water dirtier", {"purity", was, was - t.pooWaterImpact},
+            {"cPooWaterImpact", t.pooWaterImpact});
+    return true;
+  }
+  if (tank >= 0 || onWater(m)) {
+    ZT_STEP("0x4a8f89", "On water: no dung, the meter stays full");
+    return false;
+  }
+  this->items->addDung(m.exhibit, m.x, m.y, t.dinoDung, m.baby ? t.youngDungSize : t.dungSize);
+  if (m.exhibit >= 0)
+    this->markDirty(m.exhibit);
+  ZT_STEP("0x4a8f89", "Drops a dung pile", {"x", m.x}, {"y", m.y});
+  return true;
+}
+
 void Animals::waterTick(Member &m, const WorldMap &map, const Fences &fences) {
   const Type &t = this->typeList[m.type];
   const Fences::Exhibit *ex = m.exhibit >= 0 ? fences.exhibit(m.exhibit) : nullptr;
@@ -2538,7 +2818,20 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
   for (Member &m : this->list) {
     ZT_WHO("animal", m.id);
     const Type &t = this->typeList[m.type];
-    m.animTime += seconds;
+    // (moving, its move's animation at its rate - zoo.exe 0x435bbe: the
+    // time x unit +0x1fc / 100)
+    const bool movingAnim = m.pathAt < m.path.size() && !m.animRateFor.empty() && m.anim == m.animRateFor;
+    m.animTime += movingAnim ? seconds * static_cast<float>(m.animRate) / 100.0f : seconds;
+    // (fMove with a time: its plays done, on with its plain move animation
+    // at the same rate - zoo.exe 0x43646e's second queue)
+    if (movingAnim && m.moveAnimLeft >= 0) {
+      m.moveAnimLeft -= seconds * static_cast<float>(m.animRate) / 100.0f;
+      if (m.moveAnimLeft <= 0) {
+        m.moveAnimLeft = -1;
+        m.moveAnim = m.anim = m.animRateFor = m.moveAnimAfter;
+        m.animTime = 0;
+      }
+    }
     // Lowering a tank also lowers its swimmers; an old target must not leave
     // one floating above the new surface. Trick animations control their own rise.
     if(t.underwater && !m.showTrick && !m.boxed) {
@@ -2609,7 +2902,10 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
       continue;
     }
     // Caught up with the animal it's after (on its tile): prey under a dust
-    // ball (zoo.exe 0x4a6043); at play, it's over
+    // ball (zoo.exe 0x4a6043); at play, it's over. (Task74's atTarget
+    // 0x4a4dd2 asks 0x50e4e8 first: no catch while its set is bCaughtGuest,
+    // bCaughtPrey or bCaughtEgg, nor of a guest whose slot 0x260 says no -
+    // ours: its chase is over once it catches, huntAnimal -1)
     if (m.huntAnimal >= 0 && !busy(m) && !standingOff(m)) {
       Member *p = this->member(m.huntAnimal);
       bool contact=p && bodyDistance(m,m.x,m.y,bodyHeight(m,m.x,m.y,m.swimZ),*p,p->x,p->y,
@@ -2818,19 +3114,25 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
         m.path.clear();
         m.pathAt = 0;
         m.stepping = false;
-        // (at its food with an eating move - a sea animal's fMove(level, 1,
-        // submerged_eat): eats it there)
-        if (m.foodItem >= 0 && m.moveAnim.find("eat") != std::string::npos && art(m, m.moveAnim)) {
-          play(m, m.moveAnim, Member::Mode::Loop, std::max(1.5f, animSeconds(m, m.moveAnim)));
-          continue;
-        }
+        // (a move is done on arriving - zoo.exe 0x43646e; no pause at the
+        // end of an eating move)
         // At a shelter or toy: in it (hidden) for cTimeInside ticks, or its
         // play set there
         if (m.building >= 0 && !m.inside && this->objects) {
           for (const PlacedObjects::Object &o : this->objects->objects())
             if (o.id == m.building) {
               const ObjectInfo &info = infoOf(PlacedObjects::fileOf(o));
-              std::string playSet = "b" + o.typeName + "animalrest0";
+              // (its slot's set, b<name><goal><slot> - the slot +0x24d: an
+              // ice floe's big slot 0, the penguins' small ones 1-4)
+              std::string playSet = "b" + o.typeName + "animalrest" + std::to_string(std::max(0, m.restSlot));
+              // (full by now - others went in first: no entrance with room,
+              // 0x43b2f6 -> 0x42c02b, so not in. ours: one sent with no slot -
+              // a show trick's toy - by the building's room alone, as before)
+              if (m.restSlot < 0 ? shelterUsers(o.id) >= info.capacity : !slotHasRoom(o.id, info, m.restSlot, m)) {
+                ZT_STEP("0x42c02b", "At the building, but it's full: not in", {"capacity", info.capacity});
+                leaveShelter(m);
+                break;
+              }
               m.inside = true;
               m.insideFor = info.hideUser ? static_cast<float>(info.timeInside) : 0.0f;
               if (!info.hideUser && this->set(m, playSet))
@@ -3414,6 +3716,20 @@ const Animals::ObjectInfo &Animals::infoOf(const std::string &file) const {
       o.timeInside = ai->getInt(ints, "ctimeinside", 10);
       o.hideUser = ai->getInt(ints, "chideuser", 0) != 0;
       o.hideBuilding = ai->getInt(ints, "chidebuilding", 0) != 0;
+      // (its [slots]: zoo.exe ZTBuildingType::loadConfig 0x4c0b4d - id
+      // 0x4c08dc, isreturnslot 0x4c09ce, filter 0x4c0aea, entrpos
+      // 0x4c0b4d, capacity 0x4c0cd8)
+      for (const std::string &name : ai->getList("slots", "name")) {
+        ObjectInfo::Slot s;
+        s.ids = ai->getIntList(name, "id");
+        s.capacity = ai->getInt(name, "capacity", 0);
+        s.filter = lower(ai->get(name, "filter"));
+        s.isReturn = ai->getInt(name, "isreturnslot", 0) != 0;
+        std::vector<int> e = ai->getIntList(name, "entrpos");
+        for (size_t k = 0; k + 1 < e.size(); k += 2)
+          s.entrances.push_back({e[k], e[k + 1]});
+        o.slots.push_back(s);
+      }
       delete ai;
     }
   // [Satisfies] animalrest (shelters, toys): read from the file's text
@@ -3735,6 +4051,10 @@ const Animals::Rating *Animals::rating(const Member &m, const WorldMap &map, con
   return it == ev.kinds.end() ? nullptr : &it->second;
 }
 
+// zoo.exe animalExhibitRating 0x411afd: its habitat's score for it
+// (exhibitSuitabilityScores 0x415dd7(this, 1)), floored at 0 (0x630d5c) and
+// rounded up (0x415f2e under control word 0x1b3f, round up); 0 for one not
+// rated
 int Animals::suitability(int id, const WorldMap &map, const Fences &fences) {
   const Member *m = this->member(id);
   const Rating *r = m ? this->rating(*m, map, fences) : nullptr;
@@ -3762,7 +4082,10 @@ int Animals::exhibitSuitability(int exhibit, const std::function<bool(const Memb
 }
 
 // zoo.exe 0x4386a9 (animalCheckCrowding) counts with its habitat's joined
-// ones too (0x4388d7, 0x43c376, 0x438e14 called with 1: a land exhibit and
+// ones too (0x4388d7, 0x43c376 - habitatAnimalsOfSpecies 0x43c248: the
+// habitat's animals, +0x6c, of the species, its rating redone first if
+// stale - through animalCountOwnSpecies 0x43c175,
+// its species' adults, type +0x1ec - 0x438e14 called with 1: a land exhibit and
 // the tanks it shores on), and measures the room as their tiles together
 // (0x44097c(1))
 void Animals::company(const Member &m, int &kind, int &kindAdults, int &adults) const {
@@ -4062,8 +4385,15 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       m.pending += t.happyHabitatChange, verdict = "suits it (cHappyHabitatChange)";
     else if (s * 100 >= t.habitatPreference * t.pctHabitat)
       m.pending += t.angryHabitatChange, verdict = "not quite (cAngryHabitatChange)";
-    else
+    else {
       m.pending += t.veryAngryHabitatChange, verdict = "far from it (cVeryAngryHabitatChange)";
+      // zoo.exe animalCheckExhibitLike 0x438c47 (0x431701): far from it,
+      // in an exhibit (class slot 0x24c; its +0x2c clear - not read),
+      // postUnitMessage 10031 "%s doesn't like its exhibit." (urgency 2) -
+      // not an egg (+0x395) nor busy in a show (unitBusyInShow 0x437402)
+      if (m.exhibit >= 0 && !m.egg && m.showTank < 0 && this->rm)
+        this->notices.push_back({this->unitText(m, 10031), 2, m.id});
+    }
     ZT_STEP("0x4378df", "Habitat check (every 20)", {"suitability", s}, {"cHabitatPreference", t.habitatPreference},
             {"cPctHabitat", t.pctHabitat}, {"verdict", verdict}, {"pending", was, m.pending});
     if (const Rating *r = this->rating(m, map, fences)) {
@@ -4119,7 +4449,12 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   }
   if (--m.otherCheck < 0) {
     m.otherCheck = kOtherCheck - 1;
-    if (t.otherAnimalAngryChange < 0)
+    // zoo.exe animalCheckAngryNeighbours 0x438e70 (0x4216c5): its habitat's
+    // animals with +0x3aa - happiness -81 or below, animalUpdateHappiness
+    // 0x437a10 - counted by animalRateExhibit 0x444827 (+0x98), less itself;
+    // none on zoo ground (habitat +0x2c: not in an exhibit). ours: counted
+    // now, not at the last rating; joined habitats (+0x8) not modelled
+    if (t.otherAnimalAngryChange < 0 && m.exhibit >= 0)
       for (const Member &o : this->list)
         if (o.id != m.id && o.exhibit == m.exhibit && o.happiness <= -81) {
           float was = m.pending;
@@ -4128,6 +4463,14 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
           break;
         }
   }
+  // "Not enough keepers" (zoo.exe animalCheckKeepers 0x438d31, from
+  // animalUpdate 0x437620 every cKeeperCheck, 30): the animal's +0x378 under
+  // its type's +0x28c - not an egg, slot 0x22c - and cNotEnoughKeepersChange
+  // (+0x290). Both are 1 in every game - +0x378 from ZTAnimal::setup
+  // 0x453e59, +0x28c from setDefaults 0x4b659e, no key reads it (measured:
+  // a type's +0x28c read 1 in the running original) - so it never fires:
+  // nothing to do here. (Our zoos once saved +0x378 as 0, which made it
+  // fire in the original: ZooReader's zooAnimalOut writes 1)
   testFence(m, fences);
   // Eating (zoo.exe animalUpdate 0x437620 -> animalEatFood 0x4fd951 each
   // tick while it eats): at the food, in its bEat, a mouthful every tick -
@@ -4135,9 +4478,34 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   // cFoodUnitValue less hunger - till its hunger is down to its least (type
   // +0x244, 0 - setDefaults 0x4b659e) or the food's gone. (A bEat's 9 s of
   // eat_down is 9 mouthfuls; before, ours took one a bEat and stayed hungry)
-  if (m.foodItem >= 0 && m.hunger > 0 &&
+  // Eating with its hunger down to its least: animalStopEating 0x4fd86e
+  // (animalUpdate 0x437620, ahead of the mouthful)
+  if (m.eating && m.hunger <= 0)
+    stopEating(m);
+  // A cKeepMoving kind (type +0x44c - the sharks and big fish): one
+  // mouthful a trip to the food. Its eating isn't set, so neither
+  // animalUpdate nor animalCheckHunger (0x438a79) calls animalEatFood again;
+  // only Task72_FindKeeperFood::atTarget 0x4fd66a did, once, and the task
+  // is replaced (slot 0x1d8(1, 0)) - its next mouthful is its next trip
+  if (m.foodItem >= 0 && m.hunger > 0 && !(t.keepMoving && m.mealTaken) &&
       std::any_of(m.stack.begin(), m.stack.end(), [](const auto &f) { return f.first == "beat"; }))
     consumeFood(m);
+  if (m.eating) {
+    // animalEatFood 0x4fd951: loose (+0x3a3) or none left of its food
+    // (0x4fdb3a) - animalStopEating. Else, with units still left after the
+    // mouthful (0x4fdbc9 returns the food's +0x154), bEat asked for next -
+    // forced over whatever was asked, and not replaceable (setBehaviourSet
+    // 0x4300f6 with 0, 1), so a bSleep or bSick asked for during the meal
+    // isn't taken - unless bEat is asked already or it can't lie down here
+    // (0x440a37). (A cKeepMoving kind never gets here: eating isn't set)
+    const auto *food = this->items ? this->items->item(m.foodItem) : nullptr;
+    if (m.escaped || !food || food->units <= 0) {
+      stopEating(m);
+    } else if (m.nextSet != "beat" && mayRest(m)) {
+      m.nextSet = "beat";
+      ZT_STEP("0x4fd951", "Food left: bEat asked for next (forced)", {"units", food->units});
+    }
+  }
   // Hunger (zoo.exe 0x438a79): hungrier each check; hungry with no food,
   // the first time nothing, after that "%s can't find any food." and, at
   // 100, unhappier and less healthy. And the dung meter: full, a pile.
@@ -4151,27 +4519,37 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       if (!m.noFoodSeen) {
         m.noFoodSeen = true;
         ZT_STEP("0x438a79", "Hungry, no food: first time, nothing happens", {"cHungerThreshold", t.hungerThreshold});
-      } else if (m.hunger >= 100) {
-        float wasPending = m.pending, wasHealth = m.health;
-        m.pending += t.noFoodChange;
-        m.health = std::max(0.0f, m.health - t.hungryHealthChange);
-        ZT_STEP("0x438a79", "Starving: unhappier, less healthy", {"pending", wasPending, m.pending},
-                {"cNoFoodChange", t.noFoodChange}, {"health", wasHealth, m.health},
-                {"cHungryHealthChange", t.hungryHealthChange});
+      } else {
+        // zoo.exe 0x49c069: postUnitMessage 10030 "%s can't find any food."
+        // (urgency 2) each check after the first - not while it's busy in a
+        // show (unitBusyInShow 0x437402, +0x24f, +0x250, tasks 0x85/0x86)
+        if (m.showTank < 0 && this->rm) {
+          this->notices.push_back({this->unitText(m, 10030), 2, m.id});
+          ZT_STEP("0x49c069", "\"Can't find any food\" message");
+        }
+        if (m.hunger >= 100) {
+          float wasPending = m.pending, wasHealth = m.health;
+          m.pending += t.noFoodChange;
+          m.health = std::max(0.0f, m.health - t.hungryHealthChange);
+          ZT_STEP("0x438a79", "Starving: unhappier, less healthy", {"pending", wasPending, m.pending},
+                  {"cNoFoodChange", t.noFoodChange}, {"health", wasHealth, m.health},
+                  {"cHungryHealthChange", t.hungryHealthChange});
+        }
       }
     }
+    // The dung meter (zoo.exe 0x438a79 at 0x416460): cDirtyIncrement goes
+    // on its pending (+0x2cc), which the next happiness tick adds to the
+    // meter (+0x2c8, 0x4378df), kept to cMinDirty..cMaxDirty - so this
+    // check looks at the meter without it. At cDirtyThreshold, a drop
+    // (0x4a8f89); only one that took puts the meter back to 0
     float wasDirty = m.dirty;
-    m.dirty += t.dirtyIncrement;
-    ZT_STEP("0x438a79", "The dung meter", {"dirty", wasDirty, m.dirty}, {"cDirtyIncrement", t.dirtyIncrement},
-            {"cDirtyThreshold", t.dirtyThreshold});
+    bool dropped = false;
     // (loose too: on the zoo's grounds, for the maintenance workers)
-    if (m.dirty >= t.dirtyThreshold && this->items && (m.exhibit >= 0 || (m.escaped && !m.boxed))) {
-      this->items->addDung(m.exhibit, m.x, m.y, t.dinoDung, m.baby ? t.youngDungSize : t.dungSize);
-      m.dirty = 0;
-      if (m.exhibit >= 0)
-        this->markDirty(m.exhibit);
-      ZT_STEP("0x438a79", "Drops a dung pile", {"x", m.x}, {"y", m.y}, {"dirty", 0.0});
-    }
+    if (m.dirty >= t.dirtyThreshold && this->items && (m.exhibit >= 0 || (m.escaped && !m.boxed)))
+      dropped = dropDung(m, fences);
+    m.dirty = std::clamp((dropped ? 0.0f : m.dirty) + float(t.dirtyIncrement), float(t.minDirty), float(t.maxDirty));
+    ZT_STEP("0x438a79", "The dung meter", {"dirty", wasDirty, m.dirty}, {"cDirtyIncrement", t.dirtyIncrement},
+            {"cDirtyThreshold", t.dirtyThreshold}, {"dropped", dropped ? 1 : 0});
   }
   murkyWaterTick(m, map, fences);
   breathTick(m);
@@ -4189,6 +4567,12 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
     } else {
       m.starve = 0;
     }
+    // zoo.exe 0x4389aa (0x4807bd): under cSickTime (type +0x330) such
+    // checks, a sick one posts 10029 "%s is very sick." (urgency 2). (At
+    // cSickTime it's "being treated poorly" instead: 0x4808ac takes it away,
+    // 10010 - not ported, issue #247)
+    if (m.starve < t.sickTime && m.sick && this->rm)
+      this->notices.push_back({this->unitText(m, 10029), 2, m.id});
     // Poorly (health x 100 <= cPctHits x cMaxHits), not loose (+0x3a3) or
     // chasing (+0x3a4): where it may lie down (0x440a37), bSick asked for
     // next (0x4301b7 - not taken while it's in its bSick or another set is
@@ -4207,11 +4591,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
     auto say = [&](int sid) {
       if (!this->rm)
         return;
-      std::string s = this->rm->getString(sid);
-      size_t at = s.find("%s");
-      if (at != std::string::npos)
-        s.replace(at, 2, m.name);
-      this->notices.push_back({s, 2, m.id}); // (ill: urgent)
+      this->notices.push_back({this->unitText(m, sid), 2, m.id}); // (ill: urgent)
     };
     if (othersSick) {
       m.pending += t.otherSickChange;
@@ -4363,6 +4743,12 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
         if (fresh)
           runFrom(m, *threat, map, fences);
       } else {
+        // (Task 0x75's checkArrived 0x4a5471 through chaseOver 0x4a5508: the
+        // flight is over once no hunter is found (slot 0x2fc) - or one of
+        // its own kind chasing it at play past cChaseTimeOut, which ours
+        // ends from the chaser's side; then "Stopping Avoiding", the
+        // chaser's prey forgotten (slot 0x258). atTarget 0x61ae0d is
+        // 0x431834, the task's end)
         m.fleeFrom = -1;
       }
       if (m.fleeFrom < 0 && (m.huntAnimal < 0 || m.tag) && !m.baby && !occupied(m) &&
@@ -4394,7 +4780,10 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
         }
       }
     }
-    // Running: on to another spot away when it gets there
+    // Running: on to another spot away when it gets there (Task 0x75's
+    // checkArrived 0x4a5471: its route down to under 2 points, the leg's
+    // over and whileGoing 0x4a557f plays bRunFromPredator to a new ring
+    // tile, 0x4a639e - "Avoiding Predator")
     if (m.fleeFrom >= 0 && m.pathAt >= m.path.size() && !standingOff(m))
       if (const Member *threat = this->member(m.fleeFrom))
         runFrom(m, *threat, map, fences);
@@ -4446,10 +4835,10 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
     }
   }
   // A shelter or toy now and then (zoo.exe 0x438f20: every 20 ticks, a
-  // cBuildingUseChance chance)
+  // cBuildingUseChance chance, with no building goal yet - 0x43735c)
   if (--m.buildingCheck < 0) {
     m.buildingCheck = 19;
-    if (m.building < 0 && !m.escaped && !m.sleeping && t.buildingUseChance > 0 &&
+    if (m.building < 0 && m.buildingGoal < 0 && !m.escaped && !m.sleeping && t.buildingUseChance > 0 &&
         std::uniform_int_distribution<int>(0, 99)(this->rng) < t.buildingUseChance) {
       ZT_STEP("0x438f20", "Goes to use a shelter or toy", {"cBuildingUseChance", t.buildingUseChance});
       useShelter(m, map, fences);
@@ -4459,10 +4848,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   if (--m.notHappyCheck < 0) {
     m.notHappyCheck = 9;
     if (m.happiness <= -61 && this->rm) {
-      std::string s = this->rm->getString(10028);
-      size_t at = s.find("%s");
-      if (at != std::string::npos)
-        s.replace(at, 2, m.name);
+      std::string s = this->unitText(m, 10028);
       this->notices.push_back({s, 2, m.id}); // (red in the original's list)
       ZT_STEP("", "\"Not happy\" message", {"happiness", m.happiness}, {"message", s});
     }
@@ -4542,14 +4928,10 @@ void Animals::lifeEvents(const WorldMap &map, const Fences &fences) {
         }
     return false;
   };
-  auto say = [&](int sid, const std::string &name, int kind, int animal) {
-    if (!this->rm)
-      return;
-    std::string s = this->rm->getString(sid);
-    size_t at = s.find("%s");
-    if (at != std::string::npos)
-      s.replace(at, 2, name);
-    this->notices.push_back({s, kind, animal});
+  // (the text made from the animal it's about: unitText, zoo.exe 0x49cfeb)
+  auto say = [&](const std::string &s, int kind, int animal) {
+    if (this->rm)
+      this->notices.push_back({s, kind, animal});
   };
   // Born: a young one by its mother ("Congratulations! %s has given birth.")
   std::vector<Birth> births;
@@ -4559,7 +4941,7 @@ void Animals::lifeEvents(const WorldMap &map, const Fences &fences) {
     if (!mum)
       continue;
     const Type &t = this->typeList[kind];
-    const std::string mumName = mum->name;
+    const std::string born = this->unitText(*mum, 10032); // (hers: 0x4219f1 posts on the mother)
     const int mumId = mum->id;
     // A new one by its mother, made as any other (not a copy of her: none
     // of what she was doing - asleep, in a shelter, hunting - comes with it)
@@ -4582,7 +4964,7 @@ void Animals::lifeEvents(const WorldMap &map, const Fences &fences) {
     // (an egg-layer's young: an egg near its mother - zoo.exe 0x60da6b)
     if (t.laysEggs)
       becomeEgg(*b);
-    say(10032, mumName, 1, mumId); // (good news)
+    say(born, 1, mumId); // (good news)
     this->markDirty(b->exhibit);
   }
   // Died of old age ("%s has died of old age."); the others in its exhibit
@@ -4597,7 +4979,7 @@ void Animals::lifeEvents(const WorldMap &map, const Fences &fences) {
       continue;
     }
     int ex = m.exhibit;
-    say(10242, m.name, 2, -1);
+    say(this->unitText(m, 10242), 2, -1);
     for (Member &o : this->list)
       if (o.id != m.id && o.exhibit == ex)
         o.pending -= 20;
@@ -4608,62 +4990,156 @@ void Animals::lifeEvents(const WorldMap &map, const Fences &fences) {
 
 // Off to a shelter or toy in its exhibit (its [Satisfies] animalrest), the
 // nearest with room; inside (cHideUser) for cTimeInside ticks, or (a toy)
-// its "b<type>animalrest0" set played there
+// its "b<type>animalrest0" set played there. zoo.exe animalCheckBuildingUse
+// 0x438f20 -> findNearestOfKindB 0x4290f3 (kind "animalrest", 0x565054):
+// buildings of the kind in its own habitat (slot 0x248), with room
+// (0x429330 -> 0x42ac87: its users, +0x18c, under the type's cCapacity,
+// +0x16c - those in it, counted at the door), nearest by whole tiles
+// squared (the building's tile against its own), ties at random; that sets
+// its goal (+0x214..+0x21c, the kind +0x24e) - only that: chooseTask
+// 0x436f5c takes it up later (0x43735c -> guestGoToBuilding 0x43b2f6,
+// goToBuilding), after its food and drink, ahead of air (chooseBehaviour)
 bool Animals::useShelter(Member &m, const WorldMap &map, const Fences &fences) {
+  (void)map;
   if (!this->objects)
     return false;
-  const PlacedObjects::Object *best = nullptr;
-  float bestD = 1e9f;
+  std::vector<const PlacedObjects::Object *> nearest;
+  int bestD = std::numeric_limits<int>::max();
+  const int mx = static_cast<int>(std::floor(m.x)), my = static_cast<int>(std::floor(m.y));
   for (const PlacedObjects::Object &o : this->objects->objects()) {
     if (o.fence || fences.exhibitAt(static_cast<int>(o.x), static_cast<int>(o.y)) != m.exhibit)
       continue;
     const ObjectInfo &info = infoOf(PlacedObjects::fileOf(o));
-    if (!info.rest)
+    if (!info.rest || !buildingHasRoom(o.id, info, m))
       continue;
-    int users = 0;
-    for (const Member &a : this->list)
-      users += a.building == o.id ? 1 : 0;
-    if (users >= std::max(1, info.capacity))
-      continue;
-    float d = (o.x - m.x) * (o.x - m.x) + (o.y - m.y) * (o.y - m.y);
-    if (d < bestD) {
+    const int dx = static_cast<int>(std::floor(o.x)) - mx, dy = static_cast<int>(std::floor(o.y)) - my;
+    const int d = dx * dx + dy * dy;
+    if (d < bestD)
+      nearest.clear();
+    if (d <= bestD) {
       bestD = d;
-      best = &o;
+      nearest.push_back(&o);
     }
   }
-  if (!best)
+  if (nearest.empty())
     return false;
-  // To beside it: an open tile round its footprint, its door side (in
-  // front) first, then the nearest
-  const ObjectInfo &bi = infoOf(PlacedObjects::fileOf(*best));
-  float hx = bi.fx / 4.0f, hy = bi.fy / 4.0f;
-  int x0 = static_cast<int>(std::floor(best->x - hx)) - 1, x1 = static_cast<int>(std::floor(best->x + hx - 0.01f)) + 1;
-  int y0 = static_cast<int>(std::floor(best->y - hy)) - 1, y1 = static_cast<int>(std::floor(best->y + hy - 0.01f)) + 1;
-  const Type &t = this->typeList[m.type];
-  std::vector<std::pair<float, std::pair<float, float>>> spots;
-  for (int y = y0; y <= y1; y++)
-    for (int x = x0; x <= x1; x++) {
-      if ((y != y0 && y != y1 && x != x0 && x != x1) || !standable(x, y, t, m.exhibit, map, fences))
-        continue;
-      float score = (y == y1 ? 0.0f : 100.0f) + (x + 0.5f - m.x) * (x + 0.5f - m.x) + (y + 0.5f - m.y) * (y + 0.5f - m.y);
-      spots.push_back({score, {x + 0.5f, y + 0.5f}});
-    }
-  std::sort(spots.begin(), spots.end());
-  m.moveAnim = "walk";
-  m.speed = t.forAge(m.baby).slow;
-  m.stack.clear();
-  bool going = false;
-  for (const auto &sp : spots)
-    if (walkTo(m, sp.second.first, sp.second.second, map, fences)) {
-      going = true;
-      break;
-    }
-  if (!going)
-    return false;
-  m.building = best->id;
+  const PlacedObjects::Object *best =
+      nearest[std::uniform_int_distribution<size_t>(0, nearest.size() - 1)(this->rng)];
+  m.buildingGoal = best->id;
+  ZT_STEP("0x438f20", "Found a building: its goal", {"building", best->id});
   return true;
 }
 
+// zoo.exe guestGoToBuilding 0x43b2f6, for an animal: an entrance with room
+// (0x42c02b: each slot with room, 0x42ac87, in turn; its entrances,
+// 0x42b101 - entrpos turned with the building - by squared distance from
+// it, the nearest it has a route to) -> the slot (+0x24d); it walks there
+// (Task 0x66 - 0x67 for a type with +0x1a4: ours walks the same). None: the
+// goal cleared (0x5adc8a: an animal's slot 0x264 is 0x4016d1, false - no
+// Task 0x83; class slot 0x174 clears it), and it doesn't go
+bool Animals::goToBuilding(Member &m, const WorldMap &map, const Fences &fences) {
+  const int id = m.buildingGoal;
+  m.buildingGoal = -1;
+  const PlacedObjects::Object *o = nullptr;
+  if (this->objects)
+    for (const PlacedObjects::Object &p : this->objects->objects())
+      if (p.id == id)
+        o = &p;
+  if (!o)
+    return false;
+  const ObjectInfo &info = infoOf(PlacedObjects::fileOf(*o));
+  struct Spot {
+    float d2;
+    int slot;
+    float x, y;
+  };
+  std::vector<Spot> spots;
+  // (an entrpos: across and forward from its middle, 64 a tile, turned
+  // with it - as Guests::buildingPoint)
+  const float angle = o->facing * 3.14159265f / 4.0f;
+  const float fwdX = std::sin(angle), fwdY = -std::cos(angle);
+  const float acrossX = -std::cos(angle), acrossY = -std::sin(angle);
+  for (size_t k = 0; k < info.slots.size(); k++) {
+    if (!slotHasRoom(o->id, info, static_cast<int>(k), m))
+      continue;
+    for (const auto &[px, py] : info.slots[k].entrances) {
+      const float ex = o->x + (px * acrossX + py * fwdX) / 64.0f, ey = o->y + (px * acrossY + py * fwdY) / 64.0f;
+      const float tx = std::floor(ex) + 0.5f, ty = std::floor(ey) + 0.5f;
+      spots.push_back({(ex - m.x) * (ex - m.x) + (ey - m.y) * (ey - m.y), static_cast<int>(k), tx, ty});
+    }
+  }
+  std::stable_sort(spots.begin(), spots.end(), [](const Spot &a, const Spot &b) { return a.d2 < b.d2; });
+  const Type &t = this->typeList[m.type];
+  for (const Spot &s : spots) {
+    m.moveAnim = "walk";
+    m.speed = t.forAge(m.baby).slow;
+    m.stack.clear();
+    if (walkTo(m, s.x, s.y, map, fences)) {
+      m.building = id;
+      m.restSlot = s.slot;
+      ZT_STEP("0x43b2f6", "Going to building", {"building", id}, {"slot", s.slot});
+      return true;
+    }
+  }
+  ZT_STEP("0x5adc8a", "No entrance with room it can reach: goal cleared", {"building", id});
+  return false;
+}
+
+// zoo.exe buildingSlotHasRoom 0x42ac87, for an animal: the building's users
+// (+0x18c) under its cCapacity (+0x16c); the slot there, its users (+4)
+// under its capacity (+0x30); then 0x42ae68: its id list (+0x18) empty or
+// holding its kind (class slot 0x20, the cNameID), not a return slot (+0x45
+// - an animal's slot 0x264, 0x4016d1, is false), and its filter (+0x3c)
+// not holding its letter (unit +0xa4: m, f or y - 0x409ee3, a strstr).
+// The route to an entrance (0x42aad5) is goToBuilding's walk
+bool Animals::slotHasRoom(int building, const ObjectInfo &info, int slot, const Member &m) const {
+  const int guests = this->buildingGuests ? this->buildingGuests(building) : 0;
+  if (shelterUsers(building) + guests >= info.capacity)
+    return false;
+  if (slot < 0 || slot >= static_cast<int>(info.slots.size()))
+    return false;
+  const ObjectInfo::Slot &s = info.slots[static_cast<size_t>(slot)];
+  if (slotUsers(building, slot) >= s.capacity)
+    return false;
+  if (!s.ids.empty() &&
+      std::find(s.ids.begin(), s.ids.end(), this->typeList[m.type].nameId) == s.ids.end())
+    return false;
+  if (s.isReturn)
+    return false;
+  const char letter = m.baby ? 'y' : m.female ? 'f' : 'm';
+  return s.filter.find(letter) == std::string::npos;
+}
+
+// zoo.exe buildingHasRoom 0x429330: any of its slots (+0x170) with room
+bool Animals::buildingHasRoom(int building, const ObjectInfo &info, const Member &m) const {
+  for (size_t k = 0; k < info.slots.size(); k++)
+    if (slotHasRoom(building, info, static_cast<int>(k), m))
+      return true;
+  return false;
+}
+
+// A slot's users (zoo.exe the building's slot +4): the animals in it
+int Animals::slotUsers(int building, int slot) const {
+  int users = 0;
+  for (const Member &a : this->list)
+    users += a.inside && a.building == building && a.restSlot == slot ? 1 : 0;
+  return users;
+}
+
+// A shelter's users (zoo.exe building +0x18c): those in it
+int Animals::shelterUsers(int building) const {
+  int users = 0;
+  for (const Member &a : this->list)
+    users += a.inside && a.building == building ? 1 : 0;
+  return users;
+}
+
+// Out of its shelter, the building's changes to it (fExitBuilding 0x4a777e ->
+// guestBuy 0x42d858 -> ZTAnimal::addPendingHappiness 0x42648c, class slot
+// 0x1fc): the adult figure for 'm'/'f', the young one for 'y' onto its
+// pending happiness (+0x2ac); the hunger (+0x2b4) and energy (+0x2c4)
+// changes onto their pendings, which the next happiness tick (0x4378df)
+// applies. ours: hunger and energy applied at once, kept in range
 void Animals::leaveShelter(Member &m) {
   if (m.inside && this->objects)
     for (const PlacedObjects::Object &o : this->objects->objects())
@@ -4674,6 +5150,7 @@ void Animals::leaveShelter(Member &m) {
         m.energy = std::max(0.0f, m.energy + info.energyChange);
       }
   m.building = -1;
+  m.restSlot = -1;
   m.inside = false;
   m.insideFor = 0;
 }
@@ -4688,6 +5165,16 @@ void Animals::heal(int id) {
   if (Member *m = this->member(id)) {
     m->health = static_cast<float>(this->typeList[m->type].maxHits);
     m->sick = false;
+    // (cStaySick, type +0x44d: bDoneSick started at once over the set it's
+    // in - Job4_HealAnimal::atTarget 0x5eccd0 -> 0x43c6c5; the others carry
+    // on, +0x20d cleared)
+    if (this->typeList[m->type].staySick && this->set(*m, "bdonesick")) {
+      m->stack.clear();
+      m->playQueue.clear();
+      m->stepping = false;
+      pushSet(*m, "bdonesick");
+      ZT_STEP("0x5eccd0", "Healed, cStaySick: bDoneSick at once", {"animal", m->name});
+    }
   }
 }
 

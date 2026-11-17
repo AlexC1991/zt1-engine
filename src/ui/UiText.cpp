@@ -442,3 +442,15 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
       ZT_RenderFillRect(renderer, &thumb);
   }
 }
+
+// ours: the layout's forecolor, as draw() reads it (the same default)
+SDL_Color UiText::layoutColor() const {
+  SDL_Color color = {255, 228, 173, 255};
+  if (!ini_reader)
+    return color;
+  std::vector<std::string> values = ini_reader->getList(name, "forecolor");
+  if (values.size() >= 3)
+    color = {(uint8_t)std::atoi(values[0].c_str()), (uint8_t)std::atoi(values[1].c_str()),
+             (uint8_t)std::atoi(values[2].c_str()), 255};
+  return color;
+}
