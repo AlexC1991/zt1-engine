@@ -112,6 +112,49 @@ public:
   };
   // (Water: out on the water - a ride from a return building, swimming out,
   // drowning; Guest::waterTask says which)
+  //
+  // What a guest is doing. The original gives each unit a task object made
+  // by its number (unitMakeTask), each its own class with the same
+  // plumbing: a constructor (the unit, +4, and its task state, unit+0x15c,
+  // +8; the unit kept at +0x14 only if its type isKindOf 0x6386b0), a
+  // destructor (its class table set back, then the base task's 0x6323c4;
+  // freed when asked), its number (returned by its taskId, the status line
+  // and the "in a building" test 0x4108f7 read it), and the slots run by
+  // every task's tick (begin, whileGoing, checkArrived, atTarget). Ours keeps
+  // a State and the guest's own fields instead; the classes' plumbing read
+  // 2026-11-17 (each ctor, dtor and taskId as said), and where each is:
+  //   0x64 Task64_PickAttraction (ctor 0x440fb9, dtor 0x422886, taskId
+  //     0x4281f7): Guests::decide's pick (guestPickAttraction 0x4282e1).
+  //   0x65 Task65_Guest (ctor 0x413ed7, dtor 0x4260f5, destroy 0x4260ff,
+  //     freeIfAsked 0x42610c, taskId 0x436800 - shared with the keepers'):
+  //     going to an exhibit's viewing tile (whileGoing 0x43aab4, atTarget
+  //     0x42612f: task 0x70) - Guests::update's walk to Guest::target.
+  //   0x66 Task66_BuildingCrowded (ctor 0x4a8162, dtor 0x42a49b, taskId
+  //     0x4124c6): seekBuilding's crowded building (10243).
+  //   0x67 Task67_GoToBuilding (ctor 0x4a826d, dtor 0x42c836), 0x68
+  //     Task68_EnterBuilding (ctor 0x42c7ca, dtor 0x42a4d5), 0x69
+  //     Task69_ExitBuilding (ctor 0x42a8f0, dtor 0x42a549), 0x6a
+  //     Task6a_InsideBuilding (ctor 0x4a8201): Guest::building and
+  //     State::Using.
+  //   0x6b Task6b_GoEat (ctor 0x59d3e6, dtor 0x59d3ac, taskId 0x59d57a), 0x6c
+  //     Task6c_Eat (ctor 0x52dc85, dtor 0x52d967, taskId 0x52d94f), 0x6d
+  //     Task6d_EatStanding (ctor 0x52de0e, dtor 0x52da06, taskId 0x52da00):
+  //     Guest::eatStep.
+  //   0x70 Task70_ViewAnimals (ctor 0x4a837b, dtor 0x4261cf, taskId
+  //     0x423214): State::Gawking at an exhibit.
+  //   0x71 Task71_LeaveAnimalsFree (ctor 0x4a6758, dtor 0x4fa2e4, taskId
+  //     0x4233e4): Guest::leaving.
+  //   0x76 Task76_GuestFollowGuide (ctor 0x58d276, dtor 0x58d2e2, destroy
+  //     0x58d2ec, freeIfAsked 0x58d2f9, taskId 0x58ce66 - shared with the
+  //     guide's): Guest::guide, joinTour.
+  //   0x79 Task79_GuestSick (ctor 0x5b06c2, dtor 0x5b05a4, destroy 0x5b05ae,
+  //     freeIfAsked 0x5b05bb, taskId 0x5b05de): Guest::puking.
+  //   0x7f Task7f_GuestInWater (ctor 0x49a5ad, dtor 0x49a432, taskId
+  //     0x4994bd), 0x84 Task84_Drown (ctor 0x61a68a, dtor 0x61a6dc, taskId
+  //     0x61a6d6): State::Water, Guest::waterTask (kOutOfWaterTask,
+  //     kDrownTask).
+  //   0x81 Task81_GawkObject (ctor 0x4a6bbd, dtor 0x441256, taskId 0x441216):
+  //     Guest::gawkObject.
   enum class State { Arriving, Walking, Gawking, Leaving, Fleeing, Using, Caught, Water };
   // Its tasks on the water, by the original's task numbers (unitMakeTask):
   // 0x82 a ride (Task82, class table 0x6335d4), 0x66 back to a return
@@ -218,6 +261,10 @@ public:
     // Attacked by a loose predator (never twice), and getting up after
     bool attacked = false;
     int caughtStage = 0;
+    // The rename cheats' flags (zoo.exe +0x340, not saved): Original::Cheat's
+    // stinky, rpro, boogyman, yellowman, redman - Guests::cheatTick
+    int cheatFlags = 0;
+    bool stinkSick = false; // (being sick from a "Stinky" guest: its bSick, no task)
     // Marine Mania's water rides (zoo.exe guestBuy 0x42d858 on a cReturnBuilding):
     // the ride's building type (its cNameID, ZTGuest +0x284's low bits; 0
     // none), its behaviour set (+0x288: "breturnboatshak1"), in the water
@@ -273,12 +320,18 @@ public:
   int nearestPrey(float x, float y, float radius) const;
   bool preyPosition(int guest, float &x, float &y) const;
   void caught(int guest, const std::string &animalKey, bool female, const std::string &animalName);
+  // Taken away (zoo.exe unitMarkRemoved 0x4fa78e(1): +0x13c, removed at the
+  // sweep 0x434df7) - fKillPrey's guest. ours: out of the zoo, as drowned
+  void takeAway(int guest);
   void releaseTour(int guide);
   void tourTalk(int guide, int bonus);
   std::function<bool(int guide)> guideSpeaking;
   // A guest come in at the gate (zoo.exe 0x4f6e3c ends with 0x4f7ebe, the
   // special days' flyers)
   std::function<void()> onArrive;
+  // A guest taken in as a building's user (buildingAddUser 0x42ce0a): the
+  // building's use sound (0x42cc1a: World::startUseSound)
+  std::function<void(int building)> useSoundStart;
   // A building wrecked (zoo.exe buildingPutGuestsOut 0x5ae745, from
   // ZTBuilding::toRubble 0x611bd6): every guest inside put out now, as if
   // its time inside were over (guestBuy 0x42d858 with 1: paid, judged, its
@@ -450,6 +503,12 @@ public:
   bool visitedExhibit(const Guest &g, int exhibit) const;
   bool visitedObject(const Guest &g, const PlacedObjects::Object &o) const;
   int placesToVisit() const;
+  // Whether a thing satisfies any need (its .ai's [Satisfies]: zoo.exe
+  // keeps such things on its lists 0x639060 - the "The Rock" cheat's)
+  bool satisfiesAny(const std::string &file) const { return !infoOf(file).satisfies.empty(); }
+  // The rename cheats' guest flags at work, each tick (zoo.exe ZTGuest's
+  // update 0x43a62c)
+  void cheatTick();
 
 private:
   ResourceManager *rm = nullptr;

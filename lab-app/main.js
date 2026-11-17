@@ -519,6 +519,10 @@ function playRect() {
 ipcMain.handle('play:original', (_e, opts = {}) => {
   if (updateHandoffActive) return {error:'The updater is starting.'};
   if (play.proc) return play.kind === 'original' ? { ok: true } : { error: 'Our engine is running in Play: stop it first.' };
+  // (a zoo that isn't there: said now - the original only says it can't
+  // open it after its films, on its menu)
+  if (opts && typeof opts.lastfile === 'string' && opts.lastfile && !fs.existsSync(path.resolve(opts.lastfile)))
+    return { error: `There's no saved zoo at ${path.resolve(opts.lastfile)}.` };
   const c = originalConfig();
   if (!fs.existsSync(c.exe)) return { error: `The original isn't at ${c.exe} (re/private/original.json says where it is).` };
   const launcher = roots.originalExe;
@@ -558,9 +562,15 @@ ipcMain.handle('play:original', (_e, opts = {}) => {
       else if (line.startsWith('wrote ')) recWrote(line);
       else {
         log.write(line + '\n');
-        for (const w of hookWaits.splice(0)) {
-          if (line.startsWith(w.prefix)) w.done(line);
-          else hookWaits.push(w);
+        // (ours: the hook answers its lines in order, one answer each - an
+        // answer goes to the first one waiting for it, not to every waiter
+        // with the same start: two "peek"s at once each got the first's
+        // bytes, and a census read beside the live bar mixed its numbers
+        // and its names)
+        const w = hookWaits.find((x) => line.startsWith(x.prefix));
+        if (w) {
+          hookWaits.splice(hookWaits.indexOf(w), 1);
+          w.done(line);
         }
       }
     }
@@ -1357,12 +1367,20 @@ ipcMain.handle('orig:recSave', (_e, file, names, by) => {
 // run) or the heap (inside some object) - and each instruction a watch caught
 // writing it is put in its function (Ghidra's)
 const watchLog = [];
-ipcMain.handle('orig:ask', async (_e, line, prefix) => {
-  if (!originalUp()) return { error: 'Start the original first (Play original).' };
-  const answer = hookWait(prefix, 60000);
-  playWrite(line);
-  const got = await answer;
-  return got ? { line: got } : { error: 'The game didn’t answer.' };
+// (ours: one question to the hook at a time, from every caller - the live
+// bar, a census, another session's memPeek - so each answer is the one asked
+// for; a question left unanswered is given up on after a minute)
+let origAsking = Promise.resolve();
+ipcMain.handle('orig:ask', (_e, line, prefix) => {
+  const ask = origAsking.then(async () => {
+    if (!originalUp()) return { error: 'Start the original first (Play original).' };
+    const answer = hookWait(prefix, 60000);
+    playWrite(line);
+    const got = await answer;
+    return got ? { line: got } : { error: 'The game didn’t answer.' };
+  });
+  origAsking = ask.catch(() => {});
+  return ask;
 });
 function hookWhere(a) {
   // (zoo.exe's image: 0x400000 up to its end, from Ghidra's last function)
@@ -3873,7 +3891,9 @@ http
           app.relaunch();
           setTimeout(() => win.close(), 200);
         }
-        else out = await pageCall(method, params || {});
+        // (a button's action may run long - origCheckSave opens a zoo in the
+        // original, films and all, on a busy PC: 10 minutes for those)
+        else out = await pageCall(method, params || {}, method === 'action' ? 600000 : undefined);
       } catch (e) {
         out = { error: String(e && e.message ? e.message : e) };
       }

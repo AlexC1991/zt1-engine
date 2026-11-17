@@ -1710,8 +1710,28 @@ function playVolume() {
   const v = store.get('playVolume', 100);
   return Number.isFinite(+v) ? Math.max(0, Math.min(100, +v)) : 100;
 }
-function sendPlayVolume() {
-  for (const t of [800, 3000, 8000]) setTimeout(() => S.play.running && lab.playCmd('volume ' + playVolume()), t);
+// (volume: this run's instead of the slider's - 0 for a check's run)
+function sendPlayVolume(volume) {
+  const v = volume === undefined ? playVolume() : volume;
+  for (const t of [800, 3000, 8000]) setTimeout(() => S.play.running && lab.playCmd('volume ' + v), t);
+}
+// ours: a Lab dialog that only shows something - Where used, a list, a
+// census: nothing to fill in or answer, only Close - left open over Play
+// (by another caller of the Lab, often) hides the game: closed by Play's
+// own actions. A dialog asking something is left; false then
+function closeStrayDialog() {
+  const m = $('modal');
+  if (!m || m.classList.contains('hidden')) return true;
+  // (Where used of a global also offers to name it: untouched, it's only
+  // showing something too)
+  const h = m.querySelector('.h');
+  const whereUsed = h && /^Where /.test(h.textContent) && ![...m.querySelectorAll('.field')].some((f) => f.value.trim());
+  if (!whereUsed && m.querySelector('input, textarea, select, .field, [data-x="ok"], [data-x="yes"], [data-x="save"]')) return false;
+  m.classList.add('hidden');
+  m.innerHTML = '';
+  m.onclick = null;
+  sendPlayRect();
+  return true;
 }
 
 // Where the game's window goes: the Play area, in page pixels (main.js
@@ -1987,9 +2007,13 @@ const ACTIONS = {
     const z = (S.eng.build.release || {}).zip;
     if (z) lab.reveal(z);
   },
-  // (arg: a saved zoo for the main menu's Continue Saved Game to open)
+  // (arg: a saved zoo, opened - its films skipped, Continue Saved Game
+  // pressed - and waited for until it runs (memory.js origOpenZoo), muted: a
+  // check's run, not the owner's game. Without one, its main menu)
   playOriginal: async (arg) => {
-    if (S.play.running) return;
+    const zoo = typeof arg === 'string' && arg.trim() ? arg.trim() : '';
+    if (S.play.running) return zoo ? { error: `${S.play.kind === 'original' ? 'The original' : 'Our engine'} is already running in Play: stop it first (playStop).` } : undefined;
+    closeStrayDialog();
     // (the Play view's size first: the original's drawn at it)
     if (S.tab !== 'play') setTab('play');
     S.play.running = true;
@@ -1997,16 +2021,21 @@ const ACTIONS = {
     renderPlay();
     // (a new run of the original: its types at new addresses)
     if (typeof LIVE !== 'undefined') LIVE.names = {};
-    const r = await lab.playOriginal(typeof arg === 'string' && arg ? { lastfile: arg } : {});
+    const r = await lab.playOriginal(zoo ? { lastfile: zoo } : {});
     if (r && r.error) {
       S.play.running = false;
       renderPlay();
-      return toast(esc(r.error), 6000);
+      toast(esc(r.error), 6000);
+      return { error: r.error };
     }
     for (const t of [500, 1500, 3000, 6000, 10000]) setTimeout(sendPlayRect, t);
-    sendPlayVolume();
+    sendPlayVolume(zoo ? 0 : undefined);
     recPoll();
     setTimeout(livePoll, 3000);
+    if (!zoo) return { ok: true };
+    const opened = await origOpenZoo(zoo);
+    if (opened.error) toast(esc(opened.error), 8000);
+    return opened;
   },
 
   playRestart: async () => {

@@ -2,6 +2,8 @@
 #include "Research.hpp"
 #include "Ambient.hpp"
 #include "World.hpp"
+#include "Sound.hpp"
+#include "Audio.hpp"
 #include "GpuTankLayer.hpp"
 #include "Animation.hpp"
 #include "ItemCatalog.hpp"
@@ -15,6 +17,7 @@
 #include "Features.hpp"
 #include "OriginalConstants.hpp"
 #include "SpriteDatabase.hpp"
+#include "Sound.hpp"
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -598,6 +601,10 @@ std::string runActivityPolishChecks(World &world, ResourceManager *rm, bool demo
       if(w){w->job=Staff::Job::None;w->jobFilter=-1;w->path.clear();w->pathAt=0;w->playsLeft=0;w->idleLeft=0;w->workCheck=0;}
       items.remove(litter);
       filter=fn.filter(pump);filter->health=1;
+      // (the job let go by hand: the work list as a load leaves it - the
+      // decayed pump posted afresh, nobody holding it; a worker can't take
+      // back an entry it still holds, 0x4a1ee2)
+      st.rebuildWorkList(map,fn);
     }
     bool savedService=false,repaired=false;
     for(int k=0;k<6000 && !repaired;++k) {
@@ -1176,6 +1183,10 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       zt.sets[0]["bparityent3"]=setOf({"fMoveEntityDelta(0,0,0)","fPlay(walk)"});
       zt.sets[0]["bparityent2"]=setOf({"fMoveEntityDelta(1,2)","fPlay(walk)"});
       zt.sets[0]["bparityspec4"]=setOf({"fMoveEntitySpecial(1,2,3,4)","fPlay(walk)"});
+      zt.sets[0]["bparityentmove"]=setOf({"fMoveEntityDelta(64,-32,0)","fPlay(walk)"});
+      zt.sets[0]["bparityspecmove"]=setOf({"fMoveEntitySpecial(16,8,0)","fPlay(walk)"});
+      zt.sets[0]["bparitykill"]=setOf({"fKillPrey()","fPlay(walk)"});
+      zt.sets[0]["bparityreturn"]=setOf({"fReturnToBuilding()","fPlay(walk)"});
       if(z) {
         z->x=30.5f;z->y=32.5f;
         const int home=z->exhibit;
@@ -1229,6 +1240,40 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         const bool entOn=z->anim=="walk";
         check("fPlaySound: one argument passes, two fail the line; fMoveEntityDelta/Special: three pass, two or four fail (0x601a62, 0x601aa5, 0x601b73)",
               soundOn&&fails("bparitysound2")&&entOn&&fails("bparityent2")&&fails("bparityspec4"));
+        // #259: the moves (0x6005c3: 64ths of a tile added). Delta as given;
+        // Special turned by its way (2, +x: (b,-a)) from its tile's centre
+        z->x=30.25f;z->y=32.5f;
+        start("bparityentmove");
+        const float dX=z->x,dY=z->y;
+        z->x=30.75f;z->y=32.25f;z->fx=1;z->fy=0;
+        start("bparityspecmove");
+        const float sX=z->x,sY=z->y;
+        z->fx=0;z->fy=-1;
+        start("bparityspecmove");
+        const float nX=z->x,nY=z->y;
+        out<<"ENTITY MOVES delta "<<dX<<","<<dY<<" special(+x) "<<sX<<","<<sY<<" special(-y) "<<nX<<","<<nY<<"\n";
+        check("#259: fMoveEntityDelta moves it by 64ths of a tile; fMoveEntitySpecial from its tile's centre, turned by its way (0x601aa5, 0x601b73, 0x6005c3)",
+              std::abs(dX-31.25f)<1e-4f&&std::abs(dY-32.0f)<1e-4f&&
+              std::abs(sX-30.625f)<1e-4f&&std::abs(sY-32.25f)<1e-4f&&
+              std::abs(nX-30.25f)<1e-4f&&std::abs(nY-32.375f)<1e-4f);
+        z->x=30.5f;z->y=32.5f;z->fx=0;z->fy=1;
+        // #260: fKillPrey (0x60cb3a) takes its target away (0x4fa78e(1)) and
+        // the line is done; no target fails it. fReturnToBuilding (0x60cc7b):
+        // an animal's type id (slot 0x298) is 0, no building's is - it fails
+        {
+          const int other=a.adopt(zebra,true,33.5f,32.5f,map,f,true);
+          z=a.member(id);
+          z->huntAnimal=other;
+          start("bparitykill");
+          const bool killOn=z->anim=="walk";
+          const Animals::Member *o=a.member(other);
+          const bool gone=o&&o->takenAway;
+          z->huntAnimal=-1;
+          a.remove(other);
+          z=a.member(id);
+          check("#260: fKillPrey takes its target away, the line done; with none it fails; fReturnToBuilding fails for an animal (0x60cb3a, 0x60cc7b)",
+                killOn&&gone&&fails("bparitykill")&&fails("bparityreturn"));
+        }
         int missA=0,missFail=0;
         for(int i=0;i<1000;++i){
           start("bparitymiss");
@@ -1463,7 +1508,8 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         const float inSick=healthTick();
         fresh();z->sick=true;z->health=0;z->stack={{"bparitya",0}};z->nextSet="bsleep";
         const float overSleep=healthTick();
-        fresh();z->sick=true;z->health=0;z->waterMode=true;z->stack={{"bparitya",0}};
+        // (poorly but not at 0: at 0, 0x4139c9(0,0) turns its heading to land)
+        fresh();z->sick=true;z->health=1;z->waterMode=true;z->stack={{"bparitya",0}};
         const float wet1=healthTick(),wet2=healthTick();
         out<<"SICK first "<<sickOnce<<" second "<<sickAgain<<" in bSick "<<inSick<<" over bSleep "<<overSleep
            <<" water "<<wet1<<" "<<wet2<<" (cSickChange "<<zt.sickChange<<")\n";
@@ -1554,6 +1600,17 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         const auto keepSets=a.typeList[lion].sets[0];
         a.typeList[lion].sets[0]["bparitya"]={};
         const int whileAsleep=huntTick(true),whileAwake=huntTick(false);
+        // #269: a prey in its bDefense or a bCaughtBy set can't be caught
+        // (ZTUnit::caughtBy 0x4a60b9, slot 0x260): not chosen
+        Animals::Member *zm=a.member(zid);
+        zm->stack={{"bdefense",0}};
+        const int whileDefending=huntTick(false);
+        zm->stack={{"bcaughtbylion",0}};
+        const int whileCaught=huntTick(false);
+        zm->stack.clear();
+        out<<"HUNT a zebra defending -> "<<whileDefending<<", in a bCaughtBy set -> "<<whileCaught<<"\n";
+        check("#269: a zebra in its bDefense or a bCaughtBy set isn't chosen as prey (0x4a60b9)",
+              whileDefending<0&&whileCaught<0&&whileAwake==zid);
         a.typeList[lion].sets[0]=keepSets;
         out<<"HUNT GATE lion asleep -> "<<whileAsleep<<", awake -> "<<whileAwake<<" (zebra "<<zid<<", its id "
            <<a.typeList[zebra].nameId<<", the lioness's prey "<<a.typeList[lion].preyIds[1].size()<<")\n";
@@ -1936,6 +1993,23 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
   Animals::Member egg;egg.type=dino;egg.exhibit=land;egg.x=30.5f;egg.y=32.5f;
   a.becomeEgg(egg);egg.hatchIn=1;egg.health=0;a.eggTick(egg);
   check("unhealthy dinosaur egg waits to hatch",egg.egg && egg.stack.empty() && egg.hatchIn==1);
+  // An egg's health is checked too (animalUpdate 0x437620: animalEggTick,
+  // then animalCheckHealth 0x4389aa): at 0 it's sick, at cMinHits; its
+  // illness rolls are passed over (0x42373d, +0x395)
+  {
+    Animals::Member e2;e2.type=dino;e2.exhibit=land;e2.x=30.5f;e2.y=32.5f;
+    a.becomeEgg(e2);e2.hatchIn=100000;e2.health=0;e2.healthCheck=0;
+    a.tick(e2,map,f);
+    const bool sickNow=e2.sick&&e2.health==float(a.typeList[dino].minHits);
+    Animals::Type &dt=a.typeList[dino];const int keepChance=dt.sickRandomChance;dt.sickRandomChance=100;
+    e2.sick=false;e2.health=float(dt.maxHits);
+    int fell=0;
+    for(int k=0;k<1000;++k){e2.healthCheck=0;e2.hatchIn=100000;a.tick(e2,map,f);fell+=e2.sick;e2.sick=false;}
+    dt.sickRandomChance=keepChance;
+    a.takeNotices();
+    out<<"EGG HEALTH sick at 0 "<<sickNow<<", fell ill in 1000 rolls "<<fell<<"\n";
+    check("an egg's health is checked (sick at 0, cMinHits) but it never falls ill (0x437620, 0x4389aa)",sickNow&&fell==0);
+  }
   egg.health=static_cast<float>(a.typeList[dino].maxHits);egg.hatchIn=0;a.eggTick(egg); // (0x437860: its last tick)
   check("healthy egg starts its original hatching sequence",!egg.egg || (!egg.stack.empty() && egg.stack.back().first=="bhatch"));
   step(egg,{{"fhatch",{}},{"fplay",{"stand"}}});
@@ -3132,6 +3206,122 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         f.updateExhibits(map,1,0,1);world.reindex();
       }
     }
+    // #261, zoo.exe 0x44e1e8: a show tank only when every wall round it is a
+    // show wall (three show sides and one exhibit side: an exhibit tank) -
+    // but a wall it shares with another tank stops nothing, and
+    // showTankLook 0x5ab683 turns that one into its show wall's type
+    {
+      int showWall=-1;
+      for(size_t k=0;k<f.types().size()&&showWall<0;++k)if(f.types()[k].tank&&f.types()[k].showFence)showWall=static_cast<int>(k);
+      const int plainWall=f.typeIndex("atltank");
+      int tx=-1,ty=-1;
+      for(int y=4;y<map.getHeight()-12&&tx<0;++y)for(int x=4;x<map.getWidth()-20&&tx<0;++x){
+        bool ok=true;
+        for(int yy=y-1;yy<=y+5&&ok;++yy)for(int xx=x-1;xx<=x+15&&ok;++xx)ok=f.exhibitAt(xx,yy)<0&&f.insideZoo(xx,yy)&&!map.isPath(xx,yy);
+        for(const auto &o:objects.objects())ok=ok&&!(o.x>x-2&&o.x<x+17&&o.y>y-2&&o.y<y+7);
+        if(ok){tx=x;ty=y;}
+      }
+      check("#261: room for three tanks side by side",tx>=0 && showWall>=0 && plainWall>=0);
+      if(tx>=0 && showWall>=0 && plainWall>=0) {
+        auto side=[&](int x0,int which,int type){ // 0 north, 1 south, 2 west, 3 east of a 4x4 plot
+          for(int k=0;k<4;++k)f.place(which<2?Fences::Edge{true,x0+k,ty+(which?4:0)}:Fences::Edge{false,x0+(which==3?4:0),ty+k},type,drag+which,map);
+        };
+        // Three show sides, one exhibit side
+        side(tx,0,showWall);side(tx,1,showWall);side(tx,2,showWall);side(tx,3,plainWall);drag+=4;
+        for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,"Mixed tank",map);
+        const Fences::Exhibit *mixed=f.exhibit(f.exhibitAt(tx+1,ty+1));
+        // An exhibit tank, then a show tank against it on its east wall
+        const int plain=rectangle(tx+6,ty,4,4,plainWall,"Plain tank");
+        side(tx+10,0,showWall);side(tx+10,1,showWall);side(tx+10,3,showWall);drag+=4;
+        for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,"Show beside",map);
+        const Fences::Exhibit *beside=f.exhibit(f.exhibitAt(tx+11,ty+1)),*p=f.exhibit(plain);
+        int sharedType=-1;
+        if(const Fences::Piece *pc=f.at({false,tx+10,ty+1}))sharedType=pc->type;
+        out<<"SHOWWALLS mixed tank "<<(mixed?mixed->tank:0)<<" show "<<(mixed?mixed->show:0)<<" | beside tank "<<(beside?beside->tank:0)
+           <<" show "<<(beside?beside->show:0)<<" shared wall "<<sharedType<<" (show "<<showWall<<") | plain show "<<(p?p->show:-1)<<"\n";
+        check("#261: three show wall sides and one exhibit side make an exhibit tank (0x44e1e8)",mixed && mixed->tank && !mixed->show);
+        check("#261: a show tank against an exhibit tank is a show tank, the wall they share turned to its show wall (0x5ab683)",
+              beside && beside->tank && beside->show && sharedType==showWall && p && p->tank);
+        for(int id:{f.exhibitAt(tx+1,ty+1),plain,f.exhibitAt(tx+11,ty+1)})if(f.exhibit(id))f.drainExhibit(id);
+        for(int x0:{tx,tx+6,tx+10})for(int k=0;k<4;++k){f.remove({true,x0+k,ty},map);f.remove({true,x0+k,ty+4},map);f.remove({false,x0,ty+k},map);f.remove({false,x0+4,ty+k},map);}
+        f.updateExhibits(map,1,0,1);world.reindex();
+      }
+    }
+    // #249, zoo.exe 0x44e389 -> tankEmptyContents 0x458c2b(1, confirm): a
+    // tank closed round a rock and a zebra asks 10552 first (tankFillBlocked
+    // 0x485aa7) and says nothing of 10550 (no gate yet, 0x410349). No: the
+    // walls just laid taken back, their money returned (zooView +0x455 ->
+    // undoLastAction 0x4de527). Yes: the rock sold (its sell value), the
+    // zebra crated on the zoo ground by the tank (0x60da6b), the water in
+    {
+      // (the guests' random draws kept as they were, so the fixtures after
+      // this one admit the same guests)
+      const auto guestRng=g.rng;
+      const int wall=f.typeIndex("atltank"),zebra=a.typeOfFile("animals/zebra.ai");
+      int tx=-1,ty=-1;
+      for(int y=6;y<map.getHeight()-14&&tx<0;++y)for(int x=6;x<map.getWidth()-14&&tx<0;++x){
+        bool ok=true;
+        for(int yy=y-5;yy<=y+9&&ok;++yy)for(int xx=x-5;xx<=x+9&&ok;++xx)ok=f.exhibitAt(xx,yy)<0&&f.insideZoo(xx,yy)&&!map.isPath(xx,yy)&&!world.getIndex().blocked(xx,yy);
+        for(const auto &o:objects.objects())ok=ok&&!(o.x>x-6&&o.x<x+10&&o.y>y-6&&o.y<y+10);
+        if(ok){tx=x;ty=y;}
+      }
+      check("#249: room for a tank round a rock and a zebra",tx>=0 && wall>=0 && zebra>=0);
+      if(tx>=0 && wall>=0 && zebra>=0) {
+        for(int k=0;k<4;++k){f.place({true,tx+k,ty},wall,drag,map);f.place({false,tx,ty+k},wall,drag+1,map);f.place({false,tx+4,ty+k},wall,drag+2,map);}
+        drag+=3;f.updateExhibits(map,1,0,1);
+        const bool rockIn=objects.add("scenery/other/srock1.ai",tx+1.5f,ty+1.5f,0);
+        const int rock=rockIn?objects.objects().back().id:-1;
+        const float rockValue=rockIn?world.sellValue(objects.objects().back()):0.0f;
+        const int z=a.adopt(zebra,false,tx+2.5f,ty+2.5f,map,f,true);
+        world.reindex();
+        const double cashWas=world.cash;world.cash=1e9;
+        int camX=0,camY=0;world.getCameraPosition(camX,camY);
+        auto lastSide=[&]{
+          int x0,y0,x1,y1;world.centreOn(tx+2.0f,ty+2.0f);world.setFenceTool(wall);
+          world.vertexToWindow(tx,ty+4,x0,y0);world.vertexToWindow(tx+4,ty+4,x1,y1);
+          world.mouseDown(x0,y0);world.mouseMove(x1,y1);World::ToolResult r=world.mouseUp(x1,y1);
+          world.setFenceTool(-1);return r;
+        };
+        f.takeFillRefusals();
+        World::ToolResult r=lastSide();
+        // (a tank isn't named until after the question: exhibitAt finds named ones only)
+        int tank=r.newExhibits.empty()?-1:r.newExhibits[0];
+        const Fences::Exhibit *t=f.exhibit(tank);
+        const World::TankContents c=world.tankContents(tank);
+        const bool silent=f.takeFillRefusals().empty();
+        out<<"TANKASK tank "<<tank<<" asked "<<r.askTankFill<<" cost "<<r.cost<<" filling "<<(t?t->filling:-1)<<" objects "<<c.objects.size()
+           <<" animals "<<c.animals.size()<<" silent "<<silent<<"\n";
+        check("#249: a tank closed round a rock and a zebra asks 10552 first, empty and with no 10550 (0x458c2b, 0x410349)",
+              rockIn && z>=0 && t && t->tank && r.askTankFill==tank && !t->filling && t->water==0 && silent &&
+              c.objects.size()==1 && c.objects[0]==rock && c.animals.size()==1 && c.animals[0]==z);
+        const World::UndoMoney m=world.undo();
+        const bool wallsBack=!f.at({true,tx+1,ty+4}) && f.at({true,tx+1,ty});
+        out<<"TANKASK No: walls back "<<wallsBack<<" tank left "<<(f.exhibit(tank)!=nullptr)<<" money "<<m.construction<<"\n";
+        check("#249: No takes the walls just laid back with their money (undoLastAction 0x4de527); the rock and zebra stay",
+              wallsBack && !f.exhibit(tank) && r.cost>0 && std::fabs(m.construction-r.cost)<0.01f &&
+              objects.indexOf(rock)>=0 && a.member(z));
+        r=lastSide();
+        tank=r.newExhibits.empty()?-1:r.newExhibits[0];
+        const float refund=world.clearTankForFill(tank);
+        t=f.exhibit(tank);
+        const Animals::Member *zm=a.member(z);
+        const int zx=zm?static_cast<int>(std::floor(zm->x)):-1,zy=zm?static_cast<int>(std::floor(zm->y)):-1;
+        const bool out1=zm && zm->boxed && t && !t->tiles.count({zx,zy}) && f.exhibitAt(zx,zy)<0 && f.insideZoo(zx,zy);
+        // (on the rings from 3 tiles off the outside tile of its first boundary edge)
+        int dist=1000;
+        if(t)for(auto [ax,ay]:t->tiles)dist=std::min(dist,std::abs(ax-zx)+std::abs(ay-zy));
+        out<<"TANKASK Yes: refund "<<refund<<" (rock "<<rockValue<<") rock left "<<(objects.indexOf(rock)>=0)<<" zebra boxed "<<(zm?zm->boxed:0)
+           <<" at "<<(zm?zm->x:-1)<<","<<(zm?zm->y:-1)<<" filling "<<(t?t->filling:-1)<<"\n";
+        check("#249: Yes sells the rock (its sell value back) and fills the tank (0x458c2b, removeObject 0x50a0b0)",
+              r.askTankFill==tank && objects.indexOf(rock)<0 && rockValue>0 && std::fabs(refund-rockValue)<0.01f && t && t->filling);
+        check("#249: Yes puts the zebra in its crate on the zoo ground by the tank (0x505941, 0x60da6b)",out1 && dist>=2 && dist<=52);
+        world.cash=cashWas;world.setCameraPosition(camX,camY);g.rng=guestRng;
+        if(a.member(z))a.remove(z);
+        if(f.exhibit(tank))f.drainExhibit(tank);
+        for(int k=0;k<4;++k){f.remove({true,tx+k,ty},map);f.remove({true,tx+k,ty+4},map);f.remove({false,tx,ty+k},map);f.remove({false,tx+4,ty+k},map);}
+        f.updateExhibits(map,1,0,1);world.reindex();
+      }
+    }
 
     // Idling: two animals standing on the same spot must be parted. This is
     // the one thing 10.28 added that is kept, so it is what this guards.
@@ -3455,6 +3645,64 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       const bool farther=m3&&!st.findWork(*m3,map,f);
       m=st.member(w);
       check("maintenance: a farther worker doesn't take a job over",farther&&m&&m->job==Staff::Job::Trash);
+      // The work list's lifetime (zoo.exe 0x638fa0): work goes on it once,
+      // as it appears (0x434e30); a worker's entry is freed when it takes
+      // another (maintTakeEntry 0x4a97c0), done or not; a worker taken away
+      // lets its entry go, left for another (0x502078); a load empties the
+      // list and the zoo posts its work again (0x5b11a2, worldAfterLoad
+      // 0x4534e6)
+      st.clear();world.reindex();
+      auto listed=[&](Staff::Job job,int item){int n=0;for(const auto &e:st.workList())if(e.job==job&&e.item==item)++n;return n;};
+      const int dropped=items.add(ZooItems::Kind::Litter,-1,24.5f,32.5f);
+      const int wa=st.hire(maintType,24.5f,30.5f,map,f);
+      world.reindex();
+      Staff::Member *ma=st.member(wa);
+      const bool tookA=ma&&st.findWork(*ma,map,f);
+      ma=st.member(wa);
+      check("work list: litter posted once, its worker holding it",tookA&&ma&&ma->job==Staff::Job::Litter&&
+            listed(Staff::Job::Litter,dropped)==1&&listed(Staff::Job::Trash,canId)==1);
+      // picked up mid-job and put down by other litter: it takes that, and
+      // the work it dropped leaves the list for good
+      st.moveTo(wa,24.5f,26.5f);
+      const int other=items.add(ZooItems::Kind::Litter,-1,24.5f,27.5f);
+      ma=st.member(wa);
+      const bool tookOther=ma&&st.findWork(*ma,map,f);
+      ma=st.member(wa);
+      out<<"STAFF work list after the move: "<<st.workList().size()<<" entries, job "<<(ma?static_cast<int>(ma->job):-1)
+         <<" item "<<(ma?ma->jobItem:-1)<<"\n";
+      check("work list: a worker moved mid-job takes other work and the litter it dropped leaves the list (0x4a97c0)",
+            tookOther&&ma&&ma->job==Staff::Job::Litter&&ma->jobItem==other&&items.item(dropped)&&
+            listed(Staff::Job::Litter,dropped)==0);
+      const int wb=st.hire(maintType,24.5f,33.5f,map,f);
+      world.reindex();
+      Staff::Member *mb=st.member(wb);
+      const bool foundB=mb&&st.findWork(*mb,map,f);
+      mb=st.member(wb);
+      check("work list: the dropped litter isn't found again - a worker beside it takes the bin",
+            foundB&&mb&&mb->job==Staff::Job::Trash&&mb->jobItem==canId);
+      // taken away: its entry stays, for the next worker
+      st.fire(wb);
+      int heldBy=-2;for(const auto &e:st.workList())if(e.job==Staff::Job::Trash&&e.item==canId)heldBy=e.holder;
+      check("work list: a worker taken away leaves its work on the list, held by none (0x502078)",heldBy==-1);
+      // a load: emptied, the zoo's work posted again - the dropped litter too
+      st.rebuildWorkList(map,f);
+      check("work list: a load posts the zoo's work afresh, the dropped litter back on it (0x4534e6)",
+            listed(Staff::Job::Litter,dropped)==1&&listed(Staff::Job::Litter,other)==1&&listed(Staff::Job::Trash,canId)==1&&
+            st.member(wa)&&st.member(wa)->workEntry<0);
+      // a can: posted as it fills past 12, once; emptied, its entry goes;
+      // filling again posts it again
+      if(auto *can=objects.byId(canId))can->fill=0;
+      st.noticeWork(map,f);
+      if((ma=st.member(wa)))st.findWork(*ma,map,f);
+      const int afterEmpty=listed(Staff::Job::Trash,canId);
+      if(auto *can=objects.byId(canId))can->fill=13;
+      st.noticeWork(map,f);
+      const int at13=listed(Staff::Job::Trash,canId);
+      if(auto *can=objects.byId(canId))can->fill=20;
+      st.noticeWork(map,f);
+      check("work list: an emptied can's entry goes; it's posted again once as it reaches 13 (0x59d758)",
+            afterEmpty==0&&at13==1&&listed(Staff::Job::Trash,canId)==1);
+      items.remove(dropped);items.remove(other);
     }
     for(size_t i=0;i<objects.objects().size();++i)if(objects.objects()[i].id==canId){objects.remove(static_cast<int>(i));break;}
     st.clear();world.reindex();
@@ -5135,6 +5383,24 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     check("a wrecked Restroom leaves bathrubl named \"Rubble of\" it, a piece a tile (0x611bd6)",
       restroomTiles>0 && pieces==restroomTiles && kinds==std::set<std::string>{"bathrubl"} && named && centred);
     clearUp();
+    // #269: the explosion played with its piece's cExplosionSoundAtten
+    // (ZTRubbleType::loadConfig 0x4c42a2, +0x16c: brubble1-4's 1100 or 1500)
+    {
+      Sound::get().lastAt.clear();Sound::get().lastAtAtten=-1;
+      wreck("scenery/building/bgrstnd.ai",14.5f,58.5f,kinds,pieces,named,centred);
+      bool matched=false;int want=-1;
+      for(size_t i=before;i<objects.objects().size()&&!matched;++i)
+        if(IniReader *ai=rm->getIniReader("scenery/other/"+objects.objects()[i].typeName+".ai")) {
+          const std::string snd=ai->get("characteristics/integers","cexplosionsound");
+          want=ai->getInt("characteristics/integers","cexplosionsoundatten",0);
+          delete ai;
+          matched=!snd.empty()&&snd==Sound::get().lastAt&&want==Sound::get().lastAtAtten;
+        }
+      out<<"RUBBLE SOUND "<<Sound::get().lastAt<<" atten "<<Sound::get().lastAtAtten<<" (its file's "<<want<<")\n";
+      check("#269: a wrecked building's explosion plays with its rubble's cExplosionSoundAtten (0x4c42a2)",
+            pieces>0&&matched&&Sound::get().lastAtAtten>0);
+      clearUp();
+    }
     bool every=true,mixed=true;
     for(int k=0;k<5;++k) {
       const int tiles=wreck("scenery/building/bgrstnd.ai",10.5f,58.5f,kinds,pieces,named,centred);
@@ -5275,6 +5541,10 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     out<<"RENAME FIXTURE guests "<<g.list.size()<<" pen "<<pen<<" sides "<<sides.size()<<" cars "<<car<<" tree "<<tree<<"\n";
     if(g.list.size()==4&&!sides.empty()&&car&&tree) {
       // (Zeta Psi: the men, and only they, in 5 and 6, smell-sick)
+      // (a man among them: the four are drawn at random, and what the
+      // fixtures before this one did changes the draw)
+      if(std::none_of(g.list.begin(),g.list.end(),[&](const Guests::Guest &q){return !g.typeList[q.type].female&&!g.typeList[q.type].child;}))
+        for(size_t k=0;k<g.typeList.size();++k)if(!g.typeList[k].female&&!g.typeList[k].child){g.list[0].type=static_cast<int>(k);break;}
       for(auto &q:g.list){q.colours[0]=q.colours[1]=0;q.smelled=false;}
       const std::string zeta=RenameCheats::guestRenamed(world,0,"Zeta Psi");
       int men=0;bool zetaOk=true;
@@ -5357,6 +5627,263 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     f.updateExhibits(map,1,0,1);
     st.clear();g.clear();world.reindex();
   }
+  // The rest of the rename cheats (#235, round 11). Guests (0x44940b): "Eggman"
+  // (0x63cfa1) - a dinosaur bought from then on an egg 5 ticks from hatching;
+  // the +0x340 flags at work each tick (ZTGuest's update 0x43a62c) on the
+  // other guests on the tile: "Stinky" (any guest) each not in a building
+  // sick (bSick), "rpro" (a man) each woman attacked and leaving, "Boogyman"
+  // (a man) each child, "Redman" / "Yellowman" (a man) each one's shirt 1 /
+  // 9 and his own; a woman so named nothing. Staff: "Dr. Dolittle" (a man
+  // keeper) - a grizzly needn't be happy and its breeding roll is skipped
+  // once, a zebra's isn't; "Dr. Scholl" (a scientist) - scientists twice the
+  // rate, himself four times till his walk ends, keepers not; "Dr.
+  // Frankenstein" (a scientist, not a keeper) - an animal healed becomes
+  // another egg-laying kind; "The Rock" (a maintenance man) - every
+  // rubbleable thing that satisfies a need to rubble. Animals: a grizzly
+  // "Deer" - every grizzly's cBashStrength 501; a reindeer "Comet" - every
+  // Dinosaur Digs animal sold for nothing. The name table (0x449560): bonus,
+  // colours, once only, its type
+  {
+    const RenameCheats::Flags flagsWas=RenameCheats::flags();
+    RenameCheats::setFlags({});
+    const RenameCheats::Hooks realHooks=RenameCheats::hooks();
+    RenameCheats::Hooks counted=realHooks;
+    double given=0;int gifts=0;
+    counted.donation=[&](double d){given+=d;++gifts;};
+    RenameCheats::setHooks(counted);
+    a.clear();st.clear();g.clear();g.setEntrance(25,26);
+    // Eggman
+    {
+      const int allo=a.typeOfFile("animals/allo.ai");
+      const int one=allo>=0?a.adopt(allo,false,40.5f,40.5f,map,f,true):-1,two=allo>=0?a.adopt(allo,true,42.5f,40.5f,map,f,true):-1;
+      if(auto *m=a.member(one))a.becomeEgg(*m);
+      const int hatchWas=a.member(one)?a.member(one)->hatchIn:-1;
+      for(int k=0;k<2;++k)g.admit(k);
+      const std::string egg=g.list.empty()?"":RenameCheats::guestRenamed(world,0,"Eggman");
+      if(auto *m=a.member(two))a.becomeEgg(*m);
+      const int hatchNow=a.member(two)?a.member(two)->hatchIn:-1;
+      out<<"RENAME EGGMAN "<<egg<<" before "<<hatchWas<<" (cTimeToHatch "<<(allo>=0?a.typeList[allo].timeToHatch:-1)<<") after "<<hatchNow<<"\n";
+      check("\"Eggman\": an egg made from then on 5 ticks from hatching, one before at cTimeToHatch (0x63cfa1, 0x5a5283)",
+            allo>=0&&egg=="0x63cfa1"&&RenameCheats::flags().eggman&&hatchWas==a.typeList[allo].timeToHatch&&hatchNow==5);
+      RenameCheats::setFlags({});a.clear();g.clear();
+    }
+    // The guest flags: a man, a woman, a boy, a girl and another man on one tile
+    {
+      auto kind=[&](const char *key){for(int i=0;i<static_cast<int>(g.typeList.size());++i)if(g.typeList[i].key==key)return i;return -1;};
+      const int man=kind("man"),woman=kind("woman"),boy=kind("boy"),girl=kind("girl");
+      auto crowd=[&]{
+        g.clear();
+        for(int k=0;k<5;++k)g.admit(k);
+        if(g.list.size()!=5)return false;
+        const int types[5]={man,woman,boy,girl,man};
+        for(int k=0;k<5;++k){auto &q=g.list[k];q.type=types[k];q.x=30.3f+0.1f*k;q.y=30.5f;q.colours[0]=3;q.attacked=q.leaving=q.puking=false;q.building=-1;}
+        return true;
+      };
+      if(man>=0&&woman>=0&&boy>=0&&girl>=0&&crowd()) {
+        // (a woman named rpro, Boogyman, Yellowman: nothing - a man's names)
+        std::string hers;for(const char *n:{"rpro","Boogyman","Yellowman","Redman"})hers+=RenameCheats::guestRenamed(world,1,n);
+        const bool herNone=hers.empty()&&g.list[1].cheatFlags==0;
+        // Stinky: everyone on the tile sick but one in a building, and he not
+        g.list[3].building=0;
+        const std::string stinky=RenameCheats::guestRenamed(world,1,"Stinky");
+        g.cheatTick();
+        const bool sick=g.list[0].puking&&g.list[2].puking&&g.list[4].puking&&!g.list[3].puking&&!g.list[1].puking&&
+                        g.list[0].anim=="puke"&&g.list[0].stinkSick;
+        // (and away from his tile, nobody)
+        crowd();g.list[1].cheatFlags=Original::Cheat::stinky;g.list[1].x=36.5f;g.cheatTick();
+        bool alone=true;for(const auto &q:g.list)alone=alone&&!q.puking;
+        // rpro: the woman runs, the girl doesn't
+        crowd();const std::string rpro=RenameCheats::guestRenamed(world,0,"rpro");g.cheatTick();
+        const bool women=g.list[1].attacked&&g.list[1].leaving&&!g.list[3].attacked&&!g.list[2].attacked&&!g.list[4].attacked;
+        // Boogyman: the boy and the girl run
+        crowd();const std::string boog=RenameCheats::guestRenamed(world,0,"Boogyman");g.cheatTick();
+        const bool kids=g.list[2].attacked&&g.list[3].attacked&&g.list[2].leaving&&!g.list[1].attacked&&!g.list[4].attacked;
+        // Redman and Yellowman: his shirt at once, everyone's on the tile at the tick
+        crowd();const std::string red=RenameCheats::guestRenamed(world,0,"Redman");
+        const bool redOwn=g.list[0].colours[0]==1&&g.list[1].colours[0]==3;
+        g.list[3].building=0;g.cheatTick();
+        bool reds=true;for(const auto &q:g.list)reds=reds&&q.colours[0]==1;
+        crowd();const std::string yellow=RenameCheats::guestRenamed(world,4,"Yellowman");g.cheatTick();
+        bool yellows=true;for(const auto &q:g.list)yellows=yellows&&q.colours[0]==9;
+        out<<"RENAME GUEST FLAGS hers '"<<hers<<"' stinky "<<stinky<<" sick "<<sick<<" alone "<<alone<<" rpro "<<rpro<<" women "<<women
+           <<" boogyman "<<boog<<" kids "<<kids<<" red "<<red<<" own "<<redOwn<<" all "<<reds<<" yellow "<<yellow<<" all "<<yellows<<"\n";
+        check("guest flags: \"rpro\", \"Boogyman\", \"Yellowman\", \"Redman\" a man's names only (0x5cb0c5..0x5cb1a8: type +0x98 'm')",herNone);
+        check("\"Stinky\": every guest on his tile not in a building sick (bSick), none elsewhere (0x43a62c flag 2, 0x619110)",
+              stinky=="0x43a62c"&&sick&&alone);
+        check("\"rpro\": each woman on his tile attacked and leaving, no one else (flag 4, 0x6191f9)",rpro=="0x43a62c"&&women);
+        check("\"Boogyman\": each boy and girl on his tile attacked and leaving (flag 8, 0x6191f9)",boog=="0x43a62c"&&kids);
+        check("\"Redman\" / \"Yellowman\": his own shirt 1 / 9 at once, then every one's on his tile, in a building too (0x61922d, 0x619215)",
+              red=="0x43a62c"&&redOwn&&reds&&yellow=="0x43a62c"&&yellows);
+      } else check("rename guest flags fixture: five guests of the four kinds",false);
+      g.clear();
+    }
+    // Dr. Dolittle: a keeper man; a grizzly pair, unhappy, breeds once with
+    // the roll skipped; a zebra pair doesn't
+    {
+      const int grizzly=a.typeOfFile("animals/grizzly.ai"),zebra=a.typeOfFile("animals/zebra.ai");
+      const int kk=st.typeOfFile("staff/keeper.ai");
+      int her=-1,him=-1;
+      for(int y=56;y<70&&(her<0||him<0);++y)for(int x=56;x<70&&(her<0||him<0);++x){
+        const int id=st.hire(kk,x+0.5f,y+0.5f,map,f);if(id<0)continue;
+        if(her<0){st.member(id)->female=true;her=id;}else{st.member(id)->female=false;him=id;}
+      }
+      const int penDrag=drag;
+      const int pen=rectangle(28,30,10,6,f.typeIndex("chainlnk"),"Bear pen");
+      if(grizzly>=0&&zebra>=0&&her>=0&&him>=0&&pen>=0) {
+        const Animals::Type keepG=a.typeList[grizzly],keepZ=a.typeList[zebra];
+        auto pair=[&](int type,float x,int &dad,int &mum){
+          Animals::Type &t=a.typeList[type];t.reproductionChance=1;t.offspring=1;t.happyReproduceThreshold=90;
+          dad=a.adopt(type,false,x,32.5f,map,f,true);mum=a.adopt(type,true,x+1,32.5f,map,f,true);
+          for(int id:{dad,mum})if(auto *m=a.member(id)){m->happiness=10;m->ready=std::max(1,t.reproductionInterval);}
+        };
+        int gd,gm,zd,zm;pair(grizzly,30.5f,gd,gm);pair(zebra,34.5f,zd,zm);
+        auto check20=[&](int id){if(auto *m=a.member(id)){m->reproductionCheck=0;a.tick(*m,map,f);}};
+        for(int id:{gm,zm})check20(id);
+        const std::string hers=RenameCheats::staffRenamed(world,her,"Dr. Dolittle");
+        const bool herNone=hers.empty()&&!RenameCheats::flags().dolittle;
+        const std::string his=RenameCheats::staffRenamed(world,him,"Dr. Dolittle");
+        const bool set=RenameCheats::flags().dolittle;
+        a.births.clear();
+        for(int id:{zd,zm})if(auto *m=a.member(id))m->ready=std::max(1,a.typeList[zebra].reproductionInterval);
+        check20(zd);
+        const bool zebraNone=a.births.empty()&&RenameCheats::flags().dolittle;
+        for(int id:{gd,gm})if(auto *m=a.member(id))m->ready=std::max(1,a.typeList[grizzly].reproductionInterval);
+        check20(gd);
+        const bool cub=a.births.size()==1&&a.births[0].father==gd&&!RenameCheats::flags().dolittle;
+        out<<"RENAME DOLITTLE hers '"<<hers<<"' his "<<his<<" set "<<set<<" zebra none "<<zebraNone<<" grizzly cub "<<cub<<" births "<<a.births.size()<<"\n";
+        check("\"Dr. Dolittle\" (a man keeper): an unhappy grizzly breeds, its 1-in-100 roll skipped, the flag then cleared; a zebra not; a woman so named nothing (0x63c2e3, 0x5da846, 0x5db99f)",
+              herNone&&his=="0x63c2e3"&&set&&zebraNone&&cub);
+        a.births.clear();a.typeList[grizzly]=keepG;a.typeList[zebra]=keepZ;
+      } else check("Dr. Dolittle fixture: grizzly, zebra, two keepers, a pen",false);
+      RenameCheats::setFlags({});a.clear();st.clear();
+      {std::vector<Fences::Edge> all;for(const auto &[e,p]:f.pieces())if(p.drag>=penDrag&&p.drag<penDrag+4)all.push_back(e);for(const auto &e:all)f.remove(e,map);}
+      f.updateExhibits(map,1,0,1);
+    }
+    // Dr. Scholl and Dr. Frankenstein: scientists only
+    {
+      const int sk=st.typeOfFile("staff/scient.ai"),kk=st.typeOfFile("staff/keeper.ai");
+      int sci=-1,sci2=-1,kp=-1;
+      for(int y=56;y<70&&(sci<0||sci2<0||kp<0);++y)for(int x=56;x<70&&(sci<0||sci2<0||kp<0);++x){
+        const int id=st.hire(sci<0||sci2<0?sk:kk,x+0.5f,y+0.5f,map,f);if(id<0)continue;
+        if(sci<0)sci=id;else if(sci2<0)sci2=id;else kp=id;
+      }
+      if(sk>=0&&kk>=0&&sci>=0&&sci2>=0&&kp>=0) {
+        const auto &stt=st.types();
+        const float sWalk=st.tilesPerSecond(*st.member(sci2),false,false),kWalk=st.tilesPerSecond(*st.member(kp),false,false);
+        const std::string kpScholl=RenameCheats::staffRenamed(world,kp,"Dr. Scholl");
+        const std::string scholl=RenameCheats::staffRenamed(world,sci,"Dr. Scholl");
+        const int slow=stt[st.member(sci)->type].slowRate,fast=stt[st.member(sci)->type].fastRate;
+        const bool twice=st.tilesPerSecond(*st.member(sci2),false,false)==Original::unitTilesPerSecond(slow*2)&&
+                         st.tilesPerSecond(*st.member(sci2),false,true)==Original::unitTilesPerSecond(fast*2);
+        const bool four=st.tilesPerSecond(*st.member(sci),false,false)==Original::unitTilesPerSecond(slow*4);
+        const bool keeperSame=st.tilesPerSecond(*st.member(kp),false,false)==kWalk;
+        st.member(sci)->moveBoost=1;
+        const bool after=st.tilesPerSecond(*st.member(sci),false,false)==Original::unitTilesPerSecond(slow*2);
+        out<<"RENAME SCHOLL keeper '"<<kpScholl<<"' scholl "<<scholl<<" walk was "<<sWalk<<" twice "<<twice<<" himself x4 "<<four
+           <<" keeper same "<<keeperSame<<" then x2 "<<after<<"\n";
+        check("\"Dr. Scholl\" (a scientist): scientists at twice the rate, himself four times till his walk ends, keepers not; a keeper so named nothing (0x63c2e4, 0x41678b)",
+              kpScholl.empty()&&scholl=="0x63c2e4"&&twice&&four&&keeperSame&&after);
+        RenameCheats::setFlags({});
+        // Frankenstein: a keeper so named nothing; a scientist sets it, and
+        // an animal changed becomes another egg-layer, its name kept
+        const std::string kpFrank=RenameCheats::staffRenamed(world,kp,"Dr. Frankenstein");
+        const bool kpNone=kpFrank.empty()&&!RenameCheats::flags().frankenstein;
+        const std::string frank=RenameCheats::staffRenamed(world,sci2,"Dr. Frankenstein");
+        const int zebra=a.typeOfFile("animals/zebra.ai");
+        const int z=zebra>=0?a.adopt(zebra,true,32.5f,32.5f,map,f,true):-1;
+        const std::string name=a.member(z)?a.member(z)->name:"";
+        a.becomeAnotherKind(z);
+        const Animals::Member *now=a.member(z);
+        const bool changed=now&&now->type!=zebra&&a.typeList[now->type].laysEggs&&now->name==name&&now->female;
+        out<<"RENAME FRANKENSTEIN keeper '"<<kpFrank<<"' frank "<<frank<<" set "<<RenameCheats::flags().frankenstein<<" zebra now "
+           <<(now?a.typeList[now->type].key:"?")<<"\n";
+        check("\"Dr. Frankenstein\" (a scientist): set; a healed animal turned into another egg-laying kind, its name kept; a keeper so named nothing (0x64e83a, 0x4702e8)",
+              kpNone&&frank=="0x64e83a"&&RenameCheats::flags().frankenstein&&changed);
+      } else check("Dr. Scholl fixture: two scientists and a keeper",false);
+      RenameCheats::setFlags({});a.clear();st.clear();
+    }
+    // The Rock: a restroom (satisfies, rubbleable) wrecked; a gift shop
+    // (satisfies, cRubbleable 0) and a tree (satisfies nothing) kept
+    {
+      const size_t firstObj=objects.objects().size();
+      const bool placed=objects.add("scenery/building/bathroom.ai",40.0f,58.0f,0)&&objects.add("scenery/building/giftshp.ai",46.0f,58.0f,0)&&
+                        objects.add("scenery/foliage/whtthrna.ai",50.5f,58.5f,0);
+      world.reindex();
+      int woman=-1,man=-1;const int mk=st.typeOfFile("staff/maint.ai");
+      for(int y=56;y<70&&(woman<0||man<0);++y)for(int x=56;x<70&&(woman<0||man<0);++x){
+        const int id=st.hire(mk,x+0.5f,y+0.5f,map,f);if(id<0)continue;
+        if(woman<0){st.member(id)->female=true;woman=id;}else{st.member(id)->female=false;man=id;}
+      }
+      if(placed&&woman>=0&&man>=0) {
+        auto count=[&](const char *what){int n=0;for(const auto &o:objects.objects())n+=PlacedObjects::fileOf(o).find(what)!=std::string::npos;return n;};
+        const std::string hers=RenameCheats::staffRenamed(world,woman,"The Rock");
+        const bool herNone=hers.empty()&&count("bathroom")==1;
+        const std::string rock=RenameCheats::staffRenamed(world,man,"The Rock");
+        int rubble=0;for(const auto &o:objects.objects())rubble+=o.rubbleOf!=0;
+        out<<"RENAME ROCK hers '"<<hers<<"' rock "<<rock<<" restroom "<<count("bathroom")<<" gift shop "<<count("giftshp")<<" tree "<<count("whtthrna")<<" rubble "<<rubble<<"\n";
+        check("\"The Rock\" (a maintenance man): the restroom to rubble, the gift shop (cRubbleable 0) and the tree kept; a woman so named nothing (0x60d694)",
+              herNone&&rock=="0x60d694"&&count("bathroom")==0&&count("giftshp")==1&&count("whtthrna")==1&&rubble>0);
+      } else {
+        out<<"RENAME ROCK FIXTURE placed "<<placed<<" woman "<<woman<<" man "<<man<<"\n";
+        check("The Rock fixture: a restroom, a gift shop, a tree, two maintenance workers",false);
+      }
+      for(size_t k=objects.objects().size();k>firstObj;--k)objects.remove(k-1);
+      st.clear();world.reindex();
+    }
+    // Deer and Comet
+    {
+      const int grizzly=a.typeOfFile("animals/grizzly.ai"),zebra=a.typeOfFile("animals/zebra.ai"),
+                reindeer=a.typeOfFile("animals/reindeer.ai"),allo=a.typeOfFile("animals/allo.ai");
+      if(grizzly>=0&&zebra>=0&&reindeer>=0&&allo>=0) {
+        const Animals::Type keepG=a.typeList[grizzly];const int zebraBash=a.typeList[zebra].bash;
+        const int gz=a.adopt(grizzly,false,30.5f,32.5f,map,f,true),zb=a.adopt(zebra,false,32.5f,32.5f,map,f,true);
+        const std::string zebraDeer=RenameCheats::animalRenamed(world,zb,"Deer");
+        const std::string deer=RenameCheats::animalRenamed(world,gz,"Deer");
+        const bool bash=a.typeList[grizzly].bash==501&&a.typeList[grizzly].young.bash==501&&a.typeList[zebra].bash==zebraBash;
+        a.typeList[grizzly]=keepG;
+        const int rd=a.adopt(reindeer,false,34.5f,32.5f,map,f,true),al=a.adopt(allo,false,36.5f,32.5f,map,f,true);
+        const std::string zebraComet=RenameCheats::animalRenamed(world,zb,"Comet");
+        const bool allKept=a.member(al)&&a.member(rd)&&a.member(zb);
+        const std::string comet=RenameCheats::animalRenamed(world,rd,"Comet");
+        const bool gone=!a.member(al)&&a.member(rd)&&a.member(zb)&&a.member(gz);
+        out<<"RENAME DEER zebra '"<<zebraDeer<<"' deer "<<deer<<" bash "<<bash<<" COMET zebra '"<<zebraComet<<"' kept "<<allKept
+           <<" comet "<<comet<<" dinosaur gone, rest kept "<<gone<<" allo cExpansionID "<<a.typeList[allo].expansionId<<"\n";
+        check("\"Deer\" (a grizzly): every grizzly's cBashStrength 501, young too, a zebra's not; a zebra so named nothing (0x6075ea)",
+              zebraDeer.empty()&&deer=="0x6075ea"&&bash);
+        check("\"Comet\" (a reindeer): every Dinosaur Digs animal (cExpansionID 1) sold, the others kept; a zebra so named nothing (0x607757)",
+              zebraComet.empty()&&allKept&&comet=="0x607757"&&gone);
+      } else check("Deer and Comet fixture: grizzly, zebra, reindeer, allosaurus",false);
+      RenameCheats::setFlags({});a.clear();
+    }
+    // The name table: a keeper's entry (type keeper) - the bonus, once; a
+    // guest's colours; the wrong type nothing
+    {
+      RenameCheats::setNameEntry("Test Keeper","keeper","",250,0,0,0,{},true);
+      RenameCheats::setNameEntry("Test Guest","","",0,4,5,6,{},false);
+      RenameCheats::setNameEntry("Not A Guest","keeper","",99,1,1,1,{},false);
+      RenameCheats::usedNames().clear();
+      const int kk=st.typeOfFile("staff/keeper.ai");int kp=-1;
+      for(int y=56;y<70&&kp<0;++y)for(int x=56;x<70&&kp<0;++x)kp=st.hire(kk,x+0.5f,y+0.5f,map,f);
+      g.clear();for(int k=0;k<2;++k)g.admit(k);
+      given=0;gifts=0;
+      if(kp>=0&&g.list.size()==2) {
+        RenameCheats::staffRenamed(world,kp,"Test Keeper");
+        RenameCheats::staffRenamed(world,kp,"Test Keeper");
+        const bool once=given==250&&gifts==1&&RenameCheats::usedNames().count("Test Keeper");
+        RenameCheats::guestRenamed(world,0,"Test Guest");RenameCheats::guestRenamed(world,1,"Not A Guest");
+        const bool coloured=g.list[0].colours[0]==4&&g.list[0].colours[1]==5&&g.list[0].colours[2]==6&&given==250&&gifts==2;
+        const bool wrong=g.list[1].colours[0]!=1||g.list[1].colours[1]!=1;
+        out<<"RENAME TABLE once "<<once<<" coloured "<<coloured<<" wrong type kept "<<wrong<<" given "<<given<<" in "<<gifts<<"\n";
+        check("the name table: a keeper's bonus once only, a guest's colour picks (and a $0 bonus), the wrong type nothing (0x449560, 0x6089e8, 0x60875c, 0x641860)",
+              once&&coloured&&wrong);
+      } else check("name table fixture: a keeper, two guests",false);
+      RenameCheats::setNameEntry("","","",0,0,0,0,{},false);RenameCheats::usedNames().clear();
+      st.clear();g.clear();
+    }
+    RenameCheats::setHooks(realHooks);
+    RenameCheats::setFlags(flagsWas);
+    a.clear();st.clear();g.clear();world.reindex();
+  }
   // Hide Buildings (zoo.exe ZTBuilding::draw 0x433aaf): only a building whose
   // [Member] lists "structures" - a restroom hidden, a burrow (shelters) not
   {
@@ -5371,6 +5898,40 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       check("Hide Buildings: a restroom (structures) hidden, a burrow (shelters) still drawn (0x433aaf)",loo&&!burrow&&shown);
     } else check("Hide Buildings fixture",false);
     for(size_t k=objects.objects().size();k>firstObj;--k)objects.remove(k-1);
+  }
+  // A building's use sound (#267): a user taken in starts it (zoo.exe
+  // 0x42cc1a from buildingAddUser 0x42ce0a); one that loops ([UseSound]
+  // loops = 1: the carousel's) fades by 3 a ms of play while the building
+  // has no users and back while it has, 0..5000, and stops at 5000
+  // (ZTBuilding::update 0x434c4b)
+  {
+    check("a looping use sound's fade: +3 a ms with no users, -3 with some, kept to 0..5000 (0x434c4b)",
+          World::useLoopFade(0,100,false)==300&&World::useLoopFade(4900,100,false)==5000&&
+          World::useLoopFade(300,50,true)==150&&World::useLoopFade(100,50,true)==0);
+    const size_t at=objects.objects().size();
+    if(objects.add("scenery/building/carousal.ai",31.5f,31.5f,0)) {
+      world.reindex();world.centreOn(31,31);
+      const bool soundWas=Sound::get().isPaused();Sound::get().setPaused(false); // (the game's sound held while checking)
+      Audio::halt(-1); // (earlier fixtures' loops still hold the mixer's channels)
+      const int id=objects.objects()[at].id;
+      world.startUseSound(static_cast<int>(at));
+      const int ch=world.useSoundChannel(id);
+      const bool started=ch>=0&&Sound::playing(ch);
+      world.stepBuildingSounds(0.5f);
+      const int half=world.useSoundFade(id);
+      const bool still=Sound::playing(world.useSoundChannel(id));
+      world.stepBuildingSounds(1.2f);
+      const int end=world.useSoundFade(id);
+      const bool stopped=!Sound::playing(world.useSoundChannel(id));
+      float vdx=0,vdy=0;const bool seen=a.viewOffset&&a.viewOffset(31.5f,31.5f,vdx,vdy);
+      out<<"USE SOUND carousel audio "<<Audio::isOpen()<<" sound "<<Sound::get().enabled<<" master "<<Sound::get().master
+         <<" view "<<seen<<" "<<vdx<<","<<vdy<<" busy "<<[]{int n=0;for(int c=0;c<32;++c)n+=Audio::playing(c)?1:0;return n;}()<<" was paused "<<soundWas<<" channel "<<ch<<" started "<<started<<" fade "<<half
+         <<" playing "<<still<<" then "<<end<<" stopped "<<stopped<<"\n";
+      check("the carousel's use sound starts looped for a user; with none it fades (1500 after 500 ms) and stops at 5000",
+            started&&half==1500&&still&&end==5000&&stopped);
+      objects.remove(at);world.stepBuildingSounds(0.0f);Sound::get().setPaused(soundWas);
+      check("its building gone: its use sound forgotten",world.useSoundFade(id)<0);
+    } else check("use sound fixture (the carousel)",false);
   }
   a.clear();st.clear();g.clear();world.reindex();world.centreOn(31,32);
   for(size_t k=0;k<leaveDoneWas.size()&&k<g.typeList.size();++k)g.typeList[k].leaveDone=leaveDoneWas[k];

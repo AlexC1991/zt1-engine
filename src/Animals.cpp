@@ -12,6 +12,7 @@
 #include "OriginalConstants.hpp"
 #include "Pathfinder.hpp"
 #include "PlacedObjects.hpp"
+#include "RenameCheats.hpp"
 #include "Sound.hpp"
 #include "ResourceManager.hpp"
 #include "Utils.hpp"
@@ -287,6 +288,8 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.swims = num("cswims", 0) != 0;
     t.underwater = num("cunderwater", 0) != 0;
     t.needDepth = num("cdepth", 0);
+    t.tall = num("ctall", 0) == 1;
+    t.youngTall = ai->getInt("y/characteristics/integers", "ctall", t.tall ? 1 : 0) == 1;
     t.breathThreshold = num("cbreaththreshold", 100); // (0x4b6c51: +0x1fc; setDefaults 0x4b659e: 100)
     t.breathIncrement = num("cbreathincrement", 0);   // (+0x200; 0)
     t.surfaceOnly = num("csurface", 0) == 1; // (0x4b5932: "== 1", into +0x17d)
@@ -395,6 +398,10 @@ void Animals::loadTypes(ResourceManager *rm) {
       t.young.climber = young("cisclimber", t.climber ? 1 : 0) == 1;
     }
     t.laysEggs = num("clayseggs", 0) != 0;
+    // (cExpansionID: ZTEntityType::loadConfig 0x4b4903 reads it from
+    // [Characteristics/Integers] itself, 0x4b4b12 -> 0x4b4803 - not a
+    // subtype's section)
+    t.expansionId = ai->getInt("characteristics/integers", "cexpansionid", 0);
     t.eatsEggs = num("ceatseggs", 0) != 0;
     t.babiesAttack = num("cbabiesattack", 0) == 1;
     t.timeToHatch = num("ctimetohatch", 0);
@@ -2398,6 +2405,43 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       // 0x588f7e, its animation "0" - 0x63ba4c). ours: the sound heard, the
       // animation running on (the core's queue with "0" not read; no stock
       // set uses fPlaySound)
+      // zoo.exe fKillPrey 0x60cb25 -> 0x60cb3a: an animal (0x638690) with a
+      // target (ZTUnit::unitTarget 0x4a4b53: +0x178, a unit not being
+      // removed) - the target's class slot 0xcc(0) (+0x13f cleared, its
+      // panel shown again if selected: 0x43f0c5 / 0x42a9fa) and 0x4fa78e(1),
+      // taken away (removed at the sweep 0x434df7) - the line done; none,
+      // false: the line fails. ours: its target the one its dust ball holds,
+      // else the animal or the guest it's chasing
+      if (s.fn == "fkillprey") {
+        int prey = -1;
+        for (int id : {m.victim, m.huntAnimal})
+          if (prey < 0 && id >= 0 && std::find(this->kills.begin(), this->kills.end(), id) == this->kills.end())
+            if (const Member *p = this->member(id); p && !p->takenAway)
+              prey = id;
+        if (prey >= 0) {
+          this->member(prey)->takenAway = true;
+          if (m.victim == prey) { m.victim = -1; m.killIn = 0; }
+          ZT_STEP("0x60cb3a", "fKillPrey: its target taken away", {"prey", this->member(prey)->name});
+        } else if (m.prey >= 0 && this->takeGuestAway) {
+          this->takeGuestAway(m.prey);
+          ZT_STEP("0x60cb3a", "fKillPrey: its target (a guest) taken away", {"guest", m.prey});
+          m.prey = -1;
+        } else {
+          failLine("0x60cb3a");
+          return;
+        }
+      }
+      // zoo.exe fReturnToBuilding 0x60cc66 -> 0x60cc7b: a unit (0x6386b0) -
+      // its class slot 0x2b0 (0x5a05e7: findNearestOfKind 0x5a033a of kind
+      // "fun" (0x63af90, made from 0x6395b4 by 0x5666c0) - its own habitat's,
+      // with room, of the type id its slot 0x298 gives - the goal set) - its
+      // result the line's. An animal's slot 0x298 is 0x4010e1, 0, and no
+      // building type's id (+0x104, slot 0x20 - 0x597d07's counter from 19000)
+      // is 0: none found, false - the line fails
+      if (s.fn == "freturntobuilding") {
+        failLine("0x60cc7b");
+        return;
+      }
       if (s.fn == "fplaysound") {
         if (s.args.size() != 1) {
           failLine("0x601a62");
@@ -2408,10 +2452,39 @@ void Animals::nextStep(Member &m, const WorldMap &map, const Fences &fences) {
       // zoo.exe fMoveEntityDelta 0x601aa5 / fMoveEntitySpecial 0x601b73:
       // exactly three arguments (numbers, slot 0x34), else the line fails;
       // with three, the unit moved through 0x6005c3 and the line done.
-      // ours: not moved (issue #259 - no stock set uses them)
-      if ((s.fn == "fmoveentitydelta" || s.fn == "fmoveentityspecial") && s.args.size() != 3) {
-        failLine(s.fn == "fmoveentitydelta" ? "0x601aa5" : "0x601b73");
-        return;
+      // 0x6005c3 adds them to its place (+0x114/+0x118: 64 a tile; +0x11c:
+      // 16 a level) and puts it there (0x4a746a - its check reads the place
+      // already moved, so a failed one doesn't move it back). Delta: the
+      // numbers as they are (and +0x20d, frozen, cleared - ours has no such
+      // flag; its icon 0x4b1e62 rebuilt - ours draws from the place).
+      // Special: the first two turned by its way (+0x12c: 0 -y, 2 +x, 4 +y,
+      // 6 -x) - 2 (b,-a), 6 (-b,a), 0 (-a,-b), else (a,b) - from its tile's
+      // centre (- place % 64 + 32). ours: the height kept only swimming in a
+      // tank (on land it stands on the ground); kept on the map
+      if (s.fn == "fmoveentitydelta" || s.fn == "fmoveentityspecial") {
+        if (s.args.size() != 3) {
+          failLine(s.fn == "fmoveentitydelta" ? "0x601aa5" : "0x601b73");
+          return;
+        }
+        int a = std::atoi(s.args[0].c_str()), b = std::atoi(s.args[1].c_str());
+        const int c = std::atoi(s.args[2].c_str());
+        const int px = static_cast<int>(std::floor(m.x * 64.0f)), py = static_cast<int>(std::floor(m.y * 64.0f));
+        int dx = a, dy = b;
+        if (s.fn == "fmoveentityspecial") {
+          const int way = (static_cast<int>(std::lround(std::atan2(m.fx, -m.fy) / (3.14159265f / 4.0f))) % 8 + 8) % 8;
+          if (way == 2) { dx = b; dy = -a; }
+          else if (way == 6) { dx = -b; dy = a; }
+          else if (way == 0) { dx = -a; dy = -b; }
+          dx += 32 - px % 64;
+          dy += 32 - py % 64;
+        }
+        m.x = std::clamp((px + dx) / 64.0f, 0.0f, std::max(0.0f, map.getWidth() - 0.001f));
+        m.y = std::clamp((py + dy) / 64.0f, 0.0f, std::max(0.0f, map.getHeight() - 0.001f));
+        if (this->tankAt && this->tankAt(m.x, m.y) >= 0)
+          m.swimZ = m.swimTo = std::max(0.0f, m.swimZ + c / 16.0f);
+        m.path.clear();
+        m.pathAt = 0;
+        ZT_STEP(s.fn == "fmoveentitydelta" ? "0x601aa5" : "0x601b73", "Moved by its script line", {"animal", m.name});
       }
       continue;
     }
@@ -4163,14 +4236,16 @@ bool Animals::crowdedBySpecies(const Type &t, int kindAdults, int tiles) {
 }
 
 // Made an egg (zoo.exe 0x5a5283): young, still, its egg art; cTimeToHatch
-// ticks to go, and health just under what hatching takes, plus those ticks
-// (cMinHatchHits, or 60% of cMaxHits - cMinHits), no more than cMaxHits
+// ticks to go - 5 once a guest has been named "Eggman" (0x63cfa1, at
+// 0x5a5318 -> 0x5dc046) - and health just under what hatching takes, plus
+// those ticks (cMinHatchHits, or 60% of cMaxHits - cMinHits), no more than
+// cMaxHits
 void Animals::becomeEgg(Member &m) {
   const Type &t = this->typeList[m.type];
   m.egg = true;
   m.baby = true;
   m.grow = 0;
-  m.hatchIn = t.timeToHatch;
+  m.hatchIn = RenameCheats::flags().eggman ? Original::Cheat::eggmanHatchTicks : t.timeToHatch;
   int need = t.minHatchHits ? t.minHatchHits : (t.maxHits - t.minHits) * 60 / 100;
   m.health = static_cast<float>(std::min(need - 1 + m.hatchIn, t.maxHits));
   m.stack.clear();
@@ -4401,10 +4476,108 @@ void Animals::breathTick(Member &m) {
             {"cBreathThreshold", t.breathThreshold});
 }
 
+// Health (zoo.exe animalCheckHealth 0x4389aa, every cHealthCheck): at 20%
+// (cPctHits) or less, unhappy (cSickChange); others sick, unhappier and
+// maybe caught it; now and then ill anyway. An egg runs it too
+// (animalUpdate 0x437620: animalEggTick, then this - its illness rolls
+// passed over)
+void Animals::healthTick(Member &m) {
+  const Type &t = this->typeList[m.type];
+  if (--m.healthCheck >= 0)
+    return;
+  ZT_FN("0x4389aa", "Health check (every 30)");
+  m.healthCheck = kHealthCheck - 1;
+  ZT_STEP("0x4389aa", "Its health", {"health", m.health}, {"cMaxHits", t.maxHits}, {"cPctHits", t.pctHits},
+          {"sick", m.sick ? 1.0 : 0.0});
+  // zoo.exe 0x4389aa (0x4806ea): health at 0, sick (+0x3a7) and its
+  // health cMinHits (type +0x238); the checks in a row this happens with
+  // its hunger at its most (type +0x240, 100 - 0x4b661f, no config key)
+  // counted (+0x358), any other check back to 0
+  // Then 0x4139c9(0,0): its heading (+0x380) land - 0 set at once
+  // (0x42fbd8), no walk (its second argument 0); a cOnlyUnderwater one
+  // (slot 0x170) asks for 2 instead (ours: its waterMode isn't read)
+  if (m.health <= 0) {
+    m.sick = true;
+    m.health = static_cast<float>(t.minHits);
+    if (!t.onlyUnderwater)
+      m.waterMode = false;
+    m.starve = m.hunger >= 100 ? m.starve + 1 : 0;
+  } else {
+    m.starve = 0;
+  }
+  // zoo.exe 0x4389aa (0x4807bd): under cSickTime (type +0x330) such
+  // checks, a sick one posts 10029 "%s is very sick." (urgency 2). At
+  // cSickTime it's "Being treated poorly" instead (0x480843 -> 0x4808ac):
+  // in an exhibit (slot 0x24c) with no keeper at its duties there
+  // (habitat +0xf0 under 1), taken away (0x4fa78e(1), +0x13c). (0x4808ac
+  // first re-rates the exhibit when its +0x2d asks - ours counts the
+  // keepers when asked)
+  if (m.starve >= t.sickTime) {
+    ZT_STEP("0x4808ac", "Being treated poorly", {"checks", m.starve}, {"cSickTime", t.sickTime});
+    if (m.exhibit >= 0 && (this->keepersAtWork ? this->keepersAtWork(m.exhibit) : 0) < 1) {
+      m.takenAway = true;
+      ZT_STEP("0x4fa78e", "No keeper at work there: taken away");
+    }
+  } else if (m.sick && this->rm) {
+    this->notices.push_back({this->unitText(m, 10029), 2, m.id});
+  }
+  // Poorly (health x 100 <= cPctHits x cMaxHits), not loose (+0x3a3) or
+  // chasing (+0x3a4): where it may lie down (0x440a37), bSick asked for
+  // next (0x4301b7 - not taken while it's in its bSick or another set is
+  // asked for, and then nothing more); "Not feeling well" and cSickChange
+  if (m.health * 100 <= t.pctHits * t.maxHits && !m.escaped && m.prey < 0 && m.huntAnimal < 0 &&
+      (!mayRest(m) || requestSet(m, "bsick"))) {
+    float was = m.pending;
+    m.pending += t.sickChange;
+    ZT_STEP("0x4389aa", "Poorly: unhappy", {"pending", was, m.pending}, {"cSickChange", t.sickChange},
+            {"next", m.nextSet});
+  }
+  // (an egg: none - 0x42373d goes to 0x423797 for +0x395)
+  if (!m.egg) {
+    bool othersSick = false;
+    for (const Member &o : this->list)
+      othersSick = othersSick || (o.id != m.id && o.exhibit == m.exhibit && o.exhibit >= 0 && o.sick);
+    // (the illness rolls: 0x42373d, ill to cMinHits as above - 0x430fa3,
+    // 0x5daadd)
+    std::uniform_int_distribution<int> pct(0, 99);
+    auto say = [&](int sid) {
+      if (!this->rm)
+        return;
+      this->notices.push_back({this->unitText(m, sid), 2, m.id}); // (ill: urgent)
+    };
+    if (othersSick) {
+      m.pending += t.otherSickChange;
+      if (!m.sick && pct(this->rng) < t.sickChance && pct(this->rng) < 4) {
+        m.sick = true;
+        m.health = static_cast<float>(t.minHits);
+        if (!t.onlyUnderwater)
+          m.waterMode = false; // (0x4139c9(0,0), as above)
+        say(15001); // "%s has caught an illness from another animal."
+        ZT_STEP("0x4389aa", "Caught an illness from another", {"sick", 0, 1}, {"health", m.health});
+      }
+    } else if (!m.sick && pct(this->rng) < t.sickRandomChance && pct(this->rng) < 1) {
+      m.sick = true;
+      m.health = static_cast<float>(t.minHits);
+      if (!t.onlyUnderwater)
+        m.waterMode = false; // (0x4139c9(0,0), as above)
+      say(15000); // "%s is ill."
+      ZT_STEP("0x4389aa", "Fell ill (cSickRandomChance in 100, then 1 in 100)", {"sick", 0, 1}, {"health", m.health});
+    }
+  }
+  // zoo.exe 0x4389aa (0x423797): taken away (class slot 0xac), "Being
+  // removed" and 10010 "%s has been taken away due to poor treatment."
+  // through 0x4807c2 (urgency 2; a female's 40010). ours: the message
+  // holds no place (the original's its tile) - the animal is gone
+  if (m.takenAway && this->rm)
+    this->notices.push_back({this->unitText(m, 10010), 2, -1});
+}
+
 void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
-  // (an egg only waits to hatch)
+  // (an egg only waits to hatch - and its health is checked: animalUpdate
+  // 0x437620 runs animalEggTick, then animalCheckHealth 0x4389aa)
   if (m.egg) {
     eggTick(m);
+    healthTick(m);
     return;
   }
   ZT_FN("0x4378df", "Its status tick (once a second)");
@@ -4593,83 +4766,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   }
   murkyWaterTick(m, map, fences);
   breathTick(m);
-  // Health (0x4389aa): at 20% (cPctHits) or less, unhappy (cSickChange);
-  // others sick, unhappier and maybe caught it; now and then ill anyway
-  if (--m.healthCheck < 0) {
-    ZT_FN("0x4389aa", "Health check (every 30)");
-    m.healthCheck = kHealthCheck - 1;
-    ZT_STEP("0x4389aa", "Its health", {"health", m.health}, {"cMaxHits", t.maxHits}, {"cPctHits", t.pctHits},
-            {"sick", m.sick ? 1.0 : 0.0});
-    // zoo.exe 0x4389aa (0x4806ea): health at 0, sick (+0x3a7) and its
-    // health cMinHits (type +0x238); the checks in a row this happens with
-    // its hunger at its most (type +0x240, 100 - 0x4b661f, no config key)
-    // counted (+0x358), any other check back to 0
-    if (m.health <= 0) {
-      m.sick = true;
-      m.health = static_cast<float>(t.minHits);
-      m.starve = m.hunger >= 100 ? m.starve + 1 : 0;
-    } else {
-      m.starve = 0;
-    }
-    // zoo.exe 0x4389aa (0x4807bd): under cSickTime (type +0x330) such
-    // checks, a sick one posts 10029 "%s is very sick." (urgency 2). At
-    // cSickTime it's "Being treated poorly" instead (0x480843 -> 0x4808ac):
-    // in an exhibit (slot 0x24c) with no keeper at its duties there
-    // (habitat +0xf0 under 1), taken away (0x4fa78e(1), +0x13c). (0x4808ac
-    // first re-rates the exhibit when its +0x2d asks - ours counts the
-    // keepers when asked)
-    if (m.starve >= t.sickTime) {
-      ZT_STEP("0x4808ac", "Being treated poorly", {"checks", m.starve}, {"cSickTime", t.sickTime});
-      if (m.exhibit >= 0 && (this->keepersAtWork ? this->keepersAtWork(m.exhibit) : 0) < 1) {
-        m.takenAway = true;
-        ZT_STEP("0x4fa78e", "No keeper at work there: taken away");
-      }
-    } else if (m.sick && this->rm) {
-      this->notices.push_back({this->unitText(m, 10029), 2, m.id});
-    }
-    // Poorly (health x 100 <= cPctHits x cMaxHits), not loose (+0x3a3) or
-    // chasing (+0x3a4): where it may lie down (0x440a37), bSick asked for
-    // next (0x4301b7 - not taken while it's in its bSick or another set is
-    // asked for, and then nothing more); "Not feeling well" and cSickChange
-    if (m.health * 100 <= t.pctHits * t.maxHits && !m.escaped && m.prey < 0 && m.huntAnimal < 0 &&
-        (!mayRest(m) || requestSet(m, "bsick"))) {
-      float was = m.pending;
-      m.pending += t.sickChange;
-      ZT_STEP("0x4389aa", "Poorly: unhappy", {"pending", was, m.pending}, {"cSickChange", t.sickChange},
-              {"next", m.nextSet});
-    }
-    bool othersSick = false;
-    for (const Member &o : this->list)
-      othersSick = othersSick || (o.id != m.id && o.exhibit == m.exhibit && o.exhibit >= 0 && o.sick);
-    // (the illness rolls: 0x42373d, ill to cMinHits as above - 0x430fa3,
-    // 0x5daadd)
-    std::uniform_int_distribution<int> pct(0, 99);
-    auto say = [&](int sid) {
-      if (!this->rm)
-        return;
-      this->notices.push_back({this->unitText(m, sid), 2, m.id}); // (ill: urgent)
-    };
-    if (othersSick) {
-      m.pending += t.otherSickChange;
-      if (!m.sick && pct(this->rng) < t.sickChance && pct(this->rng) < 4) {
-        m.sick = true;
-        m.health = static_cast<float>(t.minHits);
-        say(15001); // "%s has caught an illness from another animal."
-        ZT_STEP("0x4389aa", "Caught an illness from another", {"sick", 0, 1}, {"health", m.health});
-      }
-    } else if (!m.sick && pct(this->rng) < t.sickRandomChance && pct(this->rng) < 1) {
-      m.sick = true;
-      m.health = static_cast<float>(t.minHits);
-      say(15000); // "%s is ill."
-      ZT_STEP("0x4389aa", "Fell ill (cSickRandomChance in 100, then 1 in 100)", {"sick", 0, 1}, {"health", m.health});
-    }
-    // zoo.exe 0x4389aa (0x423797): taken away (class slot 0xac), "Being
-    // removed" and 10010 "%s has been taken away due to poor treatment."
-    // through 0x4807c2 (urgency 2; a female's 40010). ours: the message
-    // holds no place (the original's its tile) - the animal is gone
-    if (m.takenAway && this->rm)
-      this->notices.push_back({this->unitText(m, 10010), 2, -1});
-  }
+  healthTick(m);
   // Tiredness (0x4384ba, every cEnergyCheck 30): not while it sleeps; else
   // cEnergyIncrement x animal +0x2d8 more (measured: +0x2d8 is 1 on every
   // animal sampled in the running original, 2026-11-16), no more than
@@ -4737,11 +4834,22 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
     }
     // A happy grown male, ready again, with his mate: cReproductionChance in
     // 100 of a baby by her (zoo.exe 0x4385e5, animalCheckReproduction
-    // 0x43103b - one try a check, whatever else is in the exhibit)
+    // 0x43103b - one try a check, whatever else is in the exhibit). Once a
+    // keeper has been named "Dr. Dolittle" (0x63c2e3), a grizzly or black
+    // bear needn't be happy enough (0x421966 -> 0x5da846) and its next check
+    // skips the roll (0x431117 -> 0x5db99f, the flag cleared at 0x5db9c7)
+    const bool bear =
+        t.nameId == Original::Cheat::grizzlyNameId || t.nameId == Original::Cheat::blackBearNameId;
+    const bool dolittle = RenameCheats::flags().dolittle && bear;
     if (!lostMate && !m.female && !m.baby && !m.dying && m.exhibit >= 0 && t.reproductionChance > 0 &&
-        m.ready >= t.reproductionInterval && m.happiness >= t.happyReproduceThreshold) {
+        m.ready >= t.reproductionInterval && (m.happiness >= t.happyReproduceThreshold || dolittle)) {
       Member *mate = this->findMate(m);
-      if (mate && t.reproductionChance > pct(this->rng)) {
+      const int roll = mate ? pct(this->rng) : 100;
+      if (mate && dolittle) {
+        RenameCheats::dolittleUsed();
+        ZT_STEP("0x5db99f", "Dr. Dolittle: the breeding roll skipped", {"animal", m.name});
+      }
+      if (mate && (dolittle || t.reproductionChance > roll)) {
         for (int i = 0; i < t.offspring; i++)
           this->births.push_back({mate->id, m.id, m.type});
         m.ready = 0;
@@ -5238,6 +5346,32 @@ void Animals::keeperArrives(int exhibit) {
   for (Member &m : this->list)
     if (m.exhibit == exhibit && !m.boxed)
       m.pending += this->typeList[m.type].keeperArrivesChange;
+}
+
+// zoo.exe Job4_HealAnimal::atTarget 0x4702e8's "Dr. Frankenstein" part:
+// the types of "animals" of its subtype (world slot 0x14 with its type's
+// +0xa4: every kind, its sex) that lay eggs (cLaysEggs, +0x404) and aren't
+// its own (slot 0x20, cNameID); one of them at random (rand() % their
+// count); it becomes that kind (slot 0x7c, 0x602929: its type and art -
+// the rest of it, its name, health and happiness, stays) and its exhibit
+// is rated again (+0x31). ours: one type holds both sexes, so every
+// egg-layer's type that isn't its own
+void Animals::becomeAnotherKind(int id) {
+  Member *m = this->member(id);
+  if (!m || m->type < 0 || m->type >= static_cast<int>(this->typeList.size()))
+    return;
+  const int own = this->typeList[m->type].nameId;
+  std::vector<int> kinds;
+  for (int i = 0; i < static_cast<int>(this->typeList.size()); i++)
+    if (this->typeList[i].laysEggs && this->typeList[i].nameId != own)
+      kinds.push_back(i);
+  if (kinds.empty())
+    return;
+  const int pick = kinds[std::uniform_int_distribution<int>(0, 0x7fff)(this->rng) % static_cast<int>(kinds.size())];
+  ZT_STEP("0x4702e8", "Dr. Frankenstein: it becomes another kind", {"animal", m->name},
+          {"from", this->typeList[m->type].key}, {"to", this->typeList[pick].key});
+  m->type = pick;
+  markDirty(m->exhibit);
 }
 
 void Animals::heal(int id) {

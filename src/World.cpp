@@ -346,6 +346,7 @@ bool World::loadFreeform(const std::string &path) {
     key = key.substr(0, key.find('.'));
     this->guests.caught(g, key, by.female, by.name);
   };
+  animals.takeGuestAway = [this](int g) { this->guests.takeAway(g); };
   animals.preyName = [this](int g) {
     const Guests::Guest *guest = this->guests.guest(g);
     return guest ? guest->name : std::string();
@@ -488,9 +489,12 @@ bool World::loadFreeform(const std::string &path) {
   // zoo.exe 0x5af226 over tankContents 0x4599a0 (the tank's tiles' things,
   // not the passing water effects): the deepest one's depth, class slot
   // 0xe8 - an object's or food's cDepth (0x5af392, type +0x68), an
-  // animal's cDepth (0x5af19b). ours: 0x5af19b's raise to a greater cHeight
-  // (type +0x64) of an object on the animal's tile, under a test of its
-  // type's slot 0x40 not read, is left out
+  // animal's cDepth (unitTankDepth 0x5af19b), raised to the cHeight (type
+  // +0x64) of each object on its tile it can't go through: the object's
+  // slot 0xb8 -> its type's slot 0x40 (0x414810): walkableByTall (+0x57) for
+  // a cTall unit, else walkable (+0x56) - 0x4147b5; an animal also through
+  // what's cRubbleable (+0x59) while it's rampaging (+0x3b0). ours: the
+  // unit's +0x1bc == 1 (through anything, 0x4147b5) isn't read
   fences.tankDepth = [this](int exhibit) {
     const Fences::Exhibit *ex = this->fences.exhibit(exhibit);
     int deepest = 0;
@@ -505,9 +509,33 @@ bool World::loadFreeform(const std::string &path) {
     for (const ZooItems::Item &it : this->items.items())
       if (it.kind == ZooItems::Kind::Food && in(it.x, it.y))
         deepest = std::max(deepest, this->tankFlagsOf(ZooItems::foodFile(it.food)).depth);
-    for (const Animals::Member &m : this->animals.members())
-      if (in(m.x, m.y))
-        deepest = std::max(deepest, this->animals.types()[m.type].needDepth);
+    for (const Animals::Member &m : this->animals.members()) {
+      if (!in(m.x, m.y))
+        continue;
+      const Animals::Type &t = this->animals.types()[m.type];
+      const bool tall = m.baby ? t.youngTall : t.tall;
+      const int tx = static_cast<int>(std::floor(m.x)), ty = static_cast<int>(std::floor(m.y));
+      int need = t.needDepth;
+      for (const PlacedObjects::Object &o : this->placedObjects.objects()) {
+        if (o.fence || o.className == "fences")
+          continue;
+        const std::string file = PlacedObjects::fileOf(o);
+        const TankFlags &flags = this->tankFlagsOf(file);
+        if (flags.height <= need || (tall ? flags.walkableByTall : flags.walkable) ||
+            (flags.rubbleable && m.rampaging))
+          continue;
+        // (on its tile: one of the tile's four cells holds it)
+        auto [fx, fy] = this->footprintOf(file);
+        fx = std::max(1, fx);
+        fy = std::max(1, fy);
+        if ((o.facing & 6) == 2 || (o.facing & 6) == 6)
+          std::swap(fx, fy);
+        const float hx = fx / 4.0f, hy = fy / 4.0f;
+        if (o.x + hx > tx + 0.01f && o.x - hx < tx + 1 - 0.01f && o.y + hy > ty + 0.01f && o.y - hy < ty + 1 - 0.01f)
+          need = flags.height;
+      }
+      deepest = std::max(deepest, need);
+    }
     return deepest;
   };
   staff.setObjects(&placedObjects);
@@ -521,6 +549,7 @@ bool World::loadFreeform(const std::string &path) {
   guests.tourBonusAt = [this](int exhibit) { return this->staff.guideBonusAt(this->guests.viewingTiles(exhibit)); };
   terrain.load(resourceManager);
   terrain.setMap(&worldMap, &fences);
+  guests.useSoundStart = [this](int building) { this->startUseSound(building); };
   fences.edgeBlocked = [this](const Fences::Edge &e) {
     // (an edge runs a tile along one side: blocked when a footprint covers
     // part of its length on both sides of it)
@@ -780,6 +809,12 @@ void World::update(const bool *state, float deltaTime, float inputSeconds) {
       }
       return false;
     });
+    // (zoo.exe's units share ZTUnit's class slots: handleEvents 0x435cf1,
+    // slot 0x10, empties a unit's event list each tick - ours has no event
+    // list, each system acts at once; setTask 0x43e8d3, slot 0x1d8, is
+    // taskStateSet for every unit class - ours: each system's own task
+    // state; chooseTask 0x436109, slot 0x38, is the abstract base's alone -
+    // every unit class has its own chooser)
     {FrameProfile::Scope profile("animals update");animals.update(deltaTime, clock, worldMap, fences);}
     animals.lifeEvents(worldMap, fences);
     // Fences animals broke getting out
@@ -1856,8 +1891,11 @@ void World::setPathTool(const std::string &type, int cost) {
     this->bulldozer = false;
 }
 
+// (a lake tile takes a path: zoo.exe zooViewMouse 0x4ded90's path branch
+// and placementCheck 0x4f885e leave it placeable, priced with the dirt, and
+// placeObject 0x4d9088 paints it dirt first - layPathTile)
 Fences::Fit World::pathFit(int x, int y) const {
-  Fences::Fit f = this->fences.tileFit(x, y, this->worldMap);
+  Fences::Fit f = this->fences.tileFit(x, y, this->worldMap, true);
   if (f != Fences::Fit::Ok)
     return f;
   if (this->fences.exhibitAt(x, y) >= 0 || !this->worldMap.pathShapeOk(x, y))
@@ -1875,6 +1913,45 @@ Fences::Fit World::pathFit(int x, int y) const {
         return Fences::Fit::InTheWay;
     }
   return Fences::Fit::Ok;
+}
+
+// zoo.exe placementCheck 0x4f885e (the path branch, as zooViewMouse
+// 0x4ded90's): the path type's price (slot 0xa4), and on a lake tile (+0x83
+// & 3) the price of painting it terrain 3 (0x4dc8a4(3): the tiles it can
+// paint, each the type's cost) - what placeObject is then charged
+int World::pathTilePrice(int x, int y) const {
+  int price = this->pathCost;
+  if (this->terrain.isWater(x, y))
+    price += static_cast<int>(this->terrain.typeCost(Original::pathOnLakeTerrain));
+  return price;
+}
+
+// zoo.exe placeObject 0x4d9088 for a path: on a lake tile (+0x83 & 3) the
+// tile painted terrain 3 first (0x5cdd85: 0x4f8fd8(terrain list + 0x90, 1)),
+// recorded for Undo (kind 3, once in the group - undoListHolds 0x458b5f;
+// ours: on the path's own step); then the path laid (on a path of another
+// kind: that one's type changed, full price - +0x83 & 8). ours: a lake tile
+// that can't be painted gets no path
+int World::layPathTile(int x, int y, bool undoable) {
+  const int price = this->pathTilePrice(x, y);
+  UndoStep u{UndoStep::Kind::Path};
+  u.x = x;
+  u.y = y;
+  u.pathType = this->pathTypeAt(x, y);
+  u.money = static_cast<float>(price);
+  if (this->terrain.isWater(x, y)) {
+    const MapTile *t = this->worldMap.getTile(x, y);
+    const int was = t ? t->terrainType : -1;
+    if (!this->terrain.paintTile(x, y, Original::pathOnLakeTerrain))
+      return 0;
+    u.terrain = was;
+    ZT_STEP("0x5cdd85", "A path on a lake tile: the tile painted dirt first", {"x", x}, {"y", y}, {"was", was},
+            {"price", price});
+  }
+  this->worldMap.setPath(x, y, this->pathTool);
+  if (undoable)
+    this->recordUndo(u);
+  return price;
 }
 
 // A path drag's tiles planned as one when the ground alone can't carry it
@@ -2196,7 +2273,7 @@ int World::buildLine(ToolResult &r) {
   int price = 0;
   for (const DeckPreview &p : this->deckPreview)
     if (p.ok)
-      price += p.ground ? (canLayPath(p.x, p.y) ? this->pathCost : 0)
+      price += p.ground ? (canLayPath(p.x, p.y) ? this->pathTilePrice(p.x, p.y) : 0)
                         : (!this->walkways.at(p.x, p.y) ? this->pathCost * 2 : 0);
   if (!this->canAfford(price)) {
     this->deckPreview.clear();
@@ -2213,10 +2290,8 @@ int World::buildLine(ToolResult &r) {
     if (!p.ok)
       continue;
     if (p.ground) {
-      if (canLayPath(p.x, p.y)) {
-        this->worldMap.setPath(p.x, p.y, this->pathTool);
-        cost += this->pathCost;
-      }
+      if (canLayPath(p.x, p.y))
+        cost += this->layPathTile(p.x, p.y, false);
     } else if (!this->walkways.at(p.x, p.y)) {
       Walkways::Deck d;
       d.type = this->pathTool;
@@ -2657,16 +2732,101 @@ void World::startAmbience(const std::string &scenario) {
   }
 }
 
-// (zoo.exe ZTBuilding::update 0x434c4b, class slot 0x28, also fades a
-// building's ambient loop in while it has users and out while it has none,
-// 3 a ms of attenuation to 5000, for a type with +0x1e8, and its use sound
-// down from +0x1b8 - ours: started near the view, stopped far, #267)
+// A building type's [UseSound]: name, attenuation, loops (zoo.exe
+// ZTBuildingType::loadConfig 0x4c070a: 0x4c10d4 "loops" into +0x1e8 as == 1,
+// 0x4c10ed attenuation +0x1ec, the name +0x1dc)
+const World::UseSoundType &World::useSoundType(const std::string &file) {
+  auto it = this->useSoundOf.find(file);
+  if (it == this->useSoundOf.end()) {
+    UseSoundType t;
+    if (IniReader *ai = this->resourceManager->getIniReader(file)) {
+      t.name = Utils::string_to_lower(ai->get("usesound", "name"));
+      t.atten = ai->getInt("usesound", "attenuation", 0);
+      t.loops = ai->getInt("usesound", "loops", 0) == 1;
+      delete ai;
+    }
+    it = this->useSoundOf.emplace(file, t).first;
+  }
+  return it->second;
+}
+
+// zoo.exe 0x42cc1a (buildingAddUser 0x42ce0a, a user taken in): no
+// [UseSound], nothing; else, unless it loops and the building has no users,
+// and its sound isn't playing: the sound loaded with the type's attenuation
+// (slot 0x48, +0x1ec); looping, its fade (+0x1b4) 0 and it's started looped
+// where the building stands (slot 0x34); else played once there (slot 0x24)
+void World::startUseSound(int index) {
+  const auto &objs = this->placedObjects.objects();
+  if (index < 0 || index >= static_cast<int>(objs.size()))
+    return;
+  const PlacedObjects::Object &o = objs[static_cast<size_t>(index)];
+  const UseSoundType &t = this->useSoundType(PlacedObjects::fileOf(o));
+  if (t.name.empty())
+    return;
+  UseSound &u = this->useSounds[o.id];
+  if (Sound::playing(u.channel))
+    return;
+  float dx = 0, dy = 0;
+  if (this->animals.viewOffset)
+    this->animals.viewOffset(o.x, o.y, dx, dy);
+  u.loops = t.loops;
+  if (t.loops) {
+    u.fade = 0;
+    u.channel = Sound::get().loopAt(t.name, dx, dy, t.atten);
+  } else {
+    u.channel = Sound::get().playAt(t.name, dx, dy, t.atten);
+  }
+  ZT_STEP("0x42cc1a", "A building's use sound started", {"building", o.typeName}, {"sound", t.name},
+          {"loops", t.loops ? 1 : 0}, {"channel", u.channel});
+}
+
+// zoo.exe ZTBuilding::update 0x434c4b: +0x1b4 + ms x 3 with no users
+// (+0x18c < 1), - ms x 3 with some, kept to 0..5000
+int World::useLoopFade(int fade, int ms, bool users) {
+  const int step = ms * Original::useLoopFadePerMs;
+  return std::clamp(users ? fade - step : fade + step, 0, Original::useLoopFadeMax);
+}
+
+// zoo.exe ZTBuilding::update 0x434c4b, class slot 0x28, each tick with its
+// ms of play:
+// - a looping use sound (type +0x1e8) playing: its fade (useLoopFade) set on
+//   it (slot 0x4c) where the building is (slot 0x30); at 5000 it stops
+//   (slot 0x60);
+// - its [AmbientSound] (+0x1c0, made empty by the constructor 0x451152):
+//   not playing, 0x41e3f8 starts it looped where the building is if the
+//   type's attenuation (+0x1fc) and its distance come to 2200 at most, no
+//   sooner than 1000 ms of real time after any building's last start
+//   (0x6394e8); playing, moved where the building is, its own fade (+0x1b8,
+//   0 from the start) left as it was, and over 2200 it stops (0x4b0bca).
+//   Its fade's step writes +0x1b4 (+0x1b8 - ms x 3, so 0): while a
+//   building's ambient sound plays, its looping use sound's fade starts
+//   from 0 each tick;
+// - a ride on the water (+0x240, cReturnBuilding) with no capacity yet
+//   (+0x1c8): one of its doors on a lake tile sets it (rideCapacity
+//   0x59398a) - ours: Guests' look for a building works it out each time
 void World::updateBuildingSounds(float seconds) {
   if (!this->animals.viewOffset)
     return;
   this->buildingSoundClock += seconds;
-  bool mayStart = this->buildingSoundClock >= 1.0f;
+  const uint64_t nowMs = SDL_GetTicks();
+  bool mayStart = nowMs >= this->ambientNextMs;
+  const int ms = static_cast<int>(std::lround(seconds * 1000.0f));
   const auto &objs = this->placedObjects.objects();
+  // (each building's users: +0x18c, those taken in - buildingAddUser
+  // 0x42ce0a - not yet let go)
+  std::vector<int> users(objs.size(), 0);
+  for (const Guests::Guest &g : this->guests.guests())
+    if (g.state == Guests::State::Using && g.building >= 0 && g.building < static_cast<int>(objs.size()) &&
+        (g.sitStep < 0 || g.takenIn))
+      users[static_cast<size_t>(g.building)]++;
+  // (gone buildings' use sounds stopped)
+  for (auto it = this->useSounds.begin(); it != this->useSounds.end();)
+    if (this->placedObjects.indexOf(it->first) < 0) {
+      Sound::get().stop(it->second.channel);
+      it = this->useSounds.erase(it);
+    } else {
+      ++it;
+    }
   // (gone objects' loops stopped)
   for (auto it = this->buildingLoops.begin(); it != this->buildingLoops.end();)
     if (it->first >= static_cast<int>(objs.size())) {
@@ -2680,6 +2840,19 @@ void World::updateBuildingSounds(float seconds) {
     if (o.fence)
       continue;
     std::string file = PlacedObjects::fileOf(o);
+    UseSound *use = nullptr;
+    if (auto u = this->useSounds.find(o.id); u != this->useSounds.end())
+      use = &u->second;
+    if (use && use->loops && Sound::playing(use->channel)) {
+      use->fade = useLoopFade(use->fade, ms, users[i] > 0);
+      float dx = 0, dy = 0;
+      this->animals.viewOffset(o.x, o.y, dx, dy);
+      if (!Sound::get().place(use->channel, dx, dy, this->useSoundType(file).atten + use->fade) ||
+          use->fade == Original::useLoopFadeMax) {
+        Sound::get().stop(use->channel);
+        use->channel = -1;
+      }
+    }
     if (o.randomStarted)
       if (IniReader *ai = this->resourceManager->getIniReader(file)) {
         const auto sound = ai->get("usesound", "name");
@@ -2703,9 +2876,11 @@ void World::updateBuildingSounds(float seconds) {
     float dx = 0, dy = 0;
     this->animals.viewOffset(o.x, o.y, dx, dy);
     int away = static_cast<int>(std::hypot(dx, dy) * 2.75f);
-    bool near = a->second.second + away < 2200;
+    bool near = a->second.second + away <= Original::buildingSoundReach;
     auto ch = this->buildingLoops.find(static_cast<int>(i));
     if (ch != this->buildingLoops.end()) {
+      if (use)
+        use->fade = 0; // (+0x1b4 = +0x1b8 - ms x 3, kept to 0..5000)
       if (!near || !Sound::get().place(ch->second, dx, dy, a->second.second)) {
         Sound::get().stop(ch->second);
         this->buildingLoops.erase(ch);
@@ -2715,6 +2890,7 @@ void World::updateBuildingSounds(float seconds) {
       if (c >= 0)
         this->buildingLoops[static_cast<int>(i)] = c;
       mayStart = false;
+      this->ambientNextMs = nowMs + Original::ambientStartGapMs;
       this->buildingSoundClock = 0;
     }
   }
@@ -3183,6 +3359,11 @@ const World::TankFlags &World::tankFlagsOf(const std::string &file) {
     f.deadOnLand = ai->getInt(ints,"cdeadonland",0)!=0;
     f.depth = ai->getInt(ints, "cdepth", 0);
     f.avoidEdges = ai->getInt(ints, "cavoidedges", 0);
+    f.height = ai->getInt(ints, "cheight", 0);
+    f.walkable = ai->getInt(ints, "walkable", 0) == 1;
+    f.walkableByTall = ai->getInt(ints, "walkablebytall", 0) == 1;
+    f.rubbleable = ai->getInt(ints, "crubbleable", 0) == 1;
+    f.show = ai->getInt(ints, "cshow", 0) == 1; // (0x4b4c13: sete, == 1)
     delete ai;
   }
   return this->tankFlags[file] = f;
@@ -3742,11 +3923,12 @@ void World::mouseMove(int x, int y) {
         n += p.ok ? (p.ground ? (this->worldMap.isPath(p.x, p.y) ? 0 : 1)
                               : (this->walkways.at(p.x, p.y) ? 0 : 2))
                   : 0;
+      n *= this->pathCost;
     } else {
       for (auto &p : this->pathPreview)
-        n += p.second == Fences::Fit::Ok ? 1 : 0;
+        n += p.second == Fences::Fit::Ok ? this->pathTilePrice(p.first.first, p.first.second) : 0;
     }
-    this->hoverPrice = n * this->pathCost;
+    this->hoverPrice = n;
     return;
   }
   // A guest picked up follows the cursor, green where it can be put down
@@ -4397,7 +4579,10 @@ World::ToolResult World::mouseDown(int x, int y) {
   if (this->bulldozer) {
     // (as the original: a press only marks where - what a click takes, or
     // the rectangle a drag makes, is taken on letting go: bulldozeRect
-    // 0x5092f4, watched in the original 2026-11-06)
+    // 0x5092f4, watched in the original 2026-11-06. zoo.exe bulldozerPress
+    // 0x509a31, the bulldozer's slot 0x24: pressed (+0x38), the press tile
+    // and the current one both the cursor's (+0xc, +0x18), the press point
+    // kept (+0x24, +0x28) for the click-or-drag rule)
     this->mouseMove(x, y);
     this->bulldozeDrag = {};
     this->bulldozeDrag.pressed = true;
@@ -4516,7 +4701,7 @@ World::ToolResult World::mouseDown(int x, int y) {
     this->pathFirstAxis = -1;
     this->addPathTile(fromDeck ? dtx : ptx, fromDeck ? dty : pty);
     this->planSmartPath();
-    this->hoverPrice = this->pathPreview.front().second == Fences::Fit::Ok ? this->pathCost : 0;
+    this->hoverPrice = this->pathPreview.front().second == Fences::Fit::Ok ? this->pathTilePrice(this->pathPress.first, this->pathPress.second) : 0;
     return r;
   }
   if (this->gateTool) {
@@ -4848,7 +5033,7 @@ World::ToolResult World::mouseUp(int x, int y) {
       int price = 0;
       for (auto &p : this->pathPreview)
         if (p.second == Fences::Fit::Ok && canLayPath(p.first.first, p.first.second))
-          price += this->pathCost;
+          price += this->pathTilePrice(p.first.first, p.first.second);
       if (!this->canAfford(price)) {
         Sound::get().play("sounds/noplace");
         r.messageId = kInsufficientFunds;
@@ -4857,18 +5042,11 @@ World::ToolResult World::mouseUp(int x, int y) {
     }
     // (over another kind of path: the tile's path changed, full price, no
     // money back for the old one, Undo putting the old one back - zoo.exe
-    // placeObject 0x4d9088, a tile with a path, +0x83 & 8)
+    // placeObject 0x4d9088, a tile with a path, +0x83 & 8; on a lake tile
+    // painted dirt first - layPathTile)
     for (auto &p : this->pathPreview)
-      if (p.second == Fences::Fit::Ok && canLayPath(p.first.first, p.first.second)) {
-        UndoStep u{UndoStep::Kind::Path};
-        u.x = p.first.first;
-        u.y = p.first.second;
-        u.pathType = this->pathTypeAt(u.x, u.y);
-        u.money = this->pathCost;
-        this->worldMap.setPath(p.first.first, p.first.second, this->pathTool);
-        r.cost += this->pathCost;
-        this->recordUndo(u);
-      }
+      if (p.second == Fences::Fit::Ok && canLayPath(p.first.first, p.first.second))
+        r.cost += this->layPathTile(p.first.first, p.first.second);
     ZT_STEP("", "Lays the path dragged", {"path", this->pathTool}, {"tiles", static_cast<double>(this->pathPreview.size())},
             {"cost", r.cost});
     this->pathPreview.clear();
@@ -4921,6 +5099,13 @@ World::ToolResult World::mouseUp(int x, int y) {
   if (!r.newExhibits.empty())
     ZT_STEP("", "Shut off from the map's edge: a new exhibit", {"exhibits made", static_cast<double>(r.newExhibits.size())},
             {"first", r.newExhibits.front()});
+  // zoo.exe 0x44e389: a tank made round things it can't hold asks first
+  // (tankEmptyContents 0x458c2b(1, confirm) -> tankFillBlocked 0x485aa7,
+  // 10552) - not while undoing (zooView +0x378), nor loading
+  for (int id : r.newExhibits)
+    if (const Fences::Exhibit *ex = this->fences.exhibit(id); ex && ex->tank && r.askTankFill < 0 &&
+                                                               !this->tankContents(id).empty())
+      r.askTankFill = id;
   return r;
 }
 
@@ -4960,6 +5145,11 @@ World::UndoMoney World::undo() {
       break;
     case UndoStep::Kind::Path:
       this->worldMap.setPath(u.x, u.y, u.pathType);
+      if (u.terrain >= 0)
+        if (MapTile *t = this->worldMap.getTileMutable(u.x, u.y)) {
+          t->terrainType = static_cast<uint8_t>(u.terrain); // (the lake back: undo kind 3)
+          this->worldMap.touch();
+        }
       m.construction += u.money;
       break;
     case UndoStep::Kind::Fence:
@@ -4970,7 +5160,11 @@ World::UndoMoney World::undo() {
           if (u.fenceLife >= 0)
             this->fences.setLife(u.edge, u.fenceLife);
         } else {
-          this->fences.remove(u.edge, this->worldMap);
+          // (zoo.exe undoLastAction 0x4de527: each thing on the list taken
+          // away by itself with what it cost, removeObject(it, price, 1, 0,
+          // 1) - a tank wall piece alone, not the bulldozer's whole tank;
+          // the tank it closed drained and gone with it)
+          this->fences.remove(u.edge, this->worldMap, false);
         }
         m.construction += u.money;
         fences = true;
@@ -5096,6 +5290,172 @@ int World::confirmFenceRemoval() {
   Fences::Edge e = this->pendingFence;
   this->pendingFence = {false, -1, -1};
   return this->removeFence(e);
+}
+
+// zoo.exe 0x45da8b: what's on a tank's tiles - each tile's four cells (its
+// objects), its units (not a passing water effect, cIsTransient +0x6d) -
+// that 0x45da65 picks: mode 1, what can't be under water (canBeUnderwater
+// 0x459f52 false: a unit whose kind hasn't cUnderwater, an egg, an object
+// whose kind has neither cUnderwater nor cSurface); in a show tank (its
+// slot 0x20 and +4, 0x458c2b) mode 2 as well, whatever isn't cShow (type
+// +0x6f: an animal's when it has tricks - 0x4b8cf2). The objects, food,
+// dung and litter as fillBlocker finds them
+World::TankContents World::tankContents(int tank) {
+  TankContents c;
+  const Fences::Exhibit *ex = this->fences.exhibit(tank);
+  if (!ex)
+    return c;
+  const bool show = ex->show;
+  auto in = [ex](float x, float y) {
+    return ex->tiles.count({static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y))}) > 0;
+  };
+  for (const PlacedObjects::Object &o : this->placedObjects.objects()) {
+    if (o.fence || o.className == "fences")
+      continue;
+    const std::string file = PlacedObjects::fileOf(o);
+    auto [fx, fy] = this->footprintOf(file);
+    fx = std::max(1, fx);
+    fy = std::max(1, fy);
+    if ((o.facing & 6) == 2 || (o.facing & 6) == 6)
+      std::swap(fx, fy);
+    const float hx = fx / 4.0f, hy = fy / 4.0f;
+    bool covers = false;
+    for (auto [tx, ty] : ex->tiles)
+      if (o.x + hx > tx + 0.01f && o.x - hx < tx + 1 - 0.01f && o.y + hy > ty + 0.01f && o.y - hy < ty + 1 - 0.01f) {
+        covers = true;
+        break;
+      }
+    if (!covers)
+      continue;
+    int transient = 0;
+    if (IniReader *ai = this->resourceManager->getIniReader(file)) {
+      transient = ai->getInt("characteristics/integers", "cistransient", 0);
+      delete ai;
+    }
+    const TankFlags &flags = this->tankFlagsOf(file);
+    if (!transient && ((!flags.underwater && !flags.surface) || (show && !flags.show)))
+      c.objects.push_back(o.id);
+  }
+  for (const ZooItems::Item &it : this->items.items()) {
+    if (!in(it.x, it.y))
+      continue;
+    const std::string file = it.kind == ZooItems::Kind::Food ? ZooItems::foodFile(it.food)
+                             : it.kind == ZooItems::Kind::Dung ? std::string(ZooItems::dinoDung(it) ? "scenery/other/dinopoo.ai" : "scenery/other/poo.ai")
+                                                               : std::string("scenery/other/trash.ai");
+    const TankFlags &flags = this->tankFlagsOf(file);
+    if ((!flags.underwater && !flags.surface) || (show && !flags.show))
+      c.items.push_back(it.id);
+  }
+  for (const Animals::Member &m : this->animals.members()) {
+    if (m.id == this->animals.carried || !in(m.x, m.y))
+      continue;
+    const Animals::Type &t = this->animals.types()[m.type];
+    if (m.egg || !t.underwater || (show && !t.showAnimal))
+      c.animals.push_back(m.id);
+  }
+  for (const Staff::Member &m : this->staff.members()) {
+    if (!in(m.x, m.y))
+      continue;
+    const Staff::Type &t = this->staff.types()[m.type];
+    if (!t.underwater || (show && !this->tankFlagsOf(t.file).show))
+      c.staff.push_back(m.id);
+  }
+  for (const Guests::Guest &g : this->guests.guests())
+    c.guests += !g.hidden && in(g.x, g.y) ? 1 : 0;
+  return c;
+}
+
+// zoo.exe tankEmptyContents 0x458c2b (with 1, after 10552's Yes): each
+// object taken away with its money back (removeObject 0x50a0b0, its class
+// slot 0x120 - the sell value); each animal crated (0x505941) and put on
+// the zoo ground by the tank (animalLayEgg 0x60da6b: from the outside tile
+// of the tank's first boundary pair, +0x48's +4, on rings |dx| + |dy| = 3
+// .. 50, a tile of the zoo's own habitat (+0x2c) with no unit on it), or
+// failing that sold (slot 0x2a4, ZTAnimal::sellValue); staff put out the
+// same way (0x60dd71, rings from 1, from the tile past its gate - 0x411285
+// - else the same tile) or failing that let go; guests are left. Then its
+// water (tankFillBlockedBy 0x459d94: silent while the tank has no gate
+// yet, 0x410349). ours: the first such tile that's dry, off the paths, with
+// nothing standing on it (the original scores each for no path, its cells
+// free and a random part, 0x43f578, and takes the best); the boundary in
+// tile order; food, dung and litter go with no money
+float World::clearTankForFill(int tank) {
+  const Fences::Exhibit *ex = this->fences.exhibit(tank);
+  if (!ex)
+    return 0;
+  const TankContents c = this->tankContents(tank);
+  // (the outside tile of its first boundary edge)
+  int px = -1, py = -1;
+  for (auto [x, y] : ex->tiles) {
+    const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (auto &dd : d)
+      if (px < 0 && !ex->tiles.count({x + dd[0], y + dd[1]})) {
+        px = x + dd[0];
+        py = y + dd[1];
+      }
+    if (px >= 0)
+      break;
+  }
+  auto open = [&](int x, int y) {
+    const MapTile *t = this->worldMap.getTile(x, y);
+    if (!t || t->terrainType == 9 || t->terrainType == 10 || this->fences.exhibitAt(x, y) >= 0 ||
+        !this->fences.insideZoo(x, y) || this->worldMap.isPath(x, y) || this->index.blocked(x, y))
+      return false;
+    auto on = [x, y](float ux, float uy) { return static_cast<int>(std::floor(ux)) == x && static_cast<int>(std::floor(uy)) == y; };
+    for (const Animals::Member &m : this->animals.members())
+      if (on(m.x, m.y))
+        return false;
+    for (const Staff::Member &m : this->staff.members())
+      if (on(m.x, m.y))
+        return false;
+    for (const Guests::Guest &g : this->guests.guests())
+      if (!g.hidden && on(g.x, g.y))
+        return false;
+    return true;
+  };
+  auto spot = [&](int from, float &sx, float &sy) {
+    for (int r = from; r <= 50 && px >= 0; r++)
+      for (int dx = -r; dx <= r; dx++)
+        for (int side = 0; side < 2; side++) {
+          const int dy = side == 0 ? -(r - std::abs(dx)) : r - std::abs(dx);
+          if (open(px + dx, py + dy)) {
+            sx = px + dx + 0.5f;
+            sy = py + dy + 0.5f;
+            return true;
+          }
+        }
+    return false;
+  };
+  float refund = 0;
+  for (int id : c.objects)
+    if (int o = this->placedObjects.indexOf(id); o >= 0)
+      refund += this->bulldozeObject(o);
+  for (int id : c.items)
+    this->items.remove(id);
+  for (int id : c.animals) {
+    this->animals.box(id);
+    float sx = 0, sy = 0;
+    if (spot(3, sx, sy)) {
+      this->animals.moveTo(id, sx, sy);
+    } else {
+      refund += static_cast<float>(this->animals.sellValue(id));
+      this->sellAnimal(id);
+    }
+  }
+  for (int id : c.staff) {
+    float sx = 0, sy = 0;
+    if (spot(1, sx, sy))
+      this->staff.moveTo(id, sx, sy);
+    else
+      this->staff.fire(id);
+  }
+  this->animals.markDirty();
+  this->animals.rehome(this->worldMap, this->fences);
+  this->reindex();
+  if (this->fences.fillBlocker && this->fences.fillBlocker(tank).empty())
+    if (const Fences::Exhibit *e = this->fences.exhibit(tank))
+      this->fences.fillExhibit(tank, e->salt);
+  return refund;
 }
 
 int World::confirmDrain() {

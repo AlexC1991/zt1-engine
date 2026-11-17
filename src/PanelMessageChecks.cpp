@@ -98,6 +98,32 @@ std::string runPanelMessageChecks(World &world, ResourceManager *rm, int &passed
       f.adjustWall(tankId, -1);
     check("#238: the walls stop at 4 over the orca, and come up to it from under (0x5af39e)",
           raised == 4 && tank->wallSub == 4);
+    // #251, zoo.exe unitTankDepth 0x5af19b: the orca's need raised to the
+    // cHeight of what stands on its tile that it can't go through (0x414810):
+    // an underwater cave (cHeight 6, not walkable) - least 7; kelp
+    // (walkable, cHeight 3) none; the cave cRubbleable, so not while the
+    // orca's rampaging
+    if (Animals::Member *om = a.member(swimmer)) {
+      auto &objects = world.objectsMutable();
+      auto leastWith = [&](const char *file, bool rampaging) {
+        const size_t before = objects.objects().size();
+        if (!objects.add(file, om->x, om->y, 0))
+          return -1;
+        om->rampaging = rampaging;
+        const int least = f.minWallHeight(tankId);
+        om->rampaging = false;
+        while (objects.objects().size() > before)
+          objects.remove(static_cast<int>(objects.objects().size()) - 1);
+        return least;
+      };
+      const int cave = leastWith("scenery/building/aqcave.ai", false);
+      const int caveRampage = leastWith("scenery/building/aqcave.ai", true);
+      const int kelp = leastWith("scenery/foliage/kelp.ai", false);
+      out << "PANELS least over the orca: cave " << cave << ", rampaging " << caveRampage << ", kelp " << kelp << "\n";
+      check("#251: an orca by an underwater cave (cHeight 6) needs walls 7 (0x5af19b, 0x414810)", cave == 7);
+      check("#251: kelp (walkable) doesn't raise it; a rampaging orca goes through the cave (cRubbleable)",
+            kelp == 4 && caveRampage == 4);
+    }
     a.clear();
     while (f.canAdjustWall(tankId, 1) && tank->wallSub < 5)
       f.adjustWall(tankId, 1);
@@ -216,8 +242,13 @@ std::string runPanelMessageChecks(World &world, ResourceManager *rm, int &passed
       m.hunger = 50;
       m.starve = t.sickTime - 1;
       m.healthCheck = 0;
+      m.waterMode = true;
     });
     const bool fedReset = zm->starve == 0 && !zm->takenAway && zm->health == float(t.minHits);
+    // (and its heading land: 0x4139c9(0,0) - not cOnlyUnderwater)
+    const bool landward = t.onlyUnderwater || !zm->waterMode;
+    zm->waterMode = false;
+    check("#247: falling sick sets its heading to land (0x4139c9(0,0): +0x380 0, no walk)", landward);
     out << "PANELS #247 taken away: marked " << marked << " says 40010 " << has(longSick, fill(40010))
         << " tended stays " << tendedStays << " counted " << counted << " fed reset " << fedReset << "\n";
     check("#247: sick and starving cSickTime checks running, no keeper at work there: \"" + fill(40010) +

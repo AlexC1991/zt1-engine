@@ -2,7 +2,9 @@
 #define RENAME_CHEATS_HPP
 
 #include <functional>
+#include <set>
 #include <string>
+#include <vector>
 
 class World;
 class ResourceManager;
@@ -31,11 +33,42 @@ const Hooks &hooks();
 std::string guestRenamed(World &world, int guest, const std::string &name);
 // A staff member renamed (its id); the name already set
 std::string staffRenamed(World &world, int id, const std::string &name);
+// An animal renamed (its id); the name already set
+std::string animalRenamed(World &world, int id, const std::string &name);
 // "Susan Kittleson" / "Chuck Frizelle" (zoo.exe 0x6392c1): from then on,
 // till the game is closed, the marketing's bonus counted twice in the rating
 // guests come by (guestArrivalCheck 0x424375 at 0x42443d)
 bool marketingTwice();
 void setMarketingTwice(bool on); // (ours: the checks put it back)
+// The cheats' global flags (zoo.exe: set by 0x44940b, never cleared but
+// Dr. Dolittle's; not saved - ours: the checks put them back)
+struct Flags {
+  bool marketingTwice = false; // 0x6392c1
+  bool eggman = false;         // 0x63cfa1: eggs made hatch in 5 ticks
+  bool dolittle = false;       // 0x63c2e3: the next bear breeding check passes
+  bool scholl = false;         // 0x63c2e4: scientists move at twice the rate
+  bool frankenstein = false;   // 0x64e83a: 1 heal in 10 makes a dinosaur
+  bool rosalie = false;        // 0x654ad8: set by the tour guide's name, read by nothing
+  bool deer = false;           // 0x654ad9: set by "Deer", read by nothing
+};
+const Flags &flags();
+void setFlags(const Flags &f);
+// Dr. Dolittle's flag used up (zoo.exe 0x5db9c7)
+void dolittleUsed();
+// The name table (zoo.exe 0x639040, filled by 0x514554 from every resource
+// skeepr*.cfg; none ship with the game) and its names used once (0x641860,
+// saved in a zoo's cheats section - cheatsLoad 0x594197)
+void loadNameTable(ResourceManager *rm);
+std::set<std::string> &usedNames();
+// The name table's entry for a unit renamed (zoo.exe 0x44940b's end): its
+// type's name (+0x98) and subtype (+0xa4) to match the entry's, its colour
+// picks (the guest's +0xfc, nullptr none). Returns whether one was applied
+bool applyNameTable(const std::string &name, const std::string &typeName, const std::string &subtype,
+                    int *colours, int colourCount);
+// (ours: the checks) An entry put in the table, as a skeepr*.cfg section;
+// an empty name empties it
+void setNameEntry(const std::string &name, const std::string &type, const std::string &subtype, int bonusCash,
+                  int c0, int c1, int c2, const std::vector<int> &research, bool oneTime);
 } // namespace RenameCheats
 
 #endif // RENAME_CHEATS_HPP

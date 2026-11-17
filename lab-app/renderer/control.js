@@ -301,6 +301,9 @@ const CONTROL = {
   async whereUsed({ address }) {
     await ACTIONS.xrefs(address);
     const r = gNow('/xrefs?addr=' + plainHex(address));
+    // (ours: the answer's here, so the dialog isn't left over Play - it hid
+    // the game from everyone using it - while a game runs there)
+    if (S.play.running) setTimeout(closeStrayDialog, 1500);
     return { refs: r && r.json ? r.json.refs : [] };
   },
   async nameFunction({ address, name, note, cls }) {
@@ -868,8 +871,10 @@ const CONTROL = {
   // ---- Play
   async play({ start, game, shot }) {
     setTab('play');
-    if (start !== false && !$('modal').classList.contains('hidden'))
-      return { error: 'A Lab dialog is open over Play. Close that dialog before showing or capturing the game.' };
+    // (a dialog that only shows something - Where used, left by another
+    // caller - closed; one asking something hides the game but doesn't stop
+    // it: either game still draws its pictures and takes its lines)
+    closeStrayDialog();
     // (shot: a picture of the game in Play, ours or the original, as it's
     // drawn, saved at that .png)
     if (shot) return lab.playShot(shot);

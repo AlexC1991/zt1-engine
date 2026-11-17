@@ -177,6 +177,8 @@ public:
   std::function<void(int, const std::string &)> guestRenamed;
   // A staff member's name typed (its id, the name): set, then the cheats
   std::function<void(int, const std::string &)> staffRenamed;
+  // An animal's name typed (its id, the name): set, then the cheats
+  std::function<void(int, const std::string &)> animalRenamed;
   // Building Information: a stand's (infocom.lyt: price, sell, totals and
   // averages, items sold) or another building's (infoncm.lyt: visitors)
   void setObjects(PlacedObjects *objects, std::function<void(int)> sell) {

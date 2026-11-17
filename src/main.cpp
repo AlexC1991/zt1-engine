@@ -617,6 +617,23 @@ static void prepareHud(ResourceManager *rm) {
 // The Snap Shot button (1099): 1 the map alone, 2 (Shift held) the screen as it is
 static int g_snapshot = 0;
 
+// Undo: the last thing done (since the last click on the map) undone, its
+// money back (or a bulldozing's refund taken back) - zoo.exe
+// main_SingleUndo_click 0x4de9ce -> undoLastAction 0x4de527
+static void undoAndBook() {
+  if (!g_world || !g_world->canUndo())
+    return;
+  World::UndoMoney m = g_world->undo();
+  if (m.construction)
+    g_sim.spend(ZooSim::Construction, -m.construction);
+  if (m.animals)
+    g_sim.spend(ZooSim::AnimalPurchase, -m.animals);
+  if (m.wages)
+    g_sim.spend(ZooSim::Wages, -m.wages);
+  if (m.recycling)
+    g_sim.earn(ZooSim::Recycling, m.recycling);
+}
+
 static void createHud(ResourceManager *rm, World *world, int startingCash) {
   destroyHud();
   // The HUD and its panels, as the original's in-game screen
@@ -646,19 +663,7 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
     // Undo: the last thing done (since the last click on the map) undone,
     // its money back (or a bulldozing's refund taken back) - zoo.exe
     // main_SingleUndo_click 0x4de9ce -> undoLastAction 0x4de527
-    undo->onClick = [] {
-      if (!g_world || !g_world->canUndo())
-        return;
-      World::UndoMoney m = g_world->undo();
-      if (m.construction)
-        g_sim.spend(ZooSim::Construction, -m.construction);
-      if (m.animals)
-        g_sim.spend(ZooSim::AnimalPurchase, -m.animals);
-      if (m.wages)
-        g_sim.spend(ZooSim::Wages, -m.wages);
-      if (m.recycling)
-        g_sim.earn(ZooSim::Recycling, m.recycling);
-    };
+    undo->onClick = [] { undoAndBook(); };
   }
   if (UiElement *scenario = g_hud->getElementById(4107))
     scenario->setDisabled(true);
@@ -774,6 +779,10 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
   };
   g_hud->staffRenamed = [world, rm](int id, const std::string &name) {
     RenameCheats::staffRenamed(*world, id, name);
+    updateHudClock(rm);
+  };
+  g_hud->animalRenamed = [world, rm](int id, const std::string &name) {
+    RenameCheats::animalRenamed(*world, id, name);
     updateHudClock(rm);
   };
   g_hud->setGuests(&world->getGuests(), [world, rm](int type) {
@@ -921,23 +930,49 @@ static void handleToolResult(const World::ToolResult &r, ResourceManager *rm) {
   // A new exhibit: exhibit.wav, then its name asked
   if (!r.newExhibits.empty())
     Sound::get().play("sounds/exhibit", 100);
-  for (int id : r.newExhibits) {
-    const Fences::Exhibit *ex = g_world->getFences().exhibit(id);
-    if (!ex)
-      continue;
-    // "Exhibit 1", "Tank 2": the count of every exhibit made
-    std::string initial = rm->getString(ex->tank ? 6209 : 6208) + " " + std::to_string(id);
-    g_hud->askName(rm->getString(158), initial, [id](const std::string &name) {
-      std::string n = name;
-      if (n.empty())
-        if (const Fences::Exhibit *e = g_world->getFences().exhibit(id))
-          n = e->name;
-      int gate = g_world->getFences().finishExhibit(id, n, g_world->getMap());
-      if (gate > 0)
-        g_sim.spend(ZooSim::Construction, gate);
-      // (then its staff access check: zoo.exe 0x44e4eb)
-      g_world->getStaff().exhibitAccess(id, g_world->getMap(), g_world->getFences());
-    });
+  auto nameThem = [rm](const std::vector<int> &made) {
+    for (int id : made) {
+      const Fences::Exhibit *ex = g_world->getFences().exhibit(id);
+      if (!ex)
+        continue;
+      // "Exhibit 1", "Tank 2": the count of every exhibit made
+      std::string initial = rm->getString(ex->tank ? 6209 : 6208) + " " + std::to_string(id);
+      g_hud->askName(rm->getString(158), initial, [id](const std::string &name) {
+        std::string n = name;
+        if (n.empty())
+          if (const Fences::Exhibit *e = g_world->getFences().exhibit(id))
+            n = e->name;
+        int gate = g_world->getFences().finishExhibit(id, n, g_world->getMap());
+        if (gate > 0)
+          g_sim.spend(ZooSim::Construction, gate);
+        // (then its staff access check: zoo.exe 0x44e4eb)
+        g_world->getStaff().exhibitAccess(id, g_world->getMap(), g_world->getFences());
+      });
+    }
+  };
+  // zoo.exe 0x44e389: a tank closed round things it can't hold asks first
+  // (tankFillBlocked 0x485aa7, 10552 "To fill the tank, some objects or
+  // animals must be sold or removed from the tank."). Yes: they're taken out
+  // and it fills (tankEmptyContents 0x458c2b), then it's named. No: zooView
+  // +0x455 set, so the placing ends with undoLastAction 0x4de527 (0x5099da,
+  // 0x4d8fce): the walls just laid taken back, their money returned
+  if (r.askTankFill >= 0) {
+    const int tank = r.askTankFill;
+    const std::vector<int> made = r.newExhibits;
+    g_hud->popupYesNo(
+        rm->getString(10552),
+        [tank, made, nameThem, rm] {
+          if (float refund = g_world->clearTankForFill(tank); refund > 0)
+            g_sim.earn(ZooSim::Recycling, refund);
+          updateHudClock(rm);
+          nameThem(made);
+        },
+        [rm] {
+          undoAndBook();
+          updateHudClock(rm);
+        });
+  } else {
+    nameThem(r.newExhibits);
   }
   if (!r.askMerge.empty())
     g_hud->askConfirm(r.askMerge, [rm] {
@@ -1019,6 +1054,26 @@ static void handleToolResult(const World::ToolResult &r, ResourceManager *rm) {
   }
   // The money shown changes at once (as the original's)
   updateHudClock(rm);
+}
+
+// The right button on the map (zoo.exe: the zoo view's class slot 0x5c,
+// 0x4f96fd -> 0x4f9621(0) - the right button, slot 0x58 its press, both
+// (x, y, flags)): the bulldozer out (+0x3f4) goes first and alone, its slot
+// 0x1c (0x509870): a drag under way taken back, the tool kept; no drag, the
+// bulldozer put away (uiTurnOff 0x404, Clear Objects off). Else a drag
+// taken back, or what's being placed let go (endPlacing 0x443df7)
+static void rightClickOnMap() {
+  if (!g_world || !g_hud)
+    return;
+  if (g_hud->bulldozerOn()) {
+    if (!g_world->cancelTool()) {
+      g_hud->bulldozerOff();
+      g_world->setBulldozer(false);
+    }
+    return;
+  }
+  if (!g_world->cancelTool())
+    g_hud->dropPicks();
 }
 
 // The terraform account settled: paid for (Construction) if the zoo can,
@@ -1557,12 +1612,7 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
       g_world->cash = g_sim.unlimited ? 1e300 : g_sim.cash();
       handleToolResult(g_world->mouseUp(in.x, in.y), rm);
     } else if (in.event == InputEvent::RIGHT_CLICK) {
-      // (mid-drag: only the drag taken back, the tool kept, as the original)
-      if (!g_world->cancelTool())
-        g_hud->dropPicks();
-      // (and the bulldozer put away: "hotkeys")
-      if (Features::hotkeys)
-        g_hud->bulldozerOff();
+      rightClickOnMap();
     }
   }
 }
@@ -3282,6 +3332,11 @@ static void setRenameHooks(ResourceManager *rm) {
     }
   };
   RenameCheats::setHooks(h);
+  // The name table (zoo.exe 0x514554, at a zoo's start) and its names used
+  // once emptied (cheatsLoad 0x594197 empties them before reading a zoo's;
+  // ours: a zoo's own aren't read yet - #275)
+  RenameCheats::loadNameTable(rm);
+  RenameCheats::usedNames().clear();
 }
 
 // A map's goals, started as it is
@@ -7147,6 +7202,26 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                 offFirst && picked && g_hud->isPanelOpen(30) && g_hud->shownExhibitId() == pen && g_hud->isPanelOpen(17) &&
                     !g_hud->isPanelOpen(31) && remove && !remove->isDisabled() && assign && !assign->isToggledOn() &&
                     !world->isAssigning());
+          // (the view to the gate's tile, habitat +0x8c - measured: the
+          // gate's outside tile, #266)
+          {
+            float vx = -1, vy = -1;
+            int gx = -1, gy = -1;
+            for (const auto &[edge, piece] : fn.pieces())
+              if (piece.gate && fn.exhibitOf(edge) == pen) {
+                const int ax = edge.alongX ? edge.x : edge.x - 1, ay = edge.alongX ? edge.y - 1 : edge.y;
+                const bool aInside = fn.exhibitAt(ax, ay) == pen;
+                gx = aInside ? edge.x : ax;
+                gy = aInside ? edge.y : ay;
+                break;
+              }
+            const bool centred = world->viewCentre(vx, vy) && std::abs(vx - (gx + 0.5f)) < 0.75f &&
+                                 std::abs(vy - (gy + 0.5f)) < 0.75f && fn.exhibitAt(gx, gy) != pen;
+            check(("keeper's exhibit picked: the view on the gate's outside tile (habitat +0x8c, measured; tile " +
+                   std::to_string(gx) + "," + std::to_string(gy) + ", view " + std::to_string(vx) + "," +
+                   std::to_string(vy) + ")").c_str(),
+                  centred);
+          }
           keeper = st.member(ids[1]);
           if (keeper)
             keeper->exhibits.clear();
@@ -7474,6 +7549,14 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                  textOf(1409)).c_str(),
                 g_hud->isPanelOpen(1400) && !g_hud->isPanelOpen(17) && g_hud->shownDrtId() == at && textOf(1403) == h->name &&
                     textOf(1407) == "$2000" && textOf(1409) == "0" && textOf(1411) == st.dutyText(*h));
+          // (TrackDRT shown, its helicopter drawn in it - measured, #266:
+          // drt_Panel_show 0x48ccc1 -> 0x4ee2ba)
+          {
+            UiElement *track = g_hud->getElementById(1405);
+            const bool art = st.art(*h, h->anim.empty() ? "idle" : h->anim) != nullptr;
+            check("DRT base panel: TrackDRT shown with its helicopter in it (0x48ccc1, 0x4ee2ba)",
+                  track && !track->isHidden() && art);
+          }
           g_hud->showPanel(0, "");
           g_hud->setPanelOpen(1400, false);
           g_hud->refreshStaff();
@@ -7571,6 +7654,17 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         check("a right click mid path drag takes it back: nothing laid, nothing spent",
               took && stray == 0 && std::lround(before - g_sim.cash()) == 0);
         check("a right click with no drag lets the tool go", !world->cancelTool());
+      }
+      // The bulldozer out and no drag: a right click puts it away (zoo.exe
+      // 0x509870 with no drag: uiTurnOff 0x404 - #265; mid-drag it's kept:
+      // the finance checks)
+      if (UiButton *clear = dynamic_cast<UiButton *>(g_hud->getElementById(1028))) {
+        clear->setToggledOn(true);
+        world->setBulldozer(true);
+        const bool on = g_hud->bulldozerOn() && world->isBulldozer();
+        rightClickOnMap();
+        check("a right click with the bulldozer out and no drag puts it away (0x509870)",
+              g_world == world && on && !g_hud->bulldozerOn() && !world->isBulldozer());
       }
       world->setPathTool("", 0);
       world->mouseMove(0, 0);

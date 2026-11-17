@@ -136,6 +136,7 @@ public:
         int animalCost = 0;            // an animal adopted: its price
         double tankWalls = 0;          // a tank's walls dragged: their price, negative for money back (zoo.exe 0x489f53)
         bool buildingPlaced = false;   // a building placed (Zoo Status refreshed at once: zoo.exe 0x4516a9 -> 0x41739a)
+        int askTankFill = -1;          // a tank closed round what it can't hold: 10552 asked first (zoo.exe 0x44e389 -> tankEmptyContents 0x458c2b)
     };
     // Where a world grid vertex is on the window (pixels), on the ground
     bool vertexToWindow(int vx, int vy, int &x, int &y);
@@ -173,12 +174,19 @@ public:
     // tile
     void setPathTool(const std::string &type, int cost);
     const std::string &getPathTool() const { return pathTool; }
-    // Where a path tile can go: zoo ground (not water, not an exhibit, not
-    // under a rock or building), flat or a ramp, no path of that type
+    // Where a path tile can go: zoo ground (a lake tile too: it's painted
+    // dirt first), not an exhibit, not under a rock or building, flat or a
+    // ramp, no path of that type
     bool canLayPath(int x, int y) const { return pathFit(x, y) == Fences::Fit::Ok; }
     // Green: it can go; orange: a path's there already, or something stands
-    // there; red: not zoo ground, water, an exhibit or too steep
+    // there; red: not zoo ground, an exhibit or too steep
     Fences::Fit pathFit(int x, int y) const;
+    // A path tile's price there: the path's, and on a lake tile the dirt's
+    // too (zoo.exe placementCheck 0x4f885e)
+    int pathTilePrice(int x, int y) const;
+    // A path tile laid (the lake under it painted dirt first, for Undo):
+    // what it cost, 0 if it couldn't be
+    int layPathTile(int x, int y, bool undoable = true);
     bool isDraggingPath() const { return pathDragging; }
     // The path types a walkway can be built of: solid built ones (not
     // dirt, sand, trails, ice, grass mats, rock or stepping stones)
@@ -322,6 +330,20 @@ public:
     // Takes away the building or filter the bulldozer asked about (its
     // cNeedsConfirm): its refund
     float confirmSell();
+    // 10552's Yes: what's in the tank that can't be in it taken out, then
+    // its water (zoo.exe tankEmptyContents 0x458c2b with 1): the money back
+    // for what was sold (Recycling Benefit)
+    float clearTankForFill(int tank);
+    // What a tank holds that it can't keep under water (zoo.exe 0x45da8b:
+    // 0x45da65's mode 1, and 2 too in a show tank)
+    struct TankContents {
+      std::vector<int> objects, items, animals, staff; // ids
+      int guests = 0;
+      bool empty() const {
+        return objects.empty() && items.empty() && animals.empty() && staff.empty() && guests == 0;
+      }
+    };
+    TankContents tankContents(int tank);
     // Undo (zoo.exe 0x4de527, the Single_Undo button 1075): one level -
     // everything done since the last click on the map, undone newest
     // first, with exactly the money it took or gave back
@@ -374,6 +396,7 @@ private:
       enum class Kind { Object, Animal, Staff, Path, Fence, RemovedObject, RemovedPath, RemovedFence } kind;
       int id = -1, x = 0, y = 0;
       std::string pathType;          // the tile's path before (Path, RemovedPath)
+      int terrain = -1;              // (Path: the lake it was, painted dirt)
       Fences::Edge edge;
       int fenceType = -1;            // (RemovedFence; Fence: the kind it replaced)
       float fenceLife = -1;          // (Fence: the replaced one's wear)
@@ -428,7 +451,43 @@ private:
     std::map<int, std::pair<int, std::string>> filterLoops; // filter index -> channel, its sound
     std::map<std::string, std::pair<std::string, int>> ambientOf; // file -> sound, attenuation
     float buildingSoundClock = 0;
+    uint64_t ambientNextMs = 0; // (zoo.exe 0x6394e8: no ambient sound starts before this real time)
+    // A building type's [UseSound] (zoo.exe ZTBuildingType +0x1dc name,
+    // +0x1ec attenuation, +0x1e8 loops == 1)
+    struct UseSoundType {
+      std::string name;
+      int atten = 0;
+      bool loops = false;
+    };
+    std::map<std::string, UseSoundType> useSoundOf; // file -> its use sound
+    const UseSoundType &useSoundType(const std::string &file);
+    // A building's use sound playing (zoo.exe ZTBuilding +0x1bc) and its
+    // fade (+0x1b4), by the building's id
+    struct UseSound {
+      int channel = -1;
+      int fade = 0;
+      bool loops = false;
+    };
+    std::map<int, UseSound> useSounds;
     void updateBuildingSounds(float seconds);
+  public:
+    // A guest taken in as a building's user: its use sound (zoo.exe
+    // 0x42cc1a, from buildingAddUser 0x42ce0a)
+    void startUseSound(int index);
+    // A looping use sound's fade after ms of play (zoo.exe ZTBuilding::update
+    // 0x434c4b): out while the building has no users, in while it has
+    static int useLoopFade(int fade, int ms, bool users);
+    // (the checks: a building's use sound now, -1 none, and its fade)
+    int useSoundChannel(int id) const {
+      auto it = this->useSounds.find(id);
+      return it == this->useSounds.end() ? -1 : it->second.channel;
+    }
+    int useSoundFade(int id) const {
+      auto it = this->useSounds.find(id);
+      return it == this->useSounds.end() ? -1 : it->second.fade;
+    }
+    void stepBuildingSounds(float seconds) { this->updateBuildingSounds(seconds); }
+  private:
     void exhibitsNear(int x0, int y0, int x1, int y1, std::vector<int> &out) const;
     std::vector<std::string> loadedMapResources;
     TerrainTool terrain;            // Terraforming
@@ -451,6 +510,11 @@ private:
     struct TankFlags {
       bool underwater = false, surface = false, deadOnLand = false;
       int depth = 0, avoidEdges = 0;
+      // cHeight (type +0x64); walkable, walkableByTall, cRubbleable (scenery
+      // type +0x56, +0x57, +0x59 - sceneryTypeLoad 0x4ba5b0)
+      int height = 0;
+      bool walkable = false, walkableByTall = false, rubbleable = false;
+      bool show = false; // cShow (entity type +0x6f, loadConfig 0x4b4903): a show tank's
     };
     std::map<std::string, TankFlags> tankFlags;
     const TankFlags &tankFlagsOf(const std::string &file);

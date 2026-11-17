@@ -621,6 +621,49 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
   }
   world.cash = 1e300;
 
+  // A path across a lake tile (zoo.exe placeObject 0x4d9088, #264): the
+  // tile painted dirt (terrain 3) first, priced the path's and the dirt's
+  // ($10 + $20, placementCheck 0x4f885e); Undo puts the lake back
+  {
+    const int ly = Y + 8;
+    MapTile *lake = map.getTileMutable(X + 2, ly);
+    const int was = lake ? lake->terrainType : -1;
+    if (lake)
+      lake->terrainType = 9; // (fresh water)
+    world.setPathTool("dirtpath", 10);
+    int x0, y0, x1 = 0, y1 = 0, hx, hy;
+    centre(X + 2, ly, hx, hy);
+    world.mouseMove(hx, hy);
+    const int hover = world.hoverCost();
+    centre(X, ly, x0, y0);
+    world.mouseMove(x0, y0);
+    world.mouseDown(x0, y0);
+    for (int i = 1; i <= 4; i++) {
+      centre(X + i, ly, x1, y1);
+      world.mouseMove(x1, y1);
+    }
+    World::ToolResult r = world.mouseUp(x1, y1);
+    int laid = 0;
+    for (int i = 0; i <= 4; i++)
+      laid += map.isPath(X + i, ly) ? 1 : 0;
+    const int now = lake ? lake->terrainType : -1;
+    check("a path over a lake tile: hover $" + std::to_string(hover) + ", five laid (" + std::to_string(laid) +
+              "), the lake painted dirt (terrain " + std::to_string(now) + "), $" + std::to_string(r.cost) +
+              " ($50 and the dirt's $20)",
+          hover == 30 && laid == 5 && now == Original::pathOnLakeTerrain && r.cost == 70);
+    const World::UndoMoney back = world.undo();
+    int left = 0;
+    for (int i = 0; i <= 4; i++)
+      left += map.isPath(X + i, ly) ? 1 : 0;
+    check("Undo: the paths gone, the lake back (terrain " + std::to_string(lake ? lake->terrainType : -1) + "), $" +
+              std::to_string(back.construction) + " back",
+          left == 0 && lake && lake->terrainType == 9 && std::lround(back.construction) == 70);
+    if (lake)
+      lake->terrainType = static_cast<uint8_t>(was);
+    map.touch();
+    world.setPathTool("", 0);
+  }
+
   // Freeform's awards, donations and unlocks (awards.scn, donation.scn,
   // unlock.scn, as extragoals): every rule they use is one the game measures
   // (zoo.exe goalRuleMeasure 0x41d665) - Dinosaur Digs' dinosaur awards

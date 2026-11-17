@@ -3954,17 +3954,17 @@ void UiGameScreen::showStaff(int id) {
 }
 
 // The tile by an exhibit's gate, its middle. zoo.exe: the habitat's +0x8c,
-// the tile holding its gate piece (set at 0x435a0d; the gate itself through
-// 0x492ca3, the tile's +0x14 by +0x90's side); ours: of the gate's two
-// tiles, the one inside (which one the original keeps wasn't measured - the
-// view moves less than a tile)
+// the tile its gate piece is reached from (the gate itself through
+// 0x492ca3, the tile's +0x14 by +0x90's side) - measured: in the running
+// original (2026-11-17, a paddock at 39..46 x 32..39 with its gate on the top
+// side at x 43) +0x8c was tile 43,31, the gate's outside tile, +0x90 4
 bool UiGameScreen::exhibitGateTile(int id, float &x, float &y) const {
   if (!this->fences)
     return false;
   for (const auto &[e, p] : this->fences->pieces())
     if (p.gate && this->fences->exhibitOf(e) == id) {
       int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
-      if (this->fences->exhibitAt(ax, ay) != id) {
+      if (this->fences->exhibitAt(ax, ay) == id) {
         ax = e.x;
         ay = e.y;
       }
@@ -3988,15 +3988,21 @@ void UiGameScreen::showDrt(int id) {
   this->shownDrt = id;
   this->staff->selected = id;
   this->tracking = false;
-  if (UiButton *track = dynamic_cast<UiButton *>(this->drtPanel->getElementById(1405)))
+  // (the layout hides TrackDRT, state=2048, as the animal panel's
+  // Zookeeper Recommendations; the game shows it, the helicopter drawn in
+  // it - measured, #266)
+  if (UiButton *track = dynamic_cast<UiButton *>(this->drtPanel->getElementById(1405))) {
+    track->setHidden(false);
     track->setToggledOn(false);
+  }
   this->drtRefreshNow = true;
   this->pickStaffRow(id);
   this->refreshDrt();
 }
 
 // The Staff List's pick follows the selection (zoo.exe 0x5b66b1 ->
-// ui_mulstaff_47158c with the unit): its row, or none
+// ui_mulstaff_47158c 0x47158c with the unit: its row in the list's order,
+// listSelectIndex 0x4189e8; none, or not listed, -1)
 void UiGameScreen::pickStaffRow(int id) {
   UiListBox *list = this->staffList ? dynamic_cast<UiListBox *>(this->staffList->getElementById(4205)) : nullptr;
   if (!list)
@@ -4162,6 +4168,11 @@ void UiGameScreen::refreshStaff() {
     for (const Staff::Member &m : all)
       if (passes(m, this->staffFilter))
         shown.push_back(m.id);
+    // (zoo.exe keeps its rows as staff come and go: one added at the end as
+    // a staff member's put in the world, its name +0x108 and its type's list
+    // icon - ui_mulstaff_457f81 0x457f81, from 0x449ed0 - and taken out as
+    // it's removed, ui_mulstaff_501f2b 0x501f2b from 0x4586f6; ours: the
+    // rows made again, in the same hiring order, whenever they differ)
     bool relist = (int)shown.size() != this->staffListCount || shown != this->listedStaff;
     if (relist) {
       list->clear();
@@ -4495,6 +4506,26 @@ void UiGameScreen::refreshLists() {
 // The round portrait at the panel's top left: the staff member itself, in
 // its colours
 void UiGameScreen::drawStaffPortrait(SDL_Renderer *renderer) {
+  // The DRT base's panel: its helicopter in the round TrackDRT button
+  // (zoo.exe drt_Panel_show 0x48ccc1 -> 0x4ee2ba with the base's helicopter,
+  // +0x158's first, and -30005: its animation's frame centred in the
+  // button; measured: the original shows the helicopter idle on its pad with
+  // its crew, kept to the round window), as the animal panel's portrait
+  if (this->staff && this->drtPanel && this->isPanelOpen(1400))
+    if (const Staff::Member *m = this->staff->member(this->shownDrt))
+      if (UiElement *track = this->drtPanel->getElementById(1405)) {
+        Animation *a = this->staff->art(*m, m->anim.empty() ? "idle" : m->anim);
+        const SDL_Rect clip = track->getLastRect();
+        float l, t, r, b;
+        if (a && clip.w > 0 && clip.h > 0 && a->anchoredBounds(0, 0, CompassDirection::SE, l, t, r, b)) {
+          const float cx = clip.x + clip.w * 0.5f, cy = clip.y + clip.h * 0.5f;
+          const int frame = this->staff->helicopterFrame(*m, a);
+          drawRound(renderer, clip, [&](float ox, float oy) {
+            a->drawAnchored(renderer, cx - (l + r) * 0.5f + ox, cy - (t + b) * 0.5f + oy, CompassDirection::SE,
+                            nullptr, frame);
+          });
+        }
+      }
   if (!this->staff || !this->isPanelOpen(17))
     return;
   const Staff::Member *m = this->staff->member(this->shownStaff);
@@ -4583,8 +4614,12 @@ void UiGameScreen::setupAnimalPanel() {
       // 0x449215; the lists sort by name again)
       if (!this->animals || !Original::nameTaken(typed))
         return;
-      if (Animals::Member *m = this->animals->member(this->shownAnimal))
+      if (Animals::Member *m = this->animals->member(this->shownAnimal)) {
         m->name = typed;
+        // (0x4e1d6b's unitSetName 0x449515: the rename cheats, 0x44940b)
+        if (this->animalRenamed)
+          this->animalRenamed(this->shownAnimal, typed);
+      }
     };
 }
 

@@ -4,6 +4,7 @@
 #include <functional>
 #include <map>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -62,7 +63,10 @@ public:
     std::string listImage[2], infoImage[2];
     std::map<std::string, std::pair<std::string, int>> sounds; // [Sounds]: file, attenuation
     // The DRT: hired as its base (scenery/building/helibase.ai, a 10 x 8
-    // half-tile building), the helicopter in its slot on top
+    // half-tile building), the helicopter in its slot on top (zoo.exe
+    // ZTBuilding 0x4e5282, class slot 0xc8, the building placed: each slot's
+    // birthUser - helibase.ai's slot0, 9550: the helicopter - made, put at
+    // the slot and taken in as its user, buildingAddUser 0x42ce0a)
     std::string baseFile;
     Animation *base = nullptr, *baseUsed = nullptr;
     int footX = 1, footY = 1; // tiles
@@ -195,6 +199,9 @@ public:
     double baseAnimTime = 0;
     bool female = false;
     int hair = 0, skin = 0;
+    // "Dr. Scholl" (zoo.exe 0x44940b: slot 0x1c0 with his rate x 2): the rate
+    // he is moving at, so many times over, till his walk ends. ours: 1 none
+    int moveBoost = 1;
     std::string name;
     float x = 0, y = 0;       // tiles
     float fx = 0, fy = 1;     // facing (world)
@@ -222,6 +229,10 @@ public:
     // their duties there begin and end - zoo.exe 0x49f3ca, 0x49ebe7)
     std::vector<std::pair<int, int>> invalid;
     float invalidClear = 0;
+    // Maintenance: the work list entry it holds (zoo.exe unit +0x2c0; a
+    // WorkEntry's id, -1 none). Not saved: a load empties the list
+    // (maintWorkListClear 0x5b11a2 clears every holder's)
+    int workEntry = -1;
     // Keepers: the animals they found no way to (zoo.exe unit +0x270: Job1
     // 0x4993b9, Job3 0x508b3c), left out until their duties end
     std::vector<int> unreachable;
@@ -294,6 +305,8 @@ public:
   void moveTo(int id, float x, float y);
 
   void update(float seconds, const WorldMap &map, Fences &fences);
+  // A walker's speed, tiles a second: fleeing, running or walking
+  float tilesPerSecond(const Member &m, bool fleeing, bool running) const;
   // What lies about (food, dung, litter) for keepers and maintenance
   void setItems(ZooItems *items) { this->items = items; }
   // The animals (keepers dart and crate escaped ones)
@@ -403,7 +416,44 @@ public:
   Fences::Fit previewFit = Fences::Fit::Ok;
   bool previewPoor = false; // (it fits, but the first month's pay is more than the cash: red)
 
+  // The maintenance work list (zoo.exe object 0x638fa0, its std::list at
+  // 0x638fa4), each entry {+0 the job, +4 its tile, +8 the worker on it,
+  // +0xc flagged}: work goes on it once, as it appears (the messages to
+  // maintenance, maintWorkListBuild 0x434e30); flagged work at its front,
+  // the rest at its back. An entry leaves it when its worker finishes
+  // (0x4a97e5) or takes another (maintTakeEntry 0x4a97c0); a load empties it
+  // (0x5b11a2) and the zoo posts its work again (worldAfterLoad 0x4534e6 ->
+  // 0x593f2f, every object's slot 0x70), so it isn't saved
+  struct WorkEntry {
+    int id = 0;
+    Job job = Job::None;
+    int x = 0, y = 0;                    // its tile (+4)
+    int item = -1;                       // the litter or dung, or the trash can (Job::Trash)
+    Fences::Edge edge = {false, -1, -1}; // a worn fence piece
+    bool flagged = false;                // (+0xc)
+    int holder = -1;                     // the worker on it (+8), -1 none
+  };
+  const std::vector<WorkEntry> &workList() const { return this->work; }
+  // The zoo's new work onto the list (what was posted since the last look)
+  void noticeWork(const WorldMap &map, const Fences &fences);
+  // ours (checks): emptied and posted again, as a load does
+  void rebuildWorkList(const WorldMap &map, const Fences &fences);
+
 private:
+  std::vector<WorkEntry> work;
+  int nextWorkId = 1;
+  // What's been posted: the litter and dung by id, the trash cans over 12
+  // full, the worn fence pieces, each filter's state by its tile (1 decayed,
+  // 2 broken)
+  std::set<int> postedItems, binsFull;
+  std::set<Fences::Edge> fencesWorn;
+  std::map<std::pair<int, int>, int> filterPosted;
+  void postWork(Job job, int x, int y, int item, Fences::Edge edge, bool flagged);
+  WorkEntry *workEntry(int id);
+  void takeEntry(Member &m, int id);
+  void finishEntry(Member &m);
+  bool workGone(const WorkEntry &e, const Fences &fences) const;
+  int filterAt(const Fences &fences, int x, int y) const;
   ResourceManager *rm = nullptr;
   ZooItems *items = nullptr;
   Animals *animals = nullptr;

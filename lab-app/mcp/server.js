@@ -193,7 +193,8 @@ const TOOLS = {
       'Run one of the Lab’s button actions by name (its data-act), with its argument. An unknown name answers with the list of every action. Prefer a purpose-made tool when there is one.',
     schema: { name: { type: 'string' }, arg: { type: 'string' } },
     required: ['name'],
-    run: (a) => call('action', a),
+    // (the Lab gives an action up to 10 minutes: origCheckSave, playOriginal <zoo>)
+    run: (a) => call('action', a, 620000),
   },
   // ---- The original zoo.exe (Original Game)
   lab_search_functions: {

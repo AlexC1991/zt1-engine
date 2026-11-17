@@ -45,6 +45,9 @@ class ZooReader;
 //   piece will drain the tank ..."), then drains it: the water and the tall
 //   walls go, the hole stays.
 // ============================================================================
+// A kind of fence or tank wall: the original's ZTFenceType and ZTTankWallType
+// (their class names 'fences' 0x401f9e and 'tankwall' 0x402106, isKindOf by
+// name 0x4aa7e4; a piece made by create, slot 0x5c: 0x5b3a55, 0x45cd6b)
 struct FenceType {
   std::string key;  // registry key and the map's subclass: chainlnk, atltank
   // the original's registry key where it isn't the file's name: saved zoos
@@ -94,6 +97,8 @@ struct FenceType {
 // walls and water sides - enlarged one by one left a line at every join)
 void drawLayered(SDL_Renderer *renderer, const std::function<void()> &draw);
 
+// The fences and the exhibits they shut off: the original's ZTHabitatMgr
+// (made by createHabitatMgr 0x464925) and its habitats
 class Fences {
   friend class DayNightLighting; // addition: reads the same native wall/platform geometry, never changes it.
   friend class SaveGame; // (saving and loading a game)
@@ -253,8 +258,10 @@ public:
   // in the way: a fence already, a building (orange)
   enum class Fit { Ok, Outside, InTheWay };
   Fit fit(const Edge &e, const WorldMap &map) const;
-  // The same for a tile (the one under the cursor)
-  Fit tileFit(int x, int y, const WorldMap &map) const;
+  // The same for a tile (the one under the cursor); lakeOk: a lake tile
+  // judged as land (the path tool's: zoo.exe placeObject 0x4d9088 lays a
+  // path on a lake tile, painted dirt first)
+  Fit tileFit(int x, int y, const WorldMap &map, bool lakeOk = false) const;
   // A piece that can't go because it's outside the main zoo wall (on land)
   bool outsideZooWall(const Edge &e, const WorldMap &map) const;
   void place(const Edge &e, int type, int drag, const WorldMap &map);
@@ -291,7 +298,8 @@ public:
   // yet worn: nothing)
   int layCost(const Edge &e, int type) const;
   // Taking a piece away (bulldozer); a tank it walled drains first
-  void remove(const Edge &e, WorldMap &map);
+  // (wholeTank false: undo's - the piece alone, its tank drained and gone)
+  void remove(const Edge &e, WorldMap &map, bool wholeTank = true);
 
   // After fence changes: ground newly shut off becomes an exhibit (returned,
   // waiting to be named); exhibits opened up are gone

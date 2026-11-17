@@ -899,6 +899,41 @@ about a minute.
 **Volume.** The Play bar's slider sets the running game's own volume (either
 game; Windows' mixer has it on its own: `volume <0-100>`, src/SessionVolume.hpp).
 
+**Opening a saved zoo in the original** (`lab_action playOriginal <file.zoo>`,
+and `origCheckSave`). The original is started with that zoo as its
+`[user] lastfile`, muted, and the call returns only once the zoo runs:
+`{loaded, entities, seconds}`, or an error that says what the original showed,
+with a picture beside the zoo (`<zoo>.menu.png` / `.loaded.png`). It presses
+Continue Saved Game (the menu's middle, 94 down) every 2.5 s until the
+original's own state says it's loading - a click in its films skips a film -
+then waits for the original's own "open" state, not a quiet count:
+`loadingZoo` (theGame 0x638148 +0x441, set and cleared by `loadZoo` 0x453000)
+back to 0, a world with things in it, and the world's clock (+0x204) running.
+A zoo it refuses ("Corrupted Microsoft Zoo Tycoon saved game.") leaves its
+menu paused under the message: said in about 10 s, with the picture. A zoo
+that isn't there is said before the original starts. Taken together, on a busy
+PC: 18 of 18 loads of the six every-item zoos reached the zoo, 13-79 s each.
+A `playOriginal <zoo>` while a game runs in Play is refused (stop it first).
+Long actions get 10 minutes (the Lab's control server and the MCP's
+`lab_action`).
+
+**Its answers, one at a time.** The hook answers its lines in order; the Lab
+asks one question at a time (`orig:ask`, for every caller: the live bar, a
+census, another session's `memPeek`) and gives each answer to the one waiter
+it's for. Before, every waiter with the same start ("peek ", "strs") got the
+first answer, so a census taken beside the live bar mixed numbers and names.
+`memPeek` also checks the answer is for the address asked. A census is only
+taken once the zoo runs, and a type's name read as nothing isn't kept.
+
+**Lab dialogs over Play.** The game draws and takes its clicks whether the
+Play view shows it or not (the hook keeps it "active": zoo.exe's pump,
+0x41aaf8, would otherwise wait on messages), so a dialog over Play no longer
+stops `playSteps` or `lab_play` (shot, start). Play's own actions close a
+dialog that only shows something (Where used, a list, a census: nothing to
+fill in, only Close; Where used of a global with its name fields untouched),
+and `lab_where_used` closes its own dialog after answering while a game runs
+in Play. A dialog asking something is left for whoever opened it.
+
 **The Lab's mouse.** `click`/`rclick`/`move <x> <y>` and `drag <x0> <y0> <x1> <y1>`
 (the game's own pixels, as in a `shot`) click in the original without anyone's
 mouse: the hook answers GetCursorPos, GetAsyncKeyState and GetKeyState for the

@@ -68,6 +68,14 @@ public:
   int accept();
   void undo();
   bool changed() const { return !this->baseline.empty() && this->cost() != 0; }
+  // A lake tile (its terrain's water key set: zoo.exe tile +0x83 & 3)
+  bool isWater(int x, int y) const;
+  // A terrain type's price (tiletex.cfg cost: the terrain list's entry +8)
+  float typeCost(int type) const;
+  // One tile painted another type outside the tool's account (zoo.exe
+  // 0x4f8fd8 over one tile: 0x4f8f0b's test, then 0x4f17e0): false if it
+  // can't be
+  bool paintTile(int x, int y, int type);
   // The last change's sound (terrpnt, terrup, terrdown, terrflat), taken
   std::string takeSound() {
     std::string s = this->sound;

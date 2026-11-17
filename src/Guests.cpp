@@ -695,7 +695,17 @@ int Guests::timeInParkText(const Guest &g) const {
 // Buildings (their .ai: [Satisfies], [Sells], cDefaultCost, cPriceFactor,
 // cCapacity, cTimeInside, cHideUser, c*Change; the item's items/<name>.cfg
 // deltas). A stand's takings are its price x cPriceFactor (checked: a $1
-// snack machine sale is $2 of Concessions in the original).
+// snack machine sale is $2 of Concessions in the original). zoo.exe
+// ZTBuildingType::loadConfig 0x4c070a reads the integers and the sounds,
+// loadConfig2 0x4c2136 the prices: cDefaultCost +0x178, cLowCost +0x17c,
+// cMedCost +0x180, cHighCost +0x184, cPriceFactor +0x188 (and cMinUsePeriod
+// / cMaxUsePeriod +0x244 / +0x248: PlacedObjects' random use). The class-wide
+// file first, once (ZTBuildingType::loadClassConfig 0x4bbe6a: "building" +
+// ".ai" - building.ai's [Satisfiers] in order, the needs' numbers, 1 drink,
+// 2 food ...; ours keeps a building's satisfiers by name; its colour parts:
+// PlacedObjects::colouringOf). ZTUnitType 0x4bf2ba, ZTFoodType 0x4c2461 and
+// ZTPathType 0x4c2625 read their own class file the same way: unit.ai has
+// nothing in it, and there's no food.ai or path.ai
 // ----------------------------------------------------------------------------
 const Guests::BuildingInfo &Guests::infoOf(const std::string &file) const {
   auto it = this->buildingInfo.find(file);
@@ -1107,8 +1117,8 @@ bool Guests::buildingSetLine(Guest &g) {
         g.takenIn = true;
         ZT_STEP("0x5ad3a6", "fEnterBuilding: taken in as the building's user", {"set", name}, {"line", g.sitStep});
         addUser(g, bo, b);
-        if (!b.useSound.empty() && this->sounds)
-          Sound::get().play(b.useSound, b.useAtten + 600);
+        if (!b.useSound.empty() && this->sounds && this->useSoundStart)
+          this->useSoundStart(g.building); // (0x42ce0a -> 0x42cc1a)
       }
       continue;
     }
@@ -1269,8 +1279,8 @@ void Guests::useBuilding(Guest &g) {
   }
   addUser(g, this->objects->all()[g.building], b);
   play(g, g.need == "energy" ? "stand" : "stand", std::max(0.5f, b.timeInside));
-  if (!b.useSound.empty() && this->sounds)
-    Sound::get().play(b.useSound, b.useAtten + 600);
+  if (!b.useSound.empty() && this->sounds && this->useSoundStart)
+    this->useSoundStart(g.building); // (0x42ce0a -> 0x42cc1a)
 }
 
 // zoo.exe ZTBuilding::buildingAddUser 0x42ce0a, its guest's part: the
@@ -2655,6 +2665,15 @@ void Guests::caught(int guest, const std::string &animalKey, bool female, const 
   }
 }
 
+void Guests::takeAway(int guest) {
+  for (Guest &g : this->list)
+    if (g.id == guest) {
+      ZT_STEP("0x4fa78e", "Taken away", {"guest", g.name});
+      g.x = -1000; // (taken out of the zoo: gone at the sweep below)
+      return;
+    }
+}
+
 void Guests::releaseTour(int guide) {
   for (Guest &g : this->list)
     if (g.guide == guide) {
@@ -2734,7 +2753,11 @@ void Guests::decide(Guest &g) {
   // +0x33e set)
   if (g.puking) {
     g.puking = false;
-    g.recheck = true;
+    // (a "Stinky" guest's bSick has no task: nothing marks it done - its
+    // next pick as any, cheatTick)
+    if (!g.stinkSick)
+      g.recheck = true;
+    g.stinkSick = false;
   }
   // Sick from a smell (zoo.exe chooseTask 0x5b0509: +0x336 set, not in a
   // building): cSickChance in 100, then Task79_GuestSick (begin 0x5b0635:
@@ -4014,9 +4037,97 @@ void Guests::putBack() {
 // ----------------------------------------------------------------------------
 // Every frame
 // ----------------------------------------------------------------------------
+// zoo.exe ZTGuest's update (class slot 0x28, 0x43a62c), after the unit's
+// own (0x43494e), unless it's held or going (+0x143, +0x142): a renamed
+// guest's flags (+0x340) work on the other guests on its tile (its tile's
+// list, those that are guests). 2 ("Stinky"): unless it stands on water
+// (tile +0x83 & 3) or a tank's (+0x85 & 0x20), each one not going into, in
+// or out of a building (0x4108f7) and not already in its bSick is stopped
+// (slot 0x198(1,0,1)) and starts its bSick at once (0x619110 ->
+// startSetNow 0x43c6c5: fPlayWithSound(puke, <kind>_puke) - no task, no
+// thought). 4 ("rpro"): each woman (type +0x98 'w') not in a building
+// attacked (0x6191f9: +0x33b, and leaving +0x339 unless on water - she runs
+// from the zoo). 8 ("Boogyman"): each boy or girl ('b', 'g') alike. 0x20
+// ("Redman"): each one's shirt (+0xfc[0]) 1 (0x61922d); 0x10 ("Yellowman"):
+// 9 (0x619215) - in that order, buildings or not
+void Guests::cheatTick() {
+  using namespace Original::Cheat;
+  for (size_t i = 0; i < this->list.size(); i++) {
+    Guest &me = this->list[i];
+    if (!me.cheatFlags || me.id == this->carried)
+      continue;
+    const int tx = static_cast<int>(std::floor(me.x)), ty = static_cast<int>(std::floor(me.y));
+    auto onTile = [&](auto &&fn) {
+      for (size_t j = 0; j < this->list.size(); j++) {
+        Guest &o = this->list[j];
+        if (j == i || o.id == this->carried || static_cast<int>(std::floor(o.x)) != tx ||
+            static_cast<int>(std::floor(o.y)) != ty)
+          continue;
+        fn(o);
+      }
+    };
+    auto kindOf = [&](const Guest &o) -> const Type * {
+      return o.type >= 0 && o.type < static_cast<int>(this->typeList.size()) ? &this->typeList[o.type] : nullptr;
+    };
+    if (me.cheatFlags & stinky) {
+      const MapTile *t = this->map->getTile(tx, ty);
+      const bool water = t && (t->terrainType == 9 || t->terrainType == 10);
+      const int ex = this->fences->exhibitAt(tx, ty);
+      const Fences::Exhibit *e = ex >= 0 ? this->fences->exhibit(ex) : nullptr;
+      if (!water && !(e && e->tank))
+        onTile([&](Guest &o) {
+          const Type *k = kindOf(o);
+          if (o.building >= 0 || o.puking || !k || !k->anims.count("puke"))
+            return;
+          ZT_STEP("0x619110", "A Stinky guest's neighbour is sick (bSick)", {"guest", o.name}, {"stinky", me.name});
+          o.state = State::Walking;
+          o.path.clear();
+          o.pathAt = 0;
+          o.target = -1;
+          o.gawkObject = -1;
+          o.guide = -1;
+          o.tourHeard = false;
+          o.puking = true;
+          o.stinkSick = true;
+          float secs = 2.0f;
+          if (Animation *a = this->art(o, "puke"))
+            if (a->frameTimeMs() > 0 && a->frameCount() > 0)
+              secs = a->frameCount() * a->frameTimeMs() / 1000.0f;
+          play(o, "puke", secs);
+          const std::string sound = k->key + "_puke";
+          if (this->sounds && this->soundFile.count(sound))
+            Sound::get().play(this->soundFile[sound], this->soundAtten[sound] + 600);
+        });
+    }
+    auto scare = [&](Guest &o) {
+      ZT_STEP("0x6191f9", "Scared off by a renamed guest: attacked, leaving", {"guest", o.name}, {"by", me.name});
+      o.attacked = true;
+      if (!o.inWater)
+        o.leaving = true;
+    };
+    if (me.cheatFlags & rpro)
+      onTile([&](Guest &o) {
+        const Type *k = kindOf(o);
+        if (o.building < 0 && k && k->female && !k->child)
+          scare(o);
+      });
+    if (me.cheatFlags & boogyman)
+      onTile([&](Guest &o) {
+        const Type *k = kindOf(o);
+        if (o.building < 0 && k && k->child)
+          scare(o);
+      });
+    if (me.cheatFlags & redman)
+      onTile([&](Guest &o) { o.colours[0] = redShirt; });
+    if (me.cheatFlags & yellowman)
+      onTile([&](Guest &o) { o.colours[0] = yellowShirt; });
+  }
+}
+
 void Guests::update(float seconds, int zooRating, double admission) {
   if (!this->map || !this->fences || !this->animals)
     return;
+  cheatTick();
   // Buildings with a guest at them show their "used" art
   if (this->objects) {
     for (PlacedObjects::Object &o : this->objects->all())

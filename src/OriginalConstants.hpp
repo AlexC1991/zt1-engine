@@ -26,6 +26,25 @@ inline constexpr int bulldozeClickPixels = 16;
 // Zoo Status, while open, is redone every 10000 ms (zoo.exe 0x401644:
 // 0x643670 = the time + 10000)
 inline constexpr uint64_t zooStatusRefreshMs = 10000;
+// A path laid on a lake tile paints it this terrain type first (zoo.exe
+// placeObject 0x4d9088 at 0x5cdd85: the terrain list's entry 3, +0x90 - the
+// list is by type: measured 2026-11-17 in the running original,
+// [0x638058]+0x10 entry 3 has type 3, cost 20.0: ttDirt), and its hover
+// price adds that terrain's cost (placementCheck 0x4f885e: 0x4dc8a4(3))
+inline constexpr int pathOnLakeTerrain = 3;
+// A building's looping use sound (its [UseSound] loops = 1) fades by this
+// much attenuation a ms of play: out while it has no users, in while it has
+// (ZTBuilding::update 0x434c4b: +0x1b4 +/- ms x 3), kept to 0..5000; at
+// 5000 it stops (sound slot 0x60)
+inline constexpr int useLoopFadePerMs = 3;
+inline constexpr int useLoopFadeMax = 5000;
+// A building's [AmbientSound] or use sound is played only while its
+// attenuation and its distance from the view come to no more than this
+// (0x41e3f8 at 0x41e4ea, 0x4b0bca: cmp 0x898), and one ambient sound
+// starts at most every 1000 ms of real time (0x4b0c49: GetTickCount + 0x3e8
+// into 0x6394e8)
+inline constexpr int buildingSoundReach = 0x898;
+inline constexpr uint32_t ambientStartGapMs = 1000;
 // ZTAnimal::sellValue 0x48d21d: happiness (-100 to 100) as 0 to 1,
 // (happiness + 100) x 0.005 (0x630d64, 0x635060); the whole halved (0x630d54)
 inline constexpr float sellHappinessOffset = 100.0f;
@@ -383,6 +402,37 @@ inline constexpr bool guestArrivalGoodValue[4][5] = {
     {false, false, false, true, true}, {false, false, false, false, true},
     {false, false, false, false, true}, {false, false, false, false, false}};
 inline constexpr int goodValueGuests = 10;
+
+// The rename cheats (zoo.exe 0x44940b and what reads their flags)
+namespace Cheat {
+// "Eggman": an egg made from then on (animalBecomeEgg 0x5a5283, with 1)
+// hatches in 5 ticks, not its cTimeToHatch (0x5dc046: +0x398 = 5)
+inline constexpr int eggmanHatchTicks = 5;
+// "Dr. Dolittle": the bears whose breeding it helps - cNameID 0x1398 the
+// grizzly, 0x1399 the black bear (0x5da846, 0x5db99f)
+inline constexpr int grizzlyNameId = 0x1398, blackBearNameId = 0x1399;
+// "Dr. Scholl" / "Dr. Frankenstein": the keeper type whose renaming they
+// are (cNameID 0x254f, the dinosaur scientist) - and Dr. Scholl's scientists
+// move at twice the rate (setMoveSpeed 0x41678b: rate x 2)
+inline constexpr int scientistNameId = 0x254f;
+inline constexpr int schollRateFactor = 2;
+// "Dr. Frankenstein": 1 heal in 10 (Job4_HealAnimal::atTarget 0x4702e8:
+// rand() % 10 == 0)
+inline constexpr int frankensteinOneIn = 10;
+// "Deer" (a grizzly): every grizzly type's cBashStrength (+0x3b4) 501
+// (0x6075ea: 0x1f5)
+inline constexpr int deerBashStrength = 0x1f5;
+// "Comet" (a reindeer, cNameID 0x14b4): every animal whose type's
+// cExpansionID (+0x54) is 1 sold for nothing (0x607757)
+inline constexpr int reindeerNameId = 0x14b4;
+inline constexpr int cometExpansionId = 1;
+// "Yellowman" / "Redman": the shirt (+0xfc[0]) given (0x619215: 9,
+// 0x61922d: 1)
+inline constexpr int yellowShirt = 9, redShirt = 1;
+// The guest flags (+0x340) the names set: "Stinky" 2, "rpro" 4,
+// "Boogyman" 8, "Yellowman" 0x10, "Redman" 0x20
+inline constexpr int stinky = 2, rpro = 4, boogyman = 8, yellowman = 0x10, redman = 0x20;
+} // namespace Cheat
 
 } // namespace Original
 

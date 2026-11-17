@@ -43,7 +43,7 @@ const leHex = (hex, i, n) => parseInt(hex.slice(i * 2, (i + n) * 2).match(/../g)
 async function livePointer(global) {
   const r = await ACTIONS.memPeek(global.toString(16) + ' 4');
   // (a read with no bytes - the original still loading a big zoo: not there yet)
-  return r.error || !r.bytes ? 0 : leHex(r.bytes, 0, 4);
+  return r.error || !r.bytes || r.bytes === '-' ? 0 : leHex(r.bytes, 0, 4);
 }
 async function liveText(at) {
   const s = await ACTIONS.memStrs(at.toString(16) + ' 4');
@@ -57,7 +57,7 @@ async function liveRead() {
   const date = await ACTIONS.memPeek(`${(gm + 0x1194).toString(16)} 16`);
   const map = await ACTIONS.memPeek(`${(w + 0x34).toString(16)} 8`);
   const list = await ACTIONS.memEach(`${(w + 0x80).toString(16)} 0 128 2a8`);
-  if (money.error || date.error || map.error || !money.bytes || !date.bytes || !map.bytes) return null;
+  if ([money, date, map].some((r) => r.error || !r.bytes || r.bytes === '-')) return null;
   const buf = new DataView(new Uint8Array(money.bytes.match(/../g).map((b) => parseInt(b, 16))).buffer);
   const out = {
     cash: buf.getFloat32(0, true),
@@ -68,7 +68,9 @@ async function liveRead() {
   };
   for (const o of list.objects || []) {
     const [vt, type, happy] = o.values;
-    if (!LIVE.names[type]) LIVE.names[type] = [await liveText(parseInt(type, 16) + 0xa4), await liveText(parseInt(type, 16) + 0x98)];
+    // (a name read as nothing - a type still being made - isn't kept: read
+    // again next time, so an early read can't stick to the census)
+    if (!LIVE.names[type] || !(LIVE.names[type][0] || LIVE.names[type][1])) LIVE.names[type] = [await liveText(parseInt(type, 16) + 0xa4), await liveText(parseInt(type, 16) + 0x98)];
     // (the knowledge base's class for a table not in the list: ZTKeeper...)
     const kbName = S.kb && Object.entries(S.kb.classes || {}).find(([, c]) => parseInt(c.vtable, 16) === parseInt(vt, 16));
     const cls = LIVE.classes[vt] || (kbName && kbName[0]) || 'Class ' + vt;
@@ -83,6 +85,100 @@ async function liveRead() {
   // (happiness as each class's average - summed above)
   for (const c of Object.values(out.classes)) if (c.happiness !== undefined) c.happiness = Math.round(c.happiness / c.count);
   return out;
+}
+
+// ---------------------------------------------------------- its own state
+// Where the original is, from its own globals (zoo.exe, read 2026-11-17):
+// - the game object 0x638148: +0x440 gamePaused (0x638588), +0x441
+//   loadingZoo (0x638589) - loadZoo 0x453000 sets it as it opens the file
+//   (0x453052) and clears it once the world has read itself (0x4531ca)
+// - the world [0x638040]: 0 in its films, an empty one at its main menu
+//   (measured); its entity list +0x80 (a
+//   begin/end pair) and its clock +0x204, whole seconds, only ever added to
+//   as the zoo runs (0x435921) - never while a zoo loads or at the menu
+// (loadZoo's error, 0x63e3e0 - messages 305-308 - is taken and cleared by
+// its caller as soon as it returns (0x4a0a1c), so a refused zoo is seen as
+// a load that ended with no zoo running, and pictured)
+const ORIG = { game: 0x638148, paused: 0x440, loading: 0x441, worldClock: 0x204, worldList: 0x80 };
+async function origState() {
+  const g = await ACTIONS.memPeek(`${(ORIG.game + ORIG.paused).toString(16)} 2`);
+  if (g.error || !g.bytes || g.bytes === '-') return null;
+  const s = { paused: leHex(g.bytes, 0, 1), loading: leHex(g.bytes, 1, 1), world: await livePointer(LIVE.world), entities: 0, clock: null };
+  if (s.world) {
+    const l = await ACTIONS.memPeek(`${(s.world + ORIG.worldList).toString(16)} 8`);
+    if (!l.error && l.bytes && l.bytes !== '-') s.entities = Math.max(0, (leHex(l.bytes, 4, 4) - leHex(l.bytes, 0, 4)) / 4);
+    const c = await ACTIONS.memPeek(`${(s.world + ORIG.worldClock).toString(16)} 4`);
+    if (!c.error && c.bytes && c.bytes !== '-') s.clock = leHex(c.bytes, 0, 4);
+  }
+  return s;
+}
+// ours: a saved zoo opened in the original (it was started with the zoo as
+// its [user] lastfile): its films skipped and Continue Saved Game pressed
+// (the menu's middle, 94 down) until it starts loading - a click before its
+// menu is up skips a film or does nothing, so it's pressed again every
+// 2.5 s - then waited for until the zoo runs: loading over, a world with
+// things in it, and its clock going. Pictures of where it stopped beside
+// the zoo (<zoo>.menu.png, .loaded.png); an error says what it saw
+async function origOpenZoo(zoo) {
+  const base = zoo.replace(/\.zoo$/i, '');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const gone = () => !S.play.running || S.play.kind !== 'original';
+  const said = (s) => (s ? `${s.loading ? 'loading' : s.world ? `a zoo of ${s.entities} things, clock ${s.clock}` : 'no zoo (its menu or films)'}${s.paused ? ', paused' : ''}` : 'nothing readable yet');
+  let size = null, s = null, clicks = 0, held = 0;
+  const t0 = Date.now();
+  for (;;) {
+    if (gone()) return { error: 'The original closed before it opened the zoo.' };
+    s = await origState();
+    // (its main menu has a world already, an empty one)
+    if (s && (s.loading || (s.world && s.entities > 0))) break;
+    // (measured: its menu paused, after Continue Saved Game - its message
+    // over the menu, "Corrupted Microsoft Zoo Tycoon saved game." for a
+    // broken file - for 10 s: it refused the zoo, said with its picture)
+    held = clicks && s && s.world && !s.entities && s.paused ? held + 1 : 0;
+    if (held >= 4) {
+      const p = await lab.playShot(base + '.menu.png');
+      return { error: 'The original refused the zoo: it shows a message on its menu instead (see the picture - "Corrupted Microsoft Zoo Tycoon saved game." for a broken file).', picture: p && p.file };
+    }
+    if (Date.now() - t0 > 150000) {
+      const p = await lab.playShot(base + '.menu.png');
+      return { error: `The original didn’t start loading the zoo in 150 s (it shows ${said(s)}).`, picture: p && p.file };
+    }
+    // (its size from a picture, once it's drawn one: the click's aimed at it)
+    if (!size) {
+      const p = await lab.playShot(base + '.menu.png');
+      if (p && !p.error && p.width) size = p;
+    }
+    if (size && !held) {
+      lab.playCmd(`click ${Math.round(size.width / 2)} ${Math.round(size.height / 2) + 94}`);
+      clicks++;
+    }
+    await sleep(2500);
+  }
+  const t1 = Date.now();
+  let clock = null, ended = 0;
+  for (;;) {
+    await sleep(1000);
+    if (gone()) return { error: 'The original closed while it loaded the zoo.' };
+    s = await origState();
+    if (s && !s.loading) {
+      ended = ended || Date.now();
+      if (s.world && s.entities > 0 && s.clock !== null) {
+        if (clock !== null && s.clock !== clock) break;
+        clock = s.clock;
+      }
+      // (loading over, and no zoo running 30 s on: it refused it - its
+      // message, 306 old or 307 corrupted, is on the picture)
+      if (Date.now() - ended > 30000) {
+        const p = await lab.playShot(base + '.loaded.png');
+        return { error: `The original finished loading but no zoo runs (it shows ${said(s)}): it may have refused the save - see the picture.`, picture: p && p.file };
+      }
+    }
+    if (Date.now() - t1 > 300000) {
+      const p = await lab.playShot(base + '.loaded.png');
+      return { error: `The original was still loading the zoo after 5 minutes (it shows ${said(s)}).`, picture: p && p.file };
+    }
+  }
+  return { loaded: true, entities: s.entities, seconds: Math.round((Date.now() - t0) / 1000) };
 }
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -319,10 +415,10 @@ Object.assign(ACTIONS, {
   origLive: async () => (await liveRead()) || { error: 'Nothing to read: is a zoo open in the original?' },
   // A shared save judged by the original (arg: an everything zoo's list,
   // everything-<map>-<part>.json, its .zoo beside it): the original started
-  // with that zoo as its last one, past its films, Continue Saved Game
-  // pressed (the menu's middle, 94 down), the census taken once it has
-  // settled, and compared with what was saved (re/lab/everything.py) - the
-  // census, the verdict and pictures written beside the list
+  // with that zoo as its last one and opened (origOpenZoo: until its own
+  // state says the zoo runs), the census taken then, and compared with what
+  // was saved (re/lab/everything.py) - the census, the verdict and pictures
+  // written beside the list
   origCheckSave: async (arg) => {
     const manifest = String(arg || '').trim();
     if (!/\.json$/i.test(manifest)) return { error: 'origCheckSave "<everything-<map>-<part>.json>"' };
@@ -331,30 +427,19 @@ Object.assign(ACTIONS, {
     if (S.play.running) {
       await ACTIONS.playStop();
       for (let i = 0; i < 60 && S.play.running; i++) await sleep(250);
+      if (S.play.running) return { error: 'The game in Play didn’t stop.' };
     }
     LIVE.names = {};
-    await ACTIONS.playOriginal(base + '.zoo');
-    if (!S.play.running) return { error: 'The original didn’t start.' };
-    await sleep(18000);
-    // (its films skipped: clicks away from the menu's buttons)
-    lab.playCmd('click 300 300');
-    await sleep(3000);
-    lab.playCmd('click 300 300');
-    await sleep(4000);
-    const menu = await lab.playShot(base + '.menu.png');
-    if (!menu || menu.error) return { error: 'No picture of the original’s menu: ' + ((menu && menu.error) || '') };
-    lab.playCmd(`click ${Math.round(menu.width / 2)} ${Math.round(menu.height / 2) + 94}`);
-    // Loaded once the census settles (guests still walk in: a few at most)
-    let census = null, last = -100;
-    for (let i = 0; i < 60 && !census; i++) {
+    const open = await ACTIONS.playOriginal(base + '.zoo');
+    if (!open || open.error) return { error: (open && open.error) || 'The original didn’t start.', picture: open && open.picture };
+    // (read once the zoo runs - a census taken while it loaded counted
+    // half-made things - and again if it fails: one more read, 2 s on)
+    let census = await liveRead();
+    if (!census || !census.entities) {
       await sleep(2000);
-      const l = await liveRead();
-      if (l && l.entities > 0) {
-        if (Math.abs(l.entities - last) <= 3) census = l;
-        last = l.entities;
-      }
+      census = await liveRead();
     }
-    if (!census) return { error: 'The zoo didn’t load in the original: no census (see ' + base + '.menu.png).' };
+    if (!census || !census.entities) return { error: 'The zoo runs in the original but couldn’t be counted.', picture: (await lab.playShot(base + '.loaded.png')).file };
     await lab.playShot(base + '.loaded.png');
     const r = await lab.everythingCheck(manifest, census);
     return { ...r, census: base + '.census.json', verdict: base + '.verdict.json', picture: base + '.loaded.png' };
@@ -411,7 +496,12 @@ Object.assign(ACTIONS, {
   memPeek: async (arg) => {
     const [at, n] = String(arg).trim().split(/\s+/);
     const r = await lab.origAsk(`peek ${at.replace(/^0x/, '')} ${n || 16}`, 'peek ');
-    return r.error ? r : { bytes: r.line.split(' ')[2] };
+    if (r.error) return r;
+    // (ours: the answer names the address it read - one for another
+    // address is said, never passed off as this one's bytes)
+    const [, got, bytes] = r.line.split(' ');
+    if (parseInt(got, 16) !== parseInt(at.replace(/^0x/, ''), 16)) return { error: `The game answered for ${got}, not ${at}.` };
+    return { bytes };
   },
   // ("<slots> <address> <address>...": class function tables - each table's
   // first <slots> entries as addresses, to compare what each class replaces)
@@ -551,11 +641,11 @@ Object.assign(ACTIONS, {
   // "click 952 462; wait 1500; click 644 470" (the original's hook, or our
   // engine: the same click lines)
   playSteps: async (arg) => {
-    // (a Lab dialog over Play - Where used, a question - takes the game's
-    // clicks: said, not sent into nothing)
-    const modal = document.getElementById('modal');
-    if (modal && !modal.classList.contains('hidden'))
-      return { error: 'A Lab dialog is open over Play: close it first, or these clicks go to the dialog, not the game.' };
+    // (ours: the lines go to the game itself - the hook posts the original's
+    // clicks to its window, shown or not - so a Lab dialog over Play doesn't
+    // stop them: one that only shows something is closed, so the game shows
+    // again, and one asking something is left for its owner)
+    closeStrayDialog();
     for (const step of String(arg).split(';').map((s) => s.trim()).filter(Boolean)) {
       const wait = step.match(/^wait\s+(\d+)/);
       if (wait) await new Promise((r) => setTimeout(r, +wait[1]));

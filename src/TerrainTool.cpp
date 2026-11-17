@@ -26,6 +26,11 @@ int lowest(const MapTile &t) { return *std::min_element(t.cornerHeight, t.corner
 int highest(const MapTile &t) { return *std::max_element(t.cornerHeight, t.cornerHeight + 4); }
 } // namespace
 
+// zoo.exe ZTTerrainType::loadConfig 0x523c58: each terrain/tiletex*.cfg
+// section's type, cost (a float), blend, water, helpid, habitattype and
+// texture - kept in the terrain list by type ([0x638058]+0x10, 0x30 bytes
+// each: +4 type, +8 cost, +0x10 water). ours: the tool's type, cost and
+// water here (the renderer reads the textures and blend)
 void TerrainTool::load(ResourceManager *rm) {
   if (!rm || !this->types.empty())
     return;
@@ -175,6 +180,24 @@ bool TerrainTool::canPaint(int x, int y, int type) const {
   if (toWater)
     return lowest(*t) == highest(*t) && !(this->hasBigObject && this->hasBigObject(x, y)) &&
            !this->map->isPath(x, y);
+  return true;
+}
+
+bool TerrainTool::isWater(int x, int y) const {
+  const MapTile *t = this->map ? this->map->getTile(x, y) : nullptr;
+  return t && water(*t);
+}
+
+float TerrainTool::typeCost(int type) const {
+  auto it = this->types.find(type);
+  return it != this->types.end() ? it->second.cost : 0.0f;
+}
+
+bool TerrainTool::paintTile(int x, int y, int type) {
+  if (!this->map || !canPaint(x, y, type))
+    return false;
+  this->map->getTileMutable(x, y)->terrainType = static_cast<uint8_t>(type);
+  touch();
   return true;
 }
 

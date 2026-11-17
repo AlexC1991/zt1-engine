@@ -22,8 +22,11 @@ public:
 
   // A sound file (with or without .wav), not on the map
   void play(const std::string &path, int atten = 0);
-  // On the map, this many screen pixels from the middle of the view
-  void playAt(const std::string &path, float dxPixels, float dyPixels, int atten = 0);
+  // On the map, this many screen pixels from the middle of the view: its
+  // channel, or -1
+  int playAt(const std::string &path, float dxPixels, float dyPixels, int atten = 0);
+  // A channel still sounding
+  static bool playing(int channel);
   // Looped (the world's ambience): its channel, or -1
   int loop(const std::string &path, int atten = 0);
   void stop(int channel);
@@ -34,9 +37,14 @@ public:
   int loopAt(const std::string &path, float dxPixels, float dyPixels, int atten);
   // Everything holds while the game is paused
   void setPaused(bool paused);
+  bool isPaused() const { return this->paused; }
   void reload();
 
   bool enabled = true;
+  // ours: the last sound asked for on the map and its own attenuation (as
+  // given, before distance), for the checks
+  std::string lastAt;
+  int lastAtAtten = -1;
   int master = 0; // the options' attenuation ([UI] userAttenuation)
 
 private:

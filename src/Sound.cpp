@@ -78,15 +78,19 @@ void Sound::play(const std::string &path, int atten) {
     this->start(this->chunk(path), atten, 0.0f, 0);
 }
 
-void Sound::playAt(const std::string &path, float dx, float dy, int atten) {
+int Sound::playAt(const std::string &path, float dx, float dy, int atten) {
   if (path.empty())
-    return;
+    return -1;
+  this->lastAt = path;
+  this->lastAtAtten = atten;
   int away = std::min(kMaxDistance, static_cast<int>(std::hypot(dx, dy) * kPerPixel));
   if (atten + away + this->master > kInaudible)
-    return;
+    return -1;
   float pan = std::clamp(dx * kPanPerPixel, -10000.0f, 10000.0f) / 10000.0f;
-  this->start(this->chunk(path), atten + away, pan, 0);
+  return this->start(this->chunk(path), atten + away, pan, 0);
 }
+
+bool Sound::playing(int channel) { return channel >= 0 && Audio::playing(channel); }
 
 int Sound::loop(const std::string &path, int atten) {
   return path.empty() ? -1 : this->start(this->chunk(path), atten, 0.0f, -1);

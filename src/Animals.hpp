@@ -86,6 +86,10 @@ public:
     bool showAnimal = false;
     int skipTrickHappiness = 50, skipTrickChance = 10;
     int needDepth = 0;
+    // cTall (unit type +0x58, the loader 0x4b5681): walks over what's
+    // walkableByTall (scenery type +0x57), not what's only walkable (+0x56)
+    // - 0x4147b5; its young by [y/] (a young plesiosaur isn't tall)
+    bool tall = false, youngTall = false;
     // cOnlyUnderwater (+0x17f): a tank's its whole home; without it a
     // cUnderwater animal needs land too (type slot 0xcc, 0x410e41).
     // cDepthMin, cDepthMax (+0x35c, +0x360): the water depth it likes
@@ -174,6 +178,9 @@ public:
     // (zoo.exe 0x4e2cf8, 0x60da6b) that hatches after cTimeToHatch ticks
     // with at least cMinHatchHits health (0: 60% of cMaxHits - cMinHits)
     bool laysEggs = false, eatsEggs = false;
+    // cExpansionID (ZTEntityType::loadConfig 0x4b4903: +0x54, a byte): 1
+    // Dinosaur Digs' animals - the "Comet" cheat's (0x607757)
+    int expansionId = 0;
     // cBabiesAttack (type +0x3d4, loadConfig 0x4b6c51): its young hunt as
     // its adults do (zoo.exe 0x4391a2)
     bool babiesAttack = false;
@@ -495,6 +502,8 @@ public:
   void keeperArrives(int exhibit);
   // A keeper heals one: health full, not sick
   void heal(int id);
+  // "Dr. Frankenstein"'s heal (zoo.exe 0x4702e8): another egg-laying kind
+  void becomeAnotherKind(int id);
   // Needs a keeper's care (zoo.exe animalIsSickly 0x4a88cf): health x 100
   // at or under cMaxHits (type +0x234) x (100 - cSicklyAnimalPct, 15)
   bool needsHealing(const Member &m) const {
@@ -622,6 +631,8 @@ public:
   std::function<int(float x, float y, float radius)> findPrey;
   std::function<bool(int guest, float &x, float &y)> preyAt;
   std::function<void(int guest, const Member &by)> caughtPrey;
+  // A guest taken away (zoo.exe 0x4fa78e(1) on it: fKillPrey 0x60cb3a)
+  std::function<void(int guest)> takeGuestAway;
   // (a guest's name, for "%1s has been eaten by %2s.")
   std::function<std::string(int guest)> preyName;
   // An exhibit's viewing areas (zoo.exe: the habitat's list at +0x34): each
@@ -745,6 +756,7 @@ private:
   // time and it's healthy enough (0x437860)
   void becomeEgg(Member &m);
   void eggTick(Member &m);
+  void healthTick(Member &m);
   void tick(Member &m, const WorldMap &map, const Fences &fences);
   void murkyWaterTick(Member &m, const WorldMap &map, const Fences &fences);
   void countGuestCrowd(Member &m, const Fences &fences);

@@ -177,6 +177,13 @@ void PlacedObjects::loadLayers(Object &o) {
                                   !ai->get("animations", "half").empty() && !ai->get("animations", "full").empty());
       delete ai;
     }
+  // (zoo.exe ZTEntityType::loadConfig 0x4b4903, every placed thing's
+  // [Characteristics/Integers]: cIconZoom, cHitThreshold, cShow,
+  // cUsesPlacementCube, cIsTransient, cHasUnderwaterSection, cExpansionID,
+  // cDrawsLate, cForceShadowBlack, cUsesRealShadows, cHasShadowImages,
+  // cUseNumbersInName, cMoveable, AvailableAtStartup, DefaultSubtype - ours
+  // reads each where it's used: the underwater part and random use here,
+  // cUseNumbersInName in naming, the shadows with the art)
   if (this->rm)
     if (IniReader *ai = this->rm->getIniReader(fileOf(o))) {
       const std::string ints = "characteristics/integers";

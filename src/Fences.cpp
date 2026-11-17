@@ -208,6 +208,9 @@ void Fences::loadTypes(ResourceManager *rm) {
     t.cost = item.cost;
     t.height = item.height;
     t.gateCost = ai->getInt("g/characteristics/integers", "cpurchasecost", t.cost);
+    // (zoo.exe ZTFenceType's load, slot 0x64 0x4bb6f6: a [TankFence] section
+    // sets +0x192 and +0x193, a [HabitatFence] one +0x192 - the eight files
+    // with [TankFence] are the ones the registry lists as tankwall)
     t.tank = item.registrySection == "tankwall";
     t.showFence = item.showFence;
     t.zooWall = item.members.count("zoowall") > 0;
@@ -688,9 +691,9 @@ bool Fences::canPlace(const Edge &e, const WorldMap &map) const {
   return this->fit(e, map) == Fit::Ok;
 }
 
-Fences::Fit Fences::tileFit(int x, int y, const WorldMap &map) const {
+Fences::Fit Fences::tileFit(int x, int y, const WorldMap &map, bool lakeOk) const {
   const MapTile *t = map.getTile(x, y);
-  if (!t || t->terrainType == 9 || t->terrainType == 10)
+  if (!t || (!lakeOk && (t->terrainType == 9 || t->terrainType == 10)))
     return Fit::Outside;
   if (x >= 0 && y >= 0 && x < this->mapW && y < this->mapH &&
       !this->building.empty() && this->building[y * this->mapW + x])
@@ -952,7 +955,7 @@ int Fences::tankOf(const Edge &e) const {
 
 static std::vector<Fences::Edge> boundaryOf(const Fences::Exhibit &ex);
 
-void Fences::remove(const Edge &e, WorldMap &map) {
+void Fences::remove(const Edge &e, WorldMap &map, bool wholeTank) {
   sharedPortalCache.clear();
   auto it = this->edges.find(e);
   if (it == this->edges.end())
@@ -974,7 +977,7 @@ void Fences::remove(const Edge &e, WorldMap &map) {
       this->lostTanks.push_back(ex->tiles);
       this->drainTank(*ex);
       this->restoreGround(*ex, map);
-      for (const Edge &w : boundaryOf(*ex)) {
+      for (const Edge &w : wholeTank ? boundaryOf(*ex) : std::vector<Edge>{}) {
         auto p = this->edges.find(w);
         if (p != this->edges.end() && (p->second.tank == tank || p->second.tank < 0) &&
             this->typeList[p->second.type].tank)
@@ -1150,6 +1153,8 @@ std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int y
         if (!loading)
           this->lostTanks.push_back(it->tiles);
       }
+      // (zoo.exe habitatMgrRemoveHabitat 0x50c515: off the manager's list
+      // and deleted, by exhibitsReshape 0x50c3d8)
       it = this->exhibitList.erase(it);
     } else {
       ++it;
@@ -1173,7 +1178,15 @@ std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int y
     ex.constructedYear = year;
     // A tank when every piece round it is a tank wall
     bool tank = true, any = false;
-    int showEdges = 0, ordinaryEdges = 0;
+    // zoo.exe 0x44e1e8 (the tank's look, its class slot 0x2c showTankLook
+    // 0x5ab683 or slot 0x30): a show tank when one of its walls is a show
+    // wall (type +0x6f, cIsShowFence) and every other is one too - but a
+    // wall it shares with another tank, which holds a record of its own
+    // there (one each side, as the original's interior tiles do), stops
+    // nothing
+    bool showWall = false, allShow = true;
+    std::vector<Edge> sharedOrdinary;
+    int firstShowType = -1;
     for (auto [x, y] : ex.tiles) {
       const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
       for (auto &dd : d) {
@@ -1194,13 +1207,33 @@ std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int y
         if (!p)
           continue;
         any = true;
-        (this->typeList[p->type].showFence ? showEdges : ordinaryEdges)++;
+        if (this->typeList[p->type].showFence) {
+          showWall = true;
+          if (firstShowType < 0)
+            firstShowType = p->type;
+        } else {
+          const Exhibit *other = p->tank >= 0 ? this->exhibit(p->tank) : nullptr;
+          if (other && other->tank)
+            sharedOrdinary.push_back(e);
+          else
+            allShow = false;
+        }
         if (!this->typeList[p->type].tank)
           tank = false;
       }
     }
     ex.tank = tank && any;
-    ex.show = ex.tank && showEdges > ordinaryEdges;
+    ex.show = ex.tank && showWall && allShow;
+    // zoo.exe showTankLook 0x5ab683: then each of its walls that isn't a
+    // show wall (the shared ones) is made the type of its first show wall
+    // (the wall's slot 0x7c(type, 1)). ours: one piece stands for both
+    // tanks' records on a shared edge, so the tank next door's side of it
+    // turns too (the shared zoo's writer gives both records the show wall
+    // already); its wear stays as it was (0x48676c not read for it)
+    if (ex.show && firstShowType >= 0)
+      for (const Edge &e : sharedOrdinary)
+        if (auto it = this->edges.find(e); it != this->edges.end())
+          it->second.type = firstShowType;
     this->exhibitList.push_back(ex);
     if (ex.tank)
       this->makeTank(this->exhibitList.back(), map);
@@ -1335,11 +1368,12 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
   ex.water = 0;                              // initialWaterLevel 0
   ex.wallSub = ex.show ? kTankHeightShow : kTankHeight; // a unit above the ground
   ex.salt = true;                            // initialSalinity 100
-  // (something in it that can't be under water: left empty, 10550 - zoo.exe
-  // 0x45b92f -> 0x459d94)
+  // (something in it that can't be under water: left empty - zoo.exe
+  // 0x45b92f -> 0x459d94; with no word of it, as 10550 waits for the tank's
+  // gate, 0x410349, and a tank just made has none yet: 10552 is asked
+  // instead, 0x44e389 -> 0x458c2b)
   if (std::string what = this->fillBlocker ? this->fillBlocker(ex.id) : std::string(); !what.empty()) {
     ex.filling = false;
-    this->fillRefusals.push_back(what);
     return;
   }
   ex.filling = true;                         // initialFillState 1
@@ -1829,6 +1863,8 @@ Fences::Fit Fences::filterFit(int x, int y, const WorldMap &map, int *tank) cons
   return worst;
 }
 
+// (zoo.exe ZTTankFilterType::createTankFilter 0x45d893, class slot 0x5c: a
+// new filter of its kind)
 bool Fences::placeFilter(int x, int y, const WorldMap &map) {
   int tank = -1;
   if (this->filterFit(x, y, map, &tank) != Fit::Ok)
