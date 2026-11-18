@@ -223,7 +223,8 @@ void Animals::loadTypes(ResourceManager *rm) {
     // does staff - Original::unitTilesPerSecond. measured: in the running
     // original 2026-11-16, an African buffalo at rate 20 went 1 step an
     // update, 0.227-0.231 tiles/s; an allosaur at 120, 8 steps, 1.77-1.88;
-    // a humpback swimming at 66, 4 steps, 0.920)
+    // a humpback swimming at 66, 4 steps, 0.920; the value is the type's
+    // +0x100, its getter ZTAmbientAnimalType::getCSlowRate 0x401897)
     t.slow = Original::unitTilesPerSecond(num("cslowrate", 30));
     t.medium = Original::unitTilesPerSecond(num("cmediumrate", 45));
     t.fast = Original::unitTilesPerSecond(num("cfastrate", 66));

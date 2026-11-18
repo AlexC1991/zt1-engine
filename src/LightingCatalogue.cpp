@@ -6,7 +6,10 @@ namespace LightingAssets {
 // Only renderer parameters are stored here; source sprites and derived raster
 // maps remain in the player installation/local cache. Coordinates are native
 // pixels relative to each displayed sprite anchor (NE, SE, SW, NW).
-void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
+// The definitions are built in several functions, each small enough that its stack frame stays
+// well under the 1 MB stack (one function held all of them in a 449 KB frame).
+namespace {
+void catalogueDefinitions1(std::vector<Definition> &definitions) {
   {
     Definition asset{200,"santa"};
     asset.views[0].push_back({"native sparkle trail",Material::Neon,{{-101.62f,31.42f},{-39.74f,13.78f},{122.1f,-72.95f},{119.72f,-58.25f},{-4.04f,7.9f},{-92.1f,50.53f}},0,{255,230,125,255},true,false,PixelMask::Spark});
@@ -195,6 +198,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{0.835f,-1.026f,0.4f},{0,0,0},{255,213,151,255},0.25f,3.5f});
     asset.animated=false;definitions.push_back(std::move(asset));
   }
+}
+void catalogueDefinitions2(std::vector<Definition> &definitions) {
   {
     Definition asset{208,"atlshop"};
     asset.views[0].push_back({"fixture glass",Material::Glass,{{-20.37f,-96.77f},{-13.08f,-96.77f},{-8.22f,-89.84f},{-10.65f,-85.22f},{-20.37f,-85.22f},{-25.23f,-92.15f}},0,{255,228,170,255},false,false,PixelMask::All});
@@ -357,6 +362,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{-1.394f,-1.226f,3.705f},{0,0,0},{255,213,151,255},0.25f,3.5f});
     asset.animated=false;definitions.push_back(std::move(asset));
   }
+}
+void catalogueDefinitions3(std::vector<Definition> &definitions) {
   {
     Definition asset{216,"crabhous"};
     asset.views[0].push_back({"window or interior pane",Material::Interior,{{-3.233f,-32.89f},{6.186f,-33.437f},{6.186f,-26.87f},{-3.233f,-26.323f}},0,{255,207,146,255},false,false,PixelMask::All});
@@ -522,6 +529,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{-0.858f,-2.087f,0.915f},{0,0,0},{255,213,151,255},0.25f,3.5f});
     asset.animated=false;definitions.push_back(std::move(asset));
   }
+}
+void catalogueDefinitions4(std::vector<Definition> &definitions) {
   {
     Definition asset{224,"dkarcade"};
     asset.views[0].push_back({"advertising or screen",Material::Sign,{{24.96f,-118.27f},{36.76f,-112.36f},{36.76f,-96.6f},{24.96f,-102.51f}},0,{255,226,179,255},false,false,PixelMask::All});
@@ -709,6 +718,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{-0.211f,0.057f,2.179f},{0,0,0},{255,213,151,255},0.25f,3.5f});
     asset.animated=false;definitions.push_back(std::move(asset));
   }
+}
+void catalogueDefinitions5(std::vector<Definition> &definitions) {
   {
     Definition asset{232,"fishhous"};
     asset.views[0].push_back({"window or interior pane",Material::Interior,{{-33.35f,-89.278f},{-20.808f,-89.278f},{-20.808f,-81.032f},{-33.35f,-81.032f}},0,{170,180,255,255},false,false,PixelMask::All});
@@ -973,6 +984,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{1.13f,-0.019f,3.528f},{0,0,0},{255,213,151,255},0.25f,3.5f});
     asset.animated=false;definitions.push_back(std::move(asset));
   }
+}
+void catalogueDefinitions6(std::vector<Definition> &definitions) {
   {
     Definition asset{240,"icecream"};
     asset.views[0].push_back({"window or interior pane",Material::Interior,{{11.85f,-17.88f},{17.19f,-20.8f},{17.19f,-13.5f},{11.85f,-10.58f}},0,{255,207,146,255},false,false,PixelMask::All});
@@ -1158,6 +1171,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{-0.039f,-0.277f,2.053f},{0,0,0},{255,213,151,255},0.25f,3.5f});
     asset.animated=false;definitions.push_back(std::move(asset));
   }
+}
+void catalogueDefinitions7(std::vector<Definition> &definitions) {
   {
     Definition asset{248,"petzoo"};
     asset.views[0].push_back({"window or interior pane",Material::Interior,{{-8.056f,-51.24f},{0.882f,-54.66f},{11.096f,-29.01f},{2.158f,-25.59f}},0,{255,207,146,255},false,false,PixelMask::All});
@@ -1402,6 +1417,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{-0.079f,0.419f,1.099f},{0,0,0},{255,213,151,255},0.25f,3.5f});
     asset.animated=false;definitions.push_back(std::move(asset));
   }
+}
+void catalogueDefinitions8(std::vector<Definition> &definitions) {
   {
     Definition asset{256,"stable3"};
     asset.views[0].push_back({"window or interior pane",Material::Interior,{{-63.584f,-31.308f},{-57.656f,-28.648f},{-57.656f,-24.392f},{-63.584f,-27.052f}},0,{255,207,146,255},false,false,PixelMask::All});
@@ -1528,6 +1545,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{-0.006f,-0.05f,4.808f},{0,0,0},{255,213,151,255},0.16f,2.5f});
     asset.animated=true;definitions.push_back(std::move(asset));
   }
+}
+void catalogueDefinitions9(std::vector<Definition> &definitions) {
   {
     Definition asset{264,"aftorch"};
     asset.views[0].push_back({"native flame",Material::Fire,{{-4.0f,-107.2f},{4.0f,-107.2f},{4.0f,-60.4f},{-4.0f,-60.4f}},0,{255,155,65,255},true,true,PixelMask::Flame});
@@ -2682,6 +2701,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{-0.009f,0.009f,3.365f},{0,0,0},{255,213,151,255},0.25f,3.5f});
     asset.animated=false;definitions.push_back(std::move(asset));
   }
+}
+void catalogueDefinitions10(std::vector<Definition> &definitions) {
   {
     Definition asset{272,"build6"};
     asset.views[0].push_back({"window or interior pane",Material::Interior,{{-77.054f,-79.866f},{-72.016f,-76.253f},{-72.016f,-65.901f},{-77.054f,-68.805f}},0,{255,207,146,255},false,false,PixelMask::All});
@@ -3061,6 +3082,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{0.178f,-0.187f,2.091f},{0,0,0},{255,213,151,255},0.25f,3.5f});
     asset.animated=false;definitions.push_back(std::move(asset));
   }
+}
+void catalogueDefinitions11(std::vector<Definition> &definitions) {
   {
     Definition asset{280,"japlant"};
     asset.views[0].push_back({"fixture glass",Material::Glass,{{-6.46f,-31.9f},{-5.1f,-31.9f},{-5.1f,-29.62f},{-6.46f,-29.62f}},0,{255,228,170,255},false,false,PixelMask::All});
@@ -3247,6 +3270,8 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{0.012f,-0.027f,3.55f},{0,0,0},{255,154,65,255},0.5f,4.0f});
     asset.animated=true;definitions.push_back(std::move(asset));
   }
+}
+void catalogueDefinitions12(std::vector<Definition> &definitions) {
   {
     Definition asset{288,"streetlt"};
     asset.views[0].push_back({"fixture glass",Material::Glass,{{54.2f,-75.08f},{61.24f,-73.0f},{61.24f,-70.92f},{54.2f,-73.0f}},0,{255,228,170,255},false,false,PixelMask::All});
@@ -3260,5 +3285,21 @@ void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
     asset.sources.push_back({"mapped fixture",{1.827f,-0.059f,5.558f},{0,0,0},{255,213,151,255},0.25f,3.5f});
     asset.animated=false;definitions.push_back(std::move(asset));
   }
+}
+}
+
+void appendCatalogueDefinitions(std::vector<Definition> &definitions) {
+  catalogueDefinitions1(definitions);
+  catalogueDefinitions2(definitions);
+  catalogueDefinitions3(definitions);
+  catalogueDefinitions4(definitions);
+  catalogueDefinitions5(definitions);
+  catalogueDefinitions6(definitions);
+  catalogueDefinitions7(definitions);
+  catalogueDefinitions8(definitions);
+  catalogueDefinitions9(definitions);
+  catalogueDefinitions10(definitions);
+  catalogueDefinitions11(definitions);
+  catalogueDefinitions12(definitions);
 }
 }

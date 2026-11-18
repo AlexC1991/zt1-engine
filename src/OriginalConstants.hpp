@@ -479,6 +479,19 @@ inline constexpr int yellowShirt = 9, redShirt = 1;
 // The guest flags (+0x340) the names set: "Stinky" 2, "rpro" 4,
 // "Boogyman" 8, "Yellowman" 0x10, "Redman" 0x20
 inline constexpr int stinky = 2, rpro = 4, boogyman = 8, yellowman = 0x10, redman = 0x20;
+// The exhibit name cheats (dinoExhibitNameList 0x5aee66, run on a name typed
+// into an exhibit's name box, 0x5aedbd): "wonderland" adds 30 to the rating
+// the guest arrival check weighs (0x42444d: add eax, 0x1e); the types the
+// others make available (typesSetAvailable 0x591325, by cNameID): "Xanadu"
+// 0x13b9 (the unicorn), "Cretaceous Corral" 0x13b6 (the triceratops),
+// "Kathmandu" 0x13b7, "Super Croc" 0x14d4 (the deinosuchus); "Copralite
+// Corner" (0x607871) turns every dung object of cNameID 0x17ce..0x17d0
+// (dinopoo, 6094) into the type of cNameID 0x23f0 (lrock1, a rock)
+inline constexpr int wonderlandArrivalBonus = 0x1e;
+inline constexpr int xanaduNameId = 0x13b9, cretaceousCorralNameId = 0x13b6, kathmanduNameId = 0x13b7,
+                     superCrocNameId = 0x14d4;
+inline constexpr int dinoDungNameIdFirst = 0x17ce, dinoDungNameIdLast = 0x17d0;
+inline constexpr int copraliteRockNameId = 0x23f0;
 } // namespace Cheat
 
 } // namespace Original

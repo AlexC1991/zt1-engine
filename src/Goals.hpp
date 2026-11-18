@@ -49,6 +49,9 @@ public:
     std::function<bool(const Goal &)> measures;
     // A popup: its picture and text; pause=1: the game waits on it
     std::function<void(const std::string &image, const std::string &text, bool pause)> popup;
+    // The tutorials' reminder bar (objectve.lyt) shown with this text, as a
+    // popup with a persistentShortText sets it (loadScenarioPopup 0x5a1b15)
+    std::function<void(const std::string &text)> objective;
     // A UI element disabled (true) or enabled; true when that changed it
     std::function<bool(int element, bool disable)> disable;
     std::function<void(int element, bool hide)> hide;
@@ -121,6 +124,24 @@ public:
   // +0x30): 0 playing, 1 won, 2 lost
   int outcome = 0;
   const std::vector<Node> &tree() const { return this->roots; }
+  // The reminder bar clicked (objectve_Message_click 0x4a09f8): the last
+  // popup that set it opened again, while there is one
+  void reopenPopup();
+
+  // The scenario page's words (Scenario Information, ui/zooinfo4.lyt, filled
+  // by zoo.exe 0x4f004a): the scenario's name (its [desc] name= string, via
+  // 0x4fc83c), its story (the [desc] story= TEXT resource, 0x4f0497 through
+  // 0x4f0264) and one line for the time limit and for each goal shown: the
+  // list as the scenario manager holds it (+0x34..+0x38), each goal's slot
+  // 0x1c (0x4f042c: its text, a goal marked hidden or without a text none;
+  // a composite, 0x4f0016, its children in turn) with the icon of its state
+  // (0x4f048c: [desc] iconp, iconc, iconf, iconc - readIcons 0x58e0c0)
+  struct Line {
+    std::string text, icon;
+  };
+  std::string scenarioName() const;
+  std::string scenarioStory() const;
+  std::vector<Line> lines() const;
 
 private:
   ResourceManager *rm = nullptr;
@@ -135,11 +156,23 @@ private:
   void updateTop(int i);
   Hooks hooks;
   float clock = 0;
+  // The scenario's [desc] and [duration] words (zoo.exe 0x4fc83c, 0x4f0497,
+  // 0x58e0c0, ScenarioGoal::ctor 0x58e218)
+  int nameId = 0, durationText = 0;
+  std::string story, durationIcon, icons[3];
+  void addLines(const Node &n, std::vector<Line> &out) const;
+  std::string format(int textId, int value, int arga, int argb) const;
   void readGoals(const std::string &file, bool fromList);
   void evaluate(Goal &g);
   int result(const Goal &g) const;
   void fire(const Goal &g, bool quiet);
   void showPopup(const std::string &file, int section);
+  // The last popup that set the reminder bar (the original's record at
+  // 0x638f28: its section, kept until a popup without one), and the text a
+  // persistentShortText of -1 gives
+  std::string lastPopupFile;
+  int lastPopupSection = 0;
+  std::string pendingObjective() const;
 };
 
 #endif // GOALS_HPP

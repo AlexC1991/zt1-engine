@@ -368,7 +368,7 @@ bool Shows::start(int tank,std::string &why) {
   for(const auto &t:sequence)if(!(why=unavailable(tank,s->species,t)).empty())return false;
   auto ports=links(tank);
   for(auto &m:world->staff.list) {
-    if(world->staff.typeList[m.type].kind!=Staff::Kind::Trainer || m.id==world->staff.carried || m.showTank>=0 || m.water || m.climbing || m.job==Staff::Job::Visit)continue;
+    if(world->staff.typeList[m.type].kind!=Staff::Kind::Trainer || m.id==world->staff.carried || m.showTank>=0 || m.water || m.climbing || (m.job==Staff::Job::Visit && !world->staff.betweenDuties(m)))continue;
     const bool assignedShow=std::find(m.exhibits.begin(),m.exhibits.end(),tank)!=m.exhibits.end();
     if(!m.exhibits.empty() && !assignedShow && !std::any_of(ports.begin(),ports.end(),[&](const auto &p){return std::find(m.exhibits.begin(),m.exhibits.end(),p.second)!=m.exhibits.end();}))continue;
     for(const auto &[edge,p]:world->fences.pieces()) {
@@ -381,7 +381,7 @@ bool Shows::start(int tank,std::string &why) {
       if(!world->staff.walkTo(m.id,x,y,world->worldMap,world->fences))continue;
       m.showTank=tank;m.dropX=m.outX=outside.first;m.dropY=m.outY=outside.second;
       const auto inside=aInside?a:b;m.inX=inside.first;m.inY=inside.second;
-      m.phase=0;m.tank=tank;m.water=0;m.z=0;m.climbing=false;m.job=Staff::Job::None;
+      m.phase=0;m.tank=tank;m.water=0;m.z=0;m.climbing=false;m.job=Staff::Job::None;m.visit=-1;m.access=-1;
       m.idleLeft=0;m.playsLeft=0;
       s->trainer=m.id;break;
     }
@@ -667,10 +667,23 @@ void Shows::actorStep(Show &s,Actor &a,float seconds) {
     if(!a.food) {
       const auto *trainer=world->staff.member(s.trainer);
       std::vector<std::pair<int,int>> round;
+      // (the tiles the animal's step cost refuses, slot 0x164 = 0x414b13: one holding an
+      // object that blocks it, 0x4149e6. measured: the show tank's tiles on its wall ring hold
+      // its tank walls (Tank walls, 0x62dbc0), the ones inside none, and the treat swim went
+      // to the one empty tile of the 3 x 3 by the gate, 4 swims of 4 - ours: a tile with a wall
+      // of this tank on a side)
+      auto onWallRing=[&](int x,int y) {
+        for(const auto &[edge,piece]:world->fences.pieces()) {
+          if(piece.tank!=s.tank && piece.tank2!=s.tank)continue;
+          const bool mine=edge.alongX?(edge.x==x && (edge.y==y || edge.y==y+1)):(edge.y==y && (edge.x==x || edge.x==x+1));
+          if(mine)return true;
+        }
+        return false;
+      };
       if(trainer && tank)
         for(int dx=-1;dx<=1;++dx)for(int dy=-1;dy<=1;++dy) {
           const int x=static_cast<int>(std::floor(trainer->inX))+dx,y=static_cast<int>(std::floor(trainer->inY))+dy;
-          if(tank->tiles.count({x,y}))round.push_back({x,y});
+          if(tank->tiles.count({x,y}) && !onWallRing(x,y))round.push_back({x,y});
         }
       if(round.empty()) {
         ZT_STEP("0x5a25cd","Trick food: no tile by the specialist, task over",{"animal",m->id});

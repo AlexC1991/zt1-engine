@@ -58,17 +58,26 @@ std::vector<std::string> extraFiles(ResourceManager *rm, const std::string &entr
 }
 } // namespace
 
+// The scenario emptied (scenarioClear 0x4b2a7f, class slot 0x1c: its goals
+// deleted, deleteGoals 0x4b2a48; its name cleared)
 void Goals::clear() {
   this->goals.clear();
   this->roots.clear();
   this->durationMonths = 0;
   this->durationState = 1;
+  this->nameId = this->durationText = 0;
+  this->story.clear();
+  this->durationIcon.clear();
+  for (std::string &icon : this->icons)
+    icon.clear();
   this->outcome = 0;
   this->scnPath.clear();
   this->awards.clear();
   this->clock = 0;
 }
 
+// A scenario file opened (scenarioOpen 0x58de19, class slot 4: read as a
+// config, then its goals, goalsLoad 0x58de8a)
 void Goals::load(ResourceManager *rm, const std::string &scnPath) {
   this->clear();
   this->rm = rm;
@@ -82,6 +91,15 @@ void Goals::load(ResourceManager *rm, const std::string &scnPath) {
   // 0x58e218: [duration] nummonths; none, 0, is met at once)
   this->durationMonths = num(scn, "duration", "nummonths");
   this->durationState = this->durationMonths == 0 ? 1 : 0;
+  // (the page's name and story, the three state icons, and the time limit's
+  // line: its text and icon)
+  this->nameId = num(scn, "desc", "name");
+  this->story = trim(scn->get("desc", "story"));
+  this->icons[0] = trim(scn->get("desc", "iconp"));
+  this->icons[1] = trim(scn->get("desc", "iconc"));
+  this->icons[2] = trim(scn->get("desc", "iconf"));
+  this->durationText = num(scn, "duration", "text");
+  this->durationIcon = trim(scn->get("duration", "icon"));
   // The map's own goals, then each extragoals= entry's files
   this->readGoals(scnPath, true);
   for (const std::string &extra : scn->getList("start", "extragoals"))
@@ -137,6 +155,76 @@ Goals::Node Goals::makeNode(IniReader *ini, const std::string &file, const std::
   n.goal = static_cast<int>(this->goals.size());
   this->goals.push_back(g);
   return n;
+}
+
+// The scenario's name (zoo.exe 0x4fc83c: [desc] name=, a string of the game's
+// text) and its story ([desc] story=, a named TEXT resource: 0x4f00f6 finds it
+// by that name in the language DLLs)
+std::string Goals::scenarioName() const {
+  return this->rm && this->nameId ? this->rm->getString(this->nameId) : "";
+}
+std::string Goals::scenarioStory() const {
+  return this->story.empty() ? "" : langText(this->story);
+}
+
+// A goal's text (ScenarioGoal::loadConfig 0x58db3f: the string 0x41ca7f
+// formats with the goal's value, arga and argb): each %d the next of them as
+// a number, each %m (0x41ccd7: moneyToText 0x40eca1 with grouping on) as
+// whole dollars, each %r (0x41cbfd) as the name of the type it names (its
+// string)
+std::string Goals::format(int textId, int value, int arga, int argb) const {
+  const std::string raw = this->rm->getString(textId);
+  const int args[3] = {value, arga, argb};
+  std::string out;
+  int next = 0;
+  for (size_t i = 0; i < raw.size(); i++) {
+    if (raw[i] == '%' && i + 1 < raw.size() && (raw[i + 1] == 'd' || raw[i + 1] == 'm' || raw[i + 1] == 'r')) {
+      const int arg = next < 3 ? args[next] : 0;
+      next++;
+      if (raw[i + 1] == 'r')
+        out += this->rm->getString(arg);
+      else if (raw[i + 1] == 'm') {
+        std::string digits = std::to_string(arg < 0 ? -arg : arg);
+        for (int k = static_cast<int>(digits.size()) - 3; k > 0; k -= 3)
+          digits.insert(k, ",");
+        out += (arg < 0 ? "-$" : "$") + digits;
+      } else
+        out += std::to_string(arg);
+      i++;
+    } else
+      out += raw[i];
+  }
+  return out;
+}
+
+void Goals::addLines(const Node &n, std::vector<Line> &out) const {
+  if (n.kind != 0) {
+    for (const Node &c : n.children)
+      this->addLines(c, out);
+    return;
+  }
+  // (a normal goal's slot 0x14, 0x4f041e: no text when hidden or without a
+  // text= key, 0x58ddf3)
+  const Goal &g = this->goals[n.goal];
+  if (g.hidden || !g.text)
+    return;
+  // (the state's icon: pending, met, failed, then met again - 3)
+  const int icon = g.state == 0 ? 0 : g.state == 2 ? 2 : 1;
+  out.push_back({this->format(g.text, g.value, g.arga, g.argb), this->icons[icon]});
+}
+
+std::vector<Goals::Line> Goals::lines() const {
+  std::vector<Line> out;
+  if (!this->rm || this->scnPath.empty())
+    return out;
+  // The time limit first (the scenario's own goal, slot 0x1c = 0x4f042c: its
+  // [duration] text with nummonths, slot 0x14 0x4f0484, and its own icon,
+  // slot 0x18 0x4f0488)
+  if (this->durationText)
+    out.push_back({this->format(this->durationText, this->durationMonths, 0, 0), this->durationIcon});
+  for (const Node &n : this->roots)
+    this->addLines(n, out);
+  return out;
 }
 
 // A node's update (its class's slot 4): a goal checked (goalCheck 0x4240f5);
@@ -197,6 +285,8 @@ void Goals::updateTop(int i) {
   else
     this->updateNode(this->roots[i - 1]);
 }
+// (the list's Nth goal, scenarioGoalAt 0x58eb71; the scenario's own goal's
+// state, ScenarioGoal::getState 0x40f121, class slot 8)
 int Goals::topState(int i) const {
   return i == 0 ? this->durationState : this->nodeState(this->roots[i - 1]);
 }
@@ -211,7 +301,8 @@ void Goals::update(float seconds) {
   this->evaluateAll();
 }
 
-// goalsCheckTick 0x435a48 (not once it's over, +0x30): each of the list
+// goalsCheckTick 0x435a48 (not once it's over, +0x30, which
+// scenarioStopIfRunning 0x58e33e sets to stopped): each of the list
 // updated in turn; a failed one (2) or the time up (3) stops the round.
 // Every one settled (none at 0) or stopped: scenarioComplete 0x48a408 asks
 // allGoalsMet 0x48a726, once - each updated again; won (1) if every one is
@@ -440,7 +531,20 @@ void Goals::showPopup(const std::string &file, int section) {
   };
   std::string image = key("image1"), longText = key("longtext1");
   bool pause = std::atoi(key("pause").c_str()) != 0;
+  const std::string persistent = key("persistentshorttext");
   delete ini;
+  // The reminder bar (0x5a1b15: persistentShortText, -1 the first goal still
+  // to do, else a string id) and the record the bar's click opens again; a
+  // popup without one clears the record
+  // (a persistentShortText of 0 - the tutorials' last steps - puts it away)
+  const int persistentId = std::atoi(persistent.c_str());
+  if (!persistent.empty() && this->hooks.objective) {
+    this->hooks.objective(persistentId == -1 ? this->pendingObjective() : this->rm->getString(persistentId));
+    this->lastPopupFile = file;
+    this->lastPopupSection = persistentId == 0 ? 0 : section;
+  } else {
+    this->lastPopupSection = 0;
+  }
   std::string text;
   if (!longText.empty() && std::all_of(longText.begin(), longText.end(), ::isdigit)) {
     text = this->rm->getString(static_cast<uint32_t>(std::atoi(longText.c_str())));
@@ -460,6 +564,28 @@ void Goals::showPopup(const std::string &file, int section) {
   }
   if (!text.empty())
     this->hooks.popup(image, text, pause);
+}
+
+// (0x5a1b15 with a persistentShortText of -1: the scenario's goals in turn,
+// the first still at 0 that has a text - not a group's children - gives its
+// text, 0x4f041e)
+std::string Goals::pendingObjective() const {
+  if (this->durationState == 0 && this->durationText)
+    return this->format(this->durationText, this->durationMonths, 0, 0);
+  for (const Node &n : this->roots) {
+    if (n.kind != 0 || this->nodeState(n) != 0)
+      continue;
+    const Goal &g = this->goals[n.goal];
+    if (!g.hidden && g.text)
+      return this->format(g.text, g.value, g.arga, g.argb);
+  }
+  return "";
+}
+
+// zoo.exe objectve_Message_click 0x4a09f8
+void Goals::reopenPopup() {
+  if (this->lastPopupSection != 0)
+    this->showPopup(this->lastPopupFile, this->lastPopupSection);
 }
 
 // zoo.exe 0x4fc783. quiet: a saved game's states put back (no popups, no

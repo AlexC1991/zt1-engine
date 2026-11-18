@@ -3492,6 +3492,10 @@ void Guests::viewDone(Guest &g) {
     // (game time in 100 ns units: a 12 s game day is 864e9)
     double ticks = watched * (864e9 / 12.0);
     double d = Original::economy().admissionMultiple * ticks * (suit + guide) * 0.01;
+    // (an exhibit named "Microsoft": doubled before the $10 cap, 0x42eb0e -
+    // flag 0x63c54e)
+    if (RenameCheats::flags().microsoft)
+      d += d;
     if (d > 0) {
       d = std::min(d, 10.0);
       this->donations += d;
@@ -4702,6 +4706,10 @@ bool Guests::outNow(Guest &g) {
     bool cheap = judged && !tooDear && price <= Original::economy().itemCheap * b.price;
     if (b.commerce) {
       double take = price * b.priceFactor;
+      // (an exhibit named "Blue Fang": doubled, guestBuy 0x42d8ee - flag
+      // 0x63aff0)
+      if (RenameCheats::flags().blueFang)
+        take += take;
       this->concessions += take;
       bo.income += take;
     }

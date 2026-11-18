@@ -225,8 +225,14 @@ def main():
     # the original's side
     with open(KB, encoding="utf-8") as fh:
         kb = json.load(fh)
-    systems = collections.OrderedDict((s, {"ported": [], "missing": []}) for s, _ in SYSTEMS)
-    systems["other gameplay"] = {"ported": [], "missing": []}
+    systems = collections.OrderedDict((s, {"ported": [], "missing": [], "plumbing": []}) for s, _ in SYSTEMS)
+    systems["other gameplay"] = {"ported": [], "missing": [], "plumbing": []}
+    # A function the original has but a player's game never needs - the
+    # developer's debug overlays and panels, the type system's plumbing - is
+    # said so in its knowledge-base note, which starts "developer-only:" or
+    # "plumbing:" (python re/kb.py note <address> "plumbing: ..."). It is
+    # counted on its own, not as missing.
+    notes = kb.get("notes", {})
     for addr, e in sorted(kb["functions"].items()):
         s = system_of(e.get("name", ""), e.get("class", ""))
         if not s:
@@ -237,14 +243,21 @@ def main():
             row["where"] = sorted(set(cited[addr]))[:3]
             systems[s]["ported"].append(row)
         else:
-            systems[s]["missing"].append(row)
+            note = notes.get(addr) or {}
+            text = (note.get("text") or "").strip().lower() if isinstance(note, dict) else ""
+            if text.startswith(("developer-only:", "plumbing:")):
+                row["why"] = text.split(":", 1)[0]
+                systems[s]["plumbing"].append(row)
+            else:
+                systems[s]["missing"].append(row)
 
     totals = collections.Counter()
     for v in ours.values():
         for k, n in v["counts"].items():
             totals[k] += n
     out = {"ours": ours, "oursTotals": dict(totals), "original": systems,
-           "originalTotals": {s: {"ported": len(v["ported"]), "missing": len(v["missing"])} for s, v in systems.items()}}
+           "originalTotals": {s: {"ported": len(v["ported"]), "missing": len(v["missing"]), "plumbing": len(v["plumbing"])}
+                           for s, v in systems.items()}}
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     with open(a.out, "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=1)
@@ -256,7 +269,8 @@ def main():
                                                                       len(v["bare"])))
         print("The original's gameplay, by system (ported / named):")
         for s, v in out["originalTotals"].items():
-            print("  %-24s %4d / %d" % (s, v["ported"], v["ported"] + v["missing"]))
+            print("  %-24s %4d / %d%s" % (s, v["ported"], v["ported"] + v["missing"],
+                                          "   (+%d developer-only or plumbing)" % v["plumbing"] if v["plumbing"] else ""))
         print("->", a.out)
 
 

@@ -591,9 +591,10 @@ private:
   bool canStep(int x, int y, int nx, int ny, const WorldMap &map, const Fences &fences,
                int access = -1) const;
   static bool cornersMeet(int x, int y, int nx, int ny, const WorldMap &map);
-  bool keeperWork(Member &m, const WorldMap &map, Fences &fences);
+  bool keeperWork(Member &m, const WorldMap &map, Fences &fences, int finished = -1);
   void visitStep(Member &m, const WorldMap &map, Fences &fences);
   bool needsVisit(const Member &m, int exhibit, const Fences &fences) const;
+  bool betweenDuties(const Member &m) const; // (a specialist on its way to a tank: a show may take it)
   // The other keepers at an exhibit: at their duties in it (the habitat's
   // +0xf0, +0x132 when any) and headed for it (+0xf4)
   void keepersAt(int exhibit, int self, const Fences &fences, int &inDuties, int &headed) const;

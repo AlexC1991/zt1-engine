@@ -191,6 +191,9 @@ public:
   std::function<void(int, const std::string &)> guestRenamed;
   // A staff member's name typed (its id, the name): set, then the cheats
   std::function<void(int, const std::string &)> staffRenamed;
+  // An exhibit's name typed (the name): the exhibit name cheats (0x5aee66),
+  // then it is set
+  std::function<void(const std::string &)> exhibitRenamed;
   // An animal's name typed (its id, the name): set, then the cheats
   std::function<void(int, const std::string &)> animalRenamed;
   // Building Information: a stand's (infocom.lyt: price, sell, totals and
@@ -229,6 +232,25 @@ public:
   bool dialogOpen() const { return this->dialog.layout != nullptr; }
   // The awards the zoo has received (Zoo Status: Zoo Awards, list 4124)
   void setAwards(const std::vector<int> &awards) { this->awards = awards; this->awardsListed = -1; }
+  // The scenario page (Scenario Information, ui/zooinfo4.lyt, id 803) as the
+  // game's goals give it: the scenario's name and story, and a line (text
+  // and state icon) for each goal shown. Asked for when the page opens and,
+  // with Zoo Status open, on its tick (zoo.exe 0x4f004a)
+  struct ScenarioPage {
+    std::string name, story;
+    std::vector<std::pair<std::string, std::string>> lines;
+  };
+  std::function<ScenarioPage()> scenarioPage;
+  // (checks) its elements as listed
+  void refreshScenarioPage();
+  UiLayout *scenarioPageLayout() const { return this->scenarioPanel; }
+  // The tutorials' reminder bar (ui/objectve.lyt, id 45400: its Message button
+  // 45406 across the top): shown with this text, or put away with "" - a
+  // click on it is onObjectiveClick (objectve_Message_click 0x4a09f8)
+  void setObjective(const std::string &text);
+  std::string objectiveText() const { return this->objective; }
+  void clickObjective();
+  std::function<void()> onObjectiveClick;
   // A notice with just OK and the exclamation mark ("Plains Zebra 2 has
   // escaped.")
   void tell(const std::string &message);
@@ -293,6 +315,32 @@ public:
   const ZooInfo &zooInfo() const { return this->zoo; }
 
   bool isPanelOpen(int id) const;
+  // Zoo Status' Commerce Building List: one row, and which of two comes first
+  // by a column (0 name, 1 months open, 2 visitors, 3 profit, 4 profit a
+  // month) - the numbers biggest first, smallest first when `up`
+  struct CommerceRow {
+    int id;
+    std::string name, type;
+    int months, visitors;
+    double profit, average;
+  };
+  static bool commerceFirst(const CommerceRow &a, const CommerceRow &b, int column, bool up);
+  // (checks) whether a column's header says smallest first
+  bool commerceSortUp(int column) const { return column >= 0 && column < 5 && this->commerceUp[column]; }
+  // The message bar held while the Message List is open (zoo.exe
+  // message_Panel_show 0x4a03b4 sets the bar's flag +0x450, message_Panel_hide
+  // 0x4a03fb clears it): the bar isn't drawn then (0x4197fc) or updated
+  // (0x4fad0f); its message timer (0x4facad) goes on
+  bool messageBarHeld() const { return this->isPanelOpen(29); }
+  // The Help window (zoo.exe help.lyt, panel 38): a topic list - help.cfg's
+  // [Topics] - and the topic's text; topic -1 is the one it was left on
+  // (openHelp 0x484a32). Its About topic fills Version and product number
+  // in: set by the program
+  void openHelp(int topic = -1);
+  int helpTopicShown() const { return this->helpShown; }
+  size_t helpTopicCount() const { return this->helpTopics.size(); }
+  std::string helpTopicText() const;
+  std::string helpVersion, helpProductId;
   // Paths tab (our addition, elevatedpaths): the arrows under the list set
   // the walkway height, a line beside them says it
   std::function<void(int)> walkwayHeight;
@@ -300,6 +348,8 @@ public:
   void setWalkwayLabel(const std::string &text);
   // (tests) picks an item of an open buy panel's list by its file
   bool selectBuyItem(int panel, const std::string &file);
+  // (checks) the file of the item a buy panel's list has selected, or ""
+  std::string selectedBuyItem(int panel) const;
   // The exhibit (or tank) whose information is open, or -1
   int shownExhibitId() const { return this->isPanelOpen(30) ? this->shownExhibit : -1; }
   // ours (checks): an exhibit's row in the Exhibit List; its tabs' pages
@@ -520,6 +570,8 @@ private:
     IniReader *withModsIni = nullptr; // (withMods owns it: deleted with it)
   } filter;
   std::map<int, int> filterChoice; // panel id -> 0 all, 1..3 a pack, 4 mods
+  int commerceColumn = 0;          // the Commerce Building List's header chosen
+  bool commerceUp[5] = {};         // each column's direction (a click on the chosen header flips it)
   static constexpr int kFilterMods = 4;
   std::string filterLabel(int choice) const;
 
@@ -600,6 +652,18 @@ private:
   UiScaleControl panelScale;
   void dragUiScale(SDL_Renderer *renderer);
   void setupAnimalPanel();
+  struct HelpTopic {
+    std::string title, text;
+  };
+  std::vector<HelpTopic> helpTopics;
+  UiLayout *helpPanel = nullptr;
+  int helpShown = -1, helpLast = 0;
+  std::string helpRaw;
+  bool helpWrapPending = false;
+  void wrapHelp(SDL_Renderer *renderer);
+  void setupHelp();
+  void refreshHelp();
+  void showHelpTopic(int row);
   Shows *shows = nullptr;
   UiLayout *showPanelLayout = nullptr;
   int shownShow = -1;
@@ -687,6 +751,10 @@ public:
 private:
   void setupZooStatus();
   void refreshZooStatus();
+  void setupScenarioPage();
+  UiLayout *scenarioPanel = nullptr;
+  UiLayout *objectivePanel = nullptr;
+  std::string objective;
 };
 
 #endif // UI_GAME_SCREEN_HPP

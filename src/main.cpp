@@ -66,6 +66,7 @@
 #include "Sound.hpp"
 #include "SaveGame.hpp"
 #include "Goals.hpp"
+#include "LangText.hpp"
 #include <SDL3_image/SDL_image.h>
 
 #include "ui/UiImage.hpp"
@@ -169,6 +170,22 @@ static void setStartingCash(int cash) {
   g_currentStartingCash = std::clamp(cash, CASH_MIN, CASH_MAX);
   Settings::setInt("UI", "MSStartingCash", g_currentStartingCash);
   showStartingCash();
+}
+
+// The starting cash's arrows (zoo.exe mapselec_UpSpinner_click 0x616350,
+// mapselec_DownSpinner_click 0x6163b2): the other arrow is enabled again
+// (uiFind 0x2cf8 / 0x2cf7, slot 0x68); the cash goes up or down by
+// MSCashIncrement (0x641b3c) and at MSMaxCash or MSMinCash (0x6433d0,
+// 0x6433c8) is held there and this arrow greyed (slot 0x6c); written back
+// and shown (0x4cb384). dir 1 up, -1 down
+static void stepStartingCash(UiLayout *layout, int dir) {
+  UiElement *self = layout ? layout->getElementById(dir > 0 ? 11511 : 11512) : nullptr;
+  UiElement *other = layout ? layout->getElementById(dir > 0 ? 11512 : 11511) : nullptr;
+  if (other)
+    other->setDisabled(false);
+  setStartingCash(g_currentStartingCash + dir * CASH_STEP);
+  if (self && (dir > 0 ? g_currentStartingCash >= CASH_MAX : g_currentStartingCash <= CASH_MIN))
+    self->setDisabled(true);
 }
 
 // These IDs trigger the TARGET_WIDTH/HEIGHT resize in UiImage.cpp
@@ -641,6 +658,9 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
   g_hud = g_nextHud ? g_nextHud
                     : new UiGameScreen(rm, "ui/main.lyt", "ui/gamescrn.lyt");
   g_nextHud = nullptr;
+  // (the Help window's About topic: Version and the product number)
+  g_hud->helpVersion = std::string(Updater::version()) + (Updater::testBuild() ? " (test)" : "");
+  g_hud->helpProductId = Paths::productId();
 
   // addition: each zoo starts at normal speed; changing rate never unpauses.
   g_gameSpeed=1;
@@ -780,6 +800,10 @@ static void createHud(ResourceManager *rm, World *world, int startingCash) {
   };
   g_hud->staffRenamed = [world, rm](int id, const std::string &name) {
     RenameCheats::staffRenamed(*world, id, name);
+    updateHudClock(rm);
+  };
+  g_hud->exhibitRenamed = [world, rm](const std::string &name) {
+    RenameCheats::exhibitRenamed(*world, name);
     updateHudClock(rm);
   };
   g_hud->animalRenamed = [world, rm](int id, const std::string &name) {
@@ -1142,8 +1166,10 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
     Guests &gs = g_world->getGuests();
     // (zoo.exe guestArrivalCheck 0x424375: the rating plus the marketing's
     // bonus - twice after a keeper's "Susan Kittleson" / "Chuck Frizelle"
-    // cheat, 0x6392c1 at 0x42443d)
-    g_world->setEconomy(static_cast<int>(g_sim.rating()) + g_hud->marketingBenefit() * (RenameCheats::marketingTwice() ? 2 : 1),
+    // cheat, 0x6392c1 at 0x42443d; 30 more after an exhibit named
+    // "wonderland", 0x6392c0 at 0x42444d)
+    g_world->setEconomy(static_cast<int>(g_sim.rating()) + g_hud->marketingBenefit() * (RenameCheats::marketingTwice() ? 2 : 1) +
+                            (RenameCheats::flags().wonderland ? Original::Cheat::wonderlandArrivalBonus : 0),
                         g_hud->zooInfo().admission);
     int came = 0;
     double paid = gs.takeIncome(came);
@@ -2708,6 +2734,13 @@ static void updateScenarioDetails(UiLayout *layout,
   if (!g_scenarioListBox)
     return;
 
+  // The Play button (50008) is enabled only for a scenario that is open
+  // (zoo.exe scenario_ScenarioList_click 0x58e9bb: slot 0x6c disables it
+  // first, then scenarioIsOpen 0x58eb28 of the row chosen enables it, 0x68)
+  UiElement *playButton = layout->getElementById(50008);
+  if (playButton)
+    playButton->setDisabled(true);
+
   int selectedIdx = g_scenarioListBox->getSelectedIndex();
   if (selectedIdx < 0)
     return;
@@ -2717,6 +2750,8 @@ static void updateScenarioDetails(UiLayout *layout,
     return;
 
   bool isLocked = scenario->isLocked;
+  if (playButton)
+    playButton->setDisabled(isLocked);
   // Fallback for non-database legacy scenarios
   if (scenario->iconPath.empty()) {
     // If not in database, assume unlocked for now, or check internal logic
@@ -2771,11 +2806,17 @@ static void updateScenarioDetails(UiLayout *layout,
     if (objList) {
       objList->clear();
       if (!isLocked) {
-        std::vector<std::string> goals =
-            scenarioManager->loadScenarioObjectives(scenario->scenarioPath);
-        for (const auto &goal : goals) {
-          objList->addItem(goal);
-        }
+        // The goals' lines as the scenario page gives them (zoo.exe 0x4f004a's
+        // list: the time limit, then each goal shown, with its icon - Goals::lines)
+        Goals page;
+        page.load(resourceManager, scenario->scenarioPath);
+        const std::vector<Goals::Line> lines = page.lines();
+        objList->setWrapped(!lines.empty());
+        for (const Goals::Line &line : lines)
+          objList->addItem(line.text, "", line.icon);
+        if (lines.empty())
+          for (const auto &goal : scenarioManager->loadScenarioObjectives(scenario->scenarioPath))
+            objList->addItem(goal);
       } else {
         objList->addItem("");
       }
@@ -2819,6 +2860,9 @@ static void updateFreeformDetails(UiLayout *layout,
   }
 }
 
+// (zoo.exe scenario_Panel_show 0x4caf09 fills the list: cleared, each
+// scenario's name by number with its icon - done, in progress or not done,
+// scenarioIsDone 0x4cae6a)
 static void populateScenarioList(UiLayout *layout,
                                  ScenarioManager *scenarioManager) {
   SDL_Log("Populating scenario list...");
@@ -2987,7 +3031,9 @@ static void setGamePaused(bool pause) {
 
 // A goal's popup read: the game goes on (if the popup paused it)
 static bool gameModalOpen() {
-  return g_hud && (g_hud->dialogOpen() || g_hud->optionsOpen() || g_hud->isPanelOpen(5));
+  // (the Help window too: zoo.exe help_Panel_show 0x484a6b pauses the game,
+  // help_Panel_hide 0x484bc1 lets it go)
+  return g_hud && (g_hud->dialogOpen() || g_hud->optionsOpen() || g_hud->isPanelOpen(5) || g_hud->isPanelOpen(38));
 }
 
 static void resumeAfterPopup() {
@@ -3150,6 +3196,10 @@ static void setupGoals(ResourceManager *rm) {
     return (g.rulea == 2 && g.ruleb == 2) || (g.rulea == 6 && (g.ruleb == 0 || g.ruleb == 1 || g.ruleb == 5)) ||
            (g.rulea == 7 && g.ruleb >= 0 && g.ruleb <= 2) ||
            (g.rulea == 3 && g.ruleb == 0) || g.rulea == 99;
+  };
+  h.objective = [](const std::string &text) {
+    if (g_hud)
+      g_hud->setObjective(text);
   };
   h.popup = [](const std::string &image, const std::string &text, bool pause) {
     if (!g_hud)
@@ -3363,6 +3413,13 @@ static void setRenameHooks(ResourceManager *rm) {
         Settings::setInt("scenario", info->unlocks.front(), 0);
     }
   };
+  // "Xanadu", "Cretaceous Corral", "Kathmandu", "Super Croc" (typesSetAvailable
+  // 0x591325 with 1): every type of the cNameID available now
+  h.typeAvailable = [](int nameId) {
+    if (const CatalogItem *item = ItemCatalog::get().findName(nameId))
+      if (ItemCatalog::get().setAvailable(*item, true) && g_hud)
+        g_hud->refreshCatalog();
+  };
   RenameCheats::setHooks(h);
   // The name table (zoo.exe 0x514554, at a zoo's start) and its names used
   // once: emptied, then the zoo's own read in (cheatsLoad 0x594197 - ours:
@@ -3395,7 +3452,25 @@ static void startGoals(ResourceManager *rm, const std::string &mapPath) {
   ItemCatalog::get().clearAvailable();
   const bool scenario = mapPath.rfind("scenario/", 0) == 0;
   ItemCatalog::get().setMode(scenario, Features::allUnlocked);
+  // The scenario page (zooinfo4.lyt) lists this scenario's goals, and its
+  // button is for a scenario only (greyed in a freeform zoo, as measured;
+  // before the goals load: a tutorial's [start] triggers may disable it)
+  if (g_hud)
+    if (UiElement *button = g_hud->getElementById(4107))
+      button->setDisabled(!scenario);
   g_goals.load(rm, mapPath);
+  if (g_hud) {
+    g_hud->setObjective("");
+    g_hud->onObjectiveClick = [] { g_goals.reopenPopup(); };
+    g_hud->scenarioPage = [] {
+      UiGameScreen::ScenarioPage page;
+      page.name = g_goals.scenarioName();
+      page.story = g_goals.scenarioStory();
+      for (const Goals::Line &line : g_goals.lines())
+        page.lines.push_back({line.text, line.icon});
+      return page;
+    };
+  }
   // (then the scenarios' rewards kept, each made available - after the
   // [start] triggers (applyStartSettings), as scenarioStart 0x4c998b calls
   // 0x4533bc: zoo.ini [user] unlockEntity0..unlockCount-1)
@@ -3967,7 +4042,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     std::ofstream rep(outDir + "/scenario-checks.txt");
     int count = 0, bad = 0;
     for (int i = 0; const ScenarioInfo *info = sm->getScenario(i); i++) {
-      const bool loaded = startScenario(rm, *info);
+      bool loaded = startScenario(rm, *info);
       int popups = 0;
       for (int k = 0; k < 40 && g_hud; k++) {
         g_goals.update(1.5f);
@@ -3989,10 +4064,41 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         }
       };
       walk(g_goals.tree());
+      // The scenario page (zooinfo4.lyt, zoo.exe 0x4f004a), opened: the name
+      // and story, then a line for the time limit and each goal shown (not
+      // the hidden ones), their numbers and type names filled in
+      std::string pageNote;
+      if (g_hud && g_hud->scenarioPage && g_hud->scenarioPageLayout()) {
+        g_hud->setPanelOpen(803, true);
+        const UiGameScreen::ScenarioPage page = g_hud->scenarioPage();
+        for (const auto &line : page.lines)
+          rep << "    | " << line.first << std::endl;
+        size_t visible = 0;
+        for (const Goals::Goal &goal : g_goals.all())
+          visible += goal.hidden || !goal.text ? 0 : 1;
+        bool filled = true;
+        for (const auto &line : page.lines)
+          filled = filled && !line.first.empty() && line.first.find('%') == std::string::npos &&
+                   line.first.find("String #") == std::string::npos && !line.second.empty();
+        UiLayout *panel = g_hud->scenarioPageLayout();
+        const UiListBox *list = dynamic_cast<UiListBox *>(panel->getElementById(4145));
+        const UiText *story = dynamic_cast<UiText *>(panel->getElementById(4143));
+        const bool pageOk = !page.name.empty() && !page.story.empty() && filled && list &&
+                            list->getItemCount() == page.lines.size() && story && story->getText() == page.story &&
+                            (page.lines.size() == visible || page.lines.size() == visible + 1);
+        if (!pageOk)
+          pageNote = " [page FAILED: name '" + page.name + "', " + std::to_string(page.story.size()) + " story chars, " +
+                     std::to_string(page.lines.size()) + " lines for " + std::to_string(visible) + " goals]";
+        else
+          pageNote = " [page: " + std::to_string(page.lines.size()) + " lines]";
+        g_hud->setPanelOpen(803, false);
+        if (!pageOk)
+          loaded = false;
+      }
       const bool ok = loaded && g_hud && !g_goals.all().empty();
       count++;
       bad += ok ? 0 : 1;
-      rep << (ok ? "PASS " : "FAIL ") << info->scenarioPath << ": " << g_goals.all().size() << " goals, " << composites
+      rep << (ok ? "PASS " : "FAIL ") << info->scenarioPath << pageNote << ": " << g_goals.all().size() << " goals, " << composites
           << " composites, limit " << g_goals.durationMonths << " months (state " << g_goals.durationState << "), "
           << popups << " popups, outcome " << g_goals.outcome << ", cash " << std::lround(g_sim.cash()) << "\n";
       rep.flush();
@@ -4018,6 +4124,68 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       if (small && tut1) {
         Settings::setInt("scenario", "ba", 3);
         startScenario(rm, *small);
+        // Tutorial 1's reminder bar (objectve.lyt): the popup that asks for the
+        // Game Options button (a persistentShortText of -1) puts the first goal
+        // still to do on it, and a click on it brings that popup back
+        // (objectve_Message_click 0x4a09f8 -> loadScenarioPopup 0x5a1b15)
+        if (const ScenarioInfo *tutorial = find("scenario/scn01a/scn01a.scn")) {
+          startScenario(rm, *tutorial);
+          // (the tutorial's step counter, rule 9, isn't measured yet: the goal
+          // that shows that popup is met by hand)
+          for (Goals::Goal &goal : g_goals.mutableAll()) {
+            if (goal.name == "options_dialog" && goal.file == tutorial->scenarioPath) {
+              goal.rulea = 99;
+              goal.arga = 2;
+            }
+            // (goals whose measures aren't known read 0 and some count as met:
+            // the ones that would put the bar away again stay quiet)
+            if (goal.file == tutorial->scenarioPath && goal.trulea == 2 && goal.targa == 8)
+              goal.trulea = 0;
+          }
+          g_goals.evaluateAll();
+          int seenPopups = 0;
+          for (int tries = 0; g_hud && g_hud->hasDialog() && tries < 20; tries++) {
+            seenPopups++;
+            g_hud->answerDialog(true);
+          }
+          const std::string bar = g_hud ? g_hud->objectiveText() : "";
+          const bool shown = !bar.empty() && bar == rm->getString(17732) && g_hud->isPanelOpen(45400);
+          const bool closed = g_hud && !g_hud->hasDialog();
+          if (g_hud)
+            g_hud->clickObjective();
+          const bool again = g_hud && g_hud->hasDialog() &&
+                             g_hud->dialogMessage().find(langText("TUTORIAL_T1A_PROMPT2").substr(0, 20)) != std::string::npos;
+          while (g_hud && g_hud->hasDialog())
+            g_hud->answerDialog(true);
+          check("Tutorial 1's reminder bar shows the first goal still to do (\"" + bar + "\"; " + std::to_string(seenPopups) +
+                    " popups, " + std::to_string(shown) + std::to_string(closed) + std::to_string(again) +
+                    ") and a click brings its popup back",
+                shown && closed && again);
+          startScenario(rm, *small);
+          check("a scenario without one has no reminder bar", g_hud && g_hud->objectiveText().empty() && !g_hud->isPanelOpen(45400));
+        }
+        // The scenario page's icons follow the goals' states (0x4f048c: the
+        // [desc] iconp, iconc, iconf, then iconc again), the time limit's
+        // line first with its own clock (0x4f0488)
+        {
+          std::vector<std::string> icons;
+          for (int state : {0, 1, 2, 3}) {
+            for (Goals::Goal &goal : g_goals.mutableAll())
+              if (goal.name == "a" && goal.file == small->scenarioPath)
+                goal.state = state;
+            const auto lines = g_goals.lines();
+            icons.push_back(lines.size() > 1 ? lines[1].icon : "");
+          }
+          for (Goals::Goal &goal : g_goals.mutableAll())
+            goal.state = 0;
+          UiElement *button = g_hud ? g_hud->getElementById(4107) : nullptr;
+          check("the Scenario information button is on in a scenario", button && !button->isDisabled());
+          const auto lines = g_goals.lines();
+          check("scenario page: the time limit shows its clock, each goal the icon of its state (pending, met, failed, "
+                "met again)",
+                !lines.empty() && lines[0].icon == "ui/scenario/clock/clock" && icons[0] == "ui/scenario/iconp/iconp" &&
+                    icons[1] == "ui/scenario/iconc/iconc" && icons[2] == "ui/scenario/iconf/iconf" && icons[3] == icons[1]);
+        }
         // What it can buy (goalFire 4: 0x5a0fc2): [start] hideall (4/7)
         // leaves no animals; goal c (4/0, the giraffe 5033) gives one
         const size_t animalsAtStart = ItemCatalog::get().inCategory("animals").size();
@@ -4057,6 +4225,30 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         const ScenarioInfo *s3 = find("scenario/scn03/scn03.scn"), *burk = find("scenario/scn07/scn07.scn");
         check("the list: Small Zoo done (" + s3->iconPath + "), Burkitsville still locked (needs bb, bc too)",
               s3->iconPath == "ui/scenario/iconc/iconc" && burk && burk->isLocked);
+        // The Tutorial & Scenario screen's Play button: greyed for a scenario
+        // that's locked, enabled for one that's open (zoo.exe
+        // scenario_ScenarioList_click 0x58e9bb)
+        {
+          UiLayout *menu = new UiLayout(rm->getIniReader(getLayoutPath(rm, "scenario.lyt")), rm);
+          populateScenarioList(menu, sm);
+          UiElement *play = menu->getElementById(50008);
+          auto choose = [&](const ScenarioInfo *want) {
+            for (int i = 0; const ScenarioInfo *s = sm->getScenario(i); i++)
+              if (s == want && g_scenarioListBox) {
+                g_scenarioListBox->setSelectedIndex(i);
+                updateScenarioDetails(menu, sm, rm);
+                return true;
+              }
+            return false;
+          };
+          const bool lockedGrey = burk && choose(burk) && play && play->isDisabled();
+          const bool openLit = choose(s3) && play && !play->isDisabled();
+          check("the Play button: greyed for a locked scenario, lit for an open one", lockedGrey && openLit);
+          g_scenarioListBox = nullptr;
+          g_scenarioDescText = nullptr;
+          g_scenarioMap = nullptr;
+          delete menu;
+        }
         startScenario(rm, *tut1);
         scenarioComplete(rm, 2);
         check("tutorial 1 lost: 16105 (Yes plays the next)", g_hud->dialogMessage() == rm->getString(16105));
@@ -4100,6 +4292,10 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           Features::allUnlocked = true;
           ItemCatalog::get().setMonth(unlockMonthFor(0));
           startGoals(rm, g_currentMapPath);
+          {
+            UiElement *button = g_hud ? g_hud->getElementById(4107) : nullptr;
+            check("the Scenario information button is greyed in a freeform zoo", button && button->isDisabled());
+          }
           const size_t all = ItemCatalog::get().inCategory("animals").size();
           Features::allUnlocked = false;
           ItemCatalog::get().setMonth(unlockMonthFor(0));
@@ -4226,7 +4422,8 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       {14, "#4180", "zoo_commerce"}, {14, "#4181", "zoo_research"},
       {14, "#4153", "zoo_graphs"},   {14, "#13982", "zoo_donations"},
       {14, "#13983", "zoo_profit"},  {14, "#13984", "zoo_attendance"},
-      {14, "#4106", "zoo_rating"},   {14, "#4152", "zoo_rating_bar"}};
+      {14, "#4106", "zoo_rating"},   {14, "#4152", "zoo_rating_bar"},
+      {803, "", "scenario_page"}};
   // Draws a few frames (art loads and settles) and saves the last
   auto capture = [&](const char *name) {
     for (int frame = 0; frame < 3; frame++) {
@@ -5148,6 +5345,16 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     SDL_Log("[ShowZoo] %s", r.c_str());
     if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
   }
+  // ours: ZT_JOIN_ZOO=<file.zoo>: two joined tanks and an unassigned
+  // specialist, for measuring a keeper's hop to a joined habitat (#297);
+  // with ZT_JOIN_SIM=1 it runs 300 s of it and checks the specialist's
+  // visits (show tank, then home tank, no idle between)
+  if (const char *joinZoo = std::getenv("ZT_JOIN_ZOO")) {
+    extern std::string buildJoinedTankZoo(World &, ZooSim &, UiGameScreen &, const std::string &, const std::string &);
+    const std::string r = buildJoinedTankZoo(*world, g_sim, *g_hud, g_currentMapPath, joinZoo);
+    SDL_Log("[JoinZoo] %s", r.c_str());
+    if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
+  }
   // ours: ZT_WALK_ZOO=<file.zoo>: two paddocks and their keepers, for
   // measuring walking about in the original (#288)
   if (const char *walkZoo = std::getenv("ZT_WALK_ZOO")) {
@@ -5258,6 +5465,41 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     std::string line = std::string(what) + (ok ? " ok" : " FAILED");
     note(line.c_str());
   };
+  // ZT_SCENARIO_PAGE=<part of a scenario's path, "scn03"; "scn03:12" also
+  // plays 12 checks of its goals first>: that scenario started as from the
+  // menu, its page (zooinfo4.lyt) opened and shown - the name, the story and
+  // each goal's line with its state's icon
+  if (const char *which = std::getenv("ZT_SCENARIO_PAGE")) {
+    std::string part = which;
+    int rounds = 0;
+    if (size_t colon = part.find(':'); colon != std::string::npos) {
+      rounds = std::atoi(part.c_str() + colon + 1);
+      part.resize(colon);
+    }
+    const ScenarioInfo *pick = nullptr;
+    for (int i = 0; const ScenarioInfo *s = sm->getScenario(i); i++)
+      if (!pick && s->scenarioPath.find(part) != std::string::npos)
+        pick = s;
+    if (!pick || !startScenario(rm, *pick)) {
+      note("scenario page: scenario not started FAILED");
+      return 1;
+    }
+    world = g_world;
+    for (int k = 0; k < rounds; k++)
+      g_goals.update(1.5f);
+    const UiGameScreen::ScenarioPage page = g_hud->scenarioPage();
+    // (the reminder bar too, with the first goal's line, as a tutorial's popup sets it)
+    if (!page.lines.empty())
+      g_hud->setObjective(page.lines.front().first);
+    g_hud->showPanel(803, "");
+    capture("scenario_page");
+    note((std::string("scenario page: ") + pick->scenarioPath + " name '" + page.name + "', " +
+          std::to_string(page.story.size()) + " story chars, " + std::to_string(page.lines.size()) + " lines")
+             .c_str());
+    for (const auto &line : page.lines)
+      note(("  " + line.first + " [" + line.second + "]").c_str());
+    return 0;
+  }
   // ZT_VIEW_SAVE=<file>: a saved zoo loaded and shown as it was saved (the
   // view it was left at, then the other three turns), its tanks and
   // animals listed, then quit - for looking at a player's save
@@ -5584,6 +5826,60 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     g_hud->showPanel(15, "");
     check("opening Research puts the bulldozer away", !g_hud->bulldozerOn());
     g_hud->showPanel(0, "");
+  }
+
+  // The Message List holds the message bar (zoo.exe message_Panel_show
+  // 0x4a03b4 sets its +0x450, message_Panel_hide 0x4a03fb clears it)
+  {
+    g_hud->setPanelOpen(29, false);
+    const bool before = g_hud->messageBarHeld();
+    g_hud->setPanelOpen(29, true);
+    const bool open = g_hud->messageBarHeld();
+    g_hud->setPanelOpen(29, false);
+    check("the Message List open holds the message bar, closed lets it go",
+          !before && open && !g_hud->messageBarHeld());
+  }
+
+  // The starting cash's arrows grey at the ends (zoo.exe mapselec_UpSpinner_click
+  // 0x616350, mapselec_DownSpinner_click 0x6163b2)
+  {
+    const int savedCash = Settings::getInt("UI", "MSStartingCash", 50000);
+    UiLayout *menu = new UiLayout(rm->getIniReader(getLayoutPath(rm, "mapselec.lyt")), rm);
+    UiElement *up = menu->getElementById(11511), *down = menu->getElementById(11512);
+    loadStartingCash();
+    setStartingCash(CASH_MAX - CASH_STEP);
+    stepStartingCash(menu, 1);
+    const bool atMax = up && down && g_currentStartingCash == CASH_MAX && up->isDisabled() && !down->isDisabled();
+    stepStartingCash(menu, -1);
+    const bool backDown = up && !up->isDisabled() && g_currentStartingCash == CASH_MAX - CASH_STEP;
+    setStartingCash(CASH_MIN + CASH_STEP);
+    stepStartingCash(menu, -1);
+    const bool atMin = up && down && g_currentStartingCash == CASH_MIN && down->isDisabled() && !up->isDisabled();
+    check("starting cash: Up greys at the most, Down at the least, the other arrow comes back",
+          up && down && atMax && backDown && atMin);
+    Settings::setInt("UI", "MSStartingCash", savedCash);
+    delete menu;
+  }
+
+  // The Help window (zoo.exe help_Panel_show 0x484a6b, help_TopicList_click
+  // 0x48482b, openHelp 0x484a32): help.cfg's topics, About first with its
+  // Version put in, the one a topic picked shows, closed and opened again
+  // the one it was left on
+  {
+    g_hud->setPanelOpen(38, false);
+    const size_t topics = g_hud->helpTopicCount();
+    g_hud->openHelp(0);
+    const bool about = g_hud->isPanelOpen(38) && g_hud->helpTopicShown() == 0 &&
+                       g_hud->helpTopicText().find("Zoo Tycoon") != std::string::npos &&
+                       g_hud->helpTopicText().find("%s") == std::string::npos;
+    g_hud->openHelp(2);
+    const std::string quick = g_hud->helpTopicText();
+    g_hud->setPanelOpen(38, false);
+    g_hud->openHelp(-1);
+    const bool left = g_hud->helpTopicShown() == 2 && g_hud->helpTopicText() == quick;
+    check("the Help window: about, a topic picked, the topic it was left on",
+          topics >= 50 && about && !quick.empty() && quick.find("Zoo Tycoon") != 0 && left);
+    g_hud->setPanelOpen(38, false);
   }
 
   // The rotate buttons turn the picked shelter (right twice, left once)
@@ -8801,6 +9097,21 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           world->centreOn(inside[0].first + 0.5f, inside[0].second + 0.5f);
       // The panel: the zebra picked, then the male button
       g_hud->showPanel(3, "animals");
+      // (measured: choosing a filter starts Adopt Animals' list at its first
+      // animal again, a pick made under the one before not kept)
+      {
+        g_hud->setFilter(3, 0);
+        const std::string first = g_hud->selectedBuyItem(3);
+        std::string other;
+        for (const CatalogItem *c : ItemCatalog::get().inCategory("animals"))
+          if (c->file != first && c->expansion == 0 && other.empty())
+            other = c->file;
+        const bool picked = !other.empty() && g_hud->selectBuyItem(3, other);
+        g_hud->setFilter(3, 1);
+        g_hud->setFilter(3, 0);
+        check("Adopt Animals: choosing a filter starts its list at the first animal again",
+              picked && !first.empty() && g_hud->selectedBuyItem(3) == first);
+      }
       g_hud->selectBuyItem(3, "animals/zebra.ai");
       click(2000);
       bool female = true;
@@ -10392,6 +10703,34 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             capture("zoo_commerce_picked");
             check("picking a row opens its Building Information", g_hud->isPanelOpen(21) && g_hud->isPanelOpen(14));
           }
+          g_hud->showPanel(0, "");
+        }
+        // The Commerce list's headers (zoo.exe buttons104f_click 0x4f09ad): a click
+        // on the one already chosen turns its column round; every number
+        // column starts biggest first
+        {
+          g_hud->showPanel(14, "");
+          g_hud->showTab(14, 4180);
+          capture("zoo_commerce_sort");
+          auto row = [](int id, int months, int visitors, double profit, double average) {
+            return UiGameScreen::CommerceRow{id, "n", "t", months, visitors, profit, average};
+          };
+          const auto lo = row(1, 1, 1, 1.0, 1.0), hi = row(2, 9, 9, 9.0, 9.0);
+          bool order = true;
+          for (int col = 1; col < 5; col++)
+            order = order && UiGameScreen::commerceFirst(hi, lo, col, false) && !UiGameScreen::commerceFirst(lo, hi, col, false) &&
+                    UiGameScreen::commerceFirst(lo, hi, col, true) && !UiGameScreen::commerceFirst(hi, lo, col, true);
+          check("the Commerce list's number columns: biggest first, smallest first when turned round", order);
+          click(4177);
+          const bool first = !g_hud->commerceSortUp(2);
+          click(4177);
+          const bool second = g_hud->commerceSortUp(2);
+          click(4177);
+          const bool third = !g_hud->commerceSortUp(2);
+          click(4179);
+          const bool other = !g_hud->commerceSortUp(4) && !g_hud->commerceSortUp(2);
+          check("the Commerce list's headers: the first click chooses, the next turn it round and back",
+                first && second && third && other);
           g_hud->showPanel(0, "");
         }
         // The Animal List and Guest List: everyone, the filters' counts;
@@ -12263,6 +12602,12 @@ int main(int argc, char *argv[]) {
         spriteCulling = !spriteCulling; worldSpriteCulling(spriteCulling);
         SDL_Log("[FrameProfile] sprite pruning %s (Lab reference comparison)", spriteCulling ? "on" : "off");
       }
+    // F1 opens the Help window on the topic it was left on (zoo.exe gameKeys
+    // 0x4cb340: openHelp(-1) 0x484a32)
+    if (g_currentState == LayoutState::GAME_LOOP && g_hud && !UiText::isEditing())
+      for (const Input &in : inputs)
+        if (in.event == InputEvent::KEY_DOWN && in.key == SDLK_F1)
+          g_hud->openHelp(-1);
     if(g_currentState==LayoutState::GAME_LOOP)
       for(const Input &in:inputs)if(in.event==InputEvent::KEY_DOWN && in.key==SDLK_F9) {
         FrameProfile::start();int width=0,height=0;SDL_GetCurrentRenderOutputSize(window.renderer,&width,&height);
@@ -12403,6 +12748,8 @@ int main(int argc, char *argv[]) {
     }
 
     switch (action) {
+    // (zoo.exe startup_Exit_click 0x4f27a8 -> 0x501224: the main panel
+    // hidden, main_Panel_hide 0x5b14a4, then the program quits)
     case UiAction::STARTUP_EXIT:
       running = false;
       break;
@@ -12475,8 +12822,10 @@ int main(int argc, char *argv[]) {
       populateScenarioList(layout, g_scenarioManager);
       break;
 
-    // The main menu's Load Saved Game (the dialog) and Continue Saved Game
-    // (the latest save)
+    // The main menu's Load Saved Game (the dialog; zoo.exe startup_LoadGame_click
+    // 0x4cc7d1 -> 0x4cc606: loadZooDialog 0x4cc0d7, and once a zoo is loaded the
+    // start-up screen, uiFind 0x1a, hidden) and Continue Saved Game (the
+    // latest save)
     case UiAction::STARTUP_LOAD_GAME:
     case UiAction::STARTUP_CONTINUE_GAME: {
       std::string path;
@@ -12521,6 +12870,9 @@ int main(int argc, char *argv[]) {
         break;
       destroyHud();
       [[fallthrough]];
+    // (zoo.exe scenario_BackToMainMenu_click 0x48a99f: the scenario list's
+    // slot 0x1c called, the panel uiFind 0x20 hidden and the start-up screen,
+    // 0x1a, shown)
     case UiAction::CREDITS_EXIT:
     case UiAction::SCENARIO_BACK_TO_MAIN_MENU: {
       // (the Mod Menu is opened from the Game Options' Mods & Updates: its
@@ -12548,18 +12900,22 @@ int main(int argc, char *argv[]) {
       updateScenarioDetails(layout, g_scenarioManager, &resource_manager);
       break;
 
+    // (zoo.exe mapselec_MapList_click 0x4ca58e: a click that picks a different
+    // row shows its map, 0x50f396; one that picks none keeps the row)
     case UiAction::FREEFORM_LIST_SELECTION:
       updateFreeformDetails(layout, g_scenarioManager, &resource_manager);
       break;
 
     case UiAction::CASH_SPINNER_UP:
-      setStartingCash(g_currentStartingCash + CASH_STEP);
+      stepStartingCash(layout, 1);
       break;
 
     case UiAction::CASH_SPINNER_DOWN:
-      setStartingCash(g_currentStartingCash - CASH_STEP);
+      stepStartingCash(layout, -1);
       break;
 
+    // (zoo.exe scenario_StartScenario_click 0x4c9d83 -> 0x4c9bc9(0): the row
+    // chosen started, [user] lastfile cleared)
     case UiAction::PLAY_SCENARIO_START:
       // (in the Mod Menu that button is Switch on / off, or Download)
       if (g_currentState == LayoutState::MOD_MENU) {
@@ -12581,6 +12937,9 @@ int main(int argc, char *argv[]) {
       }
       break;
 
+    // (zoo.exe mapselec_PlayMap_click 0x4ca34e: startMap 0x4ca15d with the
+    // starting cash chosen, the map screen's panels, uiFind 0x27 and 0x1a,
+    // hidden and the game begun)
     case UiAction::PLAY_FREEFORM_START:
       if (g_freeformListBox && g_freeformListBox->getSelectedIndex() >= 0) {
         int idx = g_freeformListBox->getSelectedIndex();
@@ -12686,6 +13045,7 @@ int main(int argc, char *argv[]) {
           }
         }
         g_goals.update(simulationSeconds);
+        // (the scenario's end taken once, then cleared: takeWonFlag 0x4c9bb2)
         if (const int outcome = g_scenarioOutcome) {
           g_scenarioOutcome = 0;
           scenarioComplete(&resource_manager, outcome);

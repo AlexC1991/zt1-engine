@@ -1981,10 +1981,24 @@ std::vector<int> Staff::dungFor(const Member &m, int exhibit) const {
   return out;
 }
 
+// zoo.exe 0x41680c (habitatShowWantsKeeper: Task 0x6e's first pick, then job 0x13): a show that
+// wants a specialist takes it at its next pick, between two tanks' duties - not in the middle
+// of one. ours: a specialist on its way to a tank (job Visit, in no tank, not in the water) is
+// between duties; with the hop to the next tank needing a visit (#297) there is no other
+// moment, and none ever came while the tanks came due in turn
+bool Staff::betweenDuties(const Member &m) const {
+  return m.job == Job::Visit && m.tank < 0 && !m.water && !m.climbing;
+}
+
 bool Staff::needsVisit(const Member &m, int exhibit, const Fences &fences) const {
   const Fences::Exhibit *ex = fences.exhibit(exhibit);
-  if (!ex || ex->animalCount() <= 0 || !this->items)
+  if (!ex || !this->items)
     return false;
+  // measured: 2026-11-18 (#297, the Lab's Play original, an unassigned marine
+  // specialist): a tank with no animal in it, its water dirty (purity 20), was
+  // the first it went to - a tank's murky water is work with nobody in it
+  if (ex->animalCount() <= 0)
+    return ex->tank && ex->water > 0 && ex->purity < kMurkyPurity;
   // Real animals (zoo.exe 0x49d202): one to heal (health 85% or less), one
   // hungry with no food, any poo, or not visited for a while - never
   // visited, or longer ago than the service interval (habitatMgr +100
@@ -2054,7 +2068,7 @@ void Staff::keepersAt(int exhibit, int self, const Fences &fences, int &inDuties
   }
 }
 
-bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences) {
+bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences, int finished) {
   // Exhibits gone (a fence taken out) leave the schedule
   m.exhibits.erase(std::remove_if(m.exhibits.begin(), m.exhibits.end(),
                                   [&](int ex) { return !fences.exhibit(ex); }),
@@ -2065,7 +2079,11 @@ bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences) {
   if (list.empty()) {
     const Type &t = this->typeList[m.type];
     for (const Fences::Exhibit &e : fences.exhibits()) {
-      if (!e.named || e.animalCount() <= 0)
+      // measured: 2026-11-18 (#297, the Lab's Play original, an unassigned marine
+      // specialist, two joined tanks): it went to the show tank with no animal in
+      // it, its water dirty, before the home tank with the orcas - every habitat
+      // is a candidate, those with nothing for it dropped by needsVisit (0x49d202)
+      if (!e.named)
         continue;
       // (scientists the dinosaurs, keepers the zoo animals: their
       // assignment messages 10324 and 10320)
@@ -2121,7 +2139,9 @@ bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences) {
                                      : fences.exhibitAt(static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y)));
   for (int pass = 0; pass < 2; pass++)
   for (int ex : list) {
-    if (ex == standingIn || !needsVisit(m, ex, fences))
+    // (zoo.exe habitatNextNeedingVisit 0x49e8fa: the habitat just finished is marked visited and
+    // is never the one handed on - `finished`, the hop's; the unit stands outside it by then)
+    if (ex == standingIn || ex == finished || !needsVisit(m, ex, fences))
       continue;
     int inDuties = 0, headed = 0;
     keepersAt(ex, m.id, fences, inDuties, headed);
@@ -2351,6 +2371,9 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
   ZT_FN("", "A keeper's visit: the next part");
   const Type &t = this->typeList[m.type];
   Fences::Exhibit *ex = fences.exhibit(m.visit);
+  const bool wasTank = ex && ex->tank;
+  const int finishedVisit = m.visit;
+  const bool keeperClass = t.kind == Kind::Keeper || t.kind == Kind::Scientist || t.kind == Kind::Trainer;
   auto done = [&] {
     // (a visit cut short in a tank: out on the bank by its gate)
     if (m.tank >= 0 || m.water != 0) {
@@ -2369,8 +2392,27 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     m.dutyId = kMonitoring;
     m.dutyArg.clear();
     // (its duties in the habitat over: both lists emptied, zoo.exe 0x49ebe7)
+    // measured: 2026-11-18 (#297, #306, the Lab's Play original, a show tank
+    // joined to a home tank, one unassigned specialist): Task6e's checkArrived
+    // 0x423fe0 ends the duties when the unit's habitat is the zoo's own ground
+    // (+0x2c is 1 there, 0 on both tanks) or the task's finished flag (+0x18,
+    // set by whileGoing 0x42400a with no duty left) - the keeper out of the
+    // exhibit, as here. After a tank the specialist went on over land to the
+    // other tank 1.5 s later, on task 0x65 with no task 1 between
+    // (habitatNextNeedingVisit 0x49e8fa; it didn't swim through the portal)
     m.invalid.clear();
     m.unreachable.clear();
+    // A tank's duties over, on directly to the next habitat that needs a
+    // visit (zoo.exe Task6e's atTarget 0x49ebe7 -> habitatNextNeedingVisit
+    // 0x49e8fa; only from a tank, its slot 0x20 giving 1). measured:
+    // 2026-11-18 (#297, the Lab's Play original, two tanks, one specialist):
+    // 1.5 s after it left the first tank it was on task 0x65 for the other,
+    // with no task 1 (monitoring) between, walking over land to its gate. ours:
+    // the keeper's own pick (keeperWork, 0x49d7c7) stands in for the hop's
+    // joined-habitat walk, so its pass rules apply (not measured: the
+    // original stalls with two specialists at work)
+    if (wasTank && keeperClass && !m.sawThreat)
+      keeperWork(m, map, fences, finishedVisit);
   };
   if (!ex || !this->items) {
     done();
@@ -2987,7 +3029,15 @@ bool Staff::tourWork(Member &m, const WorldMap &map, Fences &fences) {
   std::pair<int, int> spot = tiles[std::uniform_int_distribution<size_t>(0, tiles.size() - 1)(this->rng)];
   if (!findPath(m, spot.first, spot.second, map, fences, spot.first + 0.5f, spot.second + 0.5f))
     return false;
-  // A new trip: the last group goes, a new one gathers
+  // A new trip: the last group goes, a new one gathers (zoo.exe 0x58cf00,
+  // Task76_GuideToViewingArea::checkArrived: on the trip's first check, +0x2a0
+  // clear, the last group is let go - 0x58b362 at 100 - and the new one
+  // gathered, 0x58d349, +0x2a0 set; ours: at once, as the trip is made, and
+  // +0x2a0 isn't kept. measured: 2026-11-18, the tour zoo's two guides in the
+  // running original: +0x20c (not halted - fHalt 0x601da3 clears it, the
+  // step 0x436794 sets it) is 1 along the walk of task 0x76, +0x2a0 1 from its
+  // start, so the walk gathers as ours does; in the talk (0x77) +0x20c is 0
+  // and it gathers all the same, 0x58d043)
   this->guests->releaseTour(m.id);
   m.followers.clear();
   m.job = Job::Tour;
@@ -3222,6 +3272,8 @@ void Staff::catchStep(Member &m, float seconds, const WorldMap &map, const Fence
     return;
   }
   if (m.phase == 1 && d2 <= 1) {
+    // (Job15_BoxAnimal's atTarget 0x50df5d: the target an animal, 0x505941 puts
+    // it in its crate - ZTAnimal +0x394 - and "Boxed Animal" is its status text)
     ZT_STEP("0x50d345", "Crates it where it lies", {"animal", a->name});
     this->animals->box(a->id);
     m.job = Job::None;
@@ -3747,6 +3799,32 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
                                       return e == nullptr || (keeperClass && e->tiles.size() < 2);
                                     }),
                      m.exhibits.end());
+    // Task65_KeeperGoToHabitat::checkArrived (zoo.exe 0x423f75), each tick
+    // while the keeper hasn't reached the habitat's gate: the habitat asked
+    // staffCanAssignToExhibit 0x423e01(keeper, 0, 1) again, and any answer but
+    // 0 - under 2 tiles, the wrong kind, or nothing there it looks after any
+    // more (the animals taken out, the dirt cleaned) - ends the job (unit slot
+    // 0x174, 0x49e55b): it stands, and its chooser looks again. Not once it is
+    // at the gate (Job::Visit's phase 0 with its access set)
+    if (keeperClass && m.job == Job::Visit && m.phase == 0 && m.access < 0 && !m.climbing) {
+      const Fences::Exhibit *e = fences.exhibit(m.visit);
+      if (e && mayServe(m, *e) != 0) {
+        ZT_STEP("0x423f75", "Going to the habitat: nothing there needs it now, the job ends",
+                {"exhibit", e->name}, {"answer", mayServe(m, *e)});
+        m.job = Job::None;
+        m.visit = -1;
+        m.path.clear();
+        m.pathAt = 0;
+        m.anim = "idle";
+        m.animTime = 0;
+        m.idleLeft = 0.5f;
+        m.dutyId = kMonitoring;
+        m.dutyArg.clear();
+        m.invalid.clear();
+        m.unreachable.clear();
+        continue;
+      }
+    }
     m.animTime += seconds;
     m.baseAnimTime += seconds;
     m.workCheck -= seconds;
@@ -4075,7 +4153,14 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
         } else if (m.job == Job::Visit) {
           visitStep(m, map, fences);
         } else if (m.job == Job::Tour) {
-          // There: with a group, the talk; without, the trip's over
+          // There: with a group, the talk; without, the trip's over. The
+          // original's arrival test for the walk is the unit's tile on its
+          // target's (Task76 checkArrived 0x58cf00, ours: its path's end);
+          // the talk is task 0x77 - begin 0x58ac9c starts the bSpeak set
+          // (0x4a7e94 asks the unit to play it; the unit's tile is its target),
+          // its atTarget 0x58d068 is the base's (slot 0x5c), and checkArrived
+          // 0x58a85e ends it when the unit's set is no longer bSpeak (ours:
+          // speakLeft, the set's measured length)
           if (m.followers.empty()) {
             m.job = Job::None;
             m.anim = "idle";

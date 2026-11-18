@@ -47,6 +47,7 @@ UiListBox::UiListBox(IniReader* ini_reader, ResourceManager* resource_manager, s
     this->toggle_select = ini_reader->getInt(name, "toggleselect", 0) == 1;
     this->spacing = std::max(0, ini_reader->getInt(name, "spacing", 0));
     this->minicon_width = ini_reader->getInt(name, "miniconwidth", 0);
+    this->minicon_height = ini_reader->getInt(name, "miniconheight", 0);
     for (const std::string& c : ini_reader->getList(name, "column"))
         this->columns.push_back(std::atoi(c.c_str()));
     this->line_height = resource_manager->getFontLineHeight(font_id, font_size_id);
@@ -122,7 +123,12 @@ void UiListBox::clear() {
 // 30 px for two lines of Arial Bold 9, 16 for one)
 int UiListBox::itemHeight(const ListBoxItem& item) const {
     int lines = std::max<int>(1, (int)item.lines.size());
-    return lines * line_height + (wrapped ? spacing : 2);
+    int h = lines * line_height + (wrapped ? spacing : 2);
+    // ours: a wrapped row with an icon (the scenario page's goals) is as
+    // tall as the icon column, measured 32 px against the original's
+    if (wrapped && !toggle_select && !item.iconPath.empty())
+        h = std::max(h, minicon_height);
+    return h;
 }
 
 void UiListBox::addItem(const std::string& text, Animation* iconArt) {
@@ -335,7 +341,34 @@ void UiListBox::draw(SDL_Renderer* renderer, SDL_Rect* layout_rect) {
                 checkbox->draw(renderer, &box, item.checked ? CompassDirection::S
                                                             : CompassDirection::N);
             }
-            int ty = wrapped ? item_y : item_y + (h - (int)item.lines.size() * line_height) / 2;
+            const bool hasIcon = wrapped && !toggle_select && !item.iconPath.empty();
+            if (hasIcon) {
+                // The row's icon in the mini-icon column, as the plain rows'
+                if (!item.iconArt && !item.iconTex && !item.loadAttempted) {
+                    if (item.iconPath.find('.') == std::string::npos)
+                        item.iconArt = resource_manager->getAnimation(item.iconPath);
+                    if (!item.iconArt)
+                        item.iconTex = loadIconTexture(renderer, item.iconPath);
+                    item.loadAttempted = true;
+                }
+                int iw = 0, ih = 0;
+                if (item.iconArt)
+                    item.iconArt->queryTexture(CompassDirection::N, &iw, &ih);
+                else if (item.iconTex)
+                    ArtScaler::querySize(item.iconTex, &iw, &ih);
+                const int column = minicon_width > 0 ? minicon_width : 24;
+                if (iw > 0 && ih > 0 && art) {
+                    SDL_Rect iconRect = {cached_rect.x + 1 + std::max(0, (column - iw) / 2), item_y + (h - ih) / 2, iw, ih};
+                    if (item.iconArt) {
+                        item.iconArt->draw(renderer, &iconRect, CompassDirection::N);
+                    } else {
+                        SDL_SetTextureBlendMode(item.iconTex, SDL_BLENDMODE_BLEND);
+                        RenderSettings::applyArtScaleMode(item.iconTex);
+                        ZT_RenderCopy(renderer, item.iconTex, nullptr, &iconRect);
+                    }
+                }
+            }
+            int ty = wrapped && !hasIcon ? item_y : item_y + (h - (int)item.lines.size() * line_height) / 2;
             for (const std::string& line : item.lines) {
                 SDL_Texture* t = resource_manager->getStringTexture(
                     renderer, font_id, line, item.hasColor ? item.color : forecolor, font_size_id);

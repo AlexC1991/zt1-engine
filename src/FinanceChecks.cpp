@@ -229,6 +229,32 @@ int runFinanceChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       const float paidTo = p->progress;
       rs.advance(3.0f, [](int, double) { return false; });
       check("a tick the zoo can't pay for: no progress", p->progress == paidTo);
+      // Unchecking the category being researched (resrch2_list_click
+      // 0x6173f3 sets only its flag): research stays on it until the next
+      // tick, which pays nothing and picks from the checked categories
+      // (0x41f1ba -> 0x5b09f6); a program already begun is taken up again
+      // when picked
+      {
+        const int c0 = br->currentCategory;
+        const bool begun = p->progress > 0;
+        br->enabled[c0] = false;
+        check("unchecking the category being researched: research stays on it until the tick",
+              br->currentCategory == c0 && rs.current(*br) == p);
+        std::vector<double> asked2;
+        rs.tickClock = 0;
+        rs.advance(3.0f, [&](int branch, double amount) {
+          if (branch == 0)
+            asked2.push_back(amount);
+          return true;
+        });
+        ResearchProgram *q = rs.current(*br);
+        check("the tick pays nothing and moves it to a checked category (" + std::to_string(asked2.size()) + " asked)",
+              asked2.empty() && br->currentCategory != c0 && (!q || (br->currentCategory >= 0 && br->enabled[br->currentCategory])));
+        br->enabled[c0] = true;
+        rs.pick(*br);
+        check("checked again, a program already begun is picked up again", !begun || rs.current(*br) == p);
+        p = rs.current(*br) ? rs.current(*br) : p;
+      }
       // (every program of the branch done: nothing being researched)
       for (auto &c : br->categories)
         for (auto &prog : c.programs)

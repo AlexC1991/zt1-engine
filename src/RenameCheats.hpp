@@ -25,6 +25,9 @@ struct Hooks {
   std::function<void(double)> donation, removalRefund;
   // zoo.ini [scenario]: every scenario's token at 0 (0x48a80a)
   std::function<void()> unlockScenarios;
+  // Every type of a cNameID made available (typesSetAvailable 0x591325, with
+  // 1), the buy panels refreshed
+  std::function<void(int)> typeAvailable;
 };
 void setHooks(const Hooks &hooks);
 const Hooks &hooks();
@@ -35,6 +38,13 @@ std::string guestRenamed(World &world, int guest, const std::string &name);
 std::string staffRenamed(World &world, int id, const std::string &name);
 // An animal renamed (its id); the name already set
 std::string animalRenamed(World &world, int id, const std::string &name);
+// An exhibit named (zoo.exe dinoExhibitNameList 0x5aee66, from 0x5aedbd:
+// the name box, kept with something to see in it): "wonderland",
+// "Microsoft", "Blue Fang", "Xanadu", "Cretaceous Corral", "Kathmandu",
+// "Copralite Corner", "Super Croc", compared exactly. Returns the cheat's
+// address ("" none) - for the checks. Original behaviour, not an addition
+// (#298)
+std::string exhibitRenamed(World &world, const std::string &name);
 // "Susan Kittleson" / "Chuck Frizelle" (zoo.exe 0x6392c1): from then on,
 // till the game is closed, the marketing's bonus counted twice in the rating
 // guests come by (guestArrivalCheck 0x424375 at 0x42443d)
@@ -50,6 +60,11 @@ struct Flags {
   bool frankenstein = false;   // 0x64e83a: 1 heal in 10 makes a dinosaur
   bool rosalie = false;        // 0x654ad8: set by the tour guide's name, read by nothing
   bool deer = false;           // 0x654ad9: set by "Deer", read by nothing
+  // The exhibit names' flags (dinoExhibitNameList 0x5aee66; never cleared, not
+  // saved, loadConfig 0x591a1f stops short of them):
+  bool wonderland = false; // 0x6392c0: "wonderland", 30 added to the arrival check's rating (0x42444d)
+  bool microsoft = false;  // 0x63c54e: "Microsoft", a viewing donation doubled (guestDoneViewingExhibit 0x42eb0e)
+  bool blueFang = false;   // 0x63aff0: "Blue Fang", what a guest pays at a building doubled (guestBuy 0x42d8ee)
 };
 const Flags &flags();
 void setFlags(const Flags &f);

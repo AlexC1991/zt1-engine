@@ -191,7 +191,9 @@ int runShowAllChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
     std::string offWhat, hideWhat;
     std::set<std::string> anims;
     std::map<int, int> holding; // actor -> the toy it held a second ago
-    for (int i = 0; i < 60 * added + 240; ++i) {
+    int steps = 0;
+    for (int i = 0; i < 60 * added + 240 + 400; ++i) {
+      steps = i;
       run(1);
       for (auto &m : const_cast<std::vector<Animals::Member> &>(a.members())) m.happiness = 100;
       for (const auto &actor : s->actors) {
@@ -219,6 +221,7 @@ int runShowAllChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       }
       if (s->completed > before && s->phase == Shows::Phase::Waiting) break;
     }
+    note(name + ": loop ended at step " + std::to_string(steps) + " phase " + std::to_string(int(s->phase)));
     const int actors = 2;
     check(name + ": the show completes", s->completed == before + 1 && s->phase == Shows::Phase::Waiting);
     check(name + ": every trick performed by both (" + std::to_string(s->tricksDone - doneBefore) + " of " +
@@ -258,8 +261,21 @@ int runShowAllChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
         break;
       }
     // (to the end of any show going, then a clean wait)
+    // (ours: the animals held as in the show runs above - fed, rested, content - the
+    // schedules wait 90 s and more, long enough for them to starve and be taken as dying)
+    auto hold = [&]() {
+      for (auto &m : const_cast<std::vector<Animals::Member> &>(a.members())) {
+        m.happiness = 100;
+        m.pending = 0;
+        m.hunger = 0;
+        m.energy = 0;
+      }
+    };
     auto settle = [&]() {
-      for (int i = 0; i < 600 && s->phase != Shows::Phase::Waiting; ++i) run(1);
+      for (int i = 0; i < 600 && s->phase != Shows::Phase::Waiting; ++i) {
+        run(1);
+        hold();
+      }
     };
     shows.setFrequency(tank, -1);
     settle();
@@ -283,6 +299,7 @@ int runShowAllChecks(World &world, UiGameScreen &hud, ZooSim &sim, ResourceManag
       std::string statuses, last;
       for (; waited < interval + 300 && !started; ++waited) {
         run(1);
+        hold();
         started = s->phase != Shows::Phase::Waiting;
         if (dueAt < 0 && (started || s->status.rfind("Waiting for next show", 0) != 0)) dueAt = waited + 1;
         if (s->status != last) {

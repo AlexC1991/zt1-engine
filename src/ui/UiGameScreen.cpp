@@ -286,6 +286,8 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   targets.insert(29); // the Message List (the Messages button, 1006)
   targets.insert(302); // a building's paint tab (infocomC.lyt)
   targets.insert(37);  // its colour picker (color.lyt)
+  targets.insert(38);  // the Help window (help.lyt)
+  targets.insert(45400); // the tutorials' reminder bar (objectve.lyt)
 
   // The panels are the screen layout's sub-layouts with those ids
   IniReader *screen = resource_manager->getIniReader(screenLayout);
@@ -352,12 +354,14 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   this->setupTerraform();
   this->setupResearch();
   this->setupZooStatus();
+  this->setupScenarioPage();
   this->setupExhibits();
   this->setupFilterPanel();
   this->setupStaffPanels();
   this->setupLists();
   this->setupColours();
   this->setupAnimalPanel();
+  this->setupHelp();
   this->setupShows();
   this->setupGameOptions();
 
@@ -473,6 +477,14 @@ void UiGameScreen::setFilter(int panelId, int choice) {
       p.facing = 0;
       p.picked.clear();
     }
+  // Adopt Animals' list starts at its first animal again whenever the filter
+  // is chosen (measured in the original: a pick made under one filter isn't
+  // kept by the next - nor when coming back - the list is filled again and
+  // row 0 is selected; adoptListFill 0x4e334b, which keeps a row per
+  // filter in its maps 0x63bb40 and 0x63bb30, buya_Animals_hover 0x4e27a9)
+  for (BuyPanel &p : this->buyPanels)
+    if (p.id == 3)
+      p.picked.clear();
   for (Entry &e : this->entries) {
     if (!e.panel || !panels.count(e.id))
       continue;
@@ -633,7 +645,10 @@ void UiGameScreen::setupBuyPanels() {
         if (UiButton *plaque = dynamic_cast<UiButton *>(self->info ? self->layout->getElementById(self->info) : nullptr))
           if (plaque->isToggledOn() && index >= 0 && index < (int)self->items.size())
             this->showAdoptPlaque(self->items[index]->file);
-      // Picking a fence leaves gate mode
+      // Picking a fence leaves gate mode (zoo.exe buldhab_Objects_click
+      // 0x4da916: the tab's pick kept by index, 0x63baa8, the gate button
+      // put away on that tab, uiTurnOff 0xca8, the item handed to the zoo
+      // view, setPlaceItem 0x4f189a)
       if (self->id == 8 && index >= 0 && self->gate)
         if (UiButton *g = dynamic_cast<UiButton *>(self->layout->getElementById(self->gate)))
           g->setToggledOn(false);
@@ -803,6 +818,31 @@ bool UiGameScreen::selectBuyItem(int panel, const std::string &file) {
       }
   }
   return false;
+}
+
+// zoo.exe's comparators for the columns (0x616dcf visitors, 0x616e09 months,
+// 0x5a4fa8 profit, 0x5a5244 profit a month: each one's flag, [0x63bbc4 +
+// column], picks smaller-first when set, bigger-first when clear). The name
+// column's sort, 0x4d7ae3, never reads its flag: always A to Z (ours: by
+// kind, then name)
+bool UiGameScreen::commerceFirst(const CommerceRow &a, const CommerceRow &b, int column, bool up) {
+  switch (column) {
+  case 1: return up ? a.months < b.months : a.months > b.months;
+  case 2: return up ? a.visitors < b.visitors : a.visitors > b.visitors;
+  case 3: return up ? a.profit < b.profit : a.profit > b.profit;
+  case 4: return up ? a.average < b.average : a.average > b.average;
+  default: return a.type != b.type ? a.type < b.type : a.name < b.name;
+  }
+}
+
+std::string UiGameScreen::selectedBuyItem(int panel) const {
+  for (const BuyPanel &p : this->buyPanels)
+    if (p.id == panel && p.region) {
+      const int i = p.region->getSelected();
+      if (i >= 0 && i < (int)p.items.size())
+        return p.items[i]->file;
+    }
+  return "";
 }
 
 void UiGameScreen::setWalkwayLabel(const std::string &text) {
@@ -1226,6 +1266,10 @@ void UiGameScreen::setGateMode(bool on) {
 // tools instead (the first chosen) and the chosen tool's help text. The
 // brush starts at its largest, 5x5 (+ greyed); undo and accept are greyed
 // until something is changed.
+// (zoo.exe teraform_Panel_show 0x4da60d fills the page: the terrains, the
+// brush's size 0x4da53a and its buttons 0x4da59e, the first tab; the click
+// on a terrain, teraform_Objects_click 0x4dc9d2: terraform mode on, the
+// terrain's type handed to the zoo view, 0x4dc9bf, and its name shown, 0xcf7)
 void UiGameScreen::setupTerraform() {
   TerraformPage &t = this->terraform;
   for (Entry &e : this->entries)
@@ -1540,19 +1584,16 @@ void UiGameScreen::refreshResearch() {
         text(4001, this->resource_manager->getString(t->getHelpId()));
   if (!b)
     return;
-  // The checkboxes say which categories are researched; unchecking the one
-  // being worked on moves to another
+  // The checkboxes say which categories are researched (resrch2_list_click
+  // zoo.exe 0x6173f3: the row's category flag = its checkbox, nothing else).
+  // Unchecking the category being worked on doesn't pick another here: the
+  // research tick does that (Research::advance, 0x41f1ba)
   if (list) {
-    bool changed = false;
     for (int row = 0; row < (int)r.listed.size(); row++) {
       int i = r.listed[row];
-      if (list->isChecked(row) != b->enabled[i]) {
+      if (list->isChecked(row) != b->enabled[i])
         b->enabled[i] = list->isChecked(row);
-        changed = true;
-      }
     }
-    if (changed && (b->currentCategory < 0 || !b->enabled[b->currentCategory]))
-      research.pick(*b);
   }
 
   if (!b->funding.empty()) {
@@ -1598,6 +1639,68 @@ static std::string formatCents(long cents) {
   char buffer[32];
   snprintf(buffer, sizeof(buffer), "$%ld.%02ld", cents / 100, cents % 100);
   return buffer;
+}
+
+// ----------------------------------------------------------------------------
+// The scenario page (zooinfo4.lyt, id 803: the Scenario information button
+// 4107, zooinfo4_Panel_show 0x4efdf6): ScenarioName 4142, Story 4143 (its
+// scroll bar 4144) and the goals list Scenario_data 4145 (bar 4146, not
+// selectable), measured against the original's Seasideville Zoo
+// ----------------------------------------------------------------------------
+void UiGameScreen::setupScenarioPage() {
+  for (Entry &e : this->entries) {
+    if (e.panel && e.id == 803)
+      this->scenarioPanel = e.layout;
+    if (e.panel && e.id == 45400)
+      this->objectivePanel = e.layout;
+  }
+  if (this->objectivePanel)
+    if (UiButton *bar = dynamic_cast<UiButton *>(this->objectivePanel->getElementById(45406)))
+      bar->onClick = [this] { this->clickObjective(); };
+  UiLayout *s = this->scenarioPanel;
+  if (!s)
+    return;
+  // (a zoo loaded empties the goals list, 0x4c740a: ours fills it as the
+  // page opens)
+  // The story scrolls by the layout's own bar; each goal's row wraps beside
+  // its icon (miniconwidth, miniconheight 32)
+  if (UiText *story = dynamic_cast<UiText *>(s->getElementById(4143)))
+    if (UiScrollBar *bar = dynamic_cast<UiScrollBar *>(s->getElementById(4144)))
+      story->linkScrollBar(bar);
+  if (UiListBox *list = dynamic_cast<UiListBox *>(s->getElementById(4145)))
+    list->setWrapped(true);
+}
+
+void UiGameScreen::setObjective(const std::string &text) {
+  this->objective = text;
+  if (this->objectivePanel)
+    if (UiButton *bar = dynamic_cast<UiButton *>(this->objectivePanel->getElementById(45406)))
+      bar->setLabel(text);
+  this->setPanelOpen(45400, !text.empty());
+}
+
+// objectve_Message_click 0x4a09f8
+void UiGameScreen::clickObjective() {
+  if (this->onObjectiveClick)
+    this->onObjectiveClick();
+}
+
+// zoo.exe 0x4f004a: the name (0x4fc83c) and the story (0x4f0497 through
+// 0x4f0264) set, list 4145 cleared and each goal's line added (0x4f042c)
+void UiGameScreen::refreshScenarioPage() {
+  UiLayout *s = this->scenarioPanel;
+  if (!s || !this->scenarioPage)
+    return;
+  const ScenarioPage page = this->scenarioPage();
+  if (UiText *name = dynamic_cast<UiText *>(s->getElementById(4142)))
+    name->setText(page.name);
+  if (UiText *story = dynamic_cast<UiText *>(s->getElementById(4143)))
+    story->setText(page.story);
+  if (UiListBox *list = dynamic_cast<UiListBox *>(s->getElementById(4145))) {
+    list->clear();
+    for (const auto &line : page.lines)
+      list->addItem(line.first, "", line.second);
+  }
 }
 
 void UiGameScreen::setupZooStatus() {
@@ -1693,6 +1796,7 @@ void UiGameScreen::zooStatusTick(uint64_t nowMs, bool paused) {
     return;
   this->zooStatusDue = nowMs + Original::zooStatusRefreshMs;
   this->refreshZooStatus();
+  this->refreshScenarioPage();
 }
 
 // zoo.exe 0x41739a: 0x639145 set, then 0x401644(0) - redone at once, and
@@ -1701,6 +1805,7 @@ void UiGameScreen::forceZooStatus() {
   if (!this->isPanelOpen(14))
     return;
   this->refreshZooStatus();
+  this->refreshScenarioPage();
   this->zooStatusDue = 0;
 }
 
@@ -1871,12 +1976,22 @@ void UiGameScreen::refreshZooStatus() {
       if (UiButton *bar = dynamic_cast<UiButton *>(z->getElementById(g[2])))
         graph->setBars(bar->isToggledOn());
 
-  // Commerce list: the chosen sort's header is gold
+  // Commerce list: the chosen sort's header is gold. A click on the header
+  // already chosen turns that column round (zoo.exe buttons104f_click
+  // 0x4f09ad, for 0x104f - 0x1053: the column kept in 0x63bbbc, its flag
+  // [0x63bbc4 + column] flipped when it's the same one, the list sorted
+  // again, 0x4f0979; Zoo Status shown, 0x32a_show 0x5314cc, sorts without
+  // the flip); every number column starts biggest first (the flags clear)
   for (int i = 0; i < 5; i++) {
     UiText *label = dynamic_cast<UiText *>(z->getElementById(4184 + i));
     UiButton *sort = dynamic_cast<UiButton *>(z->getElementById(4175 + i));
     if (!label || !sort)
       continue;
+    sort->onClick = [this, i] {
+      if (this->commerceColumn == i)
+        this->commerceUp[i] = !this->commerceUp[i];
+      this->commerceColumn = i;
+    };
     if (sort->isToggledOn())
       label->setTextColor(SDL_Color{255, 219, 90, 255});
     else
@@ -1916,12 +2031,7 @@ void UiGameScreen::refreshZooStatus() {
   // unless it's the one selected already, the view to its tile, 0x4017e5,
   // selectAndShowInfo 0x59b90c, and selected, 0x4ef75b(it, 1))
   if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(4172))) {
-    struct Row {
-      int id;
-      std::string name, type;
-      int months, visitors;
-      double profit, average;
-    };
+    using Row = CommerceRow;
     std::vector<Row> rows;
     if (this->objects)
       for (const PlacedObjects::Object &o : this->objects->objects()) {
@@ -1936,14 +2046,9 @@ void UiGameScreen::refreshZooStatus() {
       if (UiButton *b = dynamic_cast<UiButton *>(z->getElementById(4175 + i)))
         if (b->isToggledOn())
           sortBy = i;
-    std::stable_sort(rows.begin(), rows.end(), [sortBy](const Row &a, const Row &b) {
-      switch (sortBy) {
-      case 1: return a.months > b.months;
-      case 2: return a.visitors > b.visitors;
-      case 3: return a.profit > b.profit;
-      case 4: return a.average > b.average;
-      default: return a.type != b.type ? a.type < b.type : a.name < b.name;
-      }
+    this->commerceColumn = sortBy;
+    std::stable_sort(rows.begin(), rows.end(), [this, sortBy](const Row &a, const Row &b) {
+      return commerceFirst(a, b, sortBy, this->commerceUp[sortBy]);
     });
     auto cents = [](double v) {
       char b[32];
@@ -2097,7 +2202,9 @@ void UiGameScreen::setupGameOptions() {
     this->tooltipDurationMs = static_cast<Uint32>(v * 100 + 500);
     Settings::setInt("UI", "tooltipDuration", static_cast<int>(this->tooltipDurationMs));
   });
-  // Short or long tooltips ([UI] helpType: 0 short, else long). ours: kept;
+  // Short or long tooltips ([UI] helpType: 0 short, else long: zoo.exe
+  // gameopt3_ToolTipShort_click 0x48aece writes 0, gameopt3_ToolTipLong_click
+  // 0x606822 writes 1). ours: kept;
   // the long ones' width isn't read yet, so both show the same
   int helpType = Settings::getInt("UI", "helpType", 0);
   for (int id : {1520, 1521})
@@ -2270,6 +2377,10 @@ void UiGameScreen::setPanelOpen(int id, bool open) {
         p.category.clear();
         this->refreshBuyPanel(p);
       }
+  // The scenario page opening fills itself (zooinfo4_Panel_show 0x4efdf6:
+  // 0x4f004a)
+  if (id == 803 && open && !this->isPanelOpen(803))
+    this->refreshScenarioPage();
   for (Entry &e : this->entries)
     if (e.panel && e.id == id) {
       if (open && !e.open)
@@ -2909,6 +3020,7 @@ void UiGameScreen::drawDateTime(SDL_Renderer *renderer) {
 }
 
 void UiGameScreen::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
+  this->wrapHelp(renderer);
   // The gate button, live: enabled the moment there's an exhibit (the first
   // one finished with the panel open left it greyed until it was opened
   // again)
@@ -3205,8 +3317,13 @@ void UiGameScreen::showMessage(const std::string &text, SDL_Color color, Uint32 
 
 // The bar's art is drawn with the screen (shown while there's a message);
 // the message goes on it, centred (gamescrn.lyt: font 7002, size 7003)
+// measured: opening the Message List sets the bar's +0x450 to 1 and closing
+// it clears it (zoo.exe 0x4a03b4, 0x4a03fb); with it set the bar's draw
+// (slot 0x2c, 0x4197fc) does nothing when +0x458 is set (never written for
+// this class - stale heap, non-zero in the runs measured), so the bar isn't
+// drawn while the list is open (the list shows it instead)
 void UiGameScreen::drawMessage(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
-  if (!this->messageBar || this->isPanelOpen(29)) // (the list shows it instead)
+  if (!this->messageBar || this->messageBarHeld())
     return;
   std::string text;
   SDL_Color color = {255, 255, 255, 255};
@@ -3460,6 +3577,7 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
   this->refreshAnimal();
   this->refreshGuest();
   this->refreshBuilding();
+  this->refreshHelp();
   this->refreshLists();
 
   if (isPanelToggle(action)) {
@@ -3950,9 +4068,11 @@ void UiGameScreen::setupExhibits() {
   if (UiText *name = dynamic_cast<UiText *>(z->getElementById(4304)))
     name->onCommit = [this](const std::string &typed) {
       // (zoo.exe mulhab_HabitatName_click 0x6107ef -> 0x5aedbd: kept only
-      // with something to see in it. Its name cheats are #235's)
+      // with something to see in it; its name cheats, 0x5aee66, run first)
       if (!this->fences || !Original::nameTaken(typed))
         return;
+      if (this->exhibitRenamed)
+        this->exhibitRenamed(typed);
       if (Fences::Exhibit *ex = this->fences->exhibit(this->shownExhibit))
         ex->name = typed;
       this->shownListCount = -1; // relist
@@ -5074,6 +5194,157 @@ void UiGameScreen::setAnimals(Animals *animals, std::function<void(AnimalRequest
   this->animalRequest = request;
 }
 
+// The Help window (zoo.exe help_Panel_show 0x484a6b, help_TopicList_click
+// 0x48482b, help_Panel_hide 0x484bc1, openHelp 0x484a32): the topics of
+// help.cfg's [Topics], each section's title (a string number) in the list and
+// its text (a lang0.dll TEXT name, HELP_...) in the window when it's picked,
+// the title above it; the first topic, About, has its Version and product
+// number put in (the text's two %s). Opened by F1 (zoo.exe gameKeys
+// 0x4cb340: openHelp(-1), the topic it was left on, the first at the start)
+// and Game Options' About tab (gameopts_AboutTab_click 0x484b9a: topic 0 -
+// ours: that tab's place holds the Extras page, so F1 only); the game waits
+// while it's open (0x484a8e: the paused flag set, put back on closing)
+void UiGameScreen::setupHelp() {
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 38)
+      this->helpPanel = e.layout;
+  UiLayout *z = this->helpPanel;
+  if (!z)
+    return;
+  IniReader *cfg = this->resource_manager->getIniReader("help.cfg");
+  if (!cfg)
+    return;
+  auto trim = [](std::string s) {
+    const char *space = " \t\r\n";
+    s.erase(0, s.find_first_not_of(space));
+    s.erase(s.find_last_not_of(space) + 1);
+    return s;
+  };
+  UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(28003));
+  for (const std::string &name : cfg->getList("topics", "topic")) {
+    const int title = cfg->getInt(name, "title", 0);
+    if (!title)
+      continue;
+    HelpTopic t;
+    t.title = this->resource_manager->getString(title);
+    t.text = trim(cfg->get(name, "text"));
+    this->helpTopics.push_back(t);
+    if (list)
+      list->addItem(t.title);
+  }
+  delete cfg;
+}
+
+void UiGameScreen::openHelp(int topic) {
+  if (!this->helpPanel || this->helpTopics.empty())
+    return;
+  this->setPanelOpen(38, true);
+  this->helpShown = -1;
+  this->showHelpTopic(topic >= 0 ? topic : this->helpLast);
+}
+
+// (the help texts are Windows-1252; the font takes UTF-8)
+static std::string windows1252ToUtf8(const std::string &in) {
+  static const unsigned short high[32] = {0x20AC, 0x81,   0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+                                          0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D,   0x017D, 0x8F,
+                                          0x90,   0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+                                          0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D,   0x017E, 0x0178};
+  std::string out;
+  for (unsigned char c : in) {
+    unsigned cp = c < 0x80 || c >= 0xA0 ? c : high[c - 0x80];
+    if (cp < 0x80) {
+      out += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+      out += static_cast<char>(0xC0 | (cp >> 6));
+      out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+      out += static_cast<char>(0xE0 | (cp >> 12));
+      out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+      out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+  }
+  return out;
+}
+
+void UiGameScreen::showHelpTopic(int row) {
+  UiLayout *z = this->helpPanel;
+  if (!z || row < 0 || row >= (int)this->helpTopics.size())
+    return;
+  this->helpShown = this->helpLast = row;
+  const HelpTopic &t = this->helpTopics[row];
+  std::string text = langText(t.text);
+  if (row == 0) {
+    // (About: sprintf(text, Version, product number))
+    for (const std::string &fill : {this->helpVersion, this->helpProductId})
+      if (size_t at = text.find("%s"); at != std::string::npos)
+        text.replace(at, 2, fill);
+  }
+  if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(28003)))
+    if (list->getSelectedIndex() != row)
+      list->setSelectedIndex(row);
+  if (UiText *title = dynamic_cast<UiText *>(z->getElementById(28002)))
+    title->setText(t.title);
+  if (UiText *body = dynamic_cast<UiText *>(z->getElementById(28005)))
+    this->helpRaw = windows1252ToUtf8(text);
+  // (wrapped to the box when it's next drawn, wrapHelp)
+  this->helpWrapPending = true;
+}
+
+// ours: a text box with lines of its own scrolls them without wrapping, so the
+// topic's paragraphs are broken at word breaks to the box's width (292, less
+// its scroll bar), each line measured in the box's own font (help.lyt MainText
+// font 25003, size 25004)
+void UiGameScreen::wrapHelp(SDL_Renderer *renderer) {
+  if (!this->helpWrapPending || !this->helpPanel)
+    return;
+  UiText *body = dynamic_cast<UiText *>(this->helpPanel->getElementById(28005));
+  if (!body)
+    return;
+  this->helpWrapPending = false;
+  const int room = 272;
+  auto width = [&](const std::string &s) {
+    int w = 0, h = 0;
+    if (SDL_Texture *t = this->resource_manager->getStringTexture(renderer, 25003, s, SDL_Color{255, 255, 255, 255}, 25004))
+      this->resource_manager->getTextSize(t, &w, &h);
+    return w;
+  };
+  std::string out;
+  std::istringstream paragraphs(this->helpRaw);
+  std::string paragraph;
+  while (std::getline(paragraphs, paragraph)) {
+    std::istringstream words(paragraph);
+    std::string word, line;
+    while (words >> word) {
+      const std::string candidate = line.empty() ? word : line + " " + word;
+      if (!line.empty() && width(candidate) > room) {
+        out += line + "\n";
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    out += line + "\n";
+  }
+  body->setText(out);
+}
+
+// A topic picked in the list shows (the list's click handler)
+void UiGameScreen::refreshHelp() {
+  if (!this->helpPanel || !this->isPanelOpen(38)) {
+    this->helpShown = -1;
+    return;
+  }
+  if (UiListBox *list = dynamic_cast<UiListBox *>(this->helpPanel->getElementById(28003))) {
+    const int row = list->getSelectedIndex();
+    if (row >= 0 && row != this->helpShown)
+      this->showHelpTopic(row);
+  }
+}
+
+std::string UiGameScreen::helpTopicText() const {
+  return this->helpRaw;
+}
+
 void UiGameScreen::setupAnimalPanel() {
   for (Entry &e : this->entries)
     if (e.panel && e.id == 6)
@@ -5387,6 +5658,9 @@ void UiGameScreen::refreshColours(UiLayout *z, PlacedObjects::Object *o, bool co
   }
 }
 
+// zoo.exe infocom_CloseWindow_click 0x4881c7 and infoncom_CloseWindow_click
+// 0x617efb (the close button of panel 21, 20: uiFind 0x15, 0x14, hidden, and
+// nothing is selected, 0x4ef75b with none)
 // zoo.exe buildingInfo_Panel_hide 0x4881a9 (infocom's and infoncom's):
 // shut, the paint tab goes with it (uiFind 0x12e, slot 0x48), and so the
 // colour picker (infocomC_Panel_hide 0x488291: uiFind 0x25, slot 0x48)
@@ -5713,6 +5987,10 @@ void UiGameScreen::refreshAnimal() {
       e->setValue(static_cast<int>(std::lround(v)));
   };
   text(3102, m->name);
+  // (zoo.exe infoanm_Panel_show 0x4ee665, an animal picked: its picture and
+  // name, 0xc2a and 0xc1e, the bars refreshed, 0x4673b5, the plaque's
+  // picture by its habitat's kind - 0x251c, 0x254f, 0x2550: 0, 1, 2 - and
+  // the tab it was left on, the layout's first after a zoo starts, 0x63e418)
   // Its carer's (cKeeper - zoo.exe 0x4831b2): the plaque's picture and help
   // (Zookeeper, Scientist or Marine Specialist Recommendations), the
   // hunger and suitability icons' help

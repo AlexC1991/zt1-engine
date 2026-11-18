@@ -121,6 +121,7 @@ void UiText::setText(const std::string& newText) {
     // 55 chars fits the box well
     this->cached_lines = splitToLines(newText, 55); 
     setScroll(this, 0); 
+    this->rowScroll = 0;
   }
 }
 
@@ -172,6 +173,15 @@ UiAction UiText::handleInputs(std::vector<Input> &inputs) {
     }
     return UiAction::NONE;
   }
+  if (this->linked) {
+    for (const auto &input : inputs)
+      if (input.event == InputEvent::SCROLL_UP || input.event == InputEvent::SCROLL_DOWN) {
+        SDL_Point p = {input.x, input.y};
+        if (SDL_PointInRect(&p, &this->last_rect))
+          this->setScrollPosition(this->rowScroll + (input.event == InputEvent::SCROLL_UP ? -1 : 1));
+      }
+    return UiAction::NONE;
+  }
   if (cached_lines.size() <= 1) return UiAction::NONE; // Don't scroll single lines
 
   // [FIX] Add +15 pixels buffer to account for padding
@@ -221,7 +231,7 @@ void UiText::draw(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
 
 void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
   this->ink = {0, 0, 0, 0};
-  if (this->cached_lines.empty()) return;
+  if (this->cached_lines.empty() && !this->linked) return;
 
   // 1. Calculate Container
   dest_rect = this->getRect(this->ini_reader->getSection(this->name), layout_rect);
@@ -277,6 +287,10 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
     this->last_rect.h = resource_manager->getFontLineHeight(
         font, ini_reader->getInt(name, "fontsize", 0));
 
+  if (this->linked) {
+    this->drawRows(renderer);
+    return;
+  }
   bool is_multiline = (this->cached_lines.size() > 1);
 
   // One line of text wider than its box wraps at word breaks to the box's
@@ -442,6 +456,54 @@ void UiText::drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect) {
       SDL_SetRenderDrawColor(renderer, 181, 159, 109, 255); 
       SDL_Rect thumb = {bar_x + 1, thumb_y, bar_w - 2, thumb_h};
       ZT_RenderFillRect(renderer, &thumb);
+  }
+}
+
+// ours: a linked box (linkScrollBar): its rows from the scrolled one on
+void UiText::drawRows(SDL_Renderer *renderer) {
+  const int fontSize = ini_reader->getInt(name, "fontsize", 0);
+  const int rowH = resource_manager->getFontLineHeight(font, fontSize) + 1;
+  if (this->rowsText != this->text_string || this->rowsWidth != dest_rect.w) {
+    this->rowsText = this->text_string;
+    this->rowsWidth = dest_rect.w;
+    this->rows.clear();
+    auto width = [&](const std::string &s) {
+      SDL_Texture *t = resource_manager->getStringTexture(renderer, font, s, SDL_Color{255, 255, 255, 255}, fontSize);
+      int w = 0, h = 0;
+      if (t)
+        resource_manager->getTextSize(t, &w, &h);
+      return w;
+    };
+    std::istringstream paragraphs(this->text_string);
+    std::string paragraph;
+    while (std::getline(paragraphs, paragraph)) {
+      std::istringstream words(paragraph);
+      std::string word, current;
+      while (words >> word) {
+        const std::string candidate = current.empty() ? word : current + " " + word;
+        if (!current.empty() && width(candidate) > dest_rect.w - 4) {
+          this->rows.push_back(current);
+          current = word;
+        } else
+          current = candidate;
+      }
+      this->rows.push_back(current);
+    }
+  }
+  this->viewRows = std::max(1, dest_rect.h / rowH);
+  this->rowScroll = std::clamp(this->rowScroll, 0, this->getScrollMaximum());
+  SDL_Color color = this->has_color_override ? this->color_override : this->layoutColor();
+  for (int i = this->rowScroll; i < static_cast<int>(this->rows.size()) && i - this->rowScroll < this->viewRows; i++) {
+    if (this->rows[i].empty())
+      continue;
+    SDL_Texture *t = resource_manager->getStringTexture(renderer, font, this->rows[i], color, fontSize);
+    if (!t || !RenderSettings::drawsUiText())
+      continue;
+    int w = 0, h = 0;
+    resource_manager->getTextSize(t, &w, &h);
+    SDL_Rect dst = {dest_rect.x + 2, dest_rect.y + (i - this->rowScroll) * rowH, w, h};
+    this->addInk(dst);
+    ZT_RenderCopy(renderer, t, NULL, &dst);
   }
 }
 

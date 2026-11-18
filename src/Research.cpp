@@ -152,7 +152,15 @@ Research::Tick Research::advance(float seconds, const std::function<bool(int bra
       // (nothing being researched: nothing paid - zoo.exe 0x41f1ba skips the
       // branch with no program)
       ResearchProgram *p = this->current(b);
-      if (!p || f.work <= 0)
+      // (no program, or its category unchecked: nothing paid, and the branch
+      // picks again at once - zoo.exe 0x41f1ba tests the category's +0x34
+      // and runs 0x5b09f6 either way, so unchecking the category being
+      // researched moves research at the next tick, not at the click)
+      if (!p || b.currentCategory >= (int)b.enabled.size() || !b.enabled[b.currentCategory]) {
+        this->pick(b);
+        continue;
+      }
+      if (f.work <= 0)
         continue;
       // (the tick's share of a month's cost, if the zoo has it - spendCash
       // only when it's no more than the cash: none paid, no progress)
@@ -184,22 +192,41 @@ ResearchProgram *Research::nextIn(ResearchCategory &category) {
   return nullptr;
 }
 
+// zoo.exe 0x5b09f6 (the branch's pick, run by the tick 0x41f1ba): clears the
+// branch's category and program, then goes through the checked categories
+// (+0x34) in order: a program already begun (progress above 0, under its
+// cost) is taken at once; otherwise the lowest order among every checked
+// category's unfinished programs is found, and one of the programs with that
+// order is chosen at random (the original's rand()).
+// ours: a program that can't be researched yet (canResearch) is left out
 void Research::pick(ResearchBranch &branch) {
   branch.currentCategory = branch.currentProgram = -1;
-  // Any program of a checked category that can be researched now (each
-  // category's lowest order), at random
+  int lowest = -1;
+  for (int c = 0; c < (int)branch.categories.size(); c++) {
+    if (c < (int)branch.enabled.size() && !branch.enabled[c])
+      continue;
+    ResearchCategory &category = branch.categories[c];
+    for (int i = 0; i < (int)category.programs.size(); i++) {
+      const ResearchProgram &p = category.programs[i];
+      if (p.done || p.progress >= p.cost || p.cost <= 0 || !this->canResearch(p))
+        continue;
+      if (p.progress > 0) {
+        branch.currentCategory = c;
+        branch.currentProgram = i;
+        return;
+      }
+      if (lowest < 0 || p.order < lowest)
+        lowest = p.order;
+    }
+  }
   std::vector<std::pair<int, int>> candidates;
   for (int c = 0; c < (int)branch.categories.size(); c++) {
     if (c < (int)branch.enabled.size() && !branch.enabled[c])
       continue;
     ResearchCategory &category = branch.categories[c];
-    int lowest = -1;
-    for (const ResearchProgram &p : category.programs)
-      if (!p.done && this->canResearch(p) && (lowest < 0 || p.order < lowest))
-        lowest = p.order;
     for (int i = 0; i < (int)category.programs.size(); i++) {
       const ResearchProgram &p = category.programs[i];
-      if (!p.done && p.order == lowest && this->canResearch(p))
+      if (!p.done && p.progress < p.cost && p.cost > 0 && this->canResearch(p) && p.order <= lowest)
         candidates.push_back({c, i});
     }
   }

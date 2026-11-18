@@ -894,9 +894,10 @@ bool SaveGame::loadOriginalWorld(World &world) {
     if(!program)continue;
     for(const auto &type:an.typeList)if(stockSpecies[&type-an.typeList.data()]>0&&stockSpecies[&type-an.typeList.data()]==program->species) {
       show->species=type.file;show->script.clear();
+      // (the treat entries are put in again by Shows::resolved)
       for(const auto &saved:program->tricks)
         for(const auto &trick:world.shows.tricks(type.file))if(trick.id==saved.id) {
-          show->script.push_back(trick.key);break;
+          if(trick.kind!=3)show->script.push_back(trick.key);break;
         }
       show->frequency=-1;
       if(hab.showInterval>0) {
@@ -1378,10 +1379,12 @@ std::string SaveGame::checkOriginalImport(World &world) {
           if(hab)for(const auto &a:hab->showAssignments)if(a.species==uint32_t(species))
             for(const auto &p:originalDecoded.getShowPrograms())if(p.id==a.program)program=&p;
           const bool compatible=originalShowScript(world.resourceManager,world.shows,show);
+          // (the saved program lists the treat entries too, #301)
+          const auto played=world.shows.resolved(const_cast<Shows::Show &>(show));
           showPrograms=showPrograms&&hab&&hab->show&&
-            (compatible?(program&&program->tricks.size()==show.script.size()):!program);
-          if(program)for(size_t k=0;k<show.script.size()&&k<program->tricks.size();++k) {
-            const auto *trick=world.shows.find(show.species,show.script[k]);
+            (compatible?(program&&program->tricks.size()==played.size()):!program);
+          if(program)for(size_t k=0;k<played.size()&&k<program->tricks.size();++k) {
+            const auto *trick=&played[k];
             showPrograms=showPrograms&&trick&&program->tricks[k].id==trick->id&&
               program->tricks[k].raw.size()>1&&program->tricks[k].raw[1]==uint8_t(trick->visible);
           }
@@ -3051,10 +3054,16 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
     }
     // The second saved byte is visibility, not the native trick type.
     out.raw(uint8_t(trick.available));out.raw(uint8_t(trick.visible));out.raw(uint16_t(trick.id));
-    out.raw(int32_t(species));out.raw(int32_t(trick.building));
+    // zoo.exe 0x5a66c0: the record's +0xc is the trick's kind (0 plain, 1 with an item, 3 treat:
+    // which of the unit's slots 0x20c, 0x204, 0x208 plays it), the item's building +0x40 (passed
+    // to slot 0x204), +0x58 its minimumdepth; the original's own saves hold the working score
+    // (the satisfaction) in +0x54 (measured: lab-show-zoo, finswim 2,1,2,2 and spit 4,2,4,2).
+    // Written with the building in +0xc and the depth in +0x54 the original played a treat as a
+    // plain trick (#301)
+    out.raw(int32_t(species));out.raw(int32_t(trick.kind));
     out.str(behavior);out.str("");out.str(pre);out.str(post);
-    out.raw(uint32_t(0));out.raw(int32_t(trick.complexity));out.raw(uint8_t(0));
-    out.raw(int32_t(trick.satisfaction));out.raw(int32_t(trick.delta));out.raw(int32_t(trick.depth));out.raw(uint32_t(0));
+    out.raw(int32_t(trick.building));out.raw(int32_t(trick.complexity));out.raw(uint8_t(0));
+    out.raw(int32_t(trick.satisfaction));out.raw(int32_t(trick.delta));out.raw(int32_t(trick.satisfaction));out.raw(int32_t(trick.depth));
     if(z.version>=103){out.raw(int32_t(normalHelp));out.raw(int32_t(grayHelp));out.str(icon);out.str(gray);}
   };
   const auto originalHabitats=z.habitats;z.habitats.clear();
@@ -3098,17 +3107,26 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
         if(++programId>=0xffff){error="Too many original show programs.";return false;}
         script=uint16_t(programId);Out program;
         program.raw(script);program.raw(int32_t(-1));program.raw(int32_t(species));
-        program.raw(uint32_t(show->script.size()));
-        for(const auto &key:show->script) {
-          const auto *trick=world.shows.find(file,key);
-          if(!trick){error="A saved show trick has no installed definition.";return false;}
-          encodeTrick(program,*trick,file,species);
-        }
+        for(const auto &key:show->script)if(!world.shows.find(file,key)){error="A saved show trick has no installed definition.";return false;}
+        // zoo.exe 0x47594f (the Add button, 0x475fc7): the treat tricks are entries of the
+        // script itself, put in as the tricks' complexity adds up to the threshold - the
+        // original plays what the saved program lists, so they are written as entries
+        // (ours keeps them out of the script and puts them in when it plays it, #301)
+        const auto played=world.shows.resolved(const_cast<Shows::Show &>(*show));
+        program.raw(uint32_t(played.size()));
+        for(const auto &trick:played)encodeTrick(program,trick,file,species);
         programs.emplace_back(program.b.begin(),program.b.end());
       }
       if(++showId>=0xffff){error="Too many original shows.";return false;}
       const int interval=show&&show->frequency>=0?world.shows.settings.interval[std::clamp(show->frequency,0,2)]:0;
-      Out record;record.raw(int32_t(interval));record.raw(uint32_t(0));
+      // zoo.exe 0x4f2947: a show's next start (+0x6c) is the AI clock's tick count (+0xec,
+      // the clocks 0x594450, kept from the file) plus its interval (+0x68, seconds), -1 and -1
+      // when it is never held; the original starts the show when the clock reaches it. Written
+      // as interval*1000 the first show came 18 hours on and never started (#304)
+      const bool never=show&&show->frequency<0;
+      const double wait=show&&show->phase==Shows::Phase::Waiting?std::max(0.0,double(interval)-double(show->clock)):double(interval);
+      const uint32_t nextStart=never?0xffffffffu:z.aiTicks+uint32_t(std::ceil(wait));
+      Out record;record.raw(int32_t(never?-1:interval));record.raw(uint32_t(0));
       record.raw(uint32_t(species?1:0));if(species)record.raw(int32_t(species));
       record.raw(uint32_t(species?1:0));
       if(species) {
@@ -3116,7 +3134,7 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
         record.raw(float(show?show->admission:world.shows.settings.admission));
         for(int k=0;k<6;++k)record.raw(uint32_t(0));record.raw(dateTime(0));
       }
-      if(z.version>=97){record.raw(uint32_t(0));record.raw(uint32_t(interval*1000));record.raw(uint16_t(showId));}
+      if(z.version>=97){record.raw(uint32_t(0));record.raw(nextStart);record.raw(uint16_t(showId));}
       if(z.version>=105)for(int k=0;k<3;++k)record.raw(uint32_t(0));
       if(z.version>=106)for(int k=0;k<6;++k)record.raw(uint32_t(0));
       if(z.version>=97) {

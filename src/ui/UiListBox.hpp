@@ -125,6 +125,7 @@ private:
     bool centered = false; // justify=center (the content filter's list)
     bool toggle_select = false;
     bool wrapped = false;
+    int minicon_height = 0; // (miniconheight=: a wrapped row with an icon is at least that tall)
     int spacing = 0;
     int minicon_width = 0;
     std::vector<int> columns; // column= (the first is the icon's)

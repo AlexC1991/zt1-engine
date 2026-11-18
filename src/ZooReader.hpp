@@ -157,6 +157,7 @@ public:
     uint64_t built = 0, viewed = 0;
     uint32_t service = 0;
     int showInterval = 65;
+    uint32_t showNext = 0; // the show's next start on the AI clock (+0x6c, 0x4f2947), -1 when never held
     uint16_t showId = 0;
     std::vector<uint32_t> showSpecies;
     struct ShowAssignment { uint32_t species = 0; uint16_t program = 0; float admission = 5.5f; };
@@ -193,6 +194,7 @@ public:
   // the milliseconds over, then +0x204 the whole seconds - the flyers'
   // spawn clock, 0x435921); -1 when the file has none
   double getWorldClock() const { return worldClock; }
+  uint32_t getAiTicks() const { return aiTicks; } // (the zoo's AI clock ticks, 0x594450)
   // ZTThoughtMgr records (0x594e63): text id, speaker/subject unit ids,
   // and an optional habitat tile x/y. The last two are not dates.
   struct Thought {
@@ -248,6 +250,7 @@ private:
   std::vector<int> awards;
   int marketing = 0;
   double worldClock = -1; // (writeOriginal writes it when 0 or more)
+  uint32_t aiTicks = 0; // (the zoo's AI clock, in seconds: +0xec of the zoo time, clocksAndEventsLoad 0x594450; a show's next start is counted on it)
   // A guest's path cost as writeOriginal writes it: ztunit.ai's cNonPathCost
   // (SaveGame sets it; 1, the constructor's 0x4f578d, until then)
   int32_t guestPathCost = 1;

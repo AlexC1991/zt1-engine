@@ -1,6 +1,7 @@
 #include "World.hpp"
 #include "Shows.hpp"
 #include "SaveGame.hpp"
+#include "ZooReader.hpp"
 #include "ZooSim.hpp"
 #include "ui/UiGameScreen.hpp"
 #include "ui/UiListBox.hpp"
@@ -46,10 +47,10 @@ std::string buildShowZoo(World &world,ZooSim &sim,UiGameScreen &hud,const std::s
   if(one<0||two<0)return "no orcas";
   for(int k=0;k<40;++k)world.update(SDL_GetKeyboardState(nullptr),0.05f);
   if(!shows.selectSpecies(tank,"animals/orca.ai"))return "species refused";
-  for(const char *t:{"finswim","spit","finswim","spit","finswim","spit"})shows.add(tank,t);
+  for(const char *t:{"finswim","spit","finswim","spit","finswim","spit","finswim","spit"})shows.add(tank,t);
   const int specialist=st.hire(st.typeOfFile("staff/trainer.ai"),54.5f,24.5f,map,f);
   if(specialist<0)return "no specialist hired";
-  if(const int refused=st.assign(specialist,home,f);refused!=0)return "specialist not assigned: "+std::to_string(refused);
+  if(const int refused=st.assign(specialist,tank,f);refused!=0)return "specialist not assigned: "+std::to_string(refused);
   shows.setFrequency(tank,0);
   for(int i=0;i<6;i++)gs.admit(i%4);
   world.reindex();
@@ -496,7 +497,7 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
     const int before=s->completed;
     const bool started=selected&&first>=0&&second>=0&&shows.start(tank,why);
     check("a show with enough tricks for a treat starts",started);
-    std::map<int,bool> going;int trips=0,byTheSpecialist=0,wentOff=0;float farthest=0;
+    std::map<int,bool> going;int trips=0,byTheSpecialist=0,wentOff=0;float farthest=0;std::set<std::pair<int,int>> tiles;std::pair<int,int> spec{-1,-1};
     if(started)for(int i=0;i<1600;i++) {
       run(0.25f);
       if(const auto *sh=shows.show(tank))
@@ -509,16 +510,51 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
               farthest=std::max(farthest,far);
               byTheSpecialist+=far<=2.0f;
             }
-            if(!going[ac.id] && ac.food)++wentOff;
+            if(!going[ac.id] && ac.food){++wentOff;tiles.insert({int(std::floor(ac.foodX)),int(std::floor(ac.foodY))});spec={int(std::floor(tr->inX)),int(std::floor(tr->inY))};}
             going[ac.id]=ac.food;
           }
       if(s->completed>before && s->phase==Shows::Phase::Waiting)break;
     }
+    report<<"Trick food tiles (specialist at "<<spec.first<<","<<spec.second<<"):";for(const auto &t:tiles)report<<" "<<t.first<<","<<t.second;report<<"\n";
     report<<"Trick food: "<<wentOff<<" set off, "<<trips<<" trips played, "<<byTheSpecialist<<" by the specialist, farthest "<<farthest<<" tiles\n";
+    // measured in the running original (the same fixture, specialist inside tile 51,33): 4 treat swims, all to 50,32,
+    // the one tile of the 3 x 3 with no tank wall on it (its step cost, 0x414b13)
+    check("the treat tile is the one of the 3 x 3 by the specialist with no wall on it, as the original's was (50,32)",
+          tiles.size()==1 && tiles.count({spec.first-1,spec.second-1})==1);
     check("a treat trick: the animal swims to a tile by the specialist first, then plays it (Task7d 0x5a25cd, 0x5a6cb2)",
           trips>0 && byTheSpecialist==trips);
     check("the show with treats completes and the orcas go home",s->completed==before+1 && s->phase==Shows::Phase::Waiting &&
           a.member(first) && a.member(second) && a.member(first)->exhibit==home && a.member(second)->exhibit==home);
+  }
+  // zoo.exe 0x4f2947 (#304): the shared save's show record holds the next start
+  // as the AI clock's ticks (kept from the file) plus the interval, not an
+  // interval in thousands - the original starts the show when its clock gets
+  // there - and -1 and -1 for a show never held
+  {
+    Goals *priorGoals=SaveGame::goals;SaveGame::goals=nullptr;
+    s->clock=10;
+    uint32_t next=0,nextNever=0,ticks=0;int interval=0,intervalNever=0,treats=0;size_t listed=0;bool read=false;
+    for(const int frequency:{0,-1}) {
+      shows.setFrequency(tank,frequency);
+      const auto file=std::filesystem::temp_directory_path()/("zt1-show-next-"+std::to_string(SDL_GetTicks())+".zoo");
+      if(SaveGame::save(file.string(),world,sim,hud,mapPath)) {
+        std::ifstream in(file,std::ios::binary);std::vector<char> bytes((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+        AssetBuffer buffer;buffer.data=bytes.data();buffer.size=bytes.size();ZooReader z;
+        if(z.load(buffer) && z.hasGame()) {
+          read=true;ticks=z.getAiTicks();
+          if(frequency==0)for(const auto &p:z.getShowPrograms())for(const auto &t:p.tricks){++listed;if(t.raw.size()>=12 && t.raw[8]==3)++treats;}
+          for(const auto &h:z.getHabitats())if(h.show){(frequency==0?next:nextNever)=h.showNext;(frequency==0?interval:intervalNever)=h.showInterval;}
+        }
+      }
+      std::error_code ec;std::filesystem::remove(file,ec);
+    }
+    shows.setFrequency(tank,0);SaveGame::goals=priorGoals;
+    report<<"Show record: interval "<<interval<<" next "<<next<<" clock "<<ticks<<" (never: "<<intervalNever<<", "<<int32_t(nextNever)<<")\n";
+    check("the saved show's next start is the AI clock plus the time still to wait (0x4f2947), 65 s minus the 10 s waited",
+          read && interval==shows.settings.interval[0] && next==ticks+uint32_t(shows.settings.interval[0]-10));
+    // zoo.exe 0x5a66c0 / 0x47594f: the saved program lists the treat tricks, each with its kind 3 in the record's +0xc
+    check("the saved program lists the treat entries (kind 3) among the script's tricks",read && treats>0 && listed==s->script.size()+size_t(treats));
+    check("a show never held is saved with interval -1 and next start -1 (0x4f2947)",read && intervalNever==-1 && nextNever==0xffffffffu);
   }
   for(const char *file:{"animals/dolphin.ai","animals/sealion.ai","animals/seaotter.ai","animals/gwshark.ai","animals/jellyfsh.ai"}) {
     while(shows.remove(tank,0)){}
@@ -609,9 +645,11 @@ std::string runShowStartChecks(World &world) {
   m->job=Staff::Job::None;m->workCheck=100000;m->idleLeft=100000;m->water=false;m->climbing=false;
   auto *s=shows.show(tank);if(!s)return out.str();
   shows.setFrequency(tank,0);s->clock=shows.settings.interval[0];
-  m->job=Staff::Job::Visit;shows.update(0.1f);
+  // zoo.exe 0x41680c: a show that wants a specialist takes it between two tanks' duties, never one at
+  // work in a tank (Staff::betweenDuties) - the busy one here is at its duties in the home tank
+  m->job=Staff::Job::Visit;m->tank=home;shows.update(0.1f);
   check("automatic start exposes busy specialist reason",s->phase==Shows::Phase::Waiting && s->status.find("busy")!=std::string::npos);
-  m->job=Staff::Job::None;m->path.clear();m->pathAt=0;
+  m->job=Staff::Job::None;m->tank=-1;m->path.clear();m->pathAt=0;
   const float disabledClock=s->clock;
   const bool disabled=shows.setFrequency(tank,-1);
   shows.update(200);
@@ -1016,10 +1054,22 @@ std::string runShowManagementChecks(World &world,ResourceManager *rm) {
     bool movedDive=false;
     for(const auto &[edge,piece]:f.pieces())if(piece.tank==tank && f.canGate(edge)){f.moveGate(edge);movedDive=true;break;}
     m->visit=m->tank=tank;m->job=Staff::Job::Visit;m->water=3;m->phase=24;
+    // (the bank by the tank's gate where it stands now: the diver comes out there - before the hop plans
+    // the next tank's gate, whose bank replaces its out tile)
+    float bankX=-1,bankY=-1;
+    for(const auto &[edge,piece]:f.pieces())if(piece.gate && f.exhibitOf(edge)==tank) {
+      const int ax=edge.alongX?edge.x:edge.x-1,ay=edge.alongX?edge.y-1:edge.y;
+      const bool aIn=f.exhibitAt(ax,ay)==tank;
+      if(f.exhibitAt(aIn?edge.x:ax,aIn?edge.y:ay)>=0)continue;
+      bankX=(aIn?edge.x:ax)+0.5f;bankY=(aIn?edge.y:ay)+0.5f;
+      break;
+    }
     st.visitStep(*m,map,f);
     check("a working diver safely leaves a relocated ladder before replanning",
-      movedDive && m->tank<0 && m->water==0 && m->job==Staff::Job::None &&
-      std::abs(m->x-m->outX)<0.01f && std::abs(m->y-m->outY)<0.01f);
+      // (its tank's duties over, it goes straight on to the next tank needing a visit - Task6e's atTarget
+      // 0x49ebe7 -> habitatNextNeedingVisit 0x49e8fa, #297 - or rests: job Visit for another tank)
+      movedDive && m->tank<0 && m->water==0 && (m->job==Staff::Job::None || (m->job==Staff::Job::Visit && m->visit!=tank)) &&
+      std::abs(m->x-bankX)<0.01f && std::abs(m->y-bankY)<0.01f);
     world.getItems().clear();const double cost=st.upkeep;
     m->visit=tank;m->job=Staff::Job::Visit;m->phase=2;m->dropX=47.5f;m->dropY=29.5f;
     st.visitStep(*m,map,f);

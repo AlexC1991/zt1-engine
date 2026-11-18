@@ -240,6 +240,17 @@ bool setup() {
 bool portable() { return g_portable; }
 std::string appDir() { return g_app; }
 std::string gameDir() { return g_game; }
+
+std::string productId() {
+#ifdef _WIN32
+  wchar_t buf[256] = {};
+  DWORD size = sizeof(buf);
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Microsoft Games\\Zoo Tycoon\\1.0", L"PID",
+                   RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY, nullptr, buf, &size) == ERROR_SUCCESS)
+    return fs::path(buf).string();
+#endif
+  return {};
+}
 std::string dataDir() { return g_data; }
 std::string configFile() {
   if (const char *session = std::getenv("ZT1_CONFIG_PATH"); session && *session) return session;

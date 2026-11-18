@@ -561,7 +561,7 @@ bool ZooReader::readExact(const uint8_t *data, size_t size) {
       }
       if (v >= 97) {
         r.skipList(20);
-        r.skip(4);b.showId=r.u16();
+        b.showNext=r.u32();b.showId=r.u16();
       }
       if (v >= 105)
         r.skip(12);
@@ -763,7 +763,7 @@ bool ZooReader::readExact(const uint8_t *data, size_t size) {
     thought.habitatX=r.i32();thought.habitatY=r.i32();thoughts.push_back(thought);
   }
   archive.thoughtsEnd=size_t(r.p-data);
-  r.skip(8);      // (the AI clock)
+  r.skip(4);aiTicks=r.u32(); // (the AI clock: +0xe8 its milliseconds over, +0xec its ticks, 0x594450)
   if (!r.ok)
     return failLate("the thoughts");
   archive.eventsBegin = size_t(r.p - data);
@@ -1240,7 +1240,7 @@ bool ZooReader::load(const AssetBuffer &buffer) {
   why.clear();
   language = nextUnitId = rating = 0;
   cash = 0;
-  research.clear(); thoughts.clear(); awards.clear(); marketing = 0; usedNames.clear(); worldClock = -1; books = {};
+  research.clear(); thoughts.clear(); awards.clear(); marketing = 0; usedNames.clear(); worldClock = -1; aiTicks = 0; books = {};
   admission = 49.0f;
   std::fill(std::begin(date), std::end(date), 0);
   std::fill(std::begin(view), std::end(view), 0);

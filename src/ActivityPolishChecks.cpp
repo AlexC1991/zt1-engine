@@ -2717,6 +2717,32 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     g.list[0].guide=guide;leader->followers={g.list[0].id};st.fire(guide);
     check("removing guide releases its group",g.list[0].guide<0);
     type=originalType;
+    // A guide keeps looking for followers along its walk and in its talk
+    // (#305, ZTTourGuide::tick 0x58d043: task 0x76 only while its +0x20c is
+    // set, task 0x77 always; measured 2026-11-18 on the tour zoo, both
+    // guides: +0x20c 1 and +0x2a0 1 along the walk from the trip's start, +0x20c
+    // 0 while talking - halted in bSpeak - and +0x2a0 still 1)
+    {
+      const int g2=st.hire(guideType,25.5f,30.5f,map,f);
+      auto *l2=st.member(g2);
+      check("a second tour guide hired",l2!=nullptr);
+      if(l2) {
+        auto &ty=st.typeList[guideType];const auto saved=ty;ty.followChance=100;
+        auto readyGuests=[&]{for(auto &guest:g.list){guest.guide=-1;guest.x=25.5f;guest.y=30.5f;guest.hunger=guest.thirst=guest.bathroom=guest.tired=0;
+          guest.leaving=false;guest.showTank=-1;guest.state=Guests::State::Walking;}};
+        readyGuests();
+        l2->visit=land;l2->goalX=25;l2->goalY=31;l2->job=Staff::Job::Tour;l2->followers.clear();
+        l2->path={{25.5f,30.5f},{25.5f,45.5f}};l2->pathAt=0;l2->speaking=false;l2->crowdClock=0;
+        st.update(0.05f,map,f);
+        check("a guide on its walk looks for followers (0x58d043, task 0x76 with +0x20c set)",!l2->followers.empty());
+        g.releaseTour(g2);l2->followers.clear();readyGuests();
+        l2->path.clear();l2->pathAt=0;l2->speaking=true;l2->speakLeft=5;l2->crowdClock=0;
+        st.update(0.05f,map,f);
+        check("a guide in its talk looks for followers (0x58d043, task 0x77 always)",!l2->followers.empty());
+        ty=saved;
+        st.fire(g2);
+      }
+    }
   }
   // Scenery to look at (zoo.exe guestPickAttraction 0x4282e1's third group,
   // 0x42945f, Task81_GawkObject): a guest with every exhibit seen and nothing
@@ -4364,6 +4390,41 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         g.releaseTour(guide);
       }
       type=originalType;
+      // A keeper walking to a habitat gives up when nothing there needs it any
+      // more (#306, Task65_KeeperGoToHabitat::checkArrived 0x423f75: the
+      // habitat asked staffCanAssignToExhibit 0x423e01 each tick, any answer
+      // but 0 ends the job); at its gate, not
+      {
+        st.clear();g.clear();world.reindex();
+        const int kt=st.typeOfFile("staff/keeper.ai");
+        const int kw=st.hire(kt,24.5f,30.5f,map,f);
+        Staff::Member *km=st.member(kw);
+        Animals::Member *zebra=a.member(z);
+        if(km&&zebra) {
+          auto sendOff=[&](int access) {
+            km->job=Staff::Job::Visit;km->visit=land;km->access=access;km->phase=0;km->path={{22.5f,30.5f},{21.5f,30.5f}};km->pathAt=0;
+            km->dutyId=10303;km->dutyArg="Parity paddock";
+          };
+          const bool wasBoxed=zebra->boxed;
+          const int mayWith=st.mayServe(*km,*f.exhibit(land));
+          sendOff(-1);
+          st.update(0.05f,map,f);
+          const bool walking=st.member(kw)&&st.member(kw)->job==Staff::Job::Visit&&st.member(kw)->visit==land;
+          zebra->boxed=true; // (taken out of the exhibit)
+          const int mayWithout=st.mayServe(*st.member(kw),*f.exhibit(land));
+          st.update(0.05f,map,f);
+          const bool gaveUp=st.member(kw)&&st.member(kw)->job==Staff::Job::None&&st.member(kw)->visit==-1;
+          sendOff(land);
+          st.update(0.05f,map,f);
+          const bool atGate=st.member(kw)&&st.member(kw)->job==Staff::Job::Visit&&st.member(kw)->visit==land;
+          zebra->boxed=wasBoxed;
+          out<<"KEEPER GIVES UP may "<<mayWith<<" walking "<<walking<<"; animals out may "<<mayWithout<<" gave up "<<gaveUp<<" at its gate kept "<<atGate<<"\n";
+          check("a keeper walking to a habitat with animals it cares for carries on (0x423f75)",mayWith==0&&walking);
+          check("a keeper walking to a habitat that has nothing for it now gives up, the job over (0x423f75, 0x423e01)",mayWithout!=0&&gaveUp);
+          check("a keeper already at the gate doesn't give up (arrived, 0x49f624)",atGate);
+        } else check("a keeper and the paddock's animal (fixture)",false);
+        st.clear();world.reindex();
+      }
       // Every staff member's work across a save (#285; save v26 - the
       // original keeps each unit's task and job objects, UnitBase::load
       // 0x4547cc -> 0x454aaf, and each class its own: ZTStaff::load 0x455433
@@ -6816,6 +6877,54 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       check("the names used once only kept in a saved zoo: the original's part, in byte order, and ours (0x47a10c, 0x594197, #275)",
             saved&&version>=104&&inOriginal==sorted&&loaded&&back==sorted);
       RenameCheats::usedNames().clear();
+    }
+    // The exhibit name cheats (#298, zoo.exe dinoExhibitNameList 0x5aee66): the
+    // name compared exactly (case and length), the first match the only one done
+    {
+      RenameCheats::setFlags({});
+      std::vector<int> made;
+      RenameCheats::Hooks hk=RenameCheats::hooks();
+      hk.typeAvailable=[&](int id){made.push_back(id);};
+      RenameCheats::setHooks(hk);
+      const std::string none1=RenameCheats::exhibitRenamed(world,"Wonderland"),none2=RenameCheats::exhibitRenamed(world,"wonderland "),
+                        none3=RenameCheats::exhibitRenamed(world,"microsoft"),none4=RenameCheats::exhibitRenamed(world,"Exhibit 1");
+      const RenameCheats::Flags untouched=RenameCheats::flags();
+      const std::string w=RenameCheats::exhibitRenamed(world,"wonderland"),m=RenameCheats::exhibitRenamed(world,"Microsoft"),
+                        b=RenameCheats::exhibitRenamed(world,"Blue Fang");
+      const RenameCheats::Flags set=RenameCheats::flags();
+      const std::string xan=RenameCheats::exhibitRenamed(world,"Xanadu"),cc=RenameCheats::exhibitRenamed(world,"Cretaceous Corral"),
+                        kat=RenameCheats::exhibitRenamed(world,"Kathmandu"),sc=RenameCheats::exhibitRenamed(world,"Super Croc");
+      out<<"RENAME EXHIBIT none '"<<none1<<none2<<none3<<none4<<"' flags before "<<untouched.wonderland<<untouched.microsoft<<untouched.blueFang
+         <<" after "<<set.wonderland<<set.microsoft<<set.blueFang<<" made";
+      for(int id:made)out<<" 0x"<<std::hex<<id<<std::dec;
+      out<<"\n";
+      check("an exhibit's name compared exactly - other cases, a trailing blank, a default name do nothing (0x5aee66)",
+            none1.empty()&&none2.empty()&&none3.empty()&&none4.empty()&&!untouched.wonderland&&!untouched.microsoft&&!untouched.blueFang);
+      check("\"wonderland\" / \"Microsoft\" / \"Blue Fang\": 0x6392c0, 0x63c54e, 0x63aff0 set, the others left",
+            w=="0x6392c0"&&m=="0x63c54e"&&b=="0x63aff0"&&set.wonderland&&set.microsoft&&set.blueFang);
+      check("\"Xanadu\" 0x13b9, \"Cretaceous Corral\" 0x13b6, \"Kathmandu\" 0x13b7, \"Super Croc\" 0x14d4: their types made available (0x591325)",
+            xan=="0x591325"&&cc=="0x591325"&&kat=="0x591325"&&sc=="0x591325"&&made==std::vector<int>{0x13b9,0x13b6,0x13b7,0x14d4});
+      // "Copralite Corner" (0x607871): every dinosaur's dung into a rock; a
+      // small zoo animal's poo, and food, stay
+      {
+        ZooItems &items=world.getItems();
+        items.clear();
+        const int dino1=items.addDung(-1,40.5f,40.5f,true,1),dino2=items.addDung(-1,42.5f,40.5f,true,2),plain=items.addDung(-1,44.5f,40.5f,false,1);
+        const size_t objectsBefore=world.getObjects().objects().size();
+        const std::string cop=RenameCheats::exhibitRenamed(world,"Copralite Corner");
+        const bool gone=!items.item(dino1)&&!items.item(dino2),kept=items.item(plain)!=nullptr;
+        int rocks=0;
+        for(size_t i=objectsBefore;i<world.getObjects().objects().size();++i){
+          const PlacedObjects::Object &o=world.getObjects().objects()[i];
+          if(o.typeName=="lrock1"&&(o.x==40.5f||o.x==42.5f)&&o.y==40.5f)++rocks;
+        }
+        const size_t objectsAfter=world.getObjects().objects().size();
+        out<<"RENAME COPRALITE "<<cop<<" dino dung gone "<<gone<<" poo kept "<<kept<<" rocks "<<rocks<<" objects "<<objectsBefore<<" -> "<<objectsAfter<<"\n";
+        check("\"Copralite Corner\": every dinosaur's dung turned into a rock (lrock1) where it lay, other dung kept (0x607871)",
+              cop=="0x607871"&&gone&&kept&&rocks==2&&objectsAfter==objectsBefore+2);
+        items.clear();
+        for(size_t i=world.getObjects().objects().size();i>objectsBefore;--i)world.objectsMutable().remove(static_cast<int>(i)-1);
+      }
     }
     RenameCheats::setHooks(realHooks);
     RenameCheats::setFlags(flagsWas);

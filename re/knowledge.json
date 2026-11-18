@@ -11990,11 +11990,11 @@
    "summary": "Works on the exhibit list (ui/mulhab2.lyt): Animal_list"
   },
   "0x4a09f8": {
-   "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
-   "confidence": "sure",
+   "by": "Claude",
+   "confidence": "likely",
    "name": "objectve_Message_click",
    "provisional": false,
-   "summary": "UI handler (registered with uiRegisterHandler): objectve:Message clicked"
+   "summary": "Clicking the objective message reopens the scenario popup (loadScenarioPopup 0x5a1b15) from its text list"
   },
   "0x4a0b53": {
    "by": "batty251 (the task class tables read from memory; unitMakeTask, the shared tick 0x43679e)",
@@ -13388,11 +13388,11 @@
    "summary": "Works on the show panel (2) (ui/show2.lyt): ATTENDANCE_1, ATTENDANCE_2, ATTENDANCE_3, ATTENDANCE_4, INCOME_INCOME1, INCOME_INCOME2"
   },
   "0x4c740a": {
-   "by": "batty251 (the UI element numbers it asks uiFind for, from the game's layout files)",
-   "confidence": "guess",
-   "name": "ui_zooinfo4_4c740a",
-   "provisional": true,
-   "summary": "Works on Zoo Status (ui/zooinfo4.lyt): Scenario_data"
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "scenarioPageClear",
+   "provisional": false,
+   "summary": "On every zoo load (from 0x4c735c): Zoo Status' sort flags set, 0x104f's handler run, lists 4145 (the scenario page's goals) and 4164 (completed research) cleared, a kept list freed"
   },
   "0x4c7e6c": {
    "by": "batty251",
@@ -14571,12 +14571,61 @@
    "provisional": false,
    "summary": "UI handler (registered with uiRegisterHandler): zooinfo:LayoutInfo hidden (closed)"
   },
+  "0x4f0016": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "goalGroupListLines",
+   "provisional": false,
+   "summary": "Composite goals (rtype 1, 2; class tables 0x6352f8, 0x6352cc) slot 0x1c: calls slot 0x1c of each child in turn; a group has no line of its own. Engine: Goals::addLines"
+  },
   "0x4f004a": {
-   "by": "batty251 (the UI element numbers it asks uiFind for, from the game's layout files)",
-   "confidence": "guess",
-   "name": "ui_zooinfo4_4f004a",
-   "provisional": true,
-   "summary": "Works on Zoo Status (ui/zooinfo4.lyt): ScenarioName, Scenario_data"
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "scenarioPageFill",
+   "provisional": false,
+   "summary": "Fills the scenario page (zooinfo4.lyt): ScenarioName 4142 = [desc] name string (0x4fc83c), Story 4143 = [desc] story TEXT resource (0x4f0497 through 0x4f0264/0x4f00f6), then list 4145 cleared and each of the scenario manager's goals (+0x34..+0x38) adds its line (class slot 0x1c). Called from zooinfo4_Panel_show 0x4efdf6 and Zoo Status' tick 0x401644 (only while Zoo Status is shown). Engine: UiGameScreen::refreshScenarioPage"
+  },
+  "0x4f00f6": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "namedTextResource",
+   "provisional": false,
+   "summary": "A TEXT resource of the language DLLs found by its name (FindResource through 0x4f029d, LockResource) copied into a string - the scenario stories and popup texts. Engine: langText"
+  },
+  "0x4f041e": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "goalListText",
+   "provisional": false,
+   "summary": "Normal goal (class table 0x635510) slot 0x14: nothing when +0x28 (hidden, or no text= key: 0x58ddf3) is set, else +0x44, the text formatted by 0x41ca7f with value +0x18, arga +0x1c, argb +0x20 (%d a number, %m whole dollars, %r a type's name)"
+  },
+  "0x4f042c": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "goalListLine",
+   "provisional": false,
+   "summary": "Class slot 0x1c of the scenario's goals: adds the goal's line to the page list - listAdd 0x417f79 (via 0x4f0331) with slot 0x14's text and slot 0x18's icon - when slot 0x14 gives a text. Engine: Goals::lines"
+  },
+  "0x4f0484": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "scenarioGoalListText",
+   "provisional": false,
+   "summary": "The scenario's own goal (the time limit, class table 0x6354e4) slot 0x14: its [duration] text string +0x10 (text= with nummonths); slot 0x18 0x4f0488 gives its icon string +0x1c ([duration] icon=, ui/scenario/clock/clock); both shown by 0x4f042c"
+  },
+  "0x4f048c": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "goalListIcon",
+   "provisional": false,
+   "summary": "Normal goal slot 0x18: the icon of its state +0x40 from the table 0x63e3c0 (readIcons 0x58e0c0: iconp, iconc, iconf, then iconc again for state 3)"
+  },
+  "0x4f0497": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "scenarioStoryName",
+   "provisional": false,
+   "summary": "[desc] story= of the scenario (a name, SCENARIO_START_STORY_SCN03) - the name of a TEXT resource of the language DLLs"
   },
   "0x4f06a5": {
    "by": "batty251 (the UI element numbers it asks uiFind for, from the game's layout files)",
@@ -15029,6 +15078,13 @@
    "name": "goalFire",
    "provisional": true,
    "summary": "A goal met or failed: its effect (quiet when loading a save)"
+  },
+  "0x4fc83c": {
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "scenarioNameId",
+   "provisional": false,
+   "summary": "[desc] name= of the scenario (a string id, 16003)"
   },
   "0x4fd1de": {
    "by": "batty251 (confirmed 2026-10-12: the type tables' fixed slots)",
@@ -18750,11 +18806,11 @@
    "summary": "Works on the exhibit list (ui/mulhab.lyt): Habitat_list"
   },
   "0x5aee66": {
-   "by": "batty251 (the original's own status text in each, and who calls it)",
-   "confidence": "likely",
-   "name": "dinoExhibitNameList",
+   "by": "Claude",
+   "confidence": "sure",
+   "name": "exhibitNameCheats",
    "provisional": false,
-   "summary": "Dinosaur exhibit names (\"Super Croc\", \"Copralite Corner\", \"Cretaceous Corral\"...)"
+   "summary": "An exhibit's name (from mulhab_HabitatName_click 0x6107ef -> 0x5aedbd, before it is kept) compared exactly (length and bytes) with eight names, the first match the only one done: wonderland DAT_006392c0 (+30 on the arrival check's rating, 0x42444d), Microsoft DAT_0063c54e (a viewing donation doubled, guestDoneViewingExhibit 0x42eb0e), Blue Fang DAT_0063aff0 (a building's takings doubled, guestBuy 0x42d8ee), Xanadu 0x591325(0x13b9) the unicorn, Cretaceous Corral 0x13b6 the triceratops, Kathmandu 0x13b7, Copralite Corner 0x607871, Super Croc 0x14d4 the deinosuchus. Engine: RenameCheats::exhibitRenamed (#298)"
   },
   "0x5af19b": {
    "by": "Claude",
@@ -18863,6 +18919,13 @@
    "name": "ctor",
    "provisional": false,
    "summary": "Task 0x79's constructor (unitMakeTask case 0x79): the unit (+4), its task state (unit+0x15c, +8), the class table 0x6344b4 - a guest being sick (bSick; 10285 \"Ohh, I don't feel so good...\")"
+  },
+  "0x5b09f6": {
+   "by": "Claude",
+   "confidence": "likely",
+   "name": "researchPick",
+   "provisional": false,
+   "summary": "Picks what a research branch works on next"
   },
   "0x5b0f12": {
    "by": "batty251 (read every uiRegisterHandler call; element names from the game's layout files)",
@@ -40106,9 +40169,409 @@
    "by": "Claude",
    "on": "2026-11-18",
    "what": "Note at 0x49e9c2: Read 2026-11-18 (#288, ported): the 3 x 3 round the given tile (dx outer -1..1, dy inner), the tile itself too, in bounds, whose habitat grid entry is the given tile's, the unit's slot 0x164 (its step cost) not 0x635494 (refused); one at random (randSeed); a zero tile in: 0. Used by habitatFromHere 0x49ebce (Staff::walkAbout, Guests::walkAbout in a habitat) and by 0x4a8a23 (Task7d_GetTrickFood's treat tile: Shows::actorStep, #301)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x5ff9e8: developer-only: the ambient animal's debug overlay (class slot 0x64), shown only while the developer flag zooTime +0x100 is set - nothing in a player's game; not ported (r15, 2026-11-18)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x613641: developer-only: the animal's debug overlay (class slot 0x64): hap/hun/hea/eng, mate/mother/father/pred/prey and water/ramp flags - shown only while the developer flag zooTime +0x100 is set; nothing in a player's game; not ported (r15, 2026-11-18)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x611764: developer-only: the developer's debug overlay (class slot 0x64) - nothing in a player's game; not ported (r13, 2026-11-18)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x6168c3: developer-only: the developer panel's 'Zoo Cash' line (develop_Objects_click 0x47ee74) - nothing in a player's game; not ported (r13, 2026-11-18)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x401b46: plumbing: the class-name query of the type system (isKindOf compares by it); ours uses C++ types and name keys, nothing to port (r15, 2026-11-18)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x40fd7f: plumbing: isKindOf, the type system's 'is it this class' test; ours uses C++ types, nothing to port (r15, 2026-11-18)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4aa730: plumbing: isKindOf by name, the type system's test; ours uses C++ types and name keys, nothing to port (r15, 2026-11-18)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x453d41: plumbing: the type's object allocation (class slot 0x5c); ours constructs an Animals::Member when one is made (r15, 2026-11-18)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4b4d8c: plumbing: the class-wide config read, once per class (base class's section, then its own); ours reads the same .ai files in Animals::loadType, Guests::loadTypes and Staff::loadTypes (r15, 2026-11-18)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4b6381: plumbing: the type re-read on a zoo load (lists cleared, class settings, defaults); ours loads the types once, with the same files, so nothing differs (r15, 2026-11-18)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4b4d8c: plumbing: the class-wide config read, once per class (base class's section, then its own); ours reads the same .ai files in Animals::loadTypes, Guests::load and Staff::loadTypes (r15, 2026-11-18)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x5aee66 exhibitNameCheats"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x591325: Slot 0x3c of a type is its availability flag (+0xcc, the one goalTriggerAvailable 0x5a0fc2 sets). Engine: ItemCatalog::setAvailable via RenameCheats::Hooks::typeAvailable (#298)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x607871: Read 2026-11-18 (#298): every object whose type cNameID is 0x17ce..0x17d0 (dinopoo is 6094 = 0x17ce, the other two have no .ai) gets its type swapped (slot 0x7c -> 0x4865c4, only when both types' slot 0x14 strings match, as with a scenery type) for the type of cNameID 0x23f0 = scenery/other/lrock1.ai (coprolite is fossil dung), after the art index 0x4fe8f7 is cleared of the old path. Needs that type to exist (0x607889). Engine: RenameCheats::dinoDungToRock"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x6392c0: wonderland flag: read by guestArrivalCheck 0x424375 at 0x42444d (adds 0x1e to the rating plus marketing). Written only by 0x5aee66; loadConfig 0x591a1f's copy loop stops at 0x6392c0, so it is never cleared"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x63c54e: Microsoft flag: read by guestDoneViewingExhibit 0x42ea14 at 0x42eb0e (the donation doubled before the $10 cap)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x63aff0: Blue Fang flag: read by guestBuy 0x42d858 at 0x42d8ee (the building's price x priceFactor doubled, into the guest's and the zoo's takings)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4a03b4: message_Panel_show: measured in the running original: opening the Message List sets the message bar's byte +0x450 to 1 and closing it clears it. The bar's draw (vtable slot 0x2c, 0x4197fc) and update (slot 0xdc, 0x4fad0f) do nothing while +0x450 is set and +0x458 is non-zero; +0x458 is never written for this class (last dword of its 0x45c bytes, stale heap, non-zero in the runs measured), so effectively always. The message timer (slot 0xac 0x4facad) is not held. Ours: UiGameScreen::messageBarHeld (#299)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x5b09f6: researchPick(branch): clears +0x30/+0x34, then over the checked categories (+0x34): a begun program (progress > 0, under cost) is taken at once; else the lowest order over all checked categories' unfinished programs, and one with that order at random (rand). Run by researchTick 0x41f1ba every tick the branch has no program or its category is unchecked, and after a program completes (#300)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x5b09f6 researchPick"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x4f004a scenarioPageFill"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x4f042c goalListLine"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x4f0016 goalGroupListLines"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x4f041e goalListText"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x4f048c goalListIcon"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x4f0484 scenarioGoalListText"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x4f0497 scenarioStoryName"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x4fc83c scenarioNameId"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x4f00f6 namedTextResource"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x4c740a scenarioPageClear"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4efdf6: zooinfo4_Panel_show: main_Panel_hide(0x323) (every other panel shut: the toolbar panels 8 3 4 10 15 5 34, the bottom lists 16 12 31 30, Zoo Status 14, show 41, selection cleared) then 0x4f004a. The Scenario information button 4107 (main.lyt, target 803); key 0x4f (O) toggles it (0x46bdd6)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x41ca7f: Formats a game text with %d / %m / %r arguments (goals: value, arga, argb in turn; %m = moneyToText 0x40eca1 with grouping, %r = a name's string; measured on the original's Seasideville page: 'Earn an exhibit suitability rating of at least 60 for 5 exhibits.', 'Months to complete: 6'; Orca Show: 'Earn a total profit of $100 for all Orca shows.')"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x5017ce: plumbing: a goal group's destructor (frees its children) - memory management only"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x504b62: plumbing: the scenario manager's deleting destructor"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x5b12c1: plumbing: the scenario goal's deleting destructor (its strings freed)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x6131c3: developer-only: the debug overlay's goal / subgoal lines"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4e27a9: buya_Animals_hover: part of the Adopt Animals list's row memory (maps 0x63bb40 hover row, 0x63bb30 click row, keyed by the filter list uiFind 0x81a's choice, read by adoptListFill 0x4e334b at 0x4e37a0-0x4e3820, which reselects it and runs buya_Animals_click). Measured in the original: choosing a content filter (All / Zoo Tycoon / ...) always lands on the first animal; a pick made under another filter is not kept, nor on coming back. Switching tabs and back keeps the pick. Ours: setFilter clears Adopt's picks (#307)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Named 0x4a09f8 objectve_Message_click"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x47ebd4: developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x47ed35: developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x47ee2b: developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x47ee5d: developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x47ee74: developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x47f0a2: developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x6169df: developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x616a9a: developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x616b58: developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x423f75: Ported 2026-11-18 (#306): while a keeper walks to a habitat's gate (Job::Visit phase 0, not yet arrived) each tick asks mayServe (staffCanAssignToExhibit 0x423e01(keeper,0,1)); any answer but 0 ends the job. Engine: Staff::update. Task6e checkArrived 0x423fe0 (habitat +0x2c, task +0x18) not read yet"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x474771: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x589b53: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x589b34: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4e4c97: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x52fc9a: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x52fd56: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x5314cc: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x5314f3: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4efe08: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x59274c: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x5b0f12: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x5b14a4: plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x616290: plumbing: the credits pages' drawing (ours: creditsLoad / creditsTick)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x616348: plumbing: the credits pages' drawing (ours: creditsLoad / creditsTick)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4d6f98: plumbing: a display option (resolution, window or full screen, terrain blending): ours has its own display options (UiOptions) with the 2001 limits lifted"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x517b9a: plumbing: a display option (resolution, window or full screen, terrain blending): ours has its own display options (UiOptions) with the 2001 limits lifted"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x5ac651: plumbing: a display option (resolution, window or full screen, terrain blending): ours has its own display options (UiOptions) with the 2001 limits lifted"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x5aff13: plumbing: a display option (resolution, window or full screen, terrain blending): ours has its own display options (UiOptions) with the 2001 limits lifted"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x48afaa: plumbing: [advanced] loadHalfAnims switch (a 2001 memory option); ours loads what it needs and lifts that limit"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x60b4d3: plumbing: the original's online update window (Get New Zoo Tycoon Items); its service is gone, ours has the Mod Menu"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x60b7d3: plumbing: the original's online update window (Get New Zoo Tycoon Items); its service is gone, ours has the Mod Menu"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x60b7f0: plumbing: the original's online update window (Get New Zoo Tycoon Items); its service is gone, ours has the Mod Menu"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x60baf0: plumbing: the original's online update window (Get New Zoo Tycoon Items); its service is gone, ours has the Mod Menu"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x60baf8: plumbing: the original's online update window (Get New Zoo Tycoon Items); its service is gone, ours has the Mod Menu"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4da138: plumbing: stores the shown terraform list into the zoo view (+0x364) when the page is shown, clears it when hidden"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x4da168: plumbing: stores the shown terraform list into the zoo view (+0x364) when the page is shown, clears it when hidden"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x5a1b15: Popup keys read from [default] then the goal's section: layout, background, icon, image1/2, shortText1/2, longText1/2, ok, yes, no, cancel, pause, modal, persistentTextLayout, persistentShortText, persistentLongText, persistentButton, displayAsMessage. persistentShortText -1 puts the first goal still at 0 with a text (top-level, not a group's children) on the reminder bar (objectve.lyt 45400, button 45406), a string id puts that text, 0 puts the bar away; the popup is kept so objectve_Message_click 0x4a09f8 can open it again. Engine: Goals::showPopup, Goals::reopenPopup, UiGameScreen::setObjective (ours reads image1, longText1, pause and persistentShortText only: the rest is #100)"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x616242: plumbing: registered for id 0xb164, which no layout has (lab uiElement: not in any layout) - never clicked"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x49e8fa: Measured 2026-11-18 (#297, Play original, a show tank joined to a home tank by a portal, orcas, the show tank's water dirty, one UNASSIGNED marine specialist; B:/zt1-shots/r15-keepers/join.zoo, poll keeperpoll.py): both habitats are the tank class 0x6312bc. The specialist did the show tank (task 0x65 -> 0x7e climb -> 0x6e sweeping -> 0x7f out at its bank gate), and 1.5 s after leaving it was on task 0x65 for the home tank - no task 1 (monitoring) between - walking OVER LAND to the home tank's own gate, 0x7e climbing in, 0x6e, 0x7f out, then task 1. It did not swim through the portal. Habitat +0x168 (visited): 1 on the show tank while at work, cleared at 128.5 s when the home tank got 1 (atTarget clears all, then the call marks the one it asks about). +0xf0 (at duties) / +0xf4 (headed) 1/0 while there. So the hop is a direct on-to-the-next habitat needing a visit, not a swim through a join. The chooser's pass rules (no keeper there, last visit over 1000 ticks) were not shown to apply to it - not measured"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x423fe0: Measured 2026-11-18 (#306): habitat +0x2c is 1 on the zoo's own ground habitat (habitatMgr +0x18, land class 0x632100) and 0 on exhibit habitats (both tanks read). Task6e's checkArrived ends the duties when the unit's habitat (slot 0x24c) is the zoo's own ground - the keeper standing outside any exhibit - or the task's own flag +0x18 (set by whileGoing 0x42400a when no duty is left) is set. Ours: Staff::visitStep's done() when the keeper is out"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "what": "Note at 0x49ebe7: Ported 2026-11-18 (#297): a tank's duties over -> on directly to the next habitat needing a visit (Staff::visitStep's done() calls keeperWork, no idle between); measured on the original with B:/zt1-shots/r15-keepers/join.zoo. Check: ZT_JOIN_ZOO=<file> ZT_JOIN_SIM=1 ZT_FLAT_LAB=1 zt1-engine.exe --panel-shots <dir> sm_aqua (src/JoinedTankZoo.cpp). Not measured: whether the hop skips the chooser's pass rules (the original stalls ~60 s in with two specialists at work, twice)"
   }
  ],
  "notes": {
+  "0x401b46": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the class-name query of the type system (isKindOf compares by it); ours uses C++ types and name keys, nothing to port (r15, 2026-11-18)"
+  },
   "0x404fcf": {
    "by": "Claude",
    "on": "2026-11-16",
@@ -40118,6 +40581,11 @@
    "by": "Claude",
    "on": "2026-11-17",
    "text": "+0x10..+0x14: a vector of 0x1c-byte entries, one per name in the .ani's [animation] animation= list (its views), each from 0x40bc0c(name, x0..y1) (Claude, 2026-11-17)"
+  },
+  "0x40fd7f": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: isKindOf, the type system's 'is it this class' test; ours uses C++ types, nothing to port (r15, 2026-11-18)"
   },
   "0x411285": {
    "by": "Claude",
@@ -40163,6 +40631,11 @@
    "by": "Claude",
    "on": "2026-11-17",
    "text": "Read 2026-11-17 (r11 lab): also the app's active flag, theGame 0x638148 +0x4a4: WM_ACTIVATEAPP (0x1c) sets it to wParam; WM_ACTIVATE (6) clears it when LOWORD(wParam) is WA_INACTIVE or HIWORD (minimized) is set, else sets it (0x4b2b32); WM_DESTROY clears it and posts quit (0x501258). The message pump 0x41aaf8 runs a frame (slot 0x30) while it's set; while it's clear it checks [0x638050]+4 (set: WaitMessage) and GetWindowPlacement's showCmd (jump table 0x5afed0: hide/minimized/6/7 -> WaitMessage 0x58c1c2, else a frame and Sleep(0)). Measured: 1 with the Lab's hook (it answers WM_ACTIVATEAPP/WM_ACTIVATE as active), so the original keeps running while hidden behind another Lab tab or dialog"
+  },
+  "0x41ca7f": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "Formats a game text with %d / %m / %r arguments (goals: value, arga, argb in turn; %m = moneyToText 0x40eca1 with grouping, %r = a name's string; measured on the original's Seasideville page: 'Earn an exhibit suitability rating of at least 60 for 5 exhibits.', 'Months to complete: 6'; Orca Show: 'Earn a total profit of $100 for all Orca shows.')"
   },
   "0x41da81": {
    "by": "Claude",
@@ -40243,6 +40716,16 @@
    "by": "Claude",
    "on": "2026-11-18",
    "text": "Read 2026-11-18 (#288): with (keeper, 0, 1): ZTKeeper class only; tiles (+0x40) under 2: 1; tank-kind (habitat slot 0x20) differs from the staff's slot 0x16c: 2; then 0 for an animal in +0x6c it cares for (0x423f00), dirt on its tiles it cleans (slot 0x324), a tank's +0x1a8 under the type's cCleanTankThreshold +0x208, linked habitats' performers it cares for (0x498958), or a show tank (+4) and staff type 9552; else 2. Engine: Staff::mayServe"
+  },
+  "0x423f75": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "Ported 2026-11-18 (#306): while a keeper walks to a habitat's gate (Job::Visit phase 0, not yet arrived) each tick asks mayServe (staffCanAssignToExhibit 0x423e01(keeper,0,1)); any answer but 0 ends the job. Engine: Staff::update. Task6e checkArrived 0x423fe0 (habitat +0x2c, task +0x18) not read yet"
+  },
+  "0x423fe0": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "Measured 2026-11-18 (#306): habitat +0x2c is 1 on the zoo's own ground habitat (habitatMgr +0x18, land class 0x632100) and 0 on exhibit habitats (both tanks read). Task6e's checkArrived ends the duties when the unit's habitat (slot 0x24c) is the zoo's own ground - the keeper standing outside any exhibit - or the task's own flag +0x18 (set by whileGoing 0x42400a when no duty is left) is set. Ours: Staff::visitStep's done() when the keeper is out"
   },
   "0x42400a": {
    "by": "Claude",
@@ -40764,6 +41247,11 @@
    "on": "2026-11-17",
    "text": "Ported 2026-11-17 (#256): main.cpp g_rateNow - set by startGoals (a new zoo and a load), the rating worked out on the next frame, paused or not; check in the finance mode (Claude, 2026-11-17)"
   },
+  "0x453d41": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the type's object allocation (class slot 0x5c); ours constructs an Animals::Member when one is made (r15, 2026-11-18)"
+  },
   "0x454aaf": {
    "by": "Claude",
    "on": "2026-11-18",
@@ -40884,6 +41372,11 @@
    "on": "2026-11-18",
    "text": "show1_Panel_show: 11108 (the frequency button) labelled from the frequency list's pick (table 0x642c50), the frequency list 11191 hidden; Add, Remove, Up, Down off (slot 0x6c); 0x63e4a8 = 0"
   },
+  "0x474771": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
   "0x47594f": {
    "by": "Claude",
    "on": "2026-11-16",
@@ -40918,6 +41411,36 @@
    "by": "Claude",
    "on": "2026-11-16",
    "text": "Also gives its rubble pieces a shared id list (+0x158) and the scenery's cNameID (+0x15c) (0x47c67d) - as toRubble does (Claude, 2026-11-16)"
+  },
+  "0x47ebd4": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  "0x47ed35": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  "0x47ee2b": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  "0x47ee5d": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  "0x47ee74": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  "0x47f0a2": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the developer panel (develop.lyt), not part of play"
   },
   "0x47f61f": {
    "by": "Claude",
@@ -40973,6 +41496,11 @@
    "by": "Claude",
    "on": "2026-11-11",
    "text": "Read 2026-11-11: message (outcome!=1)+base: scn01a/scn01/scn27/scn28 0x3ee8 (16104/5, next = scn01/scn02/scn28/scn28b); scn02 next scn19 if expansion 1 (0x4ab32c), else scn27 if 2, else 16102/3; scn19 next scn27 if 2 else 16102/3; scn28b 16102/3; others 0x3ee4 (16100/1). Popup 0xb090 (45200) with MB_YESNO (0x4ff63c(0xb090,4,1,0)); 7 (No): tutorial -> screen 0x1a, else 0x20; Yes with a next: scenarioOpen(next) + scenarioStart(-1). Won: [completion] unlock= each through 0x598cdc. Ported: main.cpp scenarioComplete."
+  },
+  "0x48afaa": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: [advanced] loadHalfAnims switch (a 2001 memory option); ours loads what it needs and lifts that limit"
   },
   "0x48c045": {
    "by": "Claude",
@@ -41097,12 +41625,17 @@
   "0x49e8fa": {
    "by": "Claude",
    "on": "2026-11-18",
-   "text": "Not ported: #297 (keepers going on to a joined habitat still needing a visit)"
+   "text": "Measured 2026-11-18 (#297, Play original, a show tank joined to a home tank by a portal, orcas, the show tank's water dirty, one UNASSIGNED marine specialist; B:/zt1-shots/r15-keepers/join.zoo, poll keeperpoll.py): both habitats are the tank class 0x6312bc. The specialist did the show tank (task 0x65 -> 0x7e climb -> 0x6e sweeping -> 0x7f out at its bank gate), and 1.5 s after leaving it was on task 0x65 for the home tank - no task 1 (monitoring) between - walking OVER LAND to the home tank's own gate, 0x7e climbing in, 0x6e, 0x7f out, then task 1. It did not swim through the portal. Habitat +0x168 (visited): 1 on the show tank while at work, cleared at 128.5 s when the home tank got 1 (atTarget clears all, then the call marks the one it asks about). +0xf0 (at duties) / +0xf4 (headed) 1/0 while there. So the hop is a direct on-to-the-next habitat needing a visit, not a swim through a join. The chooser's pass rules (no keeper there, last visit over 1000 ticks) were not shown to apply to it - not measured"
   },
   "0x49e9c2": {
    "by": "Claude",
    "on": "2026-11-18",
    "text": "Read 2026-11-18 (#288, ported): the 3 x 3 round the given tile (dx outer -1..1, dy inner), the tile itself too, in bounds, whose habitat grid entry is the given tile's, the unit's slot 0x164 (its step cost) not 0x635494 (refused); one at random (randSeed); a zero tile in: 0. Used by habitatFromHere 0x49ebce (Staff::walkAbout, Guests::walkAbout in a habitat) and by 0x4a8a23 (Task7d_GetTrickFood's treat tile: Shows::actorStep, #301)"
+  },
+  "0x49ebe7": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "Ported 2026-11-18 (#297): a tank's duties over -> on directly to the next habitat needing a visit (Staff::visitStep's done() calls keeperWork, no idle between); measured on the original with B:/zt1-shots/r15-keepers/join.zoo. Check: ZT_JOIN_ZOO=<file> ZT_JOIN_SIM=1 ZT_FLAT_LAB=1 zt1-engine.exe --panel-shots <dir> sm_aqua (src/JoinedTankZoo.cpp). Not measured: whether the hop skips the chooser's pass rules (the original stalls ~60 s in with two specialists at work, twice)"
   },
   "0x49ee0f": {
    "by": "Claude",
@@ -41122,7 +41655,7 @@
   "0x4a03b4": {
    "by": "Claude",
    "on": "2026-11-18",
-   "text": "message_Panel_show: the message bar (ZTMessageQueue 7001) with a message (+0x458) and +0x450 clear: +0x450 = 1, 0x417695 on its +0x43c. message_Panel_hide 0x4a03fb clears it. What +0x450 does is open (#299)"
+   "text": "message_Panel_show: measured in the running original: opening the Message List sets the message bar's byte +0x450 to 1 and closing it clears it. The bar's draw (vtable slot 0x2c, 0x4197fc) and update (slot 0xdc, 0x4fad0f) do nothing while +0x450 is set and +0x458 is non-zero; +0x458 is never written for this class (last dword of its 0x45c bytes, stale heap, non-zero in the runs measured), so effectively always. The message timer (slot 0xac 0x4facad) is not held. Ours: UiGameScreen::messageBarHeld (#299)"
   },
   "0x4a0c55": {
    "by": "Claude",
@@ -41204,6 +41737,11 @@
    "on": "2026-11-17",
    "text": "Read 2026-11-17 (#242): the unit's innermost running line (+0x14 chain by +0x4c, copied by 0x4a9917) asked of the AI manager 0x638098: slow (slot 0x28, 0x4a9b17) -> slot 0x120 (walk), medium (0x2c, 0x4a9f38) -> slot 0x124 (0x4a30da: trot; swim names in water/tanks), fast (0x30, 0x4aa05a) -> slot 0x128 (run), none -> slot 0x120. So after a timed fMove the plain move is walk/trot/run by its 3rd argument. Engine: Animals::moveAnimAfter (Claude)"
   },
+  "0x4aa730": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: isKindOf by name, the type system's test; ours uses C++ types and name keys, nothing to port (r15, 2026-11-18)"
+  },
   "0x4b081b": {
    "by": "Claude",
    "on": "2026-11-15",
@@ -41219,10 +41757,20 @@
    "on": "2026-11-18",
    "text": "+0x6d is cIsTransient (Characteristics/Integers, == 1): set only by the water-effect objects; 0x4f8f0b, tankContents 0x4599a0 skip such entities"
   },
+  "0x4b4d8c": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the class-wide config read, once per class (base class's section, then its own); ours reads the same .ai files in Animals::loadTypes, Guests::load and Staff::loadTypes (r15, 2026-11-18)"
+  },
   "0x4b5c71": {
    "by": "Claude",
    "on": "2026-11-16",
    "text": "Sets cSlowAnimSpeedWater/cMediumAnimSpeedWater/cFastAnimSpeedWater (+0x154/+0x156/+0x158) to 100; 0x4b5de3 cSlow/Medium/FastAnimSpeed (+0x10c/+0x10e/+0x110) to 100 and the rates 18/27/36 (Claude, 2026-11-16)"
+  },
+  "0x4b6381": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the type re-read on a zoo load (lists cleared, class settings, defaults); ours loads the types once, with the same files, so nothing differs (r15, 2026-11-18)"
   },
   "0x4b6436": {
    "by": "Claude",
@@ -41309,6 +41857,11 @@
    "on": "2026-11-17",
    "text": "Starts on [user] lastfile like saveZooDialog; once loadZoo succeeds, lastfile = the path. Engine: SaveGame fileDialog, main.cpp Load (Claude, 2026-11-17)"
   },
+  "0x4d6f98": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: a display option (resolution, window or full screen, terrain blending): ours has its own display options (UiOptions) with the 2001 limits lifted"
+  },
   "0x4d8a4d": {
    "by": "Claude",
    "on": "2026-11-18",
@@ -41334,6 +41887,16 @@
    "on": "2026-11-17",
    "text": "The picked thing placed again (+0x40c and it is the one picked): a building turned, slot 0x74, +0x143 = 0; a guest on water or a tank tile (tile +0x83 & 3, +0x85 & 0x20): slot 0x274(1) (+0x284 |= 0x80000, in the water); slot 0xc8; selected (ui_main_4b2322(it,1)); a guest's panel open again (0x431712)"
   },
+  "0x4da138": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: stores the shown terraform list into the zoo view (+0x364) when the page is shown, clears it when hidden"
+  },
+  "0x4da168": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: stores the shown terraform list into the zoo view (+0x364) when the page is shown, clears it when hidden"
+  },
   "0x4ded90": {
    "by": "Claude",
    "on": "2026-11-18",
@@ -41354,10 +41917,20 @@
    "on": "2026-11-15",
    "text": "Water tile (+0x83 & 3), not a tank, animal not slot 0xbc (swimmer): 10569 / egg 10570 / slot 0x170 (underwater) 10554. Engine: Animals::canPlace"
   },
+  "0x4e27a9": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "buya_Animals_hover: part of the Adopt Animals list's row memory (maps 0x63bb40 hover row, 0x63bb30 click row, keyed by the filter list uiFind 0x81a's choice, read by adoptListFill 0x4e334b at 0x4e37a0-0x4e3820, which reselects it and runs buya_Animals_click). Measured in the original: choosing a content filter (All / Zoo Tycoon / ...) always lands on the first animal; a pick made under another filter is not kept, nor on coming back. Switching tabs and back keeps the pick. Ours: setFilter clears Adopt's picks (#307)"
+  },
   "0x4e334b": {
    "by": "Claude",
    "on": "2026-11-15",
    "text": "Each tab's last pick is kept in the map 0x63bb18 (tab id -> picked type): refilling the list for a tab finds that type in the new list and selects it (0x4e9fea), else the first; then buya_Animals_click with it"
+  },
+  "0x4e4c97": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
   },
   "0x4e5282": {
    "by": "Claude",
@@ -41403,6 +41976,16 @@
    "by": "Claude",
    "on": "2026-11-17",
    "text": "2026-11-17 (r9 guestpick): (on) - panels 6, 9, 17, 20, 21, 1400 and 46 to their second place (0x4ef967: +0x40/+0x44 = +0x38/+0x3c, the layout's altx/alty) or back (+0x30/+0x34); from each list's Panel_show (1) and Panel_hide (0), e.g. mulguest 0x469cc8 / 0x469d97. Ours: UiGameScreen::panelRect"
+  },
+  "0x4efdf6": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "zooinfo4_Panel_show: main_Panel_hide(0x323) (every other panel shut: the toolbar panels 8 3 4 10 15 5 34, the bottom lists 16 12 31 30, Zoo Status 14, show 41, selection cleared) then 0x4f004a. The Scenario information button 4107 (main.lyt, target 803); key 0x4f (O) toggles it (0x46bdd6)"
+  },
+  "0x4efe08": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
   },
   "0x4f004a": {
    "by": "Claude",
@@ -41474,10 +42057,20 @@
    "on": "2026-11-18",
    "text": "showDialog(text, text2, style, picture, a5, a6, dontShow, ...): base 45000 (confirm.lyt, [0x63b950]); with a text2 (its string by gameText, set by 0x4f0264) or a6, 45500 (confirm2.lyt). Message +6 by text number (slot 0xc8), picture +2 (0x4b1aa0), the don't-show box +14/+15 hidden unless dontShow; then 0x4ff63c(base, style, a5). Exit/Main Menu/Load's save question: (151/153/152, 0, 3, question picture 0x63b968, 1, 0, 0, 0)"
   },
+  "0x5017ce": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: a goal group's destructor (frees its children) - memory management only"
+  },
   "0x502078": {
    "by": "Claude",
    "on": "2026-11-17",
    "text": "ZTMaintenanceWorker class slot 0x78 (removed): arg (shutdown) set -> its work list entry freed (0x4a97e5); else let go - entry +8 and its +0x2c0 cleared, the entry stays for another; then the staff base 0x4586f6 (r11 #253)"
+  },
+  "0x504b62": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the scenario manager's deleting destructor"
   },
   "0x50687c": {
    "by": "Claude",
@@ -41599,6 +42192,11 @@
    "on": "2026-11-16",
    "text": "fShowPredator -> 0x50e6fa (line done flag +0x18): used only by guests.ai's bCaughtBy<animal> sets (238 sets with fHidePredator 200), none an animal's (2026-11-16 scan) (Claude)"
   },
+  "0x517b9a": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: a display option (resolution, window or full screen, terrain blending): ours has its own display options (UiOptions) with the 2001 limits lifted"
+  },
   "0x525961": {
    "by": "Claude",
    "on": "2026-11-17",
@@ -41634,10 +42232,40 @@
    "on": "2026-11-16",
    "text": "Read 2026-11-16: the held food (0x42d6aa) consumed (0x42d380), guest +0x2ac (pending happiness) += type +0x2ac cStandAndEatChange (guests.ai -5), plays bEatStanding. Not ported: ours eats a bought item on the way out (consumenow=0 items are held in the original)"
   },
+  "0x52fc9a": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  "0x52fd56": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  "0x5314cc": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  "0x5314f3": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
   "0x5317c5": {
    "by": "Claude",
    "on": "2026-11-16",
    "text": "Zoo Status' building list's months open: the same as buildingInfoNumbers 0x488446 - (zoo FILETIME 0x40e7e0 - the building's +0x180) / 864,000,000,000 (0x40674d), + 29.9 (0x6351a8) cut, / 30, at least 1"
+  },
+  "0x589b34": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
+  "0x589b53": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
   },
   "0x58a85e": {
    "by": "Claude",
@@ -41699,6 +42327,11 @@
    "on": "2026-11-17",
    "text": "Jump table 0x58fbf0: 0 0x5b0f77 (0x58fd9f(target,1): every type of world+0x98 whose slot 0x20 is target gets slot 0x3c(1), made available; then 0x58fc10), 1 0x58fb98 (0x58feb7, then 0x58fc10 if true), 2 0x5b0fe7, 3 0x58fbce (0x618d7c, no program uses 3), 4 0x59ace8, 5 0x59aeac, 6 0x59b64e, 7 0x59b673. Effect 0 ported 2026-11-17 (main.cpp applyResearch) (Claude, 2026-11-17)"
   },
+  "0x591325": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "Slot 0x3c of a type is its availability flag (+0xcc, the one goalTriggerAvailable 0x5a0fc2 sets). Engine: ItemCatalog::setAvailable via RenameCheats::Hooks::typeAvailable (#298)"
+  },
   "0x59148e": {
    "by": "Claude",
    "on": "2026-11-17",
@@ -41708,6 +42341,11 @@
    "by": "Claude",
    "on": "2026-11-15",
    "text": "Also reads cMembershipJoinFactor (+0x13c), cMembershipJoinHappiness (+0x138), cEndowmentGiftLow (+0x140), cEndowmentGiftHigh (+0x144), cMembershipJoinChance (+0x148) as whole numbers (0x409c14); economy.cfg: 10, 80, 100, 300, 15"
+  },
+  "0x59274c": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
   },
   "0x593f2f": {
    "by": "Claude",
@@ -41778,6 +42416,11 @@
    "by": "Claude",
    "on": "2026-11-17",
    "text": "Read 2026-11-17: the buildings of the kind (0x413db8), each with: the type id (type slot 0x20, +0x104) equal to arg5 unless arg5 is -1; the same habitat (slot 0x248); room (0x429330); tile distance squared within radius squared - ALL such collected, one picked at random (rand % count), not the nearest"
+  },
+  "0x5a1b15": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "Popup keys read from [default] then the goal's section: layout, background, icon, image1/2, shortText1/2, longText1/2, ok, yes, no, cancel, pause, modal, persistentTextLayout, persistentShortText, persistentLongText, persistentButton, displayAsMessage. persistentShortText -1 puts the first goal still at 0 with a text (top-level, not a group's children) on the reminder bar (objectve.lyt 45400, button 45406), a string id puts that text, 0 puts the bar away; the popup is kept so objectve_Message_click 0x4a09f8 can open it again. Engine: Goals::showPopup, Goals::reopenPopup, UiGameScreen::setObjective (ours reads image1, longText1, pause and persistentShortText only: the rest is #100)"
   },
   "0x5a25cd": {
    "by": "Claude",
@@ -41884,6 +42527,11 @@
    "on": "2026-11-17",
    "text": "Only reached for a show tank (tankPickLook 0x44e1e8 decides): so the walls it turns are those 0x44e1e8 let through - its own ordinary records on a wall another tank shares. Engine: Fences::updateExhibits (#261)"
   },
+  "0x5ac651": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: a display option (resolution, window or full screen, terrain blending): ours has its own display options (UiOptions) with the 2001 limits lifted"
+  },
   "0x5ad1e8": {
    "by": "Claude",
    "on": "2026-11-16",
@@ -41914,15 +42562,40 @@
    "on": "2026-11-17",
    "text": "Ported #251 (round 11): the tile param's four cells (+4..+0x10), each object's slot 0xb8(unit) = its type's slot 0x40 (sceneryWalkThrough 0x414810). Engine: World fences.tankDepth"
   },
+  "0x5aff13": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: a display option (resolution, window or full screen, terrain blending): ours has its own display options (UiOptions) with the 2001 limits lifted"
+  },
   "0x5b0635": {
    "by": "Claude",
    "on": "2026-11-15",
    "text": "Starts behaviour set bSick ([<kind>\\BehaviorSet\\bSick]: fPlayWithSound(puke, <kind>_puke)); if it started, thought 10285. checkArrived ends the task once its set isn't bSick; atTarget sets +0x33e"
   },
+  "0x5b09f6": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "researchPick(branch): clears +0x30/+0x34, then over the checked categories (+0x34): a begun program (progress > 0, under cost) is taken at once; else the lowest order over all checked categories' unfinished programs, and one with that order at random (rand). Run by researchTick 0x41f1ba every tick the branch has no program or its category is unchecked, and after a program completes (#300)"
+  },
+  "0x5b0f12": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
+  },
   "0x5b108b": {
    "by": "Claude",
    "on": "2026-11-18",
    "text": "Measured 2026-11-18 (Play original): first tank picked on Status -> Modify Tank (0x468b9d once, DAT_0063ead5); Animals kept tank to tank; Thoughts kept land to land and land to tank; Modify Tank kept tank to tank with no Status page visible; a land exhibit from Modify Tank -> Status, tank tab greyed (0x58b5f2); reopened on Thoughts, nothing picked, nothing showing. Engine: UiGameScreen::refreshExhibits (#290)"
+  },
+  "0x5b12c1": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the scenario goal's deleting destructor (its strings freed)"
+  },
+  "0x5b14a4": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: panel show/hide housekeeping - closes other panels, picks the first tab, refreshes what the panel shows (nothing of play); ours does the same through its panel open/close (UiGameScreen::setPanelOpen, the refresh functions)"
   },
   "0x5b2be5": {
    "by": "Claude",
@@ -41938,6 +42611,11 @@
    "by": "Claude",
    "on": "2026-11-16",
    "text": "Healed (2026-11-16): cStaySick (type +0x44d, loadConfig 0x4b93cd, key 0x640170) -> bDoneSick started at once (0x43c6c5 bDoneSick,1,2); else unit +0x20d = 0. The 9 cStaySick kinds (sharks, manta, tuna, barracuda, marlin) end their sick sets in fKeepControl. Engine: Animals::heal (Claude, 2026-11-16)"
+  },
+  "0x5ff9e8": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the ambient animal's debug overlay (class slot 0x64), shown only while the developer flag zooTime +0x100 is set - nothing in a player's game; not ported (r15, 2026-11-18)"
   },
   "0x6005c3": {
    "by": "Claude",
@@ -41979,10 +42657,40 @@
    "on": "2026-11-17",
    "text": "Names (0x44940b): Steve Serafino 0x5aa1 (23201), Charlie Peterson 0x5aa2, John Wheeler 0x5aa3, Andrew Binder 0x5aa4, Hank Howie 0x5aa5, Adam Levesque 0x5aa6, Lou Catanzaro 0x5aa7, Dinoman 0x5aad (23213), Ron Propst 0x5aae (23214). Every branch's categories of that name: 23201 is catex1 and catex9 (11 programs). Engine: RenameCheats researchCategory, ResearchProgram::cheatApplied (Claude, 2026-11-17)"
   },
+  "0x607871": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "Read 2026-11-18 (#298): every object whose type cNameID is 0x17ce..0x17d0 (dinopoo is 6094 = 0x17ce, the other two have no .ai) gets its type swapped (slot 0x7c -> 0x4865c4, only when both types' slot 0x14 strings match, as with a scenery type) for the type of cNameID 0x23f0 = scenery/other/lrock1.ai (coprolite is fossil dung), after the art index 0x4fe8f7 is cleared of the old path. Needs that type to exist (0x607889). Engine: RenameCheats::dinoDungToRock"
+  },
   "0x60b086": {
    "by": "Claude",
    "on": "2026-11-17",
    "text": "Ported (#231): Original::attractionScore and Guests::decide's fun pick with Guests::useAttractionAttractiveness (zoo.ini [AI], read once in Guests::load); parity check 'useAttractionAttractiveness: the furthest'"
+  },
+  "0x60b4d3": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the original's online update window (Get New Zoo Tycoon Items); its service is gone, ours has the Mod Menu"
+  },
+  "0x60b7d3": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the original's online update window (Get New Zoo Tycoon Items); its service is gone, ours has the Mod Menu"
+  },
+  "0x60b7f0": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the original's online update window (Get New Zoo Tycoon Items); its service is gone, ours has the Mod Menu"
+  },
+  "0x60baf0": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the original's online update window (Get New Zoo Tycoon Items); its service is gone, ours has the Mod Menu"
+  },
+  "0x60baf8": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the original's online update window (Get New Zoo Tycoon Items); its service is gone, ours has the Mod Menu"
   },
   "0x60c9a4": {
    "by": "Claude",
@@ -42027,7 +42735,7 @@
   "0x611764": {
    "by": "Claude",
    "on": "2026-11-18",
-   "text": "r13 (2026-11-18): the developer's debug overlay (class slot 0x64) - nothing in a player's game; not ported"
+   "text": "developer-only: the developer's debug overlay (class slot 0x64) - nothing in a player's game; not ported (r13, 2026-11-18)"
   },
   "0x611b43": {
    "by": "Claude",
@@ -42053,6 +42761,16 @@
    "by": "Claude",
    "on": "2026-11-16",
    "text": "Not an out-of-money announcement: the show by id (0x59eb99), its +0xe and +0xf set, event 0x2723 (10019) posted to its tank (0x5a6f37) and 0x5a6e46(10019, arg); arg 8 also 0x5a6894(0) (r6)"
+  },
+  "0x6131c3": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the debug overlay's goal / subgoal lines"
+  },
+  "0x613641": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the animal's debug overlay (class slot 0x64): hap/hun/hea/eng, mate/mother/father/pred/prey and water/ramp flags - shown only while the developer flag zooTime +0x100 is set; nothing in a player's game; not ported (r15, 2026-11-18)"
   },
   "0x613ca6": {
    "by": "Claude",
@@ -42084,10 +42802,40 @@
    "on": "2026-11-16",
    "text": "After foodScenerySave: the list's count and ids (+0x158; 0 when none), then +0x15c (the wrecked thing's cNameID - type slot 0x20). Records are rubble/other/<kind> (rubble01.cfg). Engine: ZooReader rubbleIds/rubbleOf, SaveGame::encodeOriginal (Claude, 2026-11-16)"
   },
+  "0x616242": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: registered for id 0xb164, which no layout has (lab uiElement: not in any layout) - never clicked"
+  },
+  "0x616290": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the credits pages' drawing (ours: creditsLoad / creditsTick)"
+  },
+  "0x616348": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "plumbing: the credits pages' drawing (ours: creditsLoad / creditsTick)"
+  },
   "0x6168c3": {
    "by": "Claude",
    "on": "2026-11-18",
-   "text": "Developer panel only (develop_Objects_click 0x47ee74): the 'Zoo Cash' line - not ported"
+   "text": "developer-only: the developer panel's 'Zoo Cash' line (develop_Objects_click 0x47ee74) - nothing in a player's game; not ported (r13, 2026-11-18)"
+  },
+  "0x6169df": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  "0x616a9a": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the developer panel (develop.lyt), not part of play"
+  },
+  "0x616b58": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "developer-only: the developer panel (develop.lyt), not part of play"
   },
   "0x617338": {
    "by": "Claude",
@@ -42208,6 +42956,21 @@
    "by": "Claude",
    "on": "2026-11-11",
    "text": "2026-11-11, everything-ff03-units in the running game: a maintenance worker holds a fence entry (+8 = the worker); newly worn pieces' flagged entries go to the very front. Still unseen: bin (9) and litter (7) entries - they need guests, so a played zoo with an animal exhibit."
+  },
+  "0x6392c0": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "wonderland flag: read by guestArrivalCheck 0x424375 at 0x42444d (adds 0x1e to the rating plus marketing). Written only by 0x5aee66; loadConfig 0x591a1f's copy loop stops at 0x6392c0, so it is never cleared"
+  },
+  "0x63aff0": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "Blue Fang flag: read by guestBuy 0x42d858 at 0x42d8ee (the building's price x priceFactor doubled, into the guest's and the zoo's takings)"
+  },
+  "0x63c54e": {
+   "by": "Claude",
+   "on": "2026-11-18",
+   "text": "Microsoft flag: read by guestDoneViewingExhibit 0x42ea14 at 0x42eb0e (the donation doubled before the $10 cap)"
   },
   "0x642c50": {
    "by": "Claude",

@@ -12,9 +12,11 @@
 #include "ResourceManager.hpp"
 #include "Staff.hpp"
 #include "World.hpp"
+#include "ZooItems.hpp"
 
 #include <map>
 #include <set>
+#include <vector>
 
 namespace {
 
@@ -627,4 +629,79 @@ bool RenameCheats::applyNameTable(const std::string &name, const std::string &ty
   g_usedNames.insert(name);
   ZT_STEP("0x449560", "Rename: the name table's entry", {"name", name}, {"bonuscash", e.bonusCash});
   return true;
+}
+
+// zoo.exe cheatDinoPoo 0x607871 ("Copralite Corner"): every object whose
+// type's cNameID is 0x17ce, 0x17cf or 0x17d0 (the dinosaurs' dung, dinopoo
+// 6094) has its type swapped (slot 0x7c, 0x4865c4, kept only for a type of
+// the same kind) for the type of cNameID 0x23f0 (lrock1: coprolite is fossil
+// dung), where it lies - none when no such type exists (0x607889). ours: a
+// dung pile is the zoo's item, the rock a placed object at its point.
+// Returns the piles turned
+static int dinoDungToRock(World &world) {
+  const std::string rock = "scenery/other/lrock1.ai";
+  if (!world.objectsMutable().artOfFile(rock))
+    return 0;
+  std::vector<std::pair<float, float>> at;
+  std::vector<int> ids;
+  for (const ZooItems::Item &i : world.getItems().items())
+    if (ZooItems::dinoDung(i)) {
+      ids.push_back(i.id);
+      at.push_back({i.x, i.y});
+    }
+  for (size_t n = 0; n < ids.size(); n++) {
+    world.getItems().remove(ids[n]);
+    world.objectsMutable().add(rock, at[n].first, at[n].second, 0);
+  }
+  return static_cast<int>(ids.size());
+}
+
+// zoo.exe dinoExhibitNameList 0x5aee66 (run on an exhibit's name, 0x5aedbd,
+// before it is kept): the name compared with each of eight, exactly - its
+// length and bytes (0x40d4e5 and the like), the first to match the only one
+// done. typesSetAvailable 0x591325 (id, 1): every type of that cNameID's own
+// flag (slot 0x3c, +0xcc) on
+std::string RenameCheats::exhibitRenamed(World &world, const std::string &name) {
+  if (name == "wonderland") {
+    g_flags.wonderland = true;
+    ZT_STEP("0x6392c0", "Exhibit name cheat: 30 more on the rating guests arrive by");
+    return "0x6392c0";
+  }
+  if (name == "Microsoft") {
+    g_flags.microsoft = true;
+    ZT_STEP("0x63c54e", "Exhibit name cheat: a viewing donation doubled");
+    return "0x63c54e";
+  }
+  if (name == "Blue Fang") {
+    g_flags.blueFang = true;
+    ZT_STEP("0x63aff0", "Exhibit name cheat: what guests pay at a building doubled");
+    return "0x63aff0";
+  }
+  struct Unlock {
+    const char *name;
+    int nameId;
+  };
+  static const Unlock unlocks[] = {{"Xanadu", Original::Cheat::xanaduNameId},
+                                   {"Cretaceous Corral", Original::Cheat::cretaceousCorralNameId},
+                                   {"Kathmandu", Original::Cheat::kathmanduNameId}};
+  for (const Unlock &u : unlocks)
+    if (name == u.name) {
+      if (g_hooks.typeAvailable)
+        g_hooks.typeAvailable(u.nameId);
+      ZT_STEP("0x591325", "Exhibit name cheat: a type made available", {"name", name}, {"cNameID", u.nameId});
+      return "0x591325";
+    }
+  if (name == "Copralite Corner") {
+    const int turned = dinoDungToRock(world);
+    ZT_STEP("0x607871", "Exhibit name cheat: every dinosaur dung into a rock", {"turned", turned});
+    return "0x607871";
+  }
+  if (name == "Super Croc") {
+    if (g_hooks.typeAvailable)
+      g_hooks.typeAvailable(Original::Cheat::superCrocNameId);
+    ZT_STEP("0x591325", "Exhibit name cheat: a type made available", {"name", name},
+            {"cNameID", Original::Cheat::superCrocNameId});
+    return "0x591325";
+  }
+  return "";
 }

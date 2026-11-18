@@ -1,15 +1,17 @@
 #ifndef UI_TEXT_HPP
 #define UI_TEXT_HPP
 
+#include <algorithm>
 #include <functional>
 #include <string>
 #include <vector>
 #include <SDL3/SDL.h>
 #include "UiElement.hpp"
+#include "UiScrollBar.hpp"
 #include "../IniReader.hpp"
 #include "../ResourceManager.hpp"
 
-class UiText : public UiElement {
+class UiText : public UiElement, public UiScrollable {
 public:
   UiText(IniReader * ini_reader, ResourceManager * resource_manager, std::string name);
   ~UiText();
@@ -18,6 +20,19 @@ public:
   void draw(SDL_Renderer * renderer, SDL_Rect * layout_rect);
   
   void setText(const std::string& newText);
+  // ours: a box the layout's own scroll bar (its scrollbar= element) scrolls,
+  // as the lists' are: the text wrapped to the box's width into rows of the
+  // font's line + 1 (a list's row), the bar along its right edge
+  void linkScrollBar(UiScrollBar *bar) {
+    bar->attach(this);
+    this->linked = true;
+  }
+  // UiScrollable (rows)
+  int getScrollPosition() const override { return this->rowScroll; }
+  int getScrollMaximum() const override { return std::max(0, static_cast<int>(this->rows.size()) - this->viewRows); }
+  int getScrollPage() const override { return this->viewRows; }
+  void setScrollPosition(int position) override { this->rowScroll = std::clamp(position, 0, this->getScrollMaximum()); }
+  SDL_Rect getScrollBounds() const override { return this->last_rect; }
   // A message for a box (dialogs): one paragraph, wrapped to the box's
   // width as it is drawn
   void setMessage(const std::string& newText);
@@ -55,6 +70,11 @@ public:
   SDL_Color layoutColor() const;
 private:
   void drawLines(SDL_Renderer * renderer, SDL_Rect * layout_rect);
+  void drawRows(SDL_Renderer * renderer);
+  bool linked = false;
+  int rowScroll = 0, viewRows = 1, rowsWidth = -1;
+  std::vector<std::string> rows;
+  std::string rowsText;
   SDL_Texture * text = nullptr;
   SDL_Texture * shadow = nullptr;
   int font = 0;

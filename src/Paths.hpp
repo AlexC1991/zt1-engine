@@ -30,6 +30,9 @@ bool portable();
 std::string appDir();
 // The player's Zoo Tycoon
 std::string gameDir();
+// The original's own product number (its key's PID, which the Help window's
+// About topic shows), or empty
+std::string productId();
 // The engine's settings, mods and scenario progress
 std::string dataDir();
 // zoo.ini: the game's paths and the player's settings
