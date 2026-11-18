@@ -253,7 +253,9 @@ void Guests::load(ResourceManager *rm) {
   // [BehaviorSet\bInWater], bSuitIdle, and a man's bSuitDrown, bSurfDrown;
   // and the buildings' sets, those with an fEnterBuilding (the benches' and
   // picnic tables' [BehaviorSet\bbencheat0] ..., the playground's and games'
-  // per kind: [boy\BehaviorSet\bswingfun0], [man\BehaviorSet\bdinoputtfun0])
+  // per kind: [boy\BehaviorSet\bswingfun0], [man\BehaviorSet\bdinoputtfun0]);
+  // and a grandstand's audience's trick sets, bBadTrick, bGoodTrick,
+  // bGreatTrick (ZTGuest::handleEvents 0x43a698)
   for (const std::string &sec : ai->getSections()) {
     const std::string low = lower(sec);
     const size_t at = low.find("behaviorset\\");
@@ -265,7 +267,7 @@ void Guests::load(ResourceManager *rm) {
     for (const std::string &f : lines)
       enters = enters || lower(f).find("fenterbuilding") != std::string::npos;
     if (name.rfind("breturn", 0) == 0 || name == "binwater" || name == "bsuitidle" || name == "bsuitdrown" ||
-        name == "bsurfdrown" || enters)
+        name == "bsurfdrown" || enters || name == "bbadtrick" || name == "bgoodtrick" || name == "bgreattrick")
       this->behaviourSets[low] = lines;
   }
   delete ai;
@@ -1481,6 +1483,29 @@ bool Guests::walkAbout(Guest &g) {
       return walkable(x, y);
     return here >= 0 ? this->fences->exhibitAt(x, y) == here || fleeGround(x, y) : fleeGround(x, y);
   };
+  const float speed = this->typeList[g.type].speed;
+  // First its own pick (ZTGuest's class slot 0x1f4, 0x42909f): on zoo
+  // ground, a path tile on a ring round it (ZTUnit's 0x428cc9: its own
+  // roll of the half widths, the ring's tiles that are paths and passable
+  // for it, one at random), routed to unless it's its own tile; only none
+  // routed, the ring below. ours: in an exhibit (0x42909f: the tile by its
+  // gate, habitatFromHere 0x49ebce) not yet - #288
+  if (here < 0) {
+    const int px = rnd(Original::aiWalkRandomGuest) + 1 + Original::aiWalkBase;
+    const int py = rnd(Original::aiWalkRandomGuest) + 1 + Original::aiWalkBase;
+    std::vector<std::pair<int, int>> paths;
+    for (int dx = -px; dx <= px; dx++)
+      for (int dy = -py; dy <= py; dy++)
+        if ((dx == px || dx == -px || dy == py || dy == -py) && walkable(sx + dx, sy + dy))
+          paths.push_back({sx + dx, sy + dy});
+    ZT_STEP("0x428cc9", "Walk about: first a path tile on a ring round it", {"half width", px}, {"half height", py},
+            {"tiles", static_cast<int>(paths.size())});
+    if (!paths.empty()) {
+      auto [gx, gy] = paths[static_cast<size_t>(rnd(static_cast<int>(paths.size())))];
+      if (walkTo(g, gx, gy, speed))
+        return true;
+    }
+  }
   std::vector<std::pair<int, int>> ring;
   for (int dx = -rx; dx <= rx; dx++)
     for (int dy = -ry; dy <= ry; dy++)
@@ -1488,7 +1513,6 @@ bool Guests::walkAbout(Guest &g) {
         ring.push_back({sx + dx, sy + dy});
   ZT_STEP("0x43d948", "Walk about: a tile on a ring round it, at random", {"half width", rx},
           {"half height", ry}, {"tiles", static_cast<int>(ring.size())});
-  const float speed = this->typeList[g.type].speed;
   if (!ring.empty()) {
     auto [gx, gy] = ring[static_cast<size_t>(rnd(static_cast<int>(ring.size())))];
     if (walkTo(g, gx, gy, speed))
@@ -2361,33 +2385,7 @@ bool Guests::joinTour(int guest, int guide, int exhibit, int tx, int ty) {
     if (g.hunger >= t.hungerThreshold || g.thirst >= t.thirstThreshold || g.tired >= t.energyThreshold ||
         g.bathroom >= t.bathroomThreshold)
       return false;
-    // Where to (zoo.exe 0x58d809): 1 in 10 the guide's own spot; else the
-    // four tiles round it (0x4171a1: north, east, south, west) from a random
-    // one on to the last, then the first (0x58d87c-0x58dabd), the first out
-    // of any exhibit (its habitat's +0x2c) it has a route to
-    auto routeTo = [&](int x, int y) {
-      if (walkTo(g, x, y, t.speed))
-        return true;
-      // ours: already on the tile it's sent to - no walk to make (walkTo
-      // has no path for it): there next frame, as if it had walked
-      if (static_cast<int>(std::floor(g.x)) != x || static_cast<int>(std::floor(g.y)) != y)
-        return false;
-      g.path = {{g.x, g.y}};
-      g.pathAt = 0;
-      g.speed = t.speed;
-      return true;
-    };
-    bool routed = false;
-    if (std::uniform_int_distribution<int>(0, 9)(this->rng) == 0) {
-      routed = routeTo(tx, ty);
-    } else {
-      const std::pair<int, int> tiles[4] = {{tx, ty - 1}, {tx + 1, ty}, {tx, ty + 1}, {tx - 1, ty}};
-      const int n = 4;
-      for (int k = std::uniform_int_distribution<int>(0, n - 1)(this->rng); k <= n && !routed; k++)
-        if (this->fences->exhibitAt(tiles[k % n].first, tiles[k % n].second) < 0)
-          routed = routeTo(tiles[k % n].first, tiles[k % n].second);
-    }
-    if (!routed)
+    if (!routeToTour(g, tx, ty))
       return false;
     g.state = State::Walking;
     g.guide = guide;
@@ -2396,6 +2394,58 @@ bool Guests::joinTour(int guest, int guide, int exhibit, int tx, int ty) {
     return true;
   }
   return false;
+}
+
+// ours: a follower after a load (Staff::resumeTour - the original reads
+// the guest's guide, ZTGuest +0x2e4, and its task back; ours doesn't save a
+// guest's walk, so it's sent again as joinTour sends one)
+bool Guests::resumeTour(int guest, int guide, int exhibit, int tx, int ty, bool heard) {
+  for (Guest &g : this->list) {
+    if (g.id != guest)
+      continue;
+    if (g.guide >= 0 || g.leaving || g.building >= 0 || g.hidden || g.showTank >= 0 ||
+        g.state == State::Fleeing || g.state == State::Caught || g.state == State::Leaving || g.state == State::Water)
+      return false;
+    if (!routeToTour(g, tx, ty))
+      return false;
+    g.state = State::Walking;
+    g.guide = guide;
+    g.tourHeard = heard;
+    g.target = exhibit;
+    return true;
+  }
+  return false;
+}
+
+bool Guests::routeToTour(Guest &g, int tx, int ty) {
+  const Type &t = this->typeList[g.type];
+  // Where to (zoo.exe 0x58d809): 1 in 10 the guide's own spot; else the
+  // four tiles round it (0x4171a1: north, east, south, west) from a random
+  // one on to the last, then the first (0x58d87c-0x58dabd), the first out
+  // of any exhibit (its habitat's +0x2c) it has a route to
+  auto routeTo = [&](int x, int y) {
+    if (walkTo(g, x, y, t.speed))
+      return true;
+    // ours: already on the tile it's sent to - no walk to make (walkTo
+    // has no path for it): there next frame, as if it had walked
+    if (static_cast<int>(std::floor(g.x)) != x || static_cast<int>(std::floor(g.y)) != y)
+      return false;
+    g.path = {{g.x, g.y}};
+    g.pathAt = 0;
+    g.speed = t.speed;
+    return true;
+  };
+  bool routed = false;
+  if (std::uniform_int_distribution<int>(0, 9)(this->rng) == 0) {
+    routed = routeTo(tx, ty);
+  } else {
+    const std::pair<int, int> tiles[4] = {{tx, ty - 1}, {tx + 1, ty}, {tx, ty + 1}, {tx - 1, ty}};
+    const int n = 4;
+    for (int k = std::uniform_int_distribution<int>(0, n - 1)(this->rng); k <= n && !routed; k++)
+      if (this->fences->exhibitAt(tiles[k % n].first, tiles[k % n].second) < 0)
+        routed = routeTo(tiles[k % n].first, tiles[k % n].second);
+  }
+  return routed;
 }
 
 // Ground a guest may run over from a predator: the paths, or open ground in
@@ -2736,6 +2786,113 @@ void Guests::caughtNext(Guest &g) {
   decide(g);
 }
 
+// zoo.exe ZTGuest::handleEvents 0x43a698: a trick's event to the audience
+// (0x272a bad, 0x272c good, 0x272d great; an OK one 0x272b none) starts
+// bBadTrick / bGoodTrick / bGreatTrick (startSetNow 0x43c6c5) - in place of
+// what it was playing - and its lines run one by one (standSetNext)
+void Guests::startStandSet(Guest &g, const std::string &set) {
+  const std::string s = lower(set);
+  auto it = g.type >= 0 && g.type < static_cast<int>(this->typeList.size())
+                ? this->behaviourSets.find(this->typeList[g.type].key + "\\behaviorset\\" + s)
+                : this->behaviourSets.end();
+  if (it == this->behaviourSets.end())
+    it = this->behaviourSets.find("behaviorset\\" + s);
+  StandSet &st = this->stand[g.id];
+  st.lines = it != this->behaviourSets.end() ? it->second : std::vector<std::string>{};
+  st.line = 0;
+  st.base.clear();
+  ZT_STEP("0x43c6c5", "A trick: the audience's set started", {"guest", g.name}, {"set", set},
+          {"lines", static_cast<int>(st.lines.size())});
+  standSetNext(g);
+}
+
+// The grandstand set's next line (the behaviour runner, 0x436065 /
+// 0x437ccd: a done line moves on at once, a playing one waits for its end):
+// - fPlay(<a>) 0x440b92: <a> played once; fPlayTime(<a>, <s>) 0x424e7f:
+//   whole plays to <s> seconds or more
+// - fPlayWithBase(<base>, <a>...) 0x5a90eb: fewer than two arguments, or
+//   the base or no other found (0x410ffe), the line fails; else the others
+//   started layered over the base (0x42296d with the layer flag: +0xf8 set,
+//   +0xf9 and the line's done byte +0x18 cleared), and the line waits until
+//   the layer's play is over (+0x9c reaching +0x8c, 0x411fed) - then +0xf9
+//   set, the line done. ours: the first other drawn over the base
+// - fKeepControl(): held there (the base, when there was one, on show)
+// A line that fails (an animation the kind hasn't) ends the set there
+bool Guests::standSetNext(Guest &g) {
+  const Type *t = g.type >= 0 && g.type < static_cast<int>(this->typeList.size()) ? &this->typeList[g.type] : nullptr;
+  auto loopOf = [&](const std::string &anim) {
+    Animation *a = t && t->anims.count(anim) ? this->art(g, anim) : nullptr;
+    if (!a)
+      return -1.0f;
+    return a->frameTimeMs() > 0 && a->frameCount() > 0 ? a->frameCount() * a->frameTimeMs() / 1000.0f : 1.0f;
+  };
+  StandSet &st = this->stand[g.id];
+  const std::string held = !st.base.empty() ? st.base : g.anim;
+  st.base.clear();
+  while (st.line < st.lines.size()) {
+    const std::string line = lower(st.lines[st.line++]);
+    const size_t open = line.find('(');
+    std::string fn = line.substr(0, open);
+    fn.erase(0, fn.find_first_not_of(" \t"));
+    fn.erase(fn.find_last_not_of(" \t") + 1);
+    std::vector<std::string> args;
+    if (open != std::string::npos) {
+      std::stringstream ss(line.substr(open + 1, line.find(')', open) - open - 1));
+      for (std::string a; std::getline(ss, a, ',');) {
+        a.erase(0, a.find_first_not_of(" \t"));
+        a.erase(a.find_last_not_of(" \t") + 1);
+        if (!a.empty())
+          args.push_back(a);
+      }
+    }
+    if (fn == "fkeepcontrol")
+      break;
+    if ((fn == "fplay" || fn == "fplaytime") && !args.empty()) {
+      const float loop = loopOf(args[0]);
+      if (loop < 0)
+        break;
+      float secs = loop;
+      if (fn == "fplaytime" && args.size() > 1)
+        while (static_cast<float>(std::atof(args[1].c_str())) - secs >= 0.001f)
+          secs += loop;
+      ZT_STEP("0x440b92", "The audience's set: its next play", {"guest", g.name}, {"fn", fn}, {"anim", args[0]},
+              {"seconds", secs});
+      play(g, args[0], secs);
+      return true;
+    }
+    if (fn == "fplaywithbase") {
+      const float loop = args.size() >= 2 && loopOf(args[0]) >= 0 ? loopOf(args[1]) : -1.0f;
+      ZT_STEP("0x5a90eb", "fPlayWithBase: played over its base", {"guest", g.name},
+              {"base", args.empty() ? "" : args[0]}, {"over it", args.size() > 1 ? args[1] : ""}, {"seconds", loop});
+      if (loop < 0)
+        break;
+      play(g, args[1], loop);
+      st.base = args[0];
+      return true;
+    }
+  }
+  // Over (or held at fKeepControl): seated, what it last showed under it
+  this->stand.erase(g.id);
+  if (!held.empty() && t && t->anims.count(held))
+    play(g, held, 0.0f);
+  return false;
+}
+
+bool Guests::standActive(const Guest &g) const {
+  auto it = this->stand.find(g.id);
+  return it != this->stand.end() && (it->second.line < it->second.lines.size() || !it->second.base.empty());
+}
+
+std::string Guests::standBase(const Guest &g) const {
+  auto it = this->stand.find(g.id);
+  return it != this->stand.end() ? it->second.base : std::string();
+}
+
+size_t Guests::standLinesLeft(const Guest &g) const {
+  auto it = this->stand.find(g.id);
+  return it != this->stand.end() ? it->second.lines.size() - it->second.line : 0;
+}
+
 bool Guests::heldBy(int guest, int animal) const {
   for (const Guest &g : this->list)
     if (g.id == guest)
@@ -2768,15 +2925,27 @@ void Guests::tourTalk(int guide, int bonus) {
     }
 }
 
+// A guest's walk (task 1), as the default task's tick runs it (zoo.exe
+// Task1::tick 0x436244, class table 0x63233c slot 5): in task 1, not
+// arrived (state +0x4c), with no target object or tile (state slot 4
+// 0x43630e: +0x1c, +0x24, slot 0x14 0x4365ed) and no job (slot 0x10
+// 0x4361dd: +0x18), the unit's class slot 0x1e0 - for a guest ZTUnit's
+// walkOnWhenRouteDone 0x43dd1d: its route list +0x154 emptied, a walk
+// about (unitWalkAbout 0x43d948) and, made, off on it (0x422127(0, 1));
+// none made, the destination still unset, task 1 set again (slot 0x1d8
+// (1, 1)) while slot 0x184 (0x422594) allows - so it tries again the next
+// update. Its walk done (0x4362bf: the route's end, task 1 - arrived),
+// the goal cleared (slot 0x174) and slot 0x188 (0x4225b5) sets +0x33e,
+// which slot 0x184 then refuses: task 0 stays, and its chooser
+// (chooseTask 0x43a6e4, every frame) decides what's next - one walk, then
+// a choice. ours: the choice is Guests::decide, at the walk's end; with no
+// walk made, it stands an update (Original::updateMs) and decide runs
+// again, as the chooser does each frame
 void Guests::wander(Guest &g) {
-  int sx = static_cast<int>(std::floor(g.x)), sy = static_cast<int>(std::floor(g.y));
-  std::uniform_int_distribution<int> off(-12, 12);
-  for (int tries = 0; tries < 12; tries++) {
-    int x = sx + off(this->rng), y = sy + off(this->rng);
-    if (walkable(x, y) && walkTo(g, x, y, this->typeList[g.type].speed))
-      return;
-  }
-  play(g, "stand", 2.0f);
+  const bool walk = walkAbout(g);
+  ZT_STEP("0x43dd1d", "Task 1: a walk about (walkOnWhenRouteDone)", {"walk about", walk ? "yes" : "none yet"});
+  if (!walk)
+    play(g, "stand", static_cast<float>(Original::updateMs) / 1000.0f);
 }
 
 void Guests::decide(Guest &g) {
@@ -4719,6 +4888,14 @@ void Guests::collect(const WorldRenderer &view, const WorldMap &map, std::vector
       out.push_back(h);
       continue;
     }
+    // (fPlayWithBase 0x5a90eb: its base under the animation layered on it)
+    if (const auto st = this->stand.find(g.id); st != this->stand.end() && !st->second.base.empty())
+      if (Animation *base = this->art(g, st->second.base)) {
+        const float bms = base->frameTimeMs() ? static_cast<float>(base->frameTimeMs()) : 100.0f;
+        Fences::Drawable b{depth - 0.00001f, sx, sy, base, facing(view, g), SDL_Color{255, 255, 110, 255}, false};
+        b.frame = static_cast<int>(g.animTime * 1000.0f / bms);
+        out.push_back(b);
+      }
     Fences::Drawable d{depth, sx, sy, a, facing(view, g), SDL_Color{255, 255, 110, 255}, g.id == this->hovered};
     d.frame = static_cast<int>(g.animTime * 1000.0f / ms);
     if (g.reverse && a->frameCount() > 0) // (fPlayReverse: last frame first)

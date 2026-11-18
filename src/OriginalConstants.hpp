@@ -337,6 +337,10 @@ inline int timedMovePlays(int timeMs, int lengthMs) {
 // further than zoo.ini [AI] maxDistToGoToShow tiles (read once; default
 // 150 at [0x6395ac] - the shipped zoo.ini has no [AI] section)
 inline constexpr int maxDistToGoToShow = 150;
+// A unit's step cost that means "impassable" (zoo.exe DAT_00635494, 20 in
+// its data: staffStepCost 0x41456c caps at it; gateCrossCheck 0x46676a calls
+// a pair at it - 1 or more code 4)
+inline constexpr int impassableStepCost = 20;
 inline constexpr int aiWalkBase = 1;
 inline constexpr int aiWalkRandom = 5;
 inline constexpr int aiWalkRandomStaff = 9;
@@ -418,6 +422,19 @@ inline constexpr int animalEggFootprint = 2;
 // more (its +0x150, UnitBase::addedToWorld 0x412cdc: x times y of slot
 // 0x94's footprint) can't be put down
 inline constexpr int animalSteepFootprintArea = 4;
+// animalPlacementRule 0x4f86fb (`cmp [esp+0x68], 2; jg`): an animal whose
+// footprint (slot 0x94) is over this many half tiles either way gets the
+// footprint-wide check 0x4f7fbd
+inline constexpr int animalFootprintCheckOver = 2;
+// 0x4f7fbd: a footprint (slot 0x94) over this many half tiles either way
+// needs flat tiles of one height (a check from a crate only) ...
+inline constexpr int footprintFlatOver = 1;
+// ... and one (slot 0x98) over this many either way no fence or cliff on
+// the edges inside it ...
+inline constexpr int footprintEdgesOver = 2;
+// ... a cliff being an edge whose code (tile +0x82, 2 bits a side; byte 6
+// of a map's tile) is over this
+inline constexpr int footprintCliffCodeMax = 1;
 
 // The rename cheats (zoo.exe 0x44940b and what reads their flags)
 namespace Cheat {

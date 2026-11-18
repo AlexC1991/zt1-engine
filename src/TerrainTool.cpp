@@ -129,6 +129,10 @@ void TerrainTool::touch() {
     this->map->touch();
 }
 
+// The terraforming's price so far (zoo.exe 0x4d9c0f): each tile changed
+// since the tool came out (the map's list +0x3c, by x << 16 | y), its
+// corners' largest change in height x elevationCost (+0x5c), and when its
+// terrain is another the new terrain's cost (the terrain list +8)
 float TerrainTool::cost() const {
   float total = 0;
   for (const auto &[pos, o] : this->baseline) {

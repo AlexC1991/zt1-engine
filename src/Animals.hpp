@@ -255,6 +255,67 @@ public:
     std::vector<Ambient> ambientUnder, ambientSurface;
     std::string listImage;
   };
+  // The original's tasks (unitMakeTask's numbered classes; Guests.hpp lists
+  // the guests'). Every one shares the base task (class table 0x6323c4):
+  // its deleting destructor 0x604185 (destroy 0x41226c: the base table set
+  // back), its number at +0xc (taskId 0x4781e5; the shared 0x67, 0x68,
+  // 0x69 and 0x6a, 0x42a0a5, 0x42a783, 0x42a849, 0x42a1d5), begin 0x404a7e
+  // (true) or beginClear 0x4a0bbf (the unit's +0x24c, +0x3a4 and +0x22c
+  // cleared, its slot 0x258), and its tick 0x43679e (class slot 5: not
+  // arrived (slot 26, 0x4367db: state +0x4c) - checkArrived; still the
+  // unit's task (slot 32, 0x4367e2: state +0x14 its number) - whileGoing
+  // until arrived, then atTarget). The state it reads: setArrived 0x43e99b
+  // (+0x4c), target 0x43680e (+0x18), targetId 0x4a4bb0 (+0x1c),
+  // targetObject 0x43031a (the world's lookup of +0x1c), targetTile
+  // 0x4367f9 (+0x24), setTargetPos 0x42224d (taskStateSetTarget),
+  // setTargetB 0x508410, setTargetAndGo 0x4a8b25 and setTargetC 0x4a722c
+  // (+0x18 and where to go), setDuration 0x42e8fc (+0x48) and timeUp
+  // 0x42323d (zooTime +0xec less the start +0x44 past +0x48), setNextTask
+  // 0x422034 (taskStateSet with that number, the target cleared); the
+  // shared checkArrived tests: pathDone 0x436806 / checkArrivedPath
+  // 0x438481 (reachedPathEnd), checkArrivedNoTarget 0x49939c (no target,
+  // slot 14), checkArrivedShowPortal 0x5a2e9e (the path's end: "Reached
+  // show portal"). Task 1 (and 0) is the default class 0x63233c, whose tick
+  // is Task1::tick 0x436244 (the walk about: walkSomewhere, Staff::wander,
+  // Guests::wander). ours: no task objects - each unit keeps its own state
+  // and these are its fields and steps. The animals' (each class's ctor
+  // keeps the unit at +0x14 only if it isKindOf 0x638690; its destroy sets
+  // its own table then the base's, freeIfAsked frees it on its argument's
+  // bit 1 - read 2026-11-18):
+  //   0x7a Task7a_DrinkWater (ctor 0x4a0b53, dtor 0x4266a6, destroy
+  //     0x4266b0, freeIfAsked 0x4266bd, taskId 0x4232bc; begin beginClear):
+  //     whileGoing 0x426582 - with no target tile yet (slot 27), 0x4a0c55
+  //     the nearest water; checkArrived 0x42655e - on that tile, arrived;
+  //     atTarget 0x4265a0 - Member::drinkX, bDrink.
+  //   0x72 Task72_FindKeeperFood (ctor 0x4a8ec4, dtor 0x42773f, destroy
+  //     0x427749, freeIfAsked 0x427756, taskId 0x438496; begin 0x49fade,
+  //     its move's animation by name - slot 0x1b0): whileGoing 0x43849c,
+  //     checkArrivedPath, atTarget 0x4fd66a - its bFindKeeperFood.
+  //   0x7c Task7c_SurfaceForAir (ctor 0x4e8a31, dtor 0x498cad, destroy
+  //     0x498cb7, freeIfAsked 0x498cc4, taskId 0x498ce7; begin 0x4e89e1:
+  //     the unit's slot 0x268 must allow it, then as beginClear):
+  //     whileGoing 0x498cf5, atTarget 0x4e8ac4 - Member::surfacing.
+  //   0x74 Task74_Chase (ctor 0x4a4e37, dtor 0x4a4d98, destroy 0x4a4da2,
+  //     freeIfAsked 0x4a4daf, taskId 0x4a4c06): chasing prey (Animals::chase).
+  //   0x75 Task75_AvoidPredator (ctor 0x4a585f, dtor 0x4a4dfd, destroy
+  //     0x4a4e07, freeIfAsked 0x4a4e14, taskId 0x4a5502; staff and guests
+  //     run it too): running from a predator (Member::fleeFrom).
+  //   0x7b Task7b_GoToTargetBuilding (ctor 0x61ac58, dtor 0x61acaa, destroy
+  //     0x61acc8, taskId 0x61aca4; begin true): checkArrived 0x61acd3 - on
+  //     its target tile, "Reached targeted building"; atTarget 0x61ad83 -
+  //     Member::rampageBuilding.
+  //   0x73 Task73 (ctor 0x61ad92, dtor 0x61ade4, destroy 0x61ae02, taskId
+  //     0x61adde): nothing of its own but beginClear (class table 0x63453c);
+  //     no counterpart.
+  //   0x7d Task7d_GetTrickFood (ctor 0x5a72d9, dtor 0x5a6c78, destroy
+  //     0x5a6c82, freeIfAsked 0x5a6c8f, taskId 0x5a25c7), 0x85
+  //     Task85_GoToShowTank (dtor 0x5a3104, destroy 0x5a310e, freeIfAsked
+  //     0x5a311b, taskId 0x5a307d; whileGoing 0x5a3083 - with no target
+  //     tile yet, 0x5a3afa; checkArrivedShowPortal; atTarget 0x5a3846, its
+  //     tank-set test 0x5a3897), 0x86 Task86_ReturnHomeTank (ctor 0x5a8457,
+  //     dtor 0x5a36d1, destroy 0x5a36db, freeIfAsked 0x5a36e8, taskId
+  //     0x5a2f1f; atTarget 0x5a370b, its test 0x5a375c): the show animals'
+  //     trips (Shows.cpp).
   struct Member {
     int id = 0, type = 0;
     bool female = false, baby = false;
@@ -461,6 +522,10 @@ public:
   // Where one can go: an exhibit's ground (a land exhibit for a zoo
   // animal), not water, not on top of another
   Fences::Fit canPlace(int type, float x, float y, const WorldMap &map, const Fences &fences) const;
+  // The footprint-wide check (zoo.exe 0x4f7fbd) for one put down at x, y:
+  // a big one's every half tile on the map and in the zoo, no fence or
+  // cliff inside it (and, from its crate, more: see Animals.cpp)
+  bool footprintFits(int type, float x, float y, const WorldMap &map, const Fences &fences) const;
   // Its footprint in half tiles (class slot 0x94, ZTAnimal 0x410803): an
   // egg's cEggFootprint, a crate's cBoxFootprint, else with `map` its
   // cMapFootprint both ways, without its cFootprintX/Y
@@ -578,7 +643,10 @@ public:
   // has no such fallback. Each face floats up for 1.25 s; smile.wav and
   // frown.wav play once.
   enum class Change { Ground, Object, Animal };
-  void snapshot(int exhibit, const WorldMap &map, const Fences &fences);
+  // (an object or animal: the habitat of the tile it's on, and only from a
+  // tank the habitats joined to it - zoo.exe 0x4d8cd2 / 0x4d8bd7)
+  void snapshot(int exhibit, const WorldMap &map, const Fences &fences, Change change = Change::Ground);
+  std::vector<int> smileHabitats(int exhibit, Change change, const WorldMap &map, const Fences &fences) const;
   void react(int exhibit, Change change, const std::string &file, int animalType, bool removed,
              const WorldMap &map, const Fences &fences);
   bool paused = false;
@@ -717,7 +785,7 @@ private:
   bool feedingPlace(Member &m, float x, float y, const WorldMap &map, const Fences &fences);
   void consumeFood(Member &m);
   void reactOne(int exhibit, Change change, const std::string &file, int animalType, bool removed,
-                const WorldMap &map, const Fences &fences);
+                const WorldMap &map, const Fences &fences, std::map<int, float> &snap);
   void separateIdle(Member &m, float seconds, const WorldMap &map, const Fences &fences);
   const WorldMap *mapRef = nullptr; // (the map, for the art: swimmers' swim / water idle)
   bool onWater(const Member &m) const;
@@ -807,7 +875,10 @@ private:
   mutable std::map<const Animation *, Animation *> shadowCache; // (an art's shadow, or none)
   Animation *selectArrow = nullptr;
   Animation *smileArt = nullptr, *frownArt = nullptr;
-  std::map<int, std::map<int, float>> snaps; // exhibit -> kind -> rating
+  std::map<int, std::map<int, float>> snaps; // exhibit -> kind -> rating (the ground's)
+  // An object's or animal's before-snapshot: one for all, each habitat
+  // snapshotted replacing it (zoo.exe's DAT_0063b998, kind -> rating)
+  std::map<int, float> snapOne;
   std::vector<std::string> messages;
   std::vector<Fences::Edge> breaks;
   std::vector<int> kills; // caught prey to go (next update)

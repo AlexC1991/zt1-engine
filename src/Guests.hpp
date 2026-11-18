@@ -158,7 +158,8 @@ public:
   //     guide's): Guest::guide, joinTour.
   //   0x79 Task79_GuestSick (ctor 0x5b06c2, dtor 0x5b05a4, destroy 0x5b05ae,
   //     freeIfAsked 0x5b05bb, taskId 0x5b05de): Guest::puking.
-  //   0x7f Task7f_GuestInWater (ctor 0x49a5ad, dtor 0x49a432, taskId
+  //   0x7f Task7f_GuestInWater (ctor 0x49a5ad, dtor 0x49a432, destroy
+  //     0x49a43c - class table 0x633194, freeIfAsked 0x49a449, taskId
   //     0x4994bd), 0x84 Task84_Drown (ctor 0x61a68a, dtor 0x61a6dc, taskId
   //     0x61a6d6; destroy 0x61a6fa, its own class table 0x633fec), 0x83
   //     Task83_InWater (dtor 0x5a5d2b, destroy 0x5a5d35, freeIfAsked
@@ -166,6 +167,10 @@ public:
   //     0x5a058e, destroy 0x5a0598, freeIfAsked 0x5a05a5, taskId 0x59fe50):
   //     State::Water, Guest::waterTask (kOutOfWaterTask, kDrownTask,
   //     kInWaterTask, kRideTask).
+  //   0x80 Task80 (ctor 0x4a851b, dtor 0x44121c, destroy 0x441226 - class
+  //     table 0x6333b4, freeIfAsked 0x441233, taskId 0x44069e): going to a
+  //     piece of scenery to look at (checkArrived 0x4406a4, atTarget
+  //     0x4a6d59: task 0x81) - Guest::gawkObject's walk there.
   //   0x81 Task81_GawkObject (ctor 0x4a6bbd, dtor 0x441256, destroy 0x441260,
   //     freeIfAsked 0x44126d, taskId 0x441216): Guest::gawkObject.
   // (zoo.exe ZTGuest::debugText 0x619050, class slot 0x64: a developer's
@@ -336,6 +341,10 @@ public:
   // The tiles a guest can walk to from a tile (tests, placing things)
   std::set<std::pair<int, int>> reachableFrom(int x, int y) const;
   bool joinTour(int guest, int guide, int exhibit, int tx, int ty);
+  // A follower again after a load (its guide saved its list): sent to the
+  // guide's spot as joinTour sends one, without joinTour's tests; false if
+  // it's gone or leaving, or has no way there
+  bool resumeTour(int guest, int guide, int exhibit, int tx, int ty, bool heard);
   // Loose predators (zoo.exe 0x43971c, 0x4a6043): only men (cPrey 9503 is
   // the man guest) not already attacked; caught, it's mauled (its
   // bCaughtBy<animal><m|f>: the animation and roar), gets up and thinks
@@ -540,6 +549,17 @@ public:
   // The rename cheats' guest flags at work, each tick (zoo.exe ZTGuest's
   // update 0x43a62c)
   void cheatTick();
+  // Seated in a grandstand: a trick's set started (ZTGuest::handleEvents
+  // 0x43a698: bBadTrick, bGoodTrick, bGreatTrick) and its next line once a
+  // play is done (standSetNext: false when there's none to run)
+  void startStandSet(Guest &g, const std::string &set);
+  bool standSetNext(Guest &g);
+  // Its trick set running (lines left, or fPlayWithBase's base on show),
+  // that base ("" none), and both let go (out of the stand)
+  bool standActive(const Guest &g) const;
+  std::string standBase(const Guest &g) const;
+  size_t standLinesLeft(const Guest &g) const;
+  void standClear(const Guest &g) { this->stand.erase(g.id); }
 
 private:
   ResourceManager *rm = nullptr;
@@ -818,6 +838,8 @@ private:
   bool walkable(int x, int y) const;
   bool canStep(int x, int y, int nx, int ny) const;
   bool walkTo(Guest &g, int tx, int ty, float speed, bool emergency = false);
+  // (joinTour's way to the guide's spot, 0x58d809)
+  bool routeToTour(Guest &g, int tx, int ty);
   float walkSpeed(const Guest &g) const;
   void decide(Guest &g);
   void tick(Guest &g);
@@ -831,6 +853,16 @@ private:
   bool testFence(Guest &g);
   float groundAt(float x, float y) const;
   CompassDirection facing(const WorldRenderer &view, const Guest &g) const;
+private:
+  // Seated in a grandstand, by guest id: a trick's set (bGoodTrick ...)
+  // running line by line (standSetNext), and fPlayWithBase's base drawn
+  // under its animation while that plays (ours: not kept in saves)
+  struct StandSet {
+    std::vector<std::string> lines;
+    size_t line = 0;
+    std::string base;
+  };
+  std::map<int, StandSet> stand;
 };
 
 #endif // GUESTS_HPP

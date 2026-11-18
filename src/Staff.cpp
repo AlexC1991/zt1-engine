@@ -639,6 +639,42 @@ void Staff::restoreJob(Member &m, const SavedJob &s) {
   }
 }
 
+// What a load puts back round a member's saved work (v26). The original
+// reads every unit's task and job objects back (UnitBase::load 0x4547cc ->
+// 0x454aaf) and each class its own fields: ZTStaff::load 0x455433 its
+// look-for-a-hunter countdown (+0x28c), ZTTourGuide::load 0x59b3a1 its
+// followers (+0x294), ZTHelicopter::load 0x46b1dd its +0x294..+0x29c.
+// ours: the escaped animal it was after is claimed by it again (Animals
+// doesn't save claimedBy), gone and the job's off; the helicopter in the
+// air has its rotor loop on again (heliSetFlying 0x506990(1))
+void Staff::resumeWork(Member &m) {
+  if (m.job == Job::Catch) {
+    Animals::Member *a = this->animals ? this->animals->member(m.jobAnimal) : nullptr;
+    if (a)
+      a->claimedBy = m.id;
+    else
+      releaseCatch(m);
+  }
+  const Type &t = this->typeList[m.type];
+  const bool flying = m.heliStage != HeliStage::Parked && m.heliStage != HeliStage::SpinUp;
+  if (t.kind == Kind::Helicopter && flying && !t.rotorSound.empty() && m.rotorChannel < 0)
+    m.rotorChannel = Sound::get().loop(t.rotorSound, t.rotorAtten);
+}
+
+// A tour guide's followers after a load (zoo.exe ZTTourGuide::load 0x59b3a1
+// reads its list of them, +0x294; each guest its guide, ZTGuest +0x2e4).
+// ours: guests' own walks aren't saved, so each still here is sent to the
+// guide's spot again as joinTour sends one (Guests::resumeTour)
+void Staff::resumeTour(const Member &m, const std::vector<std::pair<int, bool>> &followers) {
+  Member *g = this->member(m.id);
+  if (!g || !this->guests)
+    return;
+  g->followers.clear();
+  for (const auto &[guest, heard] : followers)
+    if (this->guests->resumeTour(guest, m.id, m.visit, m.goalX, m.goalY, heard))
+      g->followers.push_back(guest);
+}
+
 // ours: one by its id
 Staff::Member *Staff::member(int id) {
   for (Member &m : this->list)
@@ -794,9 +830,10 @@ bool Staff::walkable(int x, int y, const WorldMap &map, const Fences &fences, in
     const Type &t = this->typeList[m.type];
     if (t.kind != Kind::Helicopter || m.id == this->carried)
       continue;
-    int x0 = static_cast<int>(std::floor(m.x - t.footX / 2.0f));
-    int y0 = static_cast<int>(std::floor(m.y - t.footY / 2.0f));
-    if (x >= x0 && x < x0 + t.footX && y >= y0 && y < y0 + t.footY)
+    const auto [fw, fh] = baseFoot(m.type, m.baseFacing);
+    int x0 = static_cast<int>(std::floor(m.x - fw / 2.0f));
+    int y0 = static_cast<int>(std::floor(m.y - fh / 2.0f));
+    if (x >= x0 && x < x0 + fw && y >= y0 && y < y0 + fh)
       return false;
   }
   return true;
@@ -811,6 +848,11 @@ bool Staff::canStep(int x, int y, int nx, int ny, const WorldMap &map, const Fen
   if (const Fences::Piece *p = fences.at(e))
     if (!(p->gate && access >= 0 && fences.exhibitOf(e) == access))
       return false;
+  return cornersMeet(x, y, nx, ny, map);
+}
+
+// ours: two neighbouring tiles' shared corners meet (no cliff between)
+bool Staff::cornersMeet(int x, int y, int nx, int ny, const WorldMap &map) {
   const MapTile *a = map.getTile(x, y), *b = map.getTile(nx, ny);
   if (!a || !b)
     return false;
@@ -841,36 +883,63 @@ Fences::Fit Staff::canPlace(float x, float y, const WorldMap &map, const Fences 
   return Fences::Fit::Ok;
 }
 
-std::pair<float, float> Staff::placementPoint(int type, float x, float y) const {
+std::pair<float, float> Staff::placementPoint(int type, float x, float y, int facing) const {
   if (type >= 0 && type < static_cast<int>(typeList.size()) && typeList[type].kind == Kind::Helicopter) {
-    const auto &t = typeList[type];
-    return {std::floor(x - t.footX * 0.5f) + t.footX * 0.5f,
-            std::floor(y - t.footY * 0.5f) + t.footY * 0.5f};
+    const auto [fw, fh] = baseFoot(type, facing);
+    return {std::floor(x - fw * 0.5f) + fw * 0.5f,
+            std::floor(y - fh * 0.5f) + fh * 0.5f};
   }
   return {x, y};
 }
 
+// zoo.exe 0x4e58f9 (personel_Staff_click's DRT pick): the base turns as a
+// building does - a quarter turn (east, west) swaps its footprint's sides
+// (as PlacedObjects' strips and fits)
+std::pair<int, int> Staff::baseFoot(int type, int facing) const {
+  if (type < 0 || type >= static_cast<int>(typeList.size()))
+    return {1, 1};
+  const auto &t = typeList[type];
+  if ((facing & 6) == 2 || (facing & 6) == 6)
+    return {t.footY, t.footX};
+  return {t.footX, t.footY};
+}
+
+// ours: a point from the base's middle, given unturned (facing 0), turned
+// clockwise with the base by its facing's quarters
+std::pair<float, float> Staff::baseTurn(int facing, float dx, float dy) {
+  switch (facing & 6) {
+  case 2: return {-dy, dx};
+  case 4: return {-dx, -dy};
+  case 6: return {dy, -dx};
+  default: return {dx, dy};
+  }
+}
+
+int Staff::padFacingOf(const Member &m) const {
+  return (this->typeList[m.type].padFacing + (m.baseFacing & 6)) & 7;
+}
+
 Fences::Fit Staff::canPlaceType(int type, float x, float y, const WorldMap &map,
-                                const Fences &fences) const {
+                                const Fences &fences, int facing) const {
   if (type >= 0 && type < static_cast<int>(this->typeList.size()) &&
       this->typeList[type].kind == Kind::Helicopter) {
     // Preview, collision and placed anchor all use the same grid-aligned point.
-    const auto point = placementPoint(type, x, y); x = point.first; y = point.second;
-    const Type &t = this->typeList[type];
-    int x0 = static_cast<int>(std::floor(x - t.footX / 2.0f));
-    int y0 = static_cast<int>(std::floor(y - t.footY / 2.0f));
+    const auto point = placementPoint(type, x, y, facing); x = point.first; y = point.second;
+    const auto [fw, fh] = baseFoot(type, facing);
+    int x0 = static_cast<int>(std::floor(x - fw / 2.0f));
+    int y0 = static_cast<int>(std::floor(y - fh / 2.0f));
     const MapTile *first = map.getTile(x0, y0);
     if (!first) return Fences::Fit::Outside;
     const int height = first->cornerHeight[0];
-    for (int ty = y0; ty < y0 + t.footY; ty++)
-      for (int tx = x0; tx < x0 + t.footX; tx++) {
+    for (int ty = y0; ty < y0 + fh; ty++)
+      for (int tx = x0; tx < x0 + fw; tx++) {
         if (!walkable(tx, ty, map, fences)) return Fences::Fit::Outside;
         if (map.isPath(tx, ty)) return Fences::Fit::InTheWay;
         const auto *tile = map.getTile(tx, ty);
         for (int corner = 0; corner < 4; corner++) if (tile->cornerHeight[corner] != height) return Fences::Fit::Outside;
       }
     for (const Member &m : this->list)
-      if (m.id != this->carried && m.x >= x0 && m.x < x0 + t.footX && m.y >= y0 && m.y < y0 + t.footY)
+      if (m.id != this->carried && m.x >= x0 && m.x < x0 + fw && m.y >= y0 && m.y < y0 + fh)
         return Fences::Fit::InTheWay;
     return Fences::Fit::Ok;
   }
@@ -1150,9 +1219,10 @@ void Staff::addToIndex(WorldIndex &index) const {
     if (m.id == this->carried) continue;
     if (t.kind == Kind::Helicopter) {
       // Its base stands in the way
-      int x0 = static_cast<int>(std::floor(m.x - t.footX / 2.0f));
-      int y0 = static_cast<int>(std::floor(m.y - t.footY / 2.0f));
-      index.addBlock(x0, y0, t.footX, t.footY, WorldIndex::What::Base);
+      const auto [fw, fh] = baseFoot(m.type, m.baseFacing);
+      int x0 = static_cast<int>(std::floor(m.x - fw / 2.0f));
+      int y0 = static_cast<int>(std::floor(m.y - fh / 2.0f));
+      index.addBlock(x0, y0, fw, fh, WorldIndex::What::Base);
       continue;
     }
     index.addMover(WorldIndex::Kind::Staff, m.id, m.x, m.y);
@@ -1183,12 +1253,39 @@ bool Staff::walkAbout(Member &m, const WorldMap &map, const Fences &fences) {
   auto rnd = [&](int n) { return std::uniform_int_distribution<int>(0, n - 1)(this->rng); };
   const int rx = rnd(Original::aiWalkRandomStaff) + 1 + Original::aiWalkBase;
   const int ry = rnd(Original::aiWalkRandomStaff) + 1 + Original::aiWalkBase;
-  // (measured: 2026-11-17, #243 - every staff member's walk about that
-  // started on a path ended on one, 38 of 38 for zookeepers and maintenance
-  // workers in two zoos with open grass beside the paths; one started on
-  // grass ended on grass. 0x423ac2's own test passes grass, so the rule is
-  // the tour guide's, 0x61b639, for them all)
-  const bool pathOnly = map.isPath(sx, sy);
+  // First its own pick (ZTStaff's class slot 0x1f4, 0x423a7e, every staff
+  // class): on zoo ground with no habitat from slot 0x328 (a maintenance
+  // worker's always none), a path tile on a ring round it (ZTUnit's
+  // 0x428cc9: its own roll of the half widths, the ring's path tiles
+  // passable for it, one at random), routed to unless it's its own tile;
+  // only none routed, the ring below with slot 0x168 - 0x423ac2's test
+  // passes grass, only a tour guide's 0x61b639 keeps to the paths from a
+  // path. (measured: 2026-11-17, #243 - every staff member's walk about
+  // that started on a path ended on one, 38 of 38, in zoos with paths
+  // about: the path ring's pick; one from grass ended on grass.) ours: in
+  // an exhibit (the tile by its gate, habitatFromHere 0x49ebce) and on zoo
+  // ground a habitat's gate (slot 0x328: a keeper's 0x49db62, a guide's
+  // 0x58af73, 0x61101d; then the tile past its gate 0x411285) not yet - #288
+  if (here < 0) {
+    const int px = rnd(Original::aiWalkRandomStaff) + 1 + Original::aiWalkBase;
+    const int py = rnd(Original::aiWalkRandomStaff) + 1 + Original::aiWalkBase;
+    std::vector<std::pair<int, int>> paths;
+    for (int dx = -px; dx <= px; dx++)
+      for (int dy = -py; dy <= py; dy++) {
+        const int x = sx + dx, y = sy + dy;
+        if ((dx == px || dx == -px || dy == py || dy == -py) && x >= 0 && y >= 0 && x < W && y < H &&
+            map.isPath(x, y) && walkable(x, y, map, fences, m.access))
+          paths.push_back({x, y});
+      }
+    ZT_STEP("0x428cc9", "Walk about: first a path tile on a ring round it", {"half width", px}, {"half height", py},
+            {"tiles", static_cast<int>(paths.size())});
+    if (!paths.empty()) {
+      auto [gx, gy] = paths[static_cast<size_t>(rnd(static_cast<int>(paths.size())))];
+      if (findPath(m, gx, gy, map, fences, gx + 0.5f, gy + 0.5f))
+        return true;
+    }
+  }
+  const bool pathOnly = map.isPath(sx, sy) && this->typeList[m.type].kind == Kind::Guide;
   auto passable = [&](int x, int y) {
     return x >= 0 && y >= 0 && x < W && y < H && walkable(x, y, map, fences, m.access) &&
            (!pathOnly || map.isPath(x, y));
@@ -1239,7 +1336,11 @@ bool Staff::walkAbout(Member &m, const WorldMap &map, const Fences &fences) {
 // (0x43cb33, the first range holding its happiness, only with no set
 // running) - or [AmbientAnimsUnderwater] / [AmbientAnimsSurface] /
 // [AmbientAnimsWater] by its water state; every staff type's lists are
-// -100..100 bZooRoutine, the routine above.
+// -100..100 bZooRoutine, the routine above. A maintenance worker's
+// bZooRoutine is fMaintRoutine 0x4a945f -> 0x4a941a: one of the maint class
+// (isKindOf, type slots 0x18 / 0x1c) plays its current animation once
+// (0x42201e -> unitPlayCurrentAnim 0x421eb7, the line's flag from unit
+// +0xf9) - the walk about's end, measured above as walking on at once.
 // Tour guides (measured 2026-11-17, Lab Play original, two guides by a
 // zebra paddock with no trip to take - B:/zt1-shots/r10-staffshows/
 // poll-guide*.txt): each walk about (task 1) ends in one play of its idle
@@ -1288,12 +1389,21 @@ void Staff::idleStep(Member &m, const WorldMap &map, Fences &fences) {
 // fWalk, kept to the paths: on a path, off along it to another bit of
 // path a few tiles away; off one, to the nearest path; no path near, it
 // stands where it is (nobody roams open ground with nothing there).
-// staffpaths off: the original's walk about (0x43d948)
+// staffpaths off: the original's walk about (0x43d948), as task 1's tick
+// runs it (zoo.exe Task1::tick 0x436244: in task 1, not arrived, no target
+// and no job - class slot 0x1e0, ZTUnit's walkOnWhenRouteDone 0x43dd1d:
+// the route list +0x154 emptied, unitWalkAbout, made: 0x422127(0, 1)).
+// None made, the destination still unset: task 1 again (slot 0x1d8(1, 1),
+// slot 0x184 0x43eb52 allowing it off a building's task 0x66-0x6a), tried
+// again the next update - ours: it stands an update (Original::updateMs)
+// and walks about again (walksLeft), the chooser not asked meanwhile
 void Staff::wander(Member &m, const WorldMap &map, const Fences &fences) {
   if (!Features::staffPaths) {
-    if (!walkAbout(m, map, fences)) {
-      m.idleLeft = kIdleSeconds * 2;
-      m.walksLeft = 0;
+    const bool walk = walkAbout(m, map, fences);
+    ZT_STEP("0x43dd1d", "Task 1: a walk about (walkOnWhenRouteDone)", {"walk about", walk ? "yes" : "none yet"});
+    if (!walk) {
+      m.idleLeft = static_cast<float>(Original::updateMs) / 1000.0f;
+      m.walksLeft = 1;
     }
     return;
   }
@@ -1991,28 +2101,106 @@ void Staff::pathTrouble(const Member &m, const std::string &exhibit, bool blocke
 // name - the check queued at gameMgr +0x34, 0x435a0d - and not while
 // loading): a temporary router, a zookeeper (9500) or for a tank a marine
 // specialist (9552) with +0x2a8 set, walks the exhibit's boundary pairs
-// from the gate's (exhibitBoundaryStep 0x487f34), each tested by
-// gateCrossCheck 0x46676a: fenced on both sides (1 - every plain fence),
-// something on either tile (3), the step across impassable for the router
-// (4: staffStepCost 0x41456c at DAT_00635494 - 1, the zoo wall too), else
-// crossable (0). A crossable pair is routed by the pathfinder ([0x638098]
-// +0x10, slot 0) from the zoo's entrance (0x410d04) to its outer tile: no
-// route, code 6; a route to a tile on the zoo's own ground (the grid's
-// habitat +0x2c), accessible - done, no message; one whose tile is in
-// another exhibit, code 5 (no message). The first pair's code decides, the
-// gate's: 1 and 3 post 11001, 4 and 6 post 11000 (the table at 0x467048),
-// with 0x49cec0 and 5. measured: a gate opening onto grass ringed by rocks
-// says "... is inaccessible to zoo staff." in the original (2026-11-16,
-// #145); a pen whose gate opens into another exhibit says nothing (round 4).
-// ours: the gate's pair alone - our only crossable boundary pieces are
-// gates, and pieces facing each other on one edge don't occur
+// from the one whose piece shut it off (Fences::accessWalk, the walk and
+// where it puts the gate), each tested by gateCrossCheck 0x46676a
+// (gateCross) and routed from the zoo's entrance (gateRoute). Its code: 1
+// and 3 post 11001, 4 and 6 post 11000 (the table at 0x467048), with
+// 0x49cec0 and 5; 0, 5 and 7 nothing. measured: a gate opening onto grass
+// ringed by rocks says "... is inaccessible to zoo staff." in the original
+// (2026-11-16, #145); a pen whose gate opens into another exhibit says
+// nothing (round 4)
 int Staff::exhibitAccess(int exhibit, const WorldMap &map, const Fences &fences) {
   const Fences::Exhibit *ex = fences.exhibit(exhibit);
-  if (!ex || !this->rm)
-    return 0;
   int ex0 = -1, ey0 = -1;
-  if (!this->guests || !this->guests->entrance(ex0, ey0))
+  // (ours: no zoo entrance known yet - nothing to route from, nothing said)
+  if (!ex || !this->rm || !this->guests || !this->guests->entrance(ex0, ey0))
     return 0;
+  const Fences::Access acc = fences.accessWalk(
+      exhibit, map,
+      [&](int id, int ix, int iy, int ox, int oy, int &cost) { return gateCross(id, ix, iy, ox, oy, map, fences, cost); },
+      [&](int id, int ox, int oy) { return gateRoute(id, ox, oy, map, fences); });
+  const int code = acc.code;
+  ZT_STEP("0x44e4eb", "A new exhibit's staff access check", {"exhibit", ex->name}, {"code", code},
+          {"gate x", acc.gate ? acc.edge.x : -1}, {"gate y", acc.gate ? acc.edge.y : -1});
+  SDL_Log("[Staff] access check of %s: code %d", ex->name.c_str(), code);
+  const int msg = code == 1 || code == 3 ? 11001 : code == 4 || code == 6 ? 11000 : 0;
+  if (!msg)
+    return 0;
+  std::string s = this->rm->getString(msg);
+  if (size_t at = s.find("%s"); at != std::string::npos)
+    s.replace(at, 2, ex->name);
+  SDL_Log("[Staff] %s", s.c_str());
+  this->notices.push_back({s, 5, -1});
+  return msg;
+}
+
+// zoo.exe gateCrossCheck 0x46676a, one boundary pair (inside, outside): a
+// fence record on both tiles' sides of the edge (ours: a wall two tanks
+// share), 1; the zoo wall (fence type +0x190), 4; the router's step across
+// with the fence lifted (staffStepCost 0x41456c both ways, the larger) at
+// impassableStepCost - 1 or more, 4; either tile holding something (its +0x10
+// cell; a tank's inside tile, any of its cells), 3; else crossable, 0.
+// ours: the step impassable where our staff can't step (canStep's corners,
+// water for a land exhibit, off the map), something on a tile is the world
+// index's blocked tiles, tank filters and DRT bases; each crossable step
+// costs the same (the original's per-terrain costs not read), so the first
+// crossable pair is the fallback
+int Staff::gateCross(int exhibit, int ix, int iy, int ox, int oy, const WorldMap &map, const Fences &fences,
+                     int &cost) const {
+  cost = Original::impassableStepCost;
+  const Fences::Exhibit *ex = fences.exhibit(exhibit);
+  const bool tank = ex && ex->tank;
+  const Fences::Edge e = ox != ix ? Fences::Edge{false, std::max(ix, ox), iy} : Fences::Edge{true, ix, std::max(iy, oy)};
+  const Fences::Piece *p = fences.at(e);
+  if (p && p->tank >= 0 && p->tank2 >= 0)
+    return 1;
+  if (p && p->type >= 0 && p->type < static_cast<int>(fences.types().size()) && fences.types()[p->type].zooWall)
+    return 4;
+  const MapTile *a = map.getTile(ix, iy), *b = map.getTile(ox, oy);
+  if (!a || !b)
+    return 4;
+  auto water = [](const MapTile *t) { return t->terrainType == 9 || t->terrainType == 10; };
+  if (water(b) || (!tank && water(a)))
+    return 4;
+  // (the corners the two tiles share must meet: our staff's step)
+  if (!tank && !cornersMeet(ix, iy, ox, oy, map))
+    return 4;
+  cost = 1;
+  auto occupied = [&](int x, int y) {
+    if (this->index && this->index->blocked(x, y))
+      return true;
+    for (const Fences::Filter &f : fences.filters()) {
+      const Fences::FilterType &k = fences.filterType(f.file);
+      if (x >= f.x && x < f.x + k.footprintX && y >= f.y && y < f.y + k.footprintY)
+        return true;
+    }
+    for (const Member &m : this->list) {
+      const Type &t = this->typeList[m.type];
+      if (t.kind != Kind::Helicopter || m.id == this->carried)
+        continue;
+      const int x0 = static_cast<int>(std::floor(m.x - t.footX / 2.0f));
+      const int y0 = static_cast<int>(std::floor(m.y - t.footY / 2.0f));
+      if (x >= x0 && x < x0 + t.footX && y >= y0 && y < y0 + t.footY)
+        return true;
+    }
+    return false;
+  };
+  if (occupied(ix, iy) || occupied(ox, oy))
+    return 3;
+  return 0;
+}
+
+// The access check's route (zoo.exe 0x44e4eb: the pathfinder, [0x638098]
+// +0x10 slot 0, with the router unit from the zoo's entrance 0x410d04 to the
+// pair's outside tile)
+bool Staff::gateRoute(int exhibit, int ox, int oy, const WorldMap &map, const Fences &fences) {
+  const Fences::Exhibit *ex = fences.exhibit(exhibit);
+  int ex0 = -1, ey0 = -1;
+  if (!ex)
+    return false;
+  // (ours: no zoo entrance known yet - any outside tile staff can stand on)
+  if (!this->guests || !this->guests->entrance(ex0, ey0))
+    return walkable(ox, oy, map, fences);
   int routerType = -1;
   for (size_t i = 0; i < this->typeList.size(); i++)
     if (this->typeList[i].kind == (ex->tank ? Kind::Trainer : Kind::Keeper)) {
@@ -2020,7 +2208,7 @@ int Staff::exhibitAccess(int exhibit, const WorldMap &map, const Fences &fences)
       break;
     }
   if (routerType < 0)
-    return 0;
+    return false;
   // (ours: an entrance tile staff can't stand on - the route starts beside
   // it, inside the wall)
   if (!walkable(ex0, ey0, map, fences)) {
@@ -2035,47 +2223,13 @@ int Staff::exhibitAccess(int exhibit, const WorldMap &map, const Fences &fences)
             found = true;
           }
   }
+  if (!walkable(ox, oy, map, fences))
+    return false;
   Member router;
   router.type = routerType;
   router.x = ex0 + 0.5f;
   router.y = ey0 + 0.5f;
-  int code = 0;
-  bool decided = false;
-  for (const auto &kv : fences.pieces()) {
-    if (!kv.second.gate || fences.exhibitOf(kv.first) != exhibit)
-      continue;
-    const Fences::Edge &e = kv.first;
-    const int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
-    const bool aIn = fences.exhibitAt(ax, ay) == exhibit;
-    const int ox = aIn ? e.x : ax, oy = aIn ? e.y : ay;
-    if (!walkable(ox, oy, map, fences)) {
-      code = 3; // (something on the gate's outer tile)
-    } else {
-      router.path.clear();
-      router.pathAt = 0;
-      if (!findPath(router, ox, oy, map, fences, ox + 0.5f, oy + 0.5f))
-        code = 6;
-      else if (fences.exhibitAt(ox, oy) < 0)
-        code = 0;
-      else
-        code = 5;
-    }
-    decided = true;
-    if (code == 0)
-      break;
-  }
-  ZT_STEP("0x44e4eb", "A new exhibit's staff access check", {"exhibit", ex->name}, {"code", decided ? code : -1},
-          {"from x", ex0}, {"from y", ey0});
-  SDL_Log("[Staff] access check of %s from %d,%d: code %d", ex->name.c_str(), ex0, ey0, decided ? code : -1);
-  const int msg = code == 1 || code == 3 ? 11001 : code == 4 || code == 6 ? 11000 : 0;
-  if (!msg)
-    return 0;
-  std::string s = this->rm->getString(msg);
-  if (size_t at = s.find("%s"); at != std::string::npos)
-    s.replace(at, 2, ex->name);
-  SDL_Log("[Staff] %s", s.c_str());
-  this->notices.push_back({s, 5, -1});
-  return msg;
+  return findPath(router, ox, oy, map, fences, ox + 0.5f, oy + 0.5f);
 }
 
 // The next step of a visit, when the last walk or animation is done
@@ -2972,16 +3126,18 @@ std::string Staff::dutyText(const Member &m) const {
 // (zoo.exe ZTUnitType::create 0x6151b3, class slot 0x5c: a new unit of its
 // class, then ZTUnit::setup 0x4f5c58, slot 0x10c - its base's, three of
 // its fields cleared. ours: a Member, set up here)
-int Staff::hire(int type, float x, float y, const WorldMap &map, const Fences &fences) {
+int Staff::hire(int type, float x, float y, const WorldMap &map, const Fences &fences, int facing) {
   if (type < 0 || type >= static_cast<int>(this->typeList.size()))
     return -1;
-  if (canPlaceType(type, x, y, map, fences) != Fences::Fit::Ok)
+  if (canPlaceType(type, x, y, map, fences, facing) != Fences::Fit::Ok)
     return -1;
   const Type &t = this->typeList[type];
-  const auto point = placementPoint(type, x, y); x = point.first; y = point.second;
+  const auto point = placementPoint(type, x, y, facing); x = point.first; y = point.second;
   Member m;
   m.id = this->nextId++;
   m.type = type;
+  if (t.kind == Kind::Helicopter)
+    m.baseFacing = facing & 7;
   m.female = t.sexes[1] && (!t.sexes[0] || std::uniform_int_distribution<int>(0, 1)(this->rng) == 1);
   if (!t.hair.empty())
     m.hair = std::uniform_int_distribution<int>(0, static_cast<int>(t.hair.size()) - 1)(this->rng);
@@ -3047,7 +3203,7 @@ void Staff::moveTo(int id, float x, float y) {
     releaseCatch(*m);
     Sound::get().stop(m->rotorChannel); m->rotorChannel = -1;
     m->heliStage = HeliStage::Parked;
-    const auto point = placementPoint(m->type, x, y);
+    const auto point = placementPoint(m->type, x, y, m->baseFacing);
     m->x = point.first;
     m->y = point.second;
     m->path.clear();
@@ -3223,11 +3379,12 @@ void Staff::releaseCatch(Member &m) {
 void Staff::helicopterStep(Member &m, float seconds, const WorldMap &map, const Fences &fences) {
   const Type &t = typeList[m.type];
   if (m.heliStage == HeliStage::Parked) {
-    const auto anchor = placementPoint(m.type, m.x, m.y); m.x = anchor.first; m.y = anchor.second;
+    const auto anchor = placementPoint(m.type, m.x, m.y, m.baseFacing); m.x = anchor.first; m.y = anchor.second;
   }
-  const float padX = m.x + t.padX, padY = m.y + t.padY;
+  const auto pad = baseTurn(m.baseFacing, t.padX, t.padY), out = baseTurn(m.baseFacing, t.exitX, t.exitY);
+  const float padX = m.x + pad.first, padY = m.y + pad.second;
   const float ground = groundAt(map, m.x, m.y), padZ = ground + t.padZ;
-  const float exitX = m.x + t.exitX, exitY = m.y + t.exitY, exitZ = ground + t.exitZ;
+  const float exitX = m.x + out.first, exitY = m.y + out.second, exitZ = ground + t.exitZ;
   // (its status line, ZTHelicopter::statusText 0x48c9ef, by its task:
   // takeoff 0x69 - bSpinup, bAscend - 10318; tranquilizing 0x6f 10308 with
   // the animal's name (+0x290); returning 0x67 10319; landing 0x68 -
@@ -3246,7 +3403,7 @@ void Staff::helicopterStep(Member &m, float seconds, const WorldMap &map, const 
     return !(tile && (tile->terrainType == 9 || tile->terrainType == 10));
   };
   auto padFacing = [&] {
-    const float angle = t.padFacing * 3.14159265f / 4;
+    const float angle = padFacingOf(m) * 3.14159265f / 4;
     m.fx = std::sin(angle); m.fy = -std::cos(angle);
   };
   // zoo.exe 0x423dae (slot 0x32c, the helicopter's as the keeper's): of
@@ -3327,6 +3484,11 @@ void Staff::helicopterStep(Member &m, float seconds, const WorldMap &map, const 
   auto *target = animals ? animals->member(m.jobAnimal) : nullptr;
   switch (m.heliStage) {
   case HeliStage::Parked: { // 0x6a: waiting at base
+    // (its idle set, heliIdleSet 0x506900 - ZTHelicopter slot 0x48 - with
+    // nothing playing or queued: bIdleGround, fPlay(idle), on the ground
+    // (+0x298 0, heliSetFlying 0x506990(0)); in the air bIdleAir, fPlay(level).
+    // ours: in the air it's always in one of its flight sets, chooseTask
+    // picking the next at once)
     m.heliX = padX; m.heliY = padY; m.heliZ = padZ; padFacing();
     m.anim = "idle"; m.dutyId = kWaitingAtBase;
     Animals::Member *a = pick();
@@ -3962,14 +4124,18 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
       view.worldToScreenF(m.x, m.y, g, bx, by, bdepth);
       const bool lit = m.id == this->hovered;
       const SDL_Color tint{255, 255, 110, 255};
-      const auto baseSide = view.screenSide(0, -1);
+      // (its facing as a world direction, then the screen side it shows -
+      // as PlacedObjects; 0, north, as before it could turn)
+      const float baseAngle = m.baseFacing * 3.14159265f / 4.0f;
+      const auto baseSide = view.screenSide(std::sin(baseAngle), -std::cos(baseAngle));
+      const auto [baseW, baseH] = baseFoot(m.type, m.baseFacing);
       float baseFrontDepth = bdepth;
       Animation *base = baseArt(m);
       if (base) {
         // Exactly as a large building: each screen strip sorts at the front
         // of its fixed world footprint, rather than floating over its neighbours.
         float xs[4], ds[4], ignored;
-        const float hx = t.footX * 0.5f, hy = t.footY * 0.5f;
+        const float hx = baseW * 0.5f, hy = baseH * 0.5f;
         const float px[4] = {m.x-hx,m.x+hx,m.x+hx,m.x-hx};
         const float py[4] = {m.y-hy,m.y-hy,m.y+hy,m.y+hy};
         int left=0,right=0,front=0;
@@ -3994,14 +4160,16 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
       }
       if (Animation *heli = this->art(m, m.anim)) {
         const bool parked = m.heliStage == HeliStage::Parked;
-        const float x = parked ? m.x+t.padX : m.heliX;
-        const float y = parked ? m.y+t.padY : m.heliY;
+        const auto pad = baseTurn(m.baseFacing, t.padX, t.padY);
+        const float x = parked ? m.x+pad.first : m.heliX;
+        const float y = parked ? m.y+pad.second : m.heliY;
         const float z = parked ? g+t.padZ : m.heliZ;
         float hx, hy, hdepth;
         view.worldToScreenF(x, y, z, hx, hy, hdepth);
-        auto side = parked ? view.screenSide(std::sin(t.padFacing*3.14159265f/4),-std::cos(t.padFacing*3.14159265f/4)) : facing(view,m);
+        const float padAngle = padFacingOf(m)*3.14159265f/4;
+        auto side = parked ? view.screenSide(std::sin(padAngle),-std::cos(padAngle)) : facing(view,m);
         // An aircraft on/above its roof must sort over every base strip.
-        if (std::abs(x-m.x) <= t.footX*0.5f && std::abs(y-m.y) <= t.footY*0.5f && z >= g+t.padZ-0.01f)
+        if (std::abs(x-m.x) <= baseW*0.5f && std::abs(y-m.y) <= baseH*0.5f && z >= g+t.padZ-0.01f)
           hdepth = std::max(hdepth, baseFrontDepth);
         Fences::Drawable d{hdepth+0.02f,hx,hy,heli,side,tint,lit};
         int frame=helicopterFrame(m,heli);
@@ -4015,7 +4183,8 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
       continue;
     float ms = a->frameTimeMs() ? static_cast<float>(a->frameTimeMs()) : 100.0f;
     int frame = static_cast<int>(m.animTime * 1000.0f / ms);
-    // (a climb plays once; climbing down, backwards - fFlyReverse)
+    // (a climb plays once; climbing down, backwards - fFlyReverse 0x49a147:
+    // fFly 0x499886 with its reverse flag 1)
     if (m.climbing) {
       int count = std::max(1, a->frameCount());
       frame = std::min(frame, count - 1);
@@ -4093,7 +4262,8 @@ void Staff::collect(const WorldRenderer &view, const WorldMap &map,
                           groundAt(map, this->previewX, this->previewY), sx, sy, depth);
       SDL_Color tint = this->previewFit == Fences::Fit::Ok && !this->previewPoor ? SDL_Color{0, 255, 0, 255}
                                                            : SDL_Color{255, 60, 60, 255};
-      const auto side = pt.kind == Kind::Helicopter ? view.screenSide(0, -1) : CompassDirection::SE;
+      const float angle = this->previewFacing * 3.14159265f / 4.0f;
+      const auto side = pt.kind == Kind::Helicopter ? view.screenSide(std::sin(angle), -std::cos(angle)) : CompassDirection::SE;
       out.push_back({depth, sx, sy, a, side, tint, true});
     }
   }

@@ -149,6 +149,11 @@ public:
     bool show = false; // Derived from its show-wall boundary, not its name.
     bool named = false;
     bool pocket = false; // shut off when the map was made: not an exhibit
+    // The piece whose laying shut it off (zoo.exe 0x44ce67 -> 0x44e389): its
+    // staff access check's walk starts there (ours: not saved; a loaded one
+    // starts at its gate)
+    Edge closing;
+    bool closingSet = false;
     int constructedDay = 1, constructedMonth = 0, constructedYear = 1;
     // Tanks: the ground they sank from, and the water (0-1 full)
     int groundHeight = 0, floorHeight = 0;
@@ -351,9 +356,28 @@ public:
     return const_cast<Fences *>(this)->exhibit(id);
   }
   const std::vector<Exhibit> &exhibits() const { return this->exhibitList; }
-  // Names a new exhibit and puts its gate in (the fence's g piece where the
-  // loop was started); the gate's price
+  // Names a new exhibit and puts its gate in (the fence's g piece where its
+  // staff access check's walk settles, accessWalk); the gate's price
   int finishExhibit(int id, const std::string &name, WorldMap &map);
+  // zoo.exe exhibitAccessCheck 0x44e4eb's walk round an exhibit's boundary
+  // pairs (inside tile, outside tile) from the piece that shut it off: where
+  // its gate goes and the code it ends with (0 accessible, 1 / 3 "The
+  // entrance to %s is blocked...", 4 / 6 "%s is inaccessible to zoo staff.",
+  // 5 and 7 nothing said); no gate when the walk can't go on
+  struct Access {
+    int code = 7;
+    bool gate = false;
+    Edge edge;
+  };
+  // gateCrossCheck 0x46676a for one pair: 0 crossable (cost: the step's),
+  // else 1, 3 or 4; and the router's route from the zoo's entrance to an
+  // outside tile
+  using GateCross = std::function<int(int exhibit, int ix, int iy, int ox, int oy, int &cost)>;
+  using GateRoute = std::function<bool(int exhibit, int ox, int oy)>;
+  Access accessWalk(int id, const WorldMap &map, const GateCross &cross, const GateRoute &route) const;
+  // (set by World: the staff's own tests; unset, plain ones - ours)
+  GateCross gateCross;
+  GateRoute gateRoute;
   int exhibitCount() const { return this->made; }
   // Drains a tank (its Drain button): the water runs out a height unit an
   // update, the tank stays - at once while the game's paused

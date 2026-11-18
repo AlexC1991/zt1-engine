@@ -197,7 +197,9 @@ public:
     int getBuildHeight() const { return buildHeight; }
     Walkways &getWalkways() { return walkways; }
     // Hiring staff (a type of getStaff().types(); -1: none)
-    void setStaffTool(int type);
+    // facing: Hire Staff's (its icons' 0-3: SE, SW, NW, NE as seen), for
+    // the DRT base
+    void setStaffTool(int type, int facing = 0);
     int getStaffTool() const { return staffTool; }
     Staff &getStaff() { return staff; }
     // The object being placed fits but costs more than the cash: shown red
@@ -531,6 +533,7 @@ private:
     WorldIndex index;               // Where everything is
     float reindexIn = 0;
     int staffTool = -1, assigning = -1, tracked = -1;
+    int staffFacing = 0; // (the staff tool's, as seen: Hire Staff's 0-3)
     std::string pathTool;
     int pathCost = 0;
     int buildHeight = 0;

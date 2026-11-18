@@ -433,15 +433,15 @@ std::vector<std::pair<std::string, double>> Ambient::lasts() const {
 // zoo.exe 0x59148e (from applyStartSettings 0x58ed1f, which a saved zoo's
 // load runs again through resumeScript 0x58fb34): each listed kind added to
 // the spawn list (world +0x20c) as {last 0, type}, and the world's clock
-// (+0x204, whole seconds) carries on - not saved, not reset - so each comes
-// on the next update. measured (2026-11-17, the running original,
-// everything-ff02-units loaded by Continue Saved Game): the list held
-// bluejay and crow, both last 559 with the clock at 564, one more of each
-// flying than the file held. ours: due now, whatever our clock reads
+// (+0x204, whole seconds) carries on from the file's (worldSave 0x47704c
+// writes it, worldLoad 0x452e13 reads it back), so each comes on the next
+// update once the clock has passed its cFrequency. measured (2026-11-17,
+// the running original, everything-ff02-units loaded by Continue Saved
+// Game): the list held bluejay and crow, both last 559 with the clock at
+// 564, one more of each flying than the file held
 void Ambient::dueNow() {
-  const double now = std::floor(this->clock);
   for (Kind &k : this->kinds)
-    k.last = now - k.frequency;
+    k.last = 0;
 }
 
 void Ambient::setLasts(const std::vector<std::pair<std::string, double>> &l) {

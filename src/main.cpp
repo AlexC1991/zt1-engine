@@ -71,6 +71,7 @@
 #include "ui/UiImage.hpp"
 #include "ui/UiLayout.hpp"
 #include "ui/UiListBox.hpp"
+#include "ui/UiScrollingRegion.hpp"
 #include "ui/UiButton.hpp"
 #include "ui/UiOptions.hpp"
 #include "ui/UiUpdate.hpp"
@@ -1077,13 +1078,17 @@ static void rightClickOnMap() {
 }
 
 // The terraform account settled: paid for (Construction) if the zoo can,
-// else put back as it was
+// else put back as it was (zoo.exe 0x4da2e0 - from teraform_Panel_hide
+// 0x4da363 and the Terrain tabs' clicks, buldhab_PaintTerrainTab_click
+// 0x4dcb50, buldhab_TerraformTab_click 0x4dd68c: the cost, 0x4d9c0f, none
+// or within the cash - accepted, 0x4da19c; else undone, 0x6097ef, and 3363
+// said in the OK dialog with the exclaim icon, showDialog 0xd23)
 static void settleTerrain(ResourceManager *rm) {
   TerrainTool &tt = g_world->getTerrainTool();
   float c = tt.cost();
   if (!g_sim.canAfford(c)) {
     tt.undo();
-    g_hud->showMessage(rm->getString(3363));
+    g_hud->tell(rm->getString(3363));
   } else if (int charge = tt.accept(); charge > 0) {
     g_sim.spend(ZooSim::Construction, charge);
   }
@@ -1538,7 +1543,7 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
     int staffType = staffFile.empty() || g_hud->bulldozerOn()
                         ? -1
                         : g_world->getStaff().typeOfFile(staffFile);
-    g_world->setStaffTool(staffType);
+    g_world->setStaffTool(staffType, g_hud->staffToolFacing());
     // Over a staff member: its name
     const Staff &st = g_world->getStaff();
     if (st.hovered >= 0 && g_world->getFenceTool() < 0)
@@ -4093,6 +4098,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           t->cornerHeight[c] = level;
         t->height = level;
         t->terrainType = 0; // grass
+        t->edgeBits = 0;    // (its sides' cliff codes, byte 6, cleared too: flat ground has none)
         map.setPath(x, y, "");
         tiles++;
       }
@@ -4928,6 +4934,85 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         ratingReport << "FAIL the rating-after-load zoo saved and loaded back\n";
       }
       SDL_Log("[Finance] %s a loaded zoo rated at once, paused (0x4534e6, #256)", ok ? "PASS" : "FAIL");
+      if (!ok)
+        result = 1;
+    }
+    // Terraforming settled as the original's (zoo.exe 0x4da2e0: leaving the
+    // tab, the price 0x4d9c0f paid for if the zoo can, else put back and
+    // 3363 in the OK dialog): a tile painted with a terrain that costs
+    {
+      std::ofstream terraReport(outDir + "/finance-terraform.txt");
+      TerrainTool &tt = g_world->getTerrainTool();
+      WorldMap &map = g_world->getMap();
+      int type = -1, tx = -1, ty = -1, before = -1;
+      float price = 0;
+      for (int t = 0; t < 64 && type < 0; ++t) {
+        if (tt.typeCost(t) <= 0)
+          continue;
+        for (int y = 0; y < map.getHeight() && type < 0; ++y)
+          for (int x = 0; x < map.getWidth() && type < 0; ++x) {
+            if (!g_world->getFences().insideZoo(x, y))
+              continue;
+            const MapTile *tile = map.getTile(x, y);
+            if (!tile || tile->terrainType == t)
+              continue;
+            const int was = tile->terrainType;
+            g_world->setTerrainTool(true, true, t, 1, 0);
+            tt.press(x, y, 0, 0);
+            tt.release();
+            if (tt.cost() > 0 && !tt.isWater(x, y)) {
+              type = t; tx = x; ty = y; before = was; price = tt.cost();
+            } else {
+              tt.undo();
+              g_world->setTerrainTool(false, true, t, 1, 0);
+            }
+          }
+      }
+      {
+        int costly = 0, inside = 0;
+        for (int t = 0; t < 64; ++t) costly += tt.typeCost(t) > 0;
+        for (int y = 0; y < map.getHeight(); ++y)
+          for (int x = 0; x < map.getWidth(); ++x) inside += g_world->getFences().insideZoo(x, y);
+        terraReport << "     terrains with a cost " << costly << ", tiles inside the zoo " << inside << " of "
+                    << map.getWidth() * map.getHeight() << "\n";
+      }
+      bool ok = type >= 0 && price == tt.typeCost(type);
+      terraReport << (ok ? "PASS" : "FAIL") << " a tile painted is priced at its terrain's cost (0x4d9c0f): type " << type
+                  << " at " << tx << "," << ty << " $" << price << ", cost $" << (type >= 0 ? tt.typeCost(type) : 0) << "\n";
+      bool refused = false, paid = false;
+      if (type >= 0) {
+        // (a dollar short: put back, the dialog, no money taken)
+        g_sim.setCash(price - 1);
+        settleTerrain(rm);
+        const MapTile *tile = map.getTile(tx, ty);
+        refused = tile && tile->terrainType == before && g_hud->hasDialog() && g_sim.cash() == price - 1 && tt.cost() == 0;
+        terraReport << (refused ? "PASS" : "FAIL") << " a dollar short: put back, 3363 in the OK dialog (showDialog 0xd23), nothing paid: terrain "
+                    << (tile ? int(tile->terrainType) : -1) << " (was " << before << "), dialog " << g_hud->hasDialog()
+                    << ", cash $" << g_sim.cash() << "\n";
+        std::vector<Input> enterKey(1);
+        enterKey[0].type = InputType::BUTTON;
+        enterKey[0].event = InputEvent::KEY_DOWN;
+        enterKey[0].key = SDLK_RETURN;
+        g_hud->handleInputs(enterKey);
+        // (enough: kept and paid for, on the Construction line)
+        tt.press(tx, ty, 0, 0);
+        tt.release();
+        g_sim.setCash(price + 100);
+        const double built = g_sim.history().empty() ? 0 : g_sim.history().back().lines[ZooSim::Construction];
+        settleTerrain(rm);
+        const double builtAfter = g_sim.history().empty() ? 0 : g_sim.history().back().lines[ZooSim::Construction];
+        tile = map.getTile(tx, ty);
+        paid = tile && tile->terrainType == type && g_sim.cash() == 100 && builtAfter - built == -price && !g_hud->hasDialog();
+        terraReport << (paid ? "PASS" : "FAIL") << " enough: kept and paid for on the Construction line: terrain "
+                    << (tile ? int(tile->terrainType) : -1) << ", cash $" << g_sim.cash() << ", Construction "
+                    << (builtAfter - built) << "\n";
+        if (MapTile *t = map.getTileMutable(tx, ty))
+          t->terrainType = static_cast<uint8_t>(before);
+        map.touch();
+      }
+      g_world->setTerrainTool(false, true, 0, 1, 0);
+      ok = ok && refused && paid;
+      SDL_Log("[Finance] %s terraforming paid for, or put back with the dialog (0x4da2e0, 0x4d9c0f)", ok ? "PASS" : "FAIL");
       if (!ok)
         result = 1;
     }
@@ -7678,6 +7763,32 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             check("DRT base panel: TrackDRT shown with its helicopter in it (0x48ccc1, 0x4ee2ba)",
                   track && !track->isHidden() && art);
           }
+          // The helicopter clicked in flight (#286; measured: 2026-11-18, the
+          // Lab's Play original, a DRT base hired with a Spinosaurus loose,
+          // the game paused with the helicopter over the zoo and clicked:
+          // the DRT panel, "Recovery Building" with the base's name, as for
+          // the base - not Staff Information). Picked at its own point on
+          // the screen, through the map click's handling
+          g_hud->showPanel(0, "");
+          g_hud->setPanelOpen(1400, false);
+          if (Staff::Member *hm = st.member(at)) {
+            hm->heliStage = Staff::HeliStage::Return;
+            hm->anim = "fly";
+            hm->heliX = hm->x + 4.5f;
+            hm->heliY = hm->y + 1.5f;
+            hm->heliZ += 6.0f;
+            float sx = 0, sy = 0, depth = 0;
+            world->getRenderer().worldToScreenF(hm->heliX, hm->heliY, hm->heliZ, sx, sy, depth);
+            World::ToolResult click;
+            click.staff = st.pick(sx, sy - 8.0f, world->getRenderer(), map);
+            handleToolResult(click, rm);
+            check("#286: the DRT helicopter clicked in flight opens the DRT panel, as the original (measured; 0x4b2322)",
+                  click.staff == at && g_hud->isPanelOpen(1400) && g_hud->shownDrtId() == at && !g_hud->isPanelOpen(17));
+            if ((hm = st.member(at))) {
+              hm->heliStage = Staff::HeliStage::Parked;
+              hm->anim = "idle";
+            }
+          }
           g_hud->showPanel(0, "");
           g_hud->setPanelOpen(1400, false);
           g_hud->refreshStaff();
@@ -7688,6 +7799,89 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         if (h) {
           st.fire(at);
           world->reindex();
+        }
+        // Hire Staff's rotate arrows (#284, zoo.exe personel_Staff_click
+        // 0x4e69b8: the DRT base's pick shows and enables them, 0x4e58f9;
+        // any other hides and greys them, 0x4e65ab); a click turns the base
+        // held a quarter (0xe5d_click 0x618883: 0x63e46c on one, the zoo
+        // view's +0x370), which the staff tool takes: turned east or west,
+        // the base's footprint sides swap and it blocks the ground so
+        {
+          std::vector<Input> none;
+          auto hidden = [&](int id) {
+            UiElement *e = g_hud->getElementById(id);
+            return !e || e->isHidden();
+          };
+          auto disabled = [&](int id) {
+            UiElement *e = g_hud->getElementById(id);
+            return !e || e->isDisabled();
+          };
+          g_hud->showPanel(10, "");
+          g_hud->handleInputs(none);
+          const bool picked = g_hud->selectBuyItem(10, "scenery/building/helibase.ai");
+          const bool arrows = picked && !hidden(3676) && !hidden(3677) && !disabled(3676) && !disabled(3677);
+          const int facing0 = g_hud->staffToolFacing();
+          capture("hire_staff_drt"); // (drawn, so the arrows can be clicked)
+          click(3677);
+          const int facing1 = g_hud->staffToolFacing();
+          capture("hire_staff_drt_turned");
+          world->setStaffTool(drt, facing0);
+          int cx = 0, cy = 0;
+          world->pointToWindow(22.5f, 32.5f, 0, cx, cy);
+          world->mouseMove(cx, cy);
+          const int world0 = st.previewFacing;
+          world->setStaffTool(drt, facing1);
+          world->mouseMove(cx + 1, cy);
+          const int world1 = st.previewFacing;
+          world->setStaffTool(-1);
+          click(3676);
+          const bool back = g_hud->staffToolFacing() == facing0;
+          g_hud->selectBuyItem(10, "staff/keeper.ai");
+          const bool keeperHides = hidden(3676) && hidden(3677) && disabled(3676) && disabled(3677);
+          g_hud->showPanel(0, "");
+          g_hud->handleInputs(none);
+          // A base turned west: its footprint swapped, the ground blocked so
+          const auto foot0 = st.baseFoot(drt, 0), foot6 = st.baseFoot(drt, 6);
+          int turned = -1;
+          for (int r = 2; r < 30 && turned < 0; r++)
+            for (int dy = -r; dy <= r && turned < 0; dy++)
+              for (int dx = -r; dx <= r && turned < 0; dx++) {
+                float x = 22.0f + dx, y = 32.0f + dy;
+                if (st.canPlaceType(drt, x, y, map, fn, 6) == Fences::Fit::Ok)
+                  turned = st.hire(drt, x, y, map, fn, 6);
+              }
+          const Staff::Member *b = st.member(turned);
+          const bool blocks = b && st.canPlace(b->x, b->y + foot6.second * 0.5f - 0.25f, map, fn) != Fences::Fit::Ok;
+          check(("Hire Staff: the DRT base's rotate arrows turn it; other staff have none; turned west its footprint swaps (#284; " +
+                 std::to_string(arrows) + " " + std::to_string(facing0) + ">" + std::to_string(facing1) + " world " +
+                 std::to_string(world0) + ">" + std::to_string(world1) + " " + std::to_string(back) +
+                 std::to_string(keeperHides) + " foot " + std::to_string(foot6.first) + "x" + std::to_string(foot6.second) +
+                 " facing " + std::to_string(b ? b->baseFacing : -1) + " " + std::to_string(blocks) + ")")
+                    .c_str(),
+                arrows && facing1 == (facing0 + 1) % 4 && world0 != world1 && ((world1 - world0) & 3) == 2 && back &&
+                    keeperHides && foot6.first == foot0.second && foot6.second == foot0.first && b && b->baseFacing == 6 &&
+                    blocks);
+          if (b) {
+            world->centreOn(b->x, b->y);
+            capture("staff_drt_turned");
+            st.fire(turned);
+            world->reindex();
+          }
+          // (and one put down unturned, as Hire Staff opens: its icons' SE)
+          int fresh = -1;
+          for (int r = 2; r < 30 && fresh < 0; r++)
+            for (int dy = -r; dy <= r && fresh < 0; dy++)
+              for (int dx = -r; dx <= r && fresh < 0; dx++) {
+                float x = 22.0f + dx, y = 32.0f + dy;
+                if (st.canPlaceType(drt, x, y, map, fn, world0) == Fences::Fit::Ok)
+                  fresh = st.hire(drt, x, y, map, fn, world0);
+              }
+          if (const Staff::Member *f = st.member(fresh)) {
+            world->centreOn(f->x, f->y);
+            capture("staff_drt_fresh");
+            st.fire(fresh);
+            world->reindex();
+          }
         }
       }
     } else {
@@ -8405,6 +8599,106 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       bool female = true;
       std::string pickedFile = g_hud->animalToolFile(female);
       check("the male button takes the zebra", pickedFile == "animals/zebra.ai" && !female);
+      // Adopt Animals' info plaque (#283, zoo.exe buya_InfoPlaque_click
+      // 0x4833e3, 0x4834cc): plaque.lyt (27) for the animal held - its name,
+      // its TEXT, no era or show star for the zebra; a pick while it's up
+      // shows that one (buya_Animals_click 0x4e2cf8) - the orca's show star,
+      // the allosaurus' era (the panel's too, 0x4e2f17), none for the
+      // jellyfish (5403); the carer's
+      // button greyed; another tab shuts it and lets the button go
+      // (adoptTabs_off 0x4e3867), the button again shuts it, and so does
+      // closing Adopt (buya_Animals_hide 0x4e2ba6); nothing held: greyed
+      {
+        std::vector<Input> none;
+        auto hidden = [&](int id) {
+          UiElement *e = g_hud->getElementById(id);
+          return !e || e->isHidden();
+        };
+        auto textOf = [&](int id) {
+          UiText *t = dynamic_cast<UiText *>(g_hud->getElementById(id));
+          return t ? t->getText() : std::string("?");
+        };
+        UiButton *info = dynamic_cast<UiButton *>(g_hud->getElementById(2050));
+        UiScrollingRegion *grid = dynamic_cast<UiScrollingRegion *>(g_hud->getElementById(2019));
+        auto pick = [&](const char *file) {
+          if (!grid || !g_hud->selectBuyItem(3, file))
+            return false;
+          if (grid->onSelect)
+            grid->onSelect(grid->getSelected());
+          g_hud->handleInputs(none);
+          return true;
+        };
+        const CatalogItem *zebraItem = ItemCatalog::get().find("animals/zebra.ai");
+        const bool enabled = info && !info->isDisabled() && !info->isToggledOn();
+        click(2050);
+        g_hud->handleInputs(none);
+        capture("adopt_plaque");
+        UiButton *carer = dynamic_cast<UiButton *>(g_hud->getElementById(25011));
+        const bool up = g_hud->isPanelOpen(27) && info->isToggledOn() && zebraItem && textOf(25001) == zebraItem->name &&
+                        textOf(25003).size() > 40 && hidden(25055) && hidden(25098) && carer && carer->isDisabled() &&
+                        hidden(2082);
+        std::string follow;
+        if (pick("animals/orca.ai"))
+          follow += g_hud->adoptPlaqueShown() == "animals/orca.ai" && !hidden(25098) && !hidden(25099) ? "o" : "O";
+        if (pick("animals/allo.ai"))
+          follow += g_hud->adoptPlaqueShown() == "animals/allo.ai" && !hidden(25055) && !textOf(25055).empty() &&
+                            !hidden(2082) && textOf(2082) == textOf(25055) ? "a" : "A";
+        if (pick("animals/jellyfsh.ai"))
+          follow += g_hud->adoptPlaqueShown() == "animals/jellyfsh.ai" && hidden(25098) ? "j" : "J";
+        capture("adopt_plaque_follow");
+        const bool followed = follow.find_first_of("OAJ") == std::string::npos && g_hud->isPanelOpen(27);
+        g_hud->showPanel(3, "shelters");
+        g_hud->handleInputs(none);
+        const bool tabShut = !g_hud->isPanelOpen(27) && !info->isToggledOn();
+        g_hud->showPanel(3, "animals");
+        pick("animals/zebra.ai");
+        click(2050);
+        g_hud->handleInputs(none);
+        const bool on2 = g_hud->isPanelOpen(27) && g_hud->adoptPlaqueShown() == "animals/zebra.ai";
+        click(2050);
+        g_hud->handleInputs(none);
+        const bool off2 = !g_hud->isPanelOpen(27) && !info->isToggledOn();
+        click(2050);
+        g_hud->showPanel(0, "");
+        g_hud->handleInputs(none);
+        const bool closeShut = !g_hud->isPanelOpen(27);
+        g_hud->showPanel(3, "animals");
+        g_hud->dropPicks();
+        g_hud->handleInputs(none);
+        const bool greyed = info->isDisabled() && g_hud->animalToolFile(female).empty();
+        check(("Adopt Animals: the info plaque for the animal held, follows picks, shut by a tab, the button and closing (#283; " +
+               std::to_string(enabled) + std::to_string(up) + follow + std::to_string(tabShut) + std::to_string(on2) +
+               std::to_string(off2) + std::to_string(closeShut) + std::to_string(greyed) + ")")
+                  .c_str(),
+              enabled && up && followed && tabShut && on2 && off2 && closeShut && greyed);
+        // The tabs' titles as their clicks set them: Show Objects 2077, not
+        // its helpid 2076 (zoo.exe 0x81c_click 0x4e6414; measured: "Show
+        // Objects"); Shelters 6207 (buya_SheltersTab_click 0x4e60e8)
+        if (g_hud->getElementById(2076)) {
+          g_hud->showPanel(3, "showtoys");
+          const std::string show = textOf(2023);
+          g_hud->showPanel(3, "shelters");
+          const std::string shelters = textOf(2023);
+          check(("Adopt Animals: the tabs' titles (\"" + show + "\", \"" + shelters + "\")").c_str(),
+                show == rm->getString(2077) && shelters == rm->getString(6207));
+        }
+        // The content filter is one choice for every panel (zoo.exe
+        // 0x5974_click 0x4e4c4d -> ui_buya_4f06a5: 0x638d4c): Dinosaur Digs
+        // picked in Adopt leaves the zookeeper out of Hire Staff too, All
+        // brings it back
+        {
+          g_hud->showPanel(3, "animals");
+          g_hud->setFilter(3, 2);
+          const bool dinoOnly = !g_hud->selectBuyItem(10, "staff/keeper.ai");
+          g_hud->setFilter(3, 0);
+          const bool all = g_hud->selectBuyItem(10, "staff/keeper.ai");
+          check("the content filter is shared by the panels (0x4e4c4d)", dinoOnly && all);
+        }
+        g_hud->showPanel(3, "animals");
+        g_hud->selectBuyItem(3, "animals/zebra.ai");
+        click(2000);
+        pickedFile = g_hud->animalToolFile(female);
+      }
       // The panel's cost as the original's (zoo.exe 0x4e3285 -> 0x40ed88,
       // its grouping off): whole dollars without a thousands comma, "$1000"
       {
@@ -8495,6 +8789,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         for (auto [x, y] : pe->tiles)
           if (MapTile *t = map.getTileMutable(x, y)) {
             t->terrainType = 0;
+            t->edgeBits = 0; // (its sides' cliff codes, byte 6, cleared too: flat ground has none)
             for (int c = 0; c < 4; c++)
               t->cornerHeight[c] = static_cast<uint8_t>(flat);
           }
@@ -9019,6 +9314,14 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           bool on = g_hud->gateMode();
           click(3240);
           check("the gate button: lit with an exhibit, toggles the gate tool", lit && on && !g_hud->gateMode());
+          // (left on, closing Build Exhibit turns it off: zoo.exe
+          // buldhab_Panel_hide 0x4e10d3 -> 0x4e1064(0))
+          click(3240);
+          g_hud->showPanel(0, "");
+          g_hud->showPanel(8, "fence");
+          g_hud->handleInputs(none);
+          UiButton *gbb = dynamic_cast<UiButton *>(gb);
+          check("closing Build Exhibit ends gate mode (0x4e10d3)", !g_hud->gateMode() && gbb && !gbb->isToggledOn());
           g_hud->showPanel(0, "");
         }
         check("its wall to the section asks to merge them", onIt && asked);
@@ -10221,6 +10524,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             t->cornerHeight[c] = flat;
           t->height = flat;
           t->terrainType = 0;
+          t->edgeBits = 0; // (its sides' cliff codes, byte 6, cleared too: flat ground has none)
         }
       map.touch();
       world->centreOn(cx + 0.5f, cy + 0.5f);
@@ -11141,7 +11445,14 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       Animals &an = world->getAnimals();
       int zebra = an.adopt(an.typeOfFile("animals/zebra.ai"), false, spot.first + 0.5f, spot.second + 0.5f, map, fn);
       int zebraWhy = an.placeMessage;
-      int shark = an.adopt(an.typeOfFile("animals/hhshark.ai"), true, spot.first + 0.5f, spot.second + 0.5f, map, fn);
+      // (the hammerhead at the 2 x 2 tank's middle: its footprint, 4 half
+      // tiles, put down on a tile's middle would reach over the tank's wall,
+      // which 0x4f7fbd refuses - #279)
+      int minX = 1 << 30, minY = 1 << 30, maxX = -1, maxY = -1;
+      for (auto [x, y] : te->tiles)
+        minX = std::min(minX, x), minY = std::min(minY, y), maxX = std::max(maxX, x), maxY = std::max(maxY, y);
+      int shark = an.adopt(an.typeOfFile("animals/hhshark.ai"), true, (minX + maxX + 1) * 0.5f, (minY + maxY + 1) * 0.5f,
+                           map, fn);
       check(("a zebra not in a tank (" + std::to_string(zebraWhy) + "), a hammerhead in it").c_str(),
             zebra < 0 && zebraWhy == 10553 && shark >= 0);
       if (Animals::Member *sm = an.member(shark))

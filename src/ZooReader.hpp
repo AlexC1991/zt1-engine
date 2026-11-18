@@ -67,6 +67,7 @@ public:
     bool decoded = false;
     // Validated byte boundaries inside payload; used by the original writer.
     size_t commonAt = 0, commonEnd = 0, ownEnd = 0;
+    size_t unitAt = 0; // (where ZTUnit::load 0x454488's part starts; 0 none)
     std::vector<uint8_t> suffixOverride; // current building state, when exporting
     uint32_t direction = 0;          // 0-7 (loadUnitCommon +0x12c)
     int32_t filterHealth = -1;       // ZTTankFilter +0x15c; -1 when not a filter
@@ -188,6 +189,10 @@ public:
   const std::vector<int> &getAwards() const { return awards; }
   int getMarketing() const { return marketing; }
   const std::vector<std::string> &getUsedNames() const { return usedNames; }
+  // The world's clock in seconds (zoo.exe worldLoad 0x452e13 from 67: +0x208
+  // the milliseconds over, then +0x204 the whole seconds - the flyers'
+  // spawn clock, 0x435921); -1 when the file has none
+  double getWorldClock() const { return worldClock; }
   // ZTThoughtMgr records (0x594e63): text id, speaker/subject unit ids,
   // and an optional habitat tile x/y. The last two are not dates.
   struct Thought {
@@ -242,6 +247,10 @@ private:
   std::vector<Thought> thoughts;
   std::vector<int> awards;
   int marketing = 0;
+  double worldClock = -1; // (writeOriginal writes it when 0 or more)
+  // A guest's path cost as writeOriginal writes it: ztunit.ai's cNonPathCost
+  // (SaveGame sets it; 1, the constructor's 0x4f578d, until then)
+  int32_t guestPathCost = 1;
   // The rename cheats' names used once only (zoo.exe 0x641860, a set of
   // strings in byte order: cheatsSave 0x47a10c, cheatsLoad 0x594197 - from
   // version 104)

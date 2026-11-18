@@ -1262,10 +1262,15 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
   const Fences::Exhibit *e = ex >= 0 ? fences.exhibit(ex) : nullptr;
   const Type &t = this->typeList[type];
   this->placeMessage = 0;
+  // A big one's whole footprint (0x4f7fbd, from animalPlacementRule
+  // 0x4f86fb before tankCheckPlacement, which runs only when it fits)
+  const bool footOk = footprintFits(type, x, y, map, fences);
   // In a tank (zoo.exe 0x4df688): one that lives underwater ("This animal
   // doesn't swim in tanks..."), with water ("...a tank with water in it.")
   // deep enough for it (cDepth: "...a deeper tank.")
   if (e && e->tank) {
+    if (!footOk)
+      return Fences::Fit::InTheWay;
     if (e->show && !t.showAnimal) {
       this->placeMessage = 10561;
       return Fences::Fit::Outside;
@@ -1304,6 +1309,9 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
   // A zoo animal: a land exhibit
   if (!e || !standable(tx, ty, t, ex, map, fences))
     return Fences::Fit::Outside;
+  // (the footprint's refusal has no message: the exhibit's, above, wins)
+  if (!footOk)
+    return Fences::Fit::InTheWay; // (red, no message)
   // A steep tile (zoo.exe zooViewMouse 0x4ded90's animal branch, 0x4e1279
   // -> 0x5ad00a -> 0x5cd93c: the slope code +0x81 not flat nor a plain
   // slope - WorldMap::pathShapeOk) refuses one whose footprint covers 4 or
@@ -1311,7 +1319,7 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
   // footprint, UnitBase::addedToWorld 0x412cdc), with no message; a small
   // one is put down anyway. The one being placed: a held egg its egg's
   // footprint, a held crate its box's. (One over 2 half tiles either way
-  // gets the footprint-wide check 0x4f7fbd as well: not here yet, #279)
+  // got the footprint-wide check 0x4f7fbd above: footprintFits)
   {
     const Member *held = this->carried >= 0 ? this->member(this->carried) : nullptr;
     int fx = t.footX, fy = t.footY;
@@ -1327,6 +1335,94 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
     if (m.id != this->carried && std::fabs(m.x - x) < 0.5f && std::fabs(m.y - y) < 0.5f)
       return Fences::Fit::InTheWay;
   return Fences::Fit::Ok;
+}
+
+// zoo.exe 0x4f7fbd (world, unit, position, lenient, unit to skip - the
+// check objects get too), as animalPlacementRule 0x4f86fb calls it for an
+// animal whose footprint (slot 0x94: its own cFootprintX/Y, its crate's or
+// its egg's) is over 2 half tiles either way: lenient unless it's in its
+// crate (+0x394), no unit skipped. Over slot 0x98's footprint (type +0xc0,
+// the loader's copy of cFootprintX/Y - the animal's own, even in its crate
+// or egg), a half tile apart from (1 - n) / 4 of a tile back of the point,
+// each point's tile (0x40fa48: off the map, the point fails):
+// - from its crate only: not water unless it swims (slot 0xbc: an egg
+//   doesn't; else the type's) - water refuses the whole footprint at once;
+//   the tile's quarter under the point empty (tile +4..); things on the tile
+//   crossing its box (slot 0x24) skipped for an animal (slot 0xb4: 1); a
+//   footprint (slot 0x94) over 1 either way: the tile flat (+0x81 0) and at
+//   the first tile's height (+0x3c)
+// - in the zoo (0x40fb8d(1): +0x83 & 0x40, or editing a map)
+// - slot 0x98's footprint over 2 either way: the edges inside the
+//   footprint - toward -y (side 0) past the first two rows, +x (2) before
+//   the last two columns, +y (4) before the last two rows, -x (6) past the
+//   first two columns - with no fence (tile +0x14 + side * 2) and not a
+//   cliff (tile +0x82 >> side & 3 over 1)
+// It refuses with no message of its own (+0x14 left as it was).
+// ours: the quarter is our tile index's whole tile; the footprint isn't
+// swapped for the facing (0x4272d4 swaps x and y when +0x12c & 3 isn't 0;
+// a placed animal's +0x12c comes from the view, 0x4e00d3, not read)
+bool Animals::footprintFits(int type, float x, float y, const WorldMap &map, const Fences &fences) const {
+  if (type < 0 || type >= static_cast<int>(this->typeList.size()))
+    return false;
+  const Type &t = this->typeList[type];
+  const Member *held = this->carried >= 0 ? this->member(this->carried) : nullptr;
+  if (held && held->type != type)
+    held = nullptr;
+  const bool egg = held && held->egg, boxed = held && held->boxed;
+  int fx = t.footX, fy = t.footY;
+  if (egg)
+    fx = t.eggX, fy = t.eggY;
+  else if (boxed)
+    fx = t.boxX, fy = t.boxY;
+  if (fx <= Original::animalFootprintCheckOver && fy <= Original::animalFootprintCheckOver)
+    return true; // (0x4f86fb doesn't call it)
+  const int gx = t.footX, gy = t.footY;
+  if (fx == 0 || fy == 0)
+    return false;
+  const bool lenient = !boxed, swims = !egg && t.swims;
+  const bool flatToo = fx > Original::footprintFlatOver || fy > Original::footprintFlatOver;
+  const bool edges = gx > Original::footprintEdgesOver || gy > Original::footprintEdgesOver;
+  auto cliff = [&](const MapTile *tile, int side) {
+    // (byte 6 of a map's tile holds side 0 in its top two bits: 0x4c864e)
+    return ((tile->edgeBits >> (6 - side)) & 3) > Original::footprintCliffCodeMax;
+  };
+  bool ok = true;
+  int firstHeight = 0;
+  bool haveFirst = false;
+  for (int i = 0; i < gx && ok; i++) {
+    for (int j = 0; j < gy && ok; j++) {
+      const float px = x + (1 - gx) * 0.25f + i * 0.5f, py = y + (1 - gy) * 0.25f + j * 0.5f;
+      const int tx = static_cast<int>(std::floor(px)), ty = static_cast<int>(std::floor(py));
+      const MapTile *tile = map.getTile(tx, ty);
+      if (!lenient && !swims && tile && isWater(map, tx, ty))
+        return false;
+      if (!tile || !fences.insideZoo(tx, ty)) {
+        ok = false;
+        continue;
+      }
+      if (!lenient) {
+        ok = !(this->index && this->index->blocked(tx, ty));
+        if (flatToo) {
+          const bool flat = tile->cornerHeight[0] == tile->height && tile->cornerHeight[1] == tile->height &&
+                            tile->cornerHeight[2] == tile->height && tile->cornerHeight[3] == tile->height;
+          if (!haveFirst)
+            firstHeight = tile->height, haveFirst = true;
+          ok = ok && flat && tile->height == firstHeight;
+        }
+      }
+      if (edges) {
+        const bool up = j > 1, right = i < gx - 2, down = j < gy - 2, left = i > 1;
+        if ((up && fences.at(Fences::Edge{true, tx, ty})) || (right && fences.at(Fences::Edge{false, tx + 1, ty})) ||
+            (down && fences.at(Fences::Edge{true, tx, ty + 1})) || (left && fences.at(Fences::Edge{false, tx, ty})))
+          ok = false;
+        if ((up && cliff(tile, 0)) || (right && cliff(tile, 2)) || (down && cliff(tile, 4)) || (left && cliff(tile, 6)))
+          ok = false;
+      }
+    }
+  }
+  ZT_STEP("0x4f7fbd", "A big animal's whole footprint checked", {"species", t.key}, {"across (half tiles)", gx}, {"along", gy},
+          {"from its crate", boxed ? 1 : 0}, {"verdict", ok ? "fits" : "doesn't fit"});
+  return ok;
 }
 
 // zoo.exe ZTAnimal's class slot 0x94 (0x410803): an egg (+0x395) its type's
@@ -2714,28 +2810,64 @@ std::vector<std::string> Animals::labSets(int id) const {
   return out;
 }
 
-// fWalk(0,0): to somewhere else in its exhibit
+// fWalk(0,0): to somewhere else in its exhibit. In the original a move line
+// with no target (fMove's 0x43646e: no task, its move done, no route) asks
+// for a move (+0x20e), task 1 is set (Task1::tick 0x436244, slot 0x184
+// allowing), and task 1's tick walks it about (ZTAnimal's
+// walkOnWhenRouteDone 0x43e440 -> unitWalkAbout 0x43d948): its own pick
+// first (slot 0x1f4, 0x43e363: a way out, away from a crowd - below), then
+// a tile on a ring round it, half widths rand % RandomX / RandomY + 1 +
+// BaseX / BaseY (2..6, OriginalConstants) - passable for it (slot 0x168,
+// 0x4273ec: its exhibit, a swimmer's own water or land) - at random and
+// routed to; no route, its four neighbours from a random one on, not
+// wrapping round (tileNeighbours4 0x4171a1), the first it can step to
 bool Animals::walkSomewhere(Member &m, const WorldMap &map, const Fences &fences) {
   const Type &t = this->typeList[m.type];
-  if (m.exhibit < 0) {
-    // Loose: somewhere about it on the zoo's open ground
-    std::uniform_int_distribution<int> off(-8, 8);
-    std::uniform_real_distribution<float> in(0.15f, 0.85f);
-    int sx = static_cast<int>(std::floor(m.x)), sy = static_cast<int>(std::floor(m.y));
-    for (int tries = 0; tries < 12; tries++) {
-      int x = sx + off(this->rng), y = sy + off(this->rng);
-      if (standable(x, y, t, -1, map, fences) && walkTo(m, x + in(this->rng), y + in(this->rng), map, fences))
+  const int sx = static_cast<int>(std::floor(m.x)), sy = static_cast<int>(std::floor(m.y));
+  std::uniform_real_distribution<float> in(0.15f, 0.85f);
+  // The ring walk (the end of unitWalkAbout 0x43d948): loose, on the zoo's
+  // open ground (standable with no exhibit)
+  auto ringWalk = [&]() {
+    auto rnd = [&](int n) { return std::uniform_int_distribution<int>(0, n - 1)(this->rng); };
+    const int rx = rnd(Original::aiWalkRandom) + 1 + Original::aiWalkBase;
+    const int ry = rnd(Original::aiWalkRandom) + 1 + Original::aiWalkBase;
+    auto passable = [&](int x, int y) {
+      if (!standable(x, y, t, m.exhibit, map, fences))
+        return false;
+      // (a swimmer wanders where it is: the water in the water, else land -
+      // zoo.exe 0x4273ec)
+      const bool wet = isWater(map, x, y) || (tankAt && tankAt(x + 0.5f, y + 0.5f) >= 0);
+      return !t.swims || wet == m.waterMode;
+    };
+    std::vector<std::pair<int, int>> ring;
+    for (int dx = -rx; dx <= rx; dx++)
+      for (int dy = -ry; dy <= ry; dy++)
+        if ((dx == rx || dx == -rx || dy == ry || dy == -ry) && passable(sx + dx, sy + dy))
+          ring.push_back({sx + dx, sy + dy});
+    ZT_STEP("0x43d948", "Walk about: a tile on a ring round it, at random", {"half width", rx},
+            {"half height", ry}, {"tiles", static_cast<int>(ring.size())});
+    if (!ring.empty()) {
+      auto [x, y] = ring[static_cast<size_t>(rnd(static_cast<int>(ring.size())))];
+      if (walkTo(m, x + in(this->rng), y + in(this->rng), map, fences))
+        return true;
+    }
+    const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (int i = rnd(4); i < 4; i++) {
+      const int nx = sx + d[i][0], ny = sy + d[i][1];
+      if (passable(nx, ny) && canStep(sx, sy, nx, ny, map, fences) &&
+          walkTo(m, nx + in(this->rng), ny + in(this->rng), map, fences))
         return true;
     }
     return false;
-  }
+  };
+  if (m.exhibit < 0)
+    return ringWalk();
   // A way out it can take: it takes it (zoo.exe: no chance roll)
   if (breakOut(m, map, fences))
     return true;
   // Away from the guests crowding it (zoo.exe 0x43e363 -> 0x42f6a9): one of
   // its exhibit's tiles that way, or either way next to it (0x43e511), at
-  // random - none, anywhere in it (0x44149f, as below) - and the way's
-  // forgotten
+  // random - none, the ring walk below - and the way's forgotten
   if (m.crowdDir >= 0) {
     int dir = m.crowdDir;
     m.crowdDir = -1;
@@ -2757,25 +2889,7 @@ bool Animals::walkSomewhere(Member &m, const WorldMap &map, const Fences &fences
   const Fences::Exhibit *ex = fences.exhibit(m.exhibit);
   if (!ex || ex->tiles.empty())
     return false;
-  std::set<std::pair<int,int>> area=ex->tiles;
-  if(t.underwater && !t.onlyUnderwater)
-    for(int id:fences.habitatGroup(m.exhibit,map))if(const auto *part=fences.exhibit(id))
-      area.insert(part->tiles.begin(),part->tiles.end());
-  std::vector<std::pair<int, int>> tiles(area.begin(),area.end());
-  std::uniform_real_distribution<float> in(0.15f, 0.85f);
-  for (int tries = 0; tries < 8; tries++) {
-    auto [x, y] = tiles[std::uniform_int_distribution<size_t>(0, tiles.size() - 1)(this->rng)];
-    if (!standable(x, y, t, m.exhibit, map, fences))
-      continue;
-    // (a swimmer wanders where it is: the water in the water, else land -
-    // zoo.exe 0x4273ec)
-    bool wet=isWater(map,x,y) || (tankAt && tankAt(x+0.5f,y+0.5f)>=0);
-    if (t.swims && wet != m.waterMode)
-      continue;
-    if (walkTo(m, x + in(this->rng), y + in(this->rng), map, fences))
-      return true;
-  }
-  return false;
+  return ringWalk();
 }
 
 bool Animals::isWater(const WorldMap &map, int x, int y) {
@@ -5646,13 +5760,46 @@ std::vector<std::pair<std::string, bool>> Animals::advice(int id, const WorldMap
 // ----------------------------------------------------------------------------
 // Smiles and frowns
 // ----------------------------------------------------------------------------
-void Animals::snapshot(int exhibit, const WorldMap &map, const Fences &fences) {
+// zoo.exe habitatObjectAdded 0x4d8cd2 (before) and habitatObjectRemoved
+// 0x4d8bd7 (after), from placeObject 0x4d9088: the habitat of the thing's
+// tile, and only when that habitat is a tank (slot 0x20) and the thing an
+// animal or one of the 'objects' kinds, the habitats joined to it (0x41620d
+// on habitat +0x8; ours: its habitatGroup, the land it's joined to and the
+// tanks joined there). A change on land doesn't reach a pool joined to it.
+// The ground (exhibitRatingSmiles3 0x4dbc79, its own list of habitats) still
+// takes the whole group - ours
+std::vector<int> Animals::smileHabitats(int exhibit, Change change, const WorldMap &map,
+                                        const Fences &fences) const {
+  std::vector<int> out;
+  if (exhibit < 0)
+    return out;
+  if (change == Change::Ground) {
+    for (int id : fences.habitatGroup(exhibit, map))
+      out.push_back(id);
+    return out;
+  }
+  out.push_back(exhibit);
+  const Fences::Exhibit *ex = fences.exhibit(exhibit);
+  if (ex && ex->tank)
+    for (int id : fences.habitatGroup(exhibit, map))
+      if (id != exhibit)
+        out.push_back(id);
+  return out;
+}
+
+// exhibitRatingSmiles2 0x4d8a4d: the snapshot (DAT_0063b998, kind -> its
+// rating, 0x4d92db) cleared and refilled for each habitat in turn - so after
+// a tank's joined habitats only the last one's is kept (ours: in exhibit id
+// order; the original's set is by address)
+void Animals::snapshot(int exhibit, const WorldMap &map, const Fences &fences, Change change) {
   if (exhibit < 0)
     return;
-  for(int id:fences.habitatGroup(exhibit,map)) {
-    this->evaluate(id,map,fences);
-    auto &snap=this->snaps[id];snap.clear();
-    for(const auto &[kind,r]:this->evaluations[id].kinds)snap[kind]=total(r);
+  for (int id : this->smileHabitats(exhibit, change, map, fences)) {
+    this->evaluate(id, map, fences);
+    auto &snap = change == Change::Ground ? this->snaps[id] : this->snapOne;
+    snap.clear();
+    for (const auto &[kind, r] : this->evaluations[id].kinds)
+      snap[kind] = total(r);
   }
 }
 
@@ -5665,18 +5812,27 @@ void Animals::face(int exhibit, int kind, bool smile) {
 void Animals::react(int exhibit, Change change, const std::string &file, int animalType, bool removed,
                     const WorldMap &map, const Fences &fences) {
   if(exhibit<0)return;
-  for(int id:fences.habitatGroup(exhibit,map))reactOne(id,change,file,animalType,removed,map,fences);
+  // (exhibitRatingSmiles1 0x4d89b2 -> 0x4d93a3: each habitat's kinds
+  // compared with the one snapshot; a kind it doesn't hold counts as not
+  // rated before. A tank with habitats joined to it - habitat +0xc, the
+  // count of its set at +0x8 - skips its own kinds: its pool's animals show
+  // nothing, the land joined to it reacts)
+  for(int id:this->smileHabitats(exhibit,change,map,fences)) {
+    if(change!=Change::Ground)
+      if(const Fences::Exhibit *e=fences.exhibit(id);e&&e->tank&&fences.habitatGroup(id,map).size()>1)continue;
+    reactOne(id,change,file,animalType,removed,map,fences,change==Change::Ground?this->snaps[id]:this->snapOne);
+  }
+  if(change!=Change::Ground)this->snapOne.clear();
 }
 
 void Animals::reactOne(int exhibit, Change change, const std::string &file, int animalType, bool removed,
-                    const WorldMap &map, const Fences &fences) {
+                    const WorldMap &map, const Fences &fences, std::map<int, float> &snap) {
   if (exhibit < 0 || this->paused)
     return;
   const Fences::Exhibit *ex = fences.exhibit(exhibit);
   if (!ex)
     return;
   this->evaluate(exhibit, map, fences);
-  std::map<int, float> &snap = this->snaps[exhibit];
   bool smiled = false, frowned = false;
   for (const auto &[kind, r] : this->evaluations[exhibit].kinds) {
     const Type &t = this->typeList[kind];
@@ -5720,7 +5876,10 @@ void Animals::reactOne(int exhibit, Change change, const std::string &file, int 
     Sound::get().play("sounds/smile", 1200);
   if (frowned)
     Sound::get().play("sounds/frown", 1000);
-  snap.clear();
+  // (an object's or animal's snapshot is kept for the joined habitats after
+  // it - react clears it)
+  if (change == Change::Ground)
+    snap.clear();
 }
 
 // ----------------------------------------------------------------------------

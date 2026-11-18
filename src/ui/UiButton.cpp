@@ -497,6 +497,11 @@ void UiButton::draw(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   this->drawChildren(renderer, &dest_rect);
 }
 
+// zoo.exe switchScreen_click 0x4190ff - the handler of startup's
+// PlayFreeform, PlayScenario, ZooItems and Credits and mapselec's "Back to
+// main menu" - does nothing: their layouts' action and target switch the
+// screen. (ours: the menu screens act on those, Exit and Back to main menu
+// by name)
 UiAction UiButton::getActionBasedOnName() {
   UiAction action = UiAction::NONE;
   if (this->name == "exit") {

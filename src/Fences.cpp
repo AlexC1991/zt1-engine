@@ -1227,6 +1227,25 @@ std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int y
     }
     ex.tank = tank && any;
     ex.show = ex.tank && showWall && allShow;
+    // zoo.exe 0x44ce67: the piece just laid that parts the ground from the
+    // entrance's side makes it a habitat (0x44e389(inside, outside, its
+    // tile)), and the access check walks from that pair. ours: a drag's
+    // pieces are laid in turn (Piece::order), so it's the boundary's last
+    // laid
+    for (auto [x, y] : ex.tiles) {
+      const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+      for (auto &dd : d) {
+        int nx = x + dd[0], ny = y + dd[1];
+        if (ex.tiles.count({nx, ny}))
+          continue;
+        Edge e = nx != x ? Edge{false, std::max(x, nx), y} : Edge{true, x, std::max(y, ny)};
+        const Piece *p = this->at(e);
+        if (p && (!ex.closingSet || p->order > this->at(ex.closing)->order)) {
+          ex.closing = e;
+          ex.closingSet = true;
+        }
+      }
+    }
     // zoo.exe showTankLook 0x5ab683: then each of its walls that isn't a
     // show wall (the shared ones) is made the type of its first show wall
     // (the wall's slot 0x7c(type, 1)). ours: one piece stands for both
@@ -1295,37 +1314,175 @@ int Fences::finishExhibit(int id, const std::string &name, WorldMap &map) {
       it->second.gate=false; // A neighbouring tank or building covered its approach.
     }
   }
-  // The gate: in the middle of the first-laid stretch of the loop, on a
-  // wall to the open zoo (never one shared with another exhibit)
-  std::vector<std::pair<Edge, Piece *>> round;
+  // The gate: where its staff access check's walk settles (zoo.exe
+  // exhibitAccessCheck 0x44e4eb at 0x466cc8: the piece on that pair made the
+  // gate, 0x4666c5 / 0x466236 -> fenceMakeGate 0x46600c, habitatSetGate
+  // 0x46616c). measured: three new exhibits in the original (2026-11-18) -
+  // two on open grass got theirs on the piece laid last, at whichever end the
+  // closing drag ended; one whose last piece faced a rock got it round the
+  // corner, the next pair of the walk
+  const Access acc = this->accessWalk(id, map, this->gateCross, this->gateRoute);
+  if (!acc.gate)
+    return 0;
+  auto it = this->edges.find(acc.edge);
+  // (0x4666c5: not a fence there, no gate - code 7)
+  if (it == this->edges.end() || it->second.gate)
+    return 0;
+  it->second.gate = true;
+  return this->typeList[it->second.type].gateCost;
+}
+
+// zoo.exe exhibitAccessCheck 0x44e4eb, its walk: from the pair (inside,
+// outside) of the piece that shut the exhibit off, each pair tested
+// (gateCrossCheck 0x46676a): blocked - its code kept if none is yet; else the
+// cheapest crossable one is the fallback (code 6), and the router's route
+// from the zoo's entrance to the outside tile tried: none, on; a route, both
+// tiles' slopes plain (tilePathPieceOk 0x416504, tile +0x81 - ours
+// WorldMap::pathShapeOk) and the outside tile the zoo's own ground (habitat
+// +0x2c): the gate's there, code 0. A route to anything else: that pair is
+// the gate if nothing better comes, code 5, and the fallback's settled. Back
+// at the first pair: the gate at the fallback (the first pair when nothing
+// was crossable). The step (exhibitBoundaryStep 0x487f34): turned a quarter
+// from outside->inside (d 0 -y, 2 +x, 4 +y, 6 -x; (d - 2) & 7), the tiles
+// beyond the pair's: the inside one still in, the outside one not - on to
+// them; both in - the inside moves to the outside's (round the outer
+// corner); neither - the outside moves to the inside's (round the inner
+// one); a diagonal pinch - no step, and the check ends there with no gate
+// (0x488048 -> 0x466f0b; after a code-5 pair, 0x466ef5, the gate there and
+// nothing said). It steps on past pairs whose outside tile isn't zoo land
+// (0x40fb8d: +0x83 & 0x40)
+Fences::Access Fences::accessWalk(int id, const WorldMap &map, const GateCross &cross,
+                                  const GateRoute &route) const {
+  Access out;
+  const Exhibit *ex = this->exhibit(id);
+  if (!ex || ex->tiles.empty())
+    return out;
+  auto in = [&](int x, int y) { return ex->tiles.count({x, y}) > 0; };
+  auto zooLand = [&](int x, int y) {
+    return this->inside.empty() ? x >= 0 && y >= 0 && x < mapW && y < mapH : this->insideZoo(x, y);
+  };
+  auto edgeOf = [](int ix, int iy, int ox, int oy) {
+    return ox != ix ? Edge{false, std::max(ix, ox), iy} : Edge{true, ix, std::max(iy, oy)};
+  };
+  // The first pair: the closing piece's (a loaded exhibit: its gate's, else
+  // its last laid piece's)
+  Edge start;
+  bool have = ex->closingSet;
+  if (have)
+    start = ex->closing;
+  long last = -1;
   for (const Edge &e : boundaryOf(*ex)) {
-    auto it = this->edges.find(e);
-    if (it == this->edges.end())
+    const Piece *p = this->at(e);
+    if (!p || have)
       continue;
-    int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
-    bool aIn = ex->tiles.count({ax, ay}) > 0;
-    int ox = aIn ? e.x : ax, oy = aIn ? e.y : ay;
-    if (this->exhibitAt(ox, oy) >= 0 || this->typeList[it->second.type].zooWall ||
-        (ex->tank && this->platformBlocked && this->platformBlocked(ox,oy)))
-      continue;
-    round.push_back({e, &it->second});
+    if (p->gate) {
+      start = e;
+      have = true;
+    } else if (p->order > last) {
+      last = p->order;
+      start = e;
+    }
   }
-  if (round.empty())
+  if (!have && last < 0)
+    return out;
+  struct Pair {
+    int ix, iy, ox, oy;
+    bool operator==(const Pair &o) const { return ix == o.ix && iy == o.iy && ox == o.ox && oy == o.oy; }
+  };
+  const int ax = start.alongX ? start.x : start.x - 1, ay = start.alongX ? start.y - 1 : start.y;
+  const Pair first = in(ax, ay) ? Pair{ax, ay, start.x, start.y} : Pair{start.x, start.y, ax, ay};
+  if (!in(first.ix, first.iy) || in(first.ox, first.oy))
+    return out;
+  // The tests themselves: the staff's (World sets them), or plain ones (ours:
+  // the zoo wall impassable, a tank's covered approach blocked; a route to
+  // any open zoo ground)
+  auto openGround = [&](int x, int y) {
+    if (!zooLand(x, y))
+      return false;
+    for (const Exhibit &other : this->exhibitList)
+      if (other.tiles.count({x, y}))
+        return false;
+    return true;
+  };
+  auto crossOf = [&](const Pair &q, int &cost) {
+    if (cross)
+      return cross(id, q.ix, q.iy, q.ox, q.oy, cost);
+    cost = 1;
+    const Piece *p = this->at(edgeOf(q.ix, q.iy, q.ox, q.oy));
+    if (p && this->typeList[p->type].zooWall)
+      return 4;
+    if (ex->tank && this->platformBlocked && this->platformBlocked(q.ox, q.oy))
+      return 3;
     return 0;
-  int firstDrag = round.front().second->drag;
-  for (auto &r : round)
-    firstDrag = std::min(firstDrag, r.second->drag);
-  std::vector<std::pair<Edge, Piece *>> stretch;
-  for (auto &r : round)
-    if (r.second->drag == firstDrag)
-      stretch.push_back(r);
-  std::sort(stretch.begin(), stretch.end(),
-            [](const auto &a, const auto &b) { return a.second->order < b.second->order; });
-  Piece *gate = stretch[stretch.size() / 2].second;
-  if (gate->gate)
-    return 0;
-  gate->gate = true;
-  return this->typeList[gate->type].gateCost;
+  };
+  auto routed = [&](int x, int y) { return route ? route(id, x, y) : openGround(x, y); };
+  auto stepOnce = [&](Pair &q) {
+    const int dx = q.ix - q.ox, dy = q.iy - q.oy;
+    const int sx = dy, sy = -dx;
+    const int Ax = q.ix + sx, Ay = q.iy + sy, Bx = q.ox + sx, By = q.oy + sy;
+    const bool a = in(Ax, Ay), b = in(Bx, By);
+    if (a && !b)
+      q = {Ax, Ay, Bx, By};
+    else if (a && b)
+      q.ix = Bx, q.iy = By;
+    else if (!a && !b)
+      q.ox = Ax, q.oy = Ay;
+    else
+      return false;
+    return true;
+  };
+  const int limit = 8 * static_cast<int>(ex->tiles.size()) + 16;
+  auto step = [&](Pair &q) {
+    for (int n = 0; n < limit; n++) {
+      if (!stepOnce(q))
+        return false;
+      if (zooLand(q.ox, q.oy))
+        return true;
+    }
+    return false;
+  };
+  auto gateAt = [&](const Pair &q, int code) {
+    out.code = code;
+    out.gate = true;
+    out.edge = edgeOf(q.ix, q.iy, q.ox, q.oy);
+    return out;
+  };
+  Pair q = first, best = first;
+  int code = 0, bestCost = Original::impassableStepCost;
+  bool settled = false;
+  for (int n = 0; n < limit; n++) {
+    int cost = Original::impassableStepCost;
+    const int c = crossOf(q, cost);
+    if (c != 0) {
+      if (!settled && code == 0)
+        code = c;
+      if (!step(q))
+        return out; // (no gate)
+    } else {
+      if (!settled && cost < bestCost) {
+        bestCost = cost;
+        best = q;
+        code = 6;
+      }
+      if (!routed(q.ox, q.oy)) {
+        if (!settled && code == 0)
+          code = 6;
+        if (!step(q))
+          return out;
+      } else if (map.pathShapeOk(q.ix, q.iy) && map.pathShapeOk(q.ox, q.oy) && openGround(q.ox, q.oy)) {
+        return gateAt(q, 0);
+      } else {
+        best = q;
+        settled = true;
+        code = 5;
+        if (!step(q))
+          return gateAt(best, 0);
+      }
+    }
+    if (q == first)
+      return gateAt(best, code);
+  }
+  return gateAt(best, code);
 }
 
 // ----------------------------------------------------------------------------

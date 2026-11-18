@@ -94,6 +94,9 @@ public:
   std::string fenceToolFile() const;
   // The staff picked in Hire Staff while it is open (its .ai file)
   std::string staffToolFile() const;
+  // Hire Staff's facing (0-3: its icons' SE, SW, NW, NE), which its rotate
+  // arrows turn for the DRT base (zoo.exe 0x63e46c)
+  int staffToolFacing() const;
   // The path picked on Buy Habitat's Paths tab while it is open
   std::string pathToolFile() const;
   // Staff: their panels (Staff Information, ui/infostf.lyt; Staff List,
@@ -112,6 +115,10 @@ public:
   // none (zoo.exe 0x481648)
   void showStaffPlaque(const std::string &file);
   const std::string &staffPlaqueShown() const { return this->staffPlaqueFile; }
+  // Adopt Animals' info plaque (plaque.lyt, 27) for an animal's .ai, or
+  // none (zoo.exe 0x483157)
+  void showAdoptPlaque(const std::string &file);
+  const std::string &adoptPlaqueShown() const { return this->adoptPlaqueFile; }
   void refreshStaff();
   // The bulldozer is on (the HUD's Clear Objects button)
   bool bulldozerOn() const;
@@ -419,6 +426,9 @@ private:
   // Its info plaque button and the plaque kept with what's held
   void refreshStaffPlaque();
   std::string staffPlaqueFile; // zoo.exe 0x63cf9c: the plaque's staff type
+  // Adopt Animals' info plaque button and the plaque kept with what's held
+  void refreshAdoptPlaque();
+  std::string adoptPlaqueFile; // zoo.exe 0x64318c: the plaque's animal type
 
   // The Buy Habitat panel's Terrain Types and Terrain Height tabs, which
   // show ui/teraform.lyt over the panel

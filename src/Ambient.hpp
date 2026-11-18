@@ -112,8 +112,9 @@ public:
   // Each kind's last (by key) and the once-a-day marks
   std::vector<std::pair<std::string, double>> lasts() const;
   void setLasts(const std::vector<std::pair<std::string, double>> &l);
-  // A saved zoo loaded: every kind's last back to 0, so each comes at once
-  // (zoo.exe 0x59148e adds each again with last 0)
+  // A saved zoo loaded: every kind's last back to 0, so each comes once the
+  // world clock has passed its cFrequency (zoo.exe 0x59148e adds each again
+  // with last 0)
   void dueNow();
   bool santaSent = false, biplaneSent = false; // zoo.exe 0x63e256, 0x63e25c
   // One at a place, going a way (tiles, tiles a second) for a while

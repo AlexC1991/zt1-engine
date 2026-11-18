@@ -179,9 +179,17 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
   float pausedClock=shows.show(tank)->elapsed;shows.update(0);check("zero time leaves show paused",shows.show(tank)->elapsed==pausedClock);
   bool sawPerformance=false,saved=false,loaded=false,seated=false;int inShow=0;
   std::set<int> trickThoughts; // (the seated guests' thoughts, each second of the performance)
+  int layered=0; // (#282: quarter seconds a seated guest showed a reaction over its gssit base)
   std::string conducting;
   for(int sec=0;sec<170;sec++) {
-    run(1);auto *s=shows.show(tank);if(!s)break;
+    // (the second in quarters, the same updates: a reaction's fPlayWithBase
+    // lasts its one play, 0.66 s for gsclap, seen at one of them)
+    for(int q=0;q<4;q++) {
+      run(0.25f);
+      for(const auto &g:guests)if(g.showTank==tank && g.showSeat>=0 && gs.standBase(g)=="gssit" &&
+                                  (g.anim=="gsclap"||g.anim=="gsovat"||g.anim=="gsboo")){++layered;break;}
+    }
+    auto *s=shows.show(tank);if(!s)break;
     for(auto &m:shows.takeMessages())barLines.push_back(m);
     if(s->phase==Shows::Phase::Performing) {
       if(!sawPerformance){sawPerformance=true;capture("show_performing");}
@@ -225,6 +233,26 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
     check("the audience thinks of a good or great trick: 10612 or 10613 (0x43a698)",
           trickThoughts.count(10612)>0 || trickThoughts.count(10613)>0);
   }
+  // #282: a trick's set (0x43a698 -> bGoodTrick: fPlay(gsclap), fPlayTime
+  // (gsclap, 4), fPlayWithBase(gssit, gsclap), fKeepControl()) run line by
+  // line: fPlayWithBase 0x5a90eb plays gsclap once over gssit, then it's
+  // held in gssit; and in the show, a seated guest seen so
+  if(!guests.empty()) {
+    Guests::Guest g=guests.front();g.id=-279282;g.anim="gssit"; // (a copy of its own, apart from the guest)
+    std::ostringstream steps;bool ok=true;
+    gs.startStandSet(g,"bGoodTrick");
+    const float once=g.playFor;steps<<g.anim<<"/"<<gs.standBase(g)<<" "<<g.playFor;
+    ok=ok&&g.anim=="gsclap"&&gs.standBase(g).empty()&&once>0;
+    gs.standSetNext(g);steps<<", "<<g.anim<<"/"<<gs.standBase(g)<<" "<<g.playFor;
+    ok=ok&&g.anim=="gsclap"&&gs.standBase(g).empty()&&g.playFor>=4.0f-0.001f&&g.playFor<4.0f+once;
+    gs.standSetNext(g);steps<<", "<<g.anim<<"/"<<gs.standBase(g)<<" "<<g.playFor;
+    ok=ok&&g.anim=="gsclap"&&gs.standBase(g)=="gssit"&&std::abs(g.playFor-once)<0.001f;
+    const bool more=gs.standSetNext(g);steps<<", "<<g.anim<<"/"<<gs.standBase(g)<<" lines "<<gs.standLinesLeft(g);
+    ok=ok&&!more&&g.anim=="gssit"&&gs.standBase(g).empty()&&gs.standLinesLeft(g)==0;
+    report<<"  bGoodTrick: "<<steps.str()<<"; layered in the show "<<layered<<" quarter seconds\n";
+    check("#282: a trick's set runs line by line - fPlay, fPlayTime, then fPlayWithBase plays gsclap once over gssit, then "
+          "held seated (0x43a698, 0x5a90eb); seen over gssit in the show",ok&&layered>0);
+  } else check("#282: a guest for the trick set",false);
   check("save during performance",saved && loaded);
   check("show completes after reload",s && s->completed==completedBefore+1 && s->phase==Shows::Phase::Waiting);
   check("all six visible tricks completed",s && s->tricksDone==6 && s->tricksSkipped==0);

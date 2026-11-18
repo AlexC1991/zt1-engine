@@ -279,6 +279,7 @@ UiGameScreen::UiGameScreen(ResourceManager *resource_manager,
   targets.insert(6);  // an animal's, clicked on the map
   targets.insert(28); // its Zookeeper Recommendations
   targets.insert(33); // Hire Staff's info plaque (splaque.lyt)
+  targets.insert(27); // Adopt Animals' info plaque (plaque.lyt)
   targets.insert(9);  // a guest's, clicked on the map
   targets.insert(21); // a stand's Building Information
   targets.insert(20); // another building's
@@ -451,11 +452,29 @@ void UiGameScreen::openFilter(int panelId) {
                                                                      : it->second);
 }
 
+// zoo.exe 0x5974_click 0x4e4c4d -> ui_buya_4f06a5: one choice for every
+// panel (0x638d4c) - each panel's filter button (Adopt 2005, Objects 3005,
+// Build Exhibit 3204, Hire Staff 3601, Research 4021) shows it, every list
+// is filled again (0x4f0a49, 0x4f0a84, 0x4f0abf; Research 0x4eb3f7), and
+// Hire Staff starts over: its pick, its type and its facing 0 (0x63e470,
+// 0x63e474, 0x63e46c). (Mods, the modfilter addition, is the buy panels'
+// only: Research, which hasn't it, keeps its pack)
 void UiGameScreen::setFilter(int panelId, int choice) {
   this->filter.open = false;
-  this->filterChoice[panelId] = choice;
+  std::set<int> panels = {panelId};
+  for (const BuyPanel &p : this->buyPanels)
+    panels.insert(p.id);
+  if (choice != kFilterMods)
+    panels.insert(15);
+  for (int id : panels)
+    this->filterChoice[id] = choice;
+  for (BuyPanel &p : this->buyPanels)
+    if (p.id == 10) {
+      p.facing = 0;
+      p.picked.clear();
+    }
   for (Entry &e : this->entries) {
-    if (!e.panel || e.id != panelId)
+    if (!e.panel || !panels.count(e.id))
       continue;
     // The button shows the choice
     std::function<void(UiElement *)> label = [&](UiElement *el) {
@@ -468,11 +487,11 @@ void UiGameScreen::setFilter(int panelId, int choice) {
     label(e.layout);
   }
   for (BuyPanel &p : this->buyPanels)
-    if (p.id == panelId) {
+    if (panels.count(p.id)) {
       p.category.clear(); // list again
       this->refreshBuyPanel(p);
     }
-  if (panelId == 15)
+  if (panels.count(15))
     this->refreshResearch();
 }
 
@@ -577,6 +596,10 @@ void UiGameScreen::setupBuyPanels() {
   }
   for (BuyPanel &p : this->buyPanels) {
     BuyPanel *self = &p;
+    // (a pick: kept for its tab, its name and cost shown, held with the
+    // panel's facing - zoo.exe buyobj_Objects_click 0x4e40f4: the tab's
+    // pick by index and type, 0x63bb88 and 0x63bb70, 0x4e4289, 0x4e42f9,
+    // setPlaceItem 0x4f189a, 0x4df56d with 0x63bba8)
     p.region->onSelect = [this, self](int index) {
       if (index >= 0 && index < (int)self->items.size())
         self->picked[self->category] = self->items[index]->file;
@@ -603,6 +626,13 @@ void UiGameScreen::setupBuyPanels() {
             if (t >= 0)
               this->showStaffPlaque(this->staff->types()[t].file);
           }
+      // An animal picked while Adopt Animals' info plaque is up: the
+      // plaque shows that one (zoo.exe buya_Animals_click 0x4e2cf8: 0x802
+      // on, flag 8 - 0x483157 with the animal)
+      if (self->id == 3 && self->category == "animals")
+        if (UiButton *plaque = dynamic_cast<UiButton *>(self->info ? self->layout->getElementById(self->info) : nullptr))
+          if (plaque->isToggledOn() && index >= 0 && index < (int)self->items.size())
+            this->showAdoptPlaque(self->items[index]->file);
       // Picking a fence leaves gate mode
       if (self->id == 8 && index >= 0 && self->gate)
         if (UiButton *g = dynamic_cast<UiButton *>(self->layout->getElementById(self->gate)))
@@ -626,6 +656,26 @@ void UiGameScreen::setupBuyPanels() {
           const int t = this->staff ? this->staff->typeOfFile(this->staffToolFile()) : -1;
           if (t >= 0)
             this->showStaffPlaque(this->staff->types()[t].file);
+        };
+      }
+    // Adopt Animals' info plaque (InfoPlaque, 2050), a toggle (state=2048):
+    // on, the plaque for the animal held (zoo.exe buya_InfoPlaque_click
+    // 0x4833e3: the zoo view's placing list's first thing, if an animal,
+    // 0x483157 then shown, 0x483463); off, the plaque hidden
+    // (buya_InfoPlaque_off 0x618d57 -> 0x4440d6: uiFind 0x1b, slot 0x48)
+    if (p.id == 3 && p.info)
+      if (UiButton *plaque = dynamic_cast<UiButton *>(p.layout->getElementById(p.info))) {
+        plaque->setToggledOn(false);
+        plaque->setGreyWhenOff(true);
+        plaque->onClick = [this, plaque] {
+          if (!plaque->isToggledOn()) {
+            this->showAdoptPlaque("");
+            return;
+          }
+          bool female = false;
+          const std::string held = this->animalToolFile(female);
+          if (!held.empty())
+            this->showAdoptPlaque(held);
         };
       }
     // Buy Habitat's gate button: a toggle (gate mode)
@@ -684,12 +734,29 @@ void UiGameScreen::refreshBuyPanel(BuyPanel &p) {
   if (category.empty() || category == p.category)
     return;
   p.category = category;
-  // The panel's title is the chosen tab's name ("Creatures", "Buildings")
+  // The panel's title is the chosen tab's name ("Creatures", "Buildings"),
+  // as each tab's click sets it: Adopt's Animals by the content filter's
+  // choice (zoo.exe buya_AnimalTab_click 0x4e3bc1: 0x638d4c - 0 2025, 1
+  // and 3 2023, 2 2024 - its helpids in that order, 0x4e3842), Shelters
+  // 6207 (buya_SheltersTab_click 0x4e60e8), Toys 6205 (buya_ToysTab_click
+  // 0x4e6366), Show Objects 2077 (0x81c_click 0x4e6414 - not its helpid,
+  // 2076); Objects' Buildings 6080 and Scenery 6081 (buyobj_BuildingTab_click
+  // 0x4e4951, buyobj_SceneryTab_click 0x4e5090: 0x4e4890); Build Exhibit's
+  // Fences 6203, Paths 6204, Foliage 6201, Rocks 6206 (buldhab_FenceTab_click
+  // 0x4db58e, buldhab_PathTab_click 0x4dda0f, buldhab_FoliageTab_click
+  // 0x4de09d, buldhab_RocksTab_click 0x4de232: buildListSelect 0x4db2ec)
   auto choice = this->filterChoice.find(p.id);
+  static const std::map<std::pair<int, std::string>, int> titles = {
+      {{3, "shelters"}, 6207}, {{3, "toys"}, 6205},  {{3, "showtoys"}, 2077}, {{4, "structures"}, 6080},
+      {{4, "scenery"}, 6081},  {{8, "fence"}, 6203}, {{8, "paths"}, 6204},    {{8, "foliage"}, 6201},
+      {{8, "rocks"}, 6206}};
   for (UiButton *tab : p.tabs)
-    if (tab->isToggledOn() && p.title)
-      p.title->setText(this->resource_manager->getString(tab->getHelpId(
-          choice == this->filterChoice.end() ? 0 : choice->second)));
+    if (tab->isToggledOn() && p.title) {
+      auto fixed = titles.find({p.id, category});
+      p.title->setText(this->resource_manager->getString(
+          fixed != titles.end() ? fixed->second
+                                : tab->getHelpId(choice == this->filterChoice.end() ? 0 : choice->second)));
+    }
   p.items.clear();
   for (const CatalogItem *item : ItemCatalog::get().inCategory(category))
     if (this->passesFilter(p.id, item->expansion, item->fromMod))
@@ -826,9 +893,39 @@ void UiGameScreen::showDetails(BuyPanel &p, const CatalogItem *item) {
   // Paths: the walkway height arrows, for the path types that can be raised
   const bool raises = c == "paths" && item && this->walkwayHeight && this->canRaise &&
                       this->canRaise(item->file);
-  show(p.rotateLeft, rotates || raises);
-  show(p.rotateRight, rotates || raises);
-  show(p.era, false);
+  // Hire Staff: the rotate arrows (0xe5c, 0xe5d) for the DRT base only -
+  // its pick enables and shows them (zoo.exe personel_Staff_click 0x4e69b8,
+  // type 0x1f5f -> 0x4e58f9: flag 0x10 cleared, slot 0x4c); any other pick,
+  // or none, switches them off and hides them (0x4e65ab: flag 0x10, slot
+  // 0x48; personel_Staff_off 0x4e6711)
+  bool drtBase = false;
+  if (p.id == 10 && item && this->staff) {
+    const int t = this->staff->typeOfFile(item->file);
+    drtBase = t >= 0 && this->staff->types()[t].kind == Staff::Kind::Helicopter;
+  }
+  show(p.rotateLeft, rotates || raises || drtBase);
+  show(p.rotateRight, rotates || raises || drtBase);
+  if (p.id == 10)
+    for (int id : {p.rotateLeft, p.rotateRight})
+      if (UiElement *e = element(id))
+        e->setDisabled(!drtBase);
+  // Adopt's era (2082): on the Animals tab, the animal's cEra's name, or
+  // hidden and switched off for one without (zoo.exe 0x4e2f17: the tab set
+  // 0x81a's choice 0x81b, the type's +0x1f8)
+  {
+    int era = 0;
+    if (p.id == 3 && animals && item && this->animals) {
+      const int t = this->animals->typeOfFile(item->file);
+      if (t >= 0)
+        era = this->animals->types()[t].era;
+    }
+    show(p.era, era != 0);
+    if (UiElement *e = element(p.era))
+      e->setDisabled(era == 0);
+    if (era)
+      if (UiText *t = dynamic_cast<UiText *>(element(p.era)))
+        t->setText(this->resource_manager->getString(era));
+  }
   // Hire Staff's Salary and Duties labels and the name: shown with a pick
   // (zoo.exe personel_Staff_click 0x4e69b8 -> 0x4e6b43, slot 0x4c), hidden
   // when it's let go (personel_Staff_off 0x4e6711 -> 0x4e66bf, slot 0x48)
@@ -938,6 +1035,142 @@ void UiGameScreen::refreshStaffPlaque() {
         if (!this->isPanelOpen(33))
           plaque->setToggledOn(false);
         plaque->setDisabled(this->staffToolFile().empty());
+      }
+}
+
+// Adopt Animals' info plaque (plaque.lyt, 27): zoo.exe 0x483157 - the
+// animal type kept (0x64318c; the same one again isn't filled again) and
+// filled by 0x4834cc: 25001 its name (slot 0x20, setTextId slot 0xc8),
+// 25002 its cPlaqueImageName (+0x450), 25050 its continent's picture
+// (cLocation +0x1f4, 0x4f85d2: ui/infoimg.cfg), 25055 its era's name
+// (cEra +0x1f8; none: hidden and switched off, flag 0x10), the show star
+// and its words (25098, 25099) shown only for an animal with tricks (+0x6f,
+// loadConfig 0x4b6c51: its trick list not empty) other than the jellyfish
+// (5403), 25051 its habitat's picture (cHabitat +0x1f0), 25053 its
+// cPrefIcon (+0x468), then 25003 the lang DLLs' TEXT resource its
+// cGeneralInfoTextName names (+0x45c; 0x4834b5 -> 0x483481 -> 0x4f0264);
+// 0x4830c0: the carer's button (25011) pictured for its cKeeper (9500 the
+// zookeeper, 9551 the scientist, 9552 the marine specialist) and greyed,
+// the plaque showing the animal held (slot 0x6c). Shown (0x483463, slot
+// 0x4c), the carer's Recommendations shut (plaque_Panel_show 0x4e2865 ->
+// ui_keprinfo_4440f1: uiFind 0x1c, slot 0x48); none: hidden (0x4440d6).
+// (The icons' help ids, 0x443bfc, aren't kept: ours show none, as the
+// Adopt panel's own)
+void UiGameScreen::showAdoptPlaque(const std::string &file) {
+  if (file == this->adoptPlaqueFile && (file.empty() || this->isPanelOpen(27)))
+    return;
+  this->adoptPlaqueFile = file;
+  UiLayout *z = nullptr;
+  for (Entry &e : this->entries)
+    if (e.panel && e.id == 27)
+      z = e.layout;
+  if (file.empty() || !z) {
+    this->setPanelOpen(27, false);
+    return;
+  }
+  IniReader *ai = this->resource_manager->getIniReader(file);
+  // (per subtype: the sex chosen's, else the male's, else the species'
+  // default's - the female sections mostly have none - else the shared one)
+  bool female = false;
+  this->animalToolFile(female);
+  const std::string def = ai ? Utils::string_to_lower(ai->get("global", "defaultsubtype")) : "";
+  std::vector<std::string> subs = {female ? "f/" : "m/", "m/"};
+  if (!def.empty())
+    subs.push_back(def + "/");
+  subs.push_back("");
+  auto str = [&](const char *key) {
+    for (const std::string &s : subs) {
+      std::string v = ai ? ai->get(s + "characteristics/strings", key) : "";
+      if (!v.empty())
+        return v;
+    }
+    return std::string();
+  };
+  auto num = [&](const char *key) {
+    for (const std::string &s : subs) {
+      int v = ai ? ai->getInt(s + "characteristics/integers", key, 0) : 0;
+      if (v)
+        return v;
+    }
+    return 0;
+  };
+  auto info = [&](int id) {
+    auto it = this->infoImages.find(id);
+    return it == this->infoImages.end() ? std::string() : it->second;
+  };
+  auto image = [&](int id, const std::string &path) {
+    if (UiImage *img = dynamic_cast<UiImage *>(z->getElementById(id))) {
+      img->setImage(path);
+      img->setHidden(path.empty());
+    }
+  };
+  const int nameId = num("cnameid");
+  if (UiText *name = dynamic_cast<UiText *>(z->getElementById(25001)))
+    name->setText(nameId ? this->resource_manager->getString(nameId) : "");
+  image(25002, Utils::string_to_lower(str("cplaqueimagename")));
+  image(25050, info(num("clocation")));
+  const int era = num("cera");
+  if (UiText *t = dynamic_cast<UiText *>(z->getElementById(25055))) {
+    t->setText(era ? this->resource_manager->getString(era) : "");
+    t->setHidden(!era);
+    t->setDisabled(!era);
+  }
+  // (its tricks: the sex's list, else the default subtype's, as Shows::tricks)
+  bool tricks = false;
+  if (ai) {
+    std::string base = "m/tricks";
+    if (ai->getList(base, "trick").empty())
+      base = (def.empty() ? std::string("m") : def) + "/tricks";
+    tricks = !ai->getList(base, "trick").empty();
+  }
+  const bool star = tricks && nameId != 5403;
+  for (int id : {25098, 25099})
+    if (UiElement *e = z->getElementById(id)) {
+      e->setHidden(!star);
+      e->setDisabled(!star);
+    }
+  image(25051, info(num("chabitat")));
+  image(25053, Utils::string_to_lower(str("cpreficon")));
+  if (UiText *text = dynamic_cast<UiText *>(z->getElementById(25003)))
+    text->setMessage(langText(str("cgeneralinfotextname")));
+  if (UiButton *carer = dynamic_cast<UiButton *>(z->getElementById(25011))) {
+    const int k = num("ckeeper");
+    const int index = k == 9551 ? 1 : k == 9552 ? 2 : 0;
+    carer->chooseAnimation(static_cast<size_t>(index));
+    carer->chooseHelp(static_cast<size_t>(index));
+    carer->setDisabled(true);
+  }
+  delete ai;
+  this->setPanelOpen(28, false);
+  this->setPanelOpen(27, true);
+}
+
+// The plaque and its button kept with what's held: the button enabled only
+// while something is held (setPlaceItem 0x4f189a: adoptInfoPlaque 0x4f187a,
+// slot 0x68 with a thing, 0x6c without); the plaque hidden when the animal
+// list goes - Adopt shut (buya_Animals_hide 0x4e2ba6) or another tab
+// (adoptTabs_off 0x4e3867), both adoptSelectionUpdate 0x4e2bec(0), 0x4440d6
+// while the button's on - and, hidden by its own close (CloseWindow) too,
+// the button let go (plaque_Panel_hide 0x4e284a, slot 0x54; 0x63cd60
+// cleared); shown, it's on (plaque_Panel_show 0x4e2865, slot 0x50)
+void UiGameScreen::refreshAdoptPlaque() {
+  bool female = false;
+  const std::string held = this->animalToolFile(female);
+  if (!this->adoptPlaqueFile.empty() && this->isPanelOpen(27) && held.empty() &&
+      (!this->isPanelOpen(3) || [&] {
+        for (const BuyPanel &p : this->buyPanels)
+          if (p.id == 3)
+            return p.category != "animals";
+        return true;
+      }()))
+    this->showAdoptPlaque("");
+  if (!this->isPanelOpen(27))
+    this->adoptPlaqueFile.clear();
+  for (BuyPanel &p : this->buyPanels)
+    if (p.id == 3 && p.info)
+      if (UiButton *plaque = dynamic_cast<UiButton *>(p.layout->getElementById(p.info))) {
+        plaque->setToggledOn(this->isPanelOpen(27));
+        plaque->setDisabled(held.empty());
       }
 }
 
@@ -1242,6 +1475,8 @@ void UiGameScreen::setupResearch() {
   this->refreshResearch();
 }
 
+// (run after every click and tab change here - as the original's tab
+// clicks run its refresh: research_Status_click 0x4a02f7 -> 0x4eae69)
 void UiGameScreen::refreshResearch() {
   ResearchPanel &r = this->research;
   if (!r.panel)
@@ -1677,7 +1912,9 @@ void UiGameScreen::refreshZooStatus() {
   // Machine 1  1  2  -$5.50  -$5.50"): every stand and shop, its months
   // open, visitors, profit (takings less upkeep, red under nothing) and
   // profit a month, in the chosen order; picking one centres the view on
-  // it and opens its Building Information
+  // it and opens its Building Information (zoo.exe 0x104c_click 0x61728e:
+  // unless it's the one selected already, the view to its tile, 0x4017e5,
+  // selectAndShowInfo 0x59b90c, and selected, 0x4ef75b(it, 1))
   if (UiListBox *list = dynamic_cast<UiListBox *>(z->getElementById(4172))) {
     struct Row {
       int id;
@@ -1963,6 +2200,7 @@ void UiGameScreen::showTab(int panelId, int buttonId) {
   for (BuyPanel &p : this->buyPanels)
     this->refreshBuyPanel(p);
   this->refreshStaffPlaque();
+  this->refreshAdoptPlaque();
   this->refreshTerraform();
   this->refreshResearch();
   this->refreshZooStatus();
@@ -1976,6 +2214,10 @@ void UiGameScreen::setPanelOpen(int id, bool open) {
   // bulldozeToolOff 0x443b60)
   if (open && !this->isPanelOpen(id) && (id == 3 || id == 4 || id == 8 || id == 10 || id == 15 || id == 5))
     this->bulldozerOff();
+  // Build Exhibit shut: gate mode off (zoo.exe buldhab_Panel_hide 0x4e10d3:
+  // 0x4e1064(0))
+  if (id == 8 && !open && this->isPanelOpen(8))
+    this->setGateMode(false);
   // The Game Options (5): the Options window in its place (the optionswindow
   // extra), the disk button left off
   if (id == 5 && open && Features::optionsWindow && this->options) {
@@ -2007,8 +2249,10 @@ void UiGameScreen::setPanelOpen(int id, bool open) {
   // smartstack: the other windows stay)
   if (open && !this->isPanelOpen(id) && (id == 16 || id == 12 || id == 31) && !Features::smartStack) {
     std::vector<int> shut = {14, 41};
-    if (id != 16)
+    if (id != 16) {
+      shut.push_back(27);
       shut.push_back(28);
+    }
     for (int p : shut) {
       this->setPanelOpen(p, false);
       for (UiButton *b : this->panelButtons)
@@ -3025,6 +3269,11 @@ void UiGameScreen::drawPopup(SDL_Renderer *renderer, SDL_Rect *layout_rect) {
   for (const Entry &e : this->entries)
     if (e.panel && e.open && e.id == this->filter.owner)
       owner = &e;
+  // (its panel shut, the list goes with it: buya_Panel_hide 0x4e2cdd,
+  // buyobj_Panel_hide 0x4e40d9, buldhab_Panel_hide 0x4e10d3 - their HUD
+  // button let go, slot 0x54, and 0x5974_listC 0x4e0ee9(0): the list's
+  // drop-down, uiFind 0x5974 +0x74, hidden; Build Exhibit's gate mode off
+  // too, 0x4e1064(0) - gateMode)
   if (!owner) {
     this->filter.open = false;
     return;
@@ -3195,6 +3444,7 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
   for (BuyPanel &p : this->buyPanels)
     this->refreshBuyPanel(p);
   this->refreshStaffPlaque();
+  this->refreshAdoptPlaque();
   this->refreshTerraform();
   this->refreshResearch();
   this->refreshZooStatus();
@@ -3230,6 +3480,9 @@ UiAction UiGameScreen::handleInputs(std::vector<Input> &inputs) {
       this->setPanelOpen(t, b->isToggledOn());
     }
   } else if (isPanelClose(action)) {
+    // (closed by its own button: its HUD button let go - as the panels'
+    // Panel_hide do: Research's, research_Panel_hide 0x4a02fc: uiFind
+    // 0x3fb, slot 0x54; Zoo Status', zooinfo_Panel_hide 0x4efff8: 0x3f6)
     int id = panelOf(action);
     this->setPanelOpen(id, false);
     for (UiButton *b : this->panelButtons)
@@ -3288,6 +3541,18 @@ std::string UiGameScreen::pathToolFile() const {
 // (zoo.exe personel_Staff_show 0x4e6f87: the zoo view's +0x364 set to the
 // grid, 0xe12; personel_Staff_hide 0x4e6794: back to none, and nothing
 // held, setPlaceItem 0x4f189a)
+// zoo.exe 0xe5c_click 0x618862 / 0xe5d_click 0x618883: 0x63e46c one back
+// (0 to 3) or on (3 to 0), the list refilled facing that way (0x4e6bbd ->
+// 0x4e90c2) and the pick made again (personel_Staff_click 0x4e69b8), which
+// hands it to the zoo view (0x4df56d: +0x370) - here, the panel's facing
+// (rotateItems), read by the staff tool
+int UiGameScreen::staffToolFacing() const {
+  for (const BuyPanel &p : this->buyPanels)
+    if (p.id == 10)
+      return p.facing;
+  return 0;
+}
+
 std::string UiGameScreen::staffToolFile() const {
   if (!this->isPanelOpen(10))
     return "";
@@ -3328,6 +3593,10 @@ void UiGameScreen::dropPicks() {
   }
 }
 
+// The object held comes from its panel's list while that's shown (zoo.exe
+// buyobj_Objects_show 0x4e48be, buldhab_Objects_show 0x4e1091: the zoo
+// view's +0x364 set to the list, 0xbcb or 0xc88; buyobj_Objects_hide
+// 0x4e4012, buldhab_Objects_hide 0x4e1079: back to none, nothing held)
 std::string UiGameScreen::objectToolFile(int &cost, int &facing) const {
   cost = 0;
   facing = 0;
@@ -3350,6 +3619,9 @@ std::string UiGameScreen::objectToolFile(int &cost, int &facing) const {
   return "";
 }
 
+// The animal held comes from Adopt's Animals list while it's shown
+// (zoo.exe buya_Animals_show 0x4e2bda: the zoo view's +0x364 set to the
+// list, 0x7e3; buya_Animals_hide 0x4e2ba6: back to none, nothing held)
 std::string UiGameScreen::animalToolFile(bool &female) const {
   female = this->animalPickFemale;
   if (!this->isPanelOpen(3))
@@ -4526,7 +4798,8 @@ void UiGameScreen::refreshLists() {
     return -1;
   };
   // The Message List: every message kept, newest at the top, each with its
-  // arrow; the Messages button lit while it's open
+  // arrow; the Messages button lit while it's open (closed: let go -
+  // zoo.exe message_Panel_hide 0x4a03fb: uiFind 0x3ee, slot 0x54)
   for (Entry &e : this->entries)
     if (e.panel && e.id == 29) {
       if (UiButton *b = this->hud ? dynamic_cast<UiButton *>(this->hud->getElementById(1006)) : nullptr)
@@ -4978,6 +5251,10 @@ void UiGameScreen::setupColours() {
 // and its colour; clicked, the panel shows the 24 colours, ordered by
 // red, then green, then blue; a pick paints it and the tab comes back).
 // Only buildings that can be painted (cIsColorReplaced) have the tab.
+// zoo.exe infocomC_Panel_show 0x4882ac: for each of the building's parts
+// (+0x28..+0x2c, 12 bytes each) the button 2461 + n (0x99d) filled with its
+// colour and the label 2451 + n (0x993) its title (+0x224), both shown;
+// the parts it hasn't, of two, hidden and switched off (flag 0x10)
 void UiGameScreen::refreshColours(UiLayout *z, PlacedObjects::Object *o, bool commerce) {
   UiLayout *paint = nullptr, *picker = nullptr;
   for (Entry &e : this->entries) {
@@ -5040,6 +5317,9 @@ void UiGameScreen::refreshColours(UiLayout *z, PlacedObjects::Object *o, bool co
   }
 }
 
+// zoo.exe buildingInfo_Panel_hide 0x4881a9 (infocom's and infoncom's):
+// shut, the paint tab goes with it (uiFind 0x12e, slot 0x48), and so the
+// colour picker (infocomC_Panel_hide 0x488291: uiFind 0x25, slot 0x48)
 void UiGameScreen::refreshBuilding() {
   if (this->shownBuilding < 0 || !this->objects)
     return;
@@ -5440,6 +5720,8 @@ void UiGameScreen::showAdvice(int id) {
       z = e.layout;
   if (!m || !z)
     return;
+  // (the animal plaque hidden: keprinfo_Panel_show 0x483b71 -> 0x4440d6)
+  this->setPanelOpen(27, false);
   this->setPanelOpen(28, true);
   // The layout lists the zookeeper's, the scientist's and the marine
   // specialist's backgrounds and titles: the animal's carer's (cKeeper -

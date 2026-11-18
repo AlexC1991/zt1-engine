@@ -587,6 +587,14 @@ bool World::loadFreeform(const std::string &path) {
     const auto *tile=this->worldMap.getTile(x,y);
     return !tile || !this->fences.insideZoo(x,y) || tile->terrainType==9 || tile->terrainType==10 || this->index.blocked(x,y);
   };
+  // (a new exhibit's gate: where the staff access check's walk settles -
+  // zoo.exe 0x44e4eb, with the staff's own tests)
+  fences.gateCross=[this](int id,int ix,int iy,int ox,int oy,int &cost) {
+    return this->staff.gateCross(id,ix,iy,ox,oy,this->worldMap,this->fences,cost);
+  };
+  fences.gateRoute=[this](int id,int ox,int oy) {
+    return this->staff.gateRoute(id,ox,oy,this->worldMap,this->fences);
+  };
   placedObjects.tankAt = [this](float x, float y) {
     int ex = this->fences.exhibitAt(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
     const Fences::Exhibit *e = ex >= 0 ? this->fences.exhibit(ex) : nullptr;
@@ -2676,7 +2684,10 @@ int World::deckAt(int x, int y, int &tx, int &ty) {
   return found;
 }
 
-void World::setStaffTool(int type) {
+void World::setStaffTool(int type, int facing) {
+  if (type == this->staffTool && facing == this->staffFacing)
+    return;
+  this->staffFacing = facing;
   if (type == this->staffTool)
     return;
   this->staffTool = type;
@@ -2951,7 +2962,7 @@ void World::pickUpAnimal(int id) {
   if (!m)
     return;
   int ex = m->exhibit, type = m->type;
-  this->animals.snapshot(ex, this->worldMap, this->fences);
+  this->animals.snapshot(ex, this->worldMap, this->fences, Animals::Change::Animal);
   this->animals.carried = id;
   this->animals.markDirty(ex);
   this->animals.react(ex, Animals::Change::Animal, "", type, true, this->worldMap, this->fences);
@@ -2966,7 +2977,7 @@ void World::sellAnimal(int id) {
   if (!m)
     return;
   int ex = m->exhibit, type = m->type;
-  this->animals.snapshot(ex, this->worldMap, this->fences);
+  this->animals.snapshot(ex, this->worldMap, this->fences, Animals::Change::Animal);
   this->animals.remove(id);
   this->animals.react(ex, Animals::Change::Animal, "", type, true, this->worldMap, this->fences);
 }
@@ -4079,10 +4090,14 @@ void World::mouseMove(int x, int y) {
       return;
     }
     this->staff.previewType = this->staffTool;
-    const auto point = this->staff.placementPoint(this->staffTool, wx, wy);
+    // (a DRT base turned as Hire Staff's arrows have it, as an object by
+    // its panel's facing: worldFacing)
+    const int facing = this->worldFacing(this->staffFacing);
+    this->staff.previewFacing = facing;
+    const auto point = this->staff.placementPoint(this->staffTool, wx, wy, facing);
     this->staff.previewX = point.first;
     this->staff.previewY = point.second;
-    this->staff.previewFit = this->staff.canPlaceType(this->staffTool, wx, wy, this->worldMap, this->fences);
+    this->staff.previewFit = this->staff.canPlaceType(this->staffTool, wx, wy, this->worldMap, this->fences, facing);
     // (zoo.exe 0x5ce19f: more than the cash, red - #71)
     this->staff.previewPoor =
         this->staff.previewFit == Fences::Fit::Ok && !this->canAfford(this->staff.types()[this->staffTool].salary);
@@ -4401,7 +4416,7 @@ World::ToolResult World::bulldozeRectRelease() {
     u.money = refund;
     this->recordUndo(u);
     const int ex = this->fences.exhibitAt(static_cast<int>(std::floor(gone.x)), static_cast<int>(std::floor(gone.y)));
-    this->animals.snapshot(ex, this->worldMap, this->fences);
+    this->animals.snapshot(ex, this->worldMap, this->fences, Animals::Change::Object);
     this->guests.buildingGone(o);
     this->placedObjects.remove(o);
     this->removeRubbleGroup(gone);
@@ -4612,7 +4627,7 @@ World::ToolResult World::mouseDown(int x, int y) {
       if (this->animals.canDrop(id, mx, my, this->worldMap, this->fences)) {
         int ex = this->fences.exhibitAt(static_cast<int>(std::floor(mx)), static_cast<int>(std::floor(my)));
         int type = m->type;
-        this->animals.snapshot(ex, this->worldMap, this->fences);
+        this->animals.snapshot(ex, this->worldMap, this->fences, Animals::Change::Animal);
         this->animals.drop(id, mx, my, this->fences);
         this->animals.react(ex, Animals::Change::Animal, "", type, false, this->worldMap, this->fences);
         std::string file;
@@ -4755,7 +4770,7 @@ World::ToolResult World::mouseDown(int x, int y) {
     int ex = this->fences.exhibitAt(static_cast<int>(std::floor(this->ghostX)),
                                     static_cast<int>(std::floor(this->ghostY)));
     if (this->objectGhost && this->ghostFit == Fences::Fit::Ok)
-      this->animals.snapshot(ex, this->worldMap, this->fences);
+      this->animals.snapshot(ex, this->worldMap, this->fences, Animals::Change::Object);
     ZT_STEP("", "Can the object go there? (objectFit)", {"object", this->objectTool}, {"x", this->ghostX},
             {"y", this->ghostY}, {"facing", this->ghostFacing},
             {"fit", this->ghostFit == Fences::Fit::Ok ? "yes" : this->ghostFit == Fences::Fit::InTheWay ? "something's in the way" : "no"},
@@ -4806,7 +4821,7 @@ World::ToolResult World::mouseDown(int x, int y) {
       return r;
     }
     if (fits)
-      this->animals.snapshot(ex, this->worldMap, this->fences);
+      this->animals.snapshot(ex, this->worldMap, this->fences, Animals::Change::Animal);
     int id = this->animals.adopt(this->animalTool, this->animalFemale, wx, wy, this->worldMap, this->fences);
     ZT_STEP("", id >= 0 ? "Adopted" : "Can't go there", {"animal", id}, {"exhibit", ex},
             {"message", id >= 0 ? 0 : this->animals.placeMessage});
@@ -4843,7 +4858,8 @@ World::ToolResult World::mouseDown(int x, int y) {
       Sound::get().play("sounds/noplace"); // (red: refused, no message - zoo.exe 0x5ce19f, #71)
       return r;
     }
-    int id = this->staff.hire(this->staffTool, wx, wy, this->worldMap, this->fences);
+    int id = this->staff.hire(this->staffTool, wx, wy, this->worldMap, this->fences,
+                              this->worldFacing(this->staffFacing));
     ZT_STEP("", id >= 0 ? "Hired" : "Can't go there", {"staff", id}, {"type", this->staff.types()[this->staffTool].key},
             {"x", wx}, {"y", wy});
     Sound::get().play(id >= 0 ? "sounds/place" : "sounds/noplace");
@@ -5226,7 +5242,7 @@ float World::bulldozeObject(int o) {
   }
   int ex = this->fences.exhibitAt(static_cast<int>(std::floor(gone.x)), static_cast<int>(std::floor(gone.y)));
   ZT_STEP("", "Bulldozes scenery: 80% back", {"object", file}, {"refund", refund}, {"exhibit", ex});
-  this->animals.snapshot(ex, this->worldMap, this->fences);
+  this->animals.snapshot(ex, this->worldMap, this->fences, Animals::Change::Object);
   this->guests.buildingGone(o);
   this->placedObjects.remove(o);
   this->removeRubbleGroup(gone);

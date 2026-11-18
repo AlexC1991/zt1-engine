@@ -631,8 +631,11 @@ void Shows::actorStep(Show &s,Actor &a,float seconds) {
       int score=a.index<static_cast<int>(a.benefit.size())?a.benefit[a.index]:trick.satisfaction;
       a.score+=score;++a.completed;++s.tricksDone;
       for(auto &g:world->guests.list)if(g.showTank==s.tank && g.showSeat>=0) {
-        const char *anim=score>=settings.greatTrick?"gsovat":score>=settings.goodTrick?"gsclap":score<=settings.badTrick?"gsboo":"gssit";
-        if(world->guests.typeList[g.type].anims.count(anim)){g.anim=anim;g.animTime=0;}
+        // (zoo.exe ZTGuest::handleEvents 0x43a698: a great trick bGreatTrick,
+        // a good one bGoodTrick, a bad one bBadTrick - fPlay, fPlayTime and
+        // fPlayWithBase over gssit, then fKeepControl; an OK one none)
+        const char *set=score>=settings.greatTrick?"bGreatTrick":score>=settings.goodTrick?"bGoodTrick":score<=settings.badTrick?"bBadTrick":nullptr;
+        if(set)world->guests.startStandSet(g,set);
         // (the guest's thought, ZTGuest::handleEvents 0x43a698: a bad trick
         // 10610 "What was that supposed to be?", a good one 10612 "That was
         // a cool trick", a great one 10613 "Wow! that trick was
@@ -827,6 +830,7 @@ void Shows::audiences(Show &s,float seconds) {
     if(g.showSeat>=0)if(auto *stand=world->placedObjects.byId(g.showStand))stand->visitorsNow=std::max(0,stand->visitorsNow-1);
     g.x=g.showDoorX;g.y=g.showDoorY;g.showTank=g.showStand=g.showSeat=-1;g.showZ=0;g.showExit=0;
     g.building=-1;g.hidden=false;g.path.clear();g.pathAt=0;g.need.clear();g.state=Guests::State::Walking;
+    world->guests.standClear(g);
     guests.play(g,"stand",1.0f);
   };
   for(auto &g:guests.list)if(g.showTank==s.tank) {
@@ -856,7 +860,9 @@ void Shows::audiences(Show &s,float seconds) {
       // its visited list, guestRecordVisit 0x4a840e)
       if(const auto *tank=world->fences.exhibit(s.tank);tank&&!tank->tiles.empty())
         guests.recordVisit(g,tank->tiles.begin()->first,tank->tiles.begin()->second);
-    } else if(g.anim!="gssit" && g.animTime>7){g.anim="gssit";g.animTime=0;}
+    } else if(guests.standActive(g) && g.animTime>=g.playFor) {
+      world->guests.standSetNext(g); // (its trick set's next line)
+    }
   }
 }
 
@@ -915,12 +921,13 @@ void Shows::releaseAudience(Show &s,bool cancelled) {
       g.showRating=s.lastScore<=settings.badShow?0:s.lastScore<settings.goodShow?1:s.lastScore<settings.greatShow?2:3;
       world->guests.think(g,10287+g.showRating);
       g.showExitLength=g.showRating==0?6.0f:g.showRating==1?5.0f:g.showRating==2?7.0f:9.0f;
-      g.showExit=g.showExitLength;g.anim="gssit";g.animTime=0;
+      g.showExit=g.showExitLength;g.anim="gssit";g.animTime=0;world->guests.standClear(g);
     } else {
       if(cancelled && g.showSeat>=0)world->guests.think(g,10287);
       if(g.showSeat>=0)if(auto *stand=world->placedObjects.byId(g.showStand))stand->visitorsNow=std::max(0,stand->visitorsNow-1);
       g.x=g.showDoorX;g.y=g.showDoorY;g.showTank=g.showStand=g.showSeat=-1;g.showZ=0;g.showExit=0;
       g.path.clear();g.pathAt=0;g.building=-1;g.need.clear();g.hidden=false;g.state=Guests::State::Walking;
+      world->guests.standClear(g);
       world->guests.play(g,"stand",1.0f);
     }
   }

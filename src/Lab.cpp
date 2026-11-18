@@ -1578,6 +1578,7 @@ void LabApp::flattenZoo() {
         t->cornerHeight[c] = want[static_cast<size_t>(y) * map.getWidth() + x][c];
       t->height = t->cornerHeight[0];
       t->terrainType = 0;
+      t->edgeBits = 0; // (its sides' cliff codes, byte 6, cleared too: flat ground has none)
       map.setPath(x, y, "");
     }
   map.touch();
@@ -1600,6 +1601,7 @@ void LabApp::flatten(int x0, int y0, int w, int h) {
           t->cornerHeight[c] = sceneLevel;
         t->height = sceneLevel;
         t->terrainType = 0;
+        t->edgeBits = 0; // (its sides' cliff codes, byte 6, cleared too: flat ground has none)
         map.setPath(x, y, "");
       }
   map.touch();

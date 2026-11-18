@@ -12,6 +12,9 @@ bool Original::confirmSell() {
   return Settings::getInt("UI", "confirmSell", 1) != 0;
 }
 
+// zoo.exe removeObject 0x50a0b0 -> sellConfirmDialog 0x50bf8d: asked when the
+// type's cNeedsConfirm (+0x134) is 1 and [UI] confirmSell (0x51f80c into the
+// view's +0x456) isn't 0
 bool Original::sellNeedsConfirm(ResourceManager *rm, const std::string &file) {
   if (!rm || !confirmSell())
     return false;
@@ -23,6 +26,8 @@ bool Original::sellNeedsConfirm(ResourceManager *rm, const std::string &file) {
   return ask;
 }
 
+// zoo.exe sellConfirmDialog 0x50bf8d: text 154 with the name (0x41ca7f), then
+// the refund as whole dollars, grouped (moneyToText 0x40eca1 with its flag 1)
 std::string Original::sellQuestion(ResourceManager *rm, const std::string &name, float refund) {
   std::string s = rm ? rm->getString(154) : "";
   size_t at = s.find("%s");

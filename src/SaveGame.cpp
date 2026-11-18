@@ -36,7 +36,7 @@
 namespace {
 constexpr uint32_t kMagic = 0x5A543153; // "S1TZ"
 constexpr uint32_t kMapMagic = 0x504D3153; // "S1MP": a map design (saveMap)
-constexpr uint32_t kVersion = 25; // 25: the rename cheats' names used once only. // 24: maintenance workers' jobs (their work, its target, route and destination). // 23: DRT bases' recoveries. // 22: guests attacked by a predator. // 21: the flyers in flight, their spawn clock and special days' marks; rubble pieces' groups and types. // 20: guests' visited lists as tiles and their visit counts. // 19: each month's guests in the zoo (books row 25). // 18: guests' recent-species lists. // 17: tank filters' built and serviced days and months in operation. // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
+constexpr uint32_t kVersion = 26; // 26: every staff member's work (keepers' visits, chases, tours and their followers, running from a predator, the helicopter's flight, the set it's playing), its look-for-a-hunter countdown, DRT bases' facing. // 25: the rename cheats' names used once only. // 24: maintenance workers' jobs (their work, its target, route and destination). // 23: DRT bases' recoveries. // 22: guests attacked by a predator. // 21: the flyers in flight, their spawn clock and special days' marks; rubble pieces' groups and types. // 20: guests' visited lists as tiles and their visit counts. // 19: each month's guests in the zoo (books row 25). // 18: guests' recent-species lists. // 17: tank filters' built and serviced days and months in operation. // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
 
 // A little binary writer and reader: numbers as they are, strings with
 // their length, vectors with their count
@@ -562,6 +562,10 @@ bool SaveGame::loadOriginalWorld(World &world) {
       world.ambient.resume(world.worldMap, record.typeName, record.x / 64.0f, record.y / 64.0f,
                            static_cast<int>(record.direction), static_cast<float>(record.ambientSpeed),
                            record.ambientStep);
+  // The world clock carries on from the file's (worldLoad 0x452e13 reads
+  // +0x208, +0x204 back, from 67)
+  if (z.getWorldClock() >= 0)
+    world.ambient.setWorldClock(z.getWorldClock());
   resumeAmbients(world);
   for (const auto &record : z.getObjects()) {
     if (!record.decoded) continue;
@@ -2007,19 +2011,46 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
       o.raw(e);
     o.raw(m.fx); o.raw(m.fy); o.raw(m.workCheck); o.raw(m.crowdClock);
     o.raw(m.recoveries);
-    // (v24: a maintenance worker's job, as the original keeps each unit's
-    // task and job - Staff::savedJob)
-    const Staff::SavedJob job = Staff::savedJob(m, st.typeList[m.type]);
-    o.raw(job.job);
-    if (job.job > 0) {
-      o.raw(job.item); o.raw(job.filter); o.raw(job.edge.alongX); o.raw(job.edge.x); o.raw(job.edge.y);
-      o.raw(job.dutyId); o.raw(job.goalX); o.raw(job.goalY); o.raw(job.working); o.raw(job.layer);
-      o.raw(job.pathAt);
-      o.raw(static_cast<uint32_t>(job.path.size()));
-      for (size_t k = 0; k < job.path.size(); k++) {
-        o.raw(job.path[k].first); o.raw(job.path[k].second);
-        o.raw(k < job.pathLayers.size() ? job.pathLayers[k] : 0);
+    o.raw(m.baseFacing);
+    // (v26: its work whole, as the original keeps each unit's task and job
+    // objects - UnitBase::load 0x4547cc -> 0x454aaf - and its class's own
+    // fields: ZTStaff::load 0x455433 the countdown to its next look for a
+    // hunter, +0x28c; ZTTourGuide::load 0x59b3a1 its followers, +0x294;
+    // ZTHelicopter::load 0x46b1dd its flight. ours: where it is (in a tank
+    // too), its job and route, its visit's part, the set it's playing)
+    o.raw(m.chaseCount); o.raw(m.statusMs);
+    const bool keep = st.keepsWork(m);
+    o.raw(keep);
+    if (keep) {
+      o.raw(m.x); o.raw(m.y); o.raw(m.layer);
+      o.raw(static_cast<int>(m.job)); o.raw(m.jobItem); o.raw(m.jobFilter);
+      o.raw(m.jobEdge.alongX); o.raw(m.jobEdge.x); o.raw(m.jobEdge.y);
+      o.raw(m.jobAnimal); o.raw(m.repath);
+      o.raw(m.dutyId); o.str(m.dutyArg); o.raw(m.goalX); o.raw(m.goalY);
+      o.raw(static_cast<uint32_t>(m.pathAt));
+      o.raw(static_cast<uint32_t>(m.path.size()));
+      for (size_t k = 0; k < m.path.size(); k++) {
+        o.raw(m.path[k].first); o.raw(m.path[k].second);
+        o.raw(k < m.pathLayers.size() ? m.pathLayers[k] : 0);
       }
+      o.str(m.anim); o.raw(m.animTime); o.raw(m.playsLeft); o.raw(m.reverse);
+      o.raw(static_cast<uint32_t>(m.steps.size()));
+      for (const Staff::Type::Step &s : m.steps) { o.str(s.anim); o.str(s.sound); o.raw(s.reverse); }
+      o.raw(m.idleLeft); o.raw(m.walksLeft); o.raw(m.moveBoost);
+      o.raw(m.visit); o.raw(m.access); o.raw(m.phase);
+      for (float v : {m.outX, m.outY, m.inX, m.inY, m.dropX, m.dropY}) o.raw(v);
+      o.raw(m.feedAnimal); o.str(m.dropFood);
+      o.raw(m.tank); o.raw(m.water); o.raw(m.z); o.raw(m.climbing); o.raw(m.climbDown); o.raw(m.climbInside);
+      o.raw(m.climbFrom); o.raw(m.climbTo); o.raw(m.climbTime); o.raw(m.climbWater); o.raw(m.sweeping);
+      o.raw(static_cast<uint32_t>(m.followers.size()));
+      for (int g : m.followers) {
+        const Guests::Guest *follower = world.guests.guest(g);
+        o.raw(g); o.raw(follower && follower->tourHeard);
+      }
+      o.raw(m.speaking); o.raw(m.speakLeft);
+      o.raw(m.sawThreat); o.raw(m.predator);
+      o.raw(static_cast<int>(m.heliStage));
+      for (float v : {m.heliX, m.heliY, m.heliZ, m.heliToX, m.heliToY}) o.raw(v);
     }
   }
   o.raw(st.nextId);
@@ -2334,6 +2365,7 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
   // Staff
   Staff &st = world.staff;
   st.clear();
+  std::map<int, std::vector<std::pair<int, bool>>> tourFollowers; // (v26: each guide's, sent on once the guests are read)
   for (uint32_t n = i.count(); n > 0 && !i.bad; n--) {
     Staff::Member m;
     const auto staffFile = i.str();
@@ -2351,7 +2383,57 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
       m.exhibits.push_back(i.raw<int>());
     if (version >= 12) { i.get(m.fx); i.get(m.fy); i.get(m.workCheck); i.get(m.crowdClock); }
     if (version >= 23) i.get(m.recoveries);
-    if (version >= 24) {
+    if (version >= 26) {
+      // (v26: its work whole - see the writer)
+      i.get(m.baseFacing);
+      i.get(m.chaseCount); i.get(m.statusMs);
+      bool keep = false;
+      i.get(keep);
+      if (keep) {
+        i.get(m.x); i.get(m.y); i.get(m.layer);
+        int job = 0;
+        i.get(job);
+        m.job = job >= 0 && job <= static_cast<int>(Staff::Job::Flee) ? static_cast<Staff::Job>(job) : Staff::Job::None;
+        i.get(m.jobItem); i.get(m.jobFilter);
+        i.get(m.jobEdge.alongX); i.get(m.jobEdge.x); i.get(m.jobEdge.y);
+        i.get(m.jobAnimal); i.get(m.repath);
+        i.get(m.dutyId); m.dutyArg = i.str(); i.get(m.goalX); i.get(m.goalY);
+        m.pathAt = i.raw<uint32_t>();
+        for (uint32_t k = i.count(1000000, 12); k > 0 && !i.bad; k--) {
+          std::pair<float, float> p;
+          int layer = 0;
+          i.get(p.first); i.get(p.second); i.get(layer);
+          m.path.push_back(p);
+          m.pathLayers.push_back(layer);
+        }
+        if (m.pathAt > m.path.size()) m.pathAt = m.path.size();
+        m.anim = i.str(); i.get(m.animTime); i.get(m.playsLeft); i.get(m.reverse);
+        for (uint32_t k = i.count(1000, 9); k > 0 && !i.bad; k--) {
+          Staff::Type::Step s;
+          s.anim = i.str(); s.sound = i.str(); i.get(s.reverse);
+          m.steps.push_back(s);
+        }
+        if (m.playsLeft < 0 || (!m.steps.empty() && static_cast<size_t>(m.playsLeft) > m.steps.size())) m.playsLeft = 0;
+        i.get(m.idleLeft); i.get(m.walksLeft); i.get(m.moveBoost);
+        i.get(m.visit); i.get(m.access); i.get(m.phase);
+        for (float *v : {&m.outX, &m.outY, &m.inX, &m.inY, &m.dropX, &m.dropY}) i.get(*v);
+        i.get(m.feedAnimal); m.dropFood = i.str();
+        i.get(m.tank); i.get(m.water); i.get(m.z); i.get(m.climbing); i.get(m.climbDown); i.get(m.climbInside);
+        i.get(m.climbFrom); i.get(m.climbTo); i.get(m.climbTime); i.get(m.climbWater); i.get(m.sweeping);
+        std::vector<std::pair<int, bool>> followers(i.count(100000, 5));
+        for (auto &[g, heard] : followers) { i.get(g); i.get(heard); }
+        if (!followers.empty()) tourFollowers[m.id] = followers;
+        i.get(m.speaking); i.get(m.speakLeft);
+        i.get(m.sawThreat); i.get(m.predator);
+        int stage = 0;
+        i.get(stage);
+        m.heliStage = stage >= 0 && stage <= static_cast<int>(Staff::HeliStage::SpinDown) ? static_cast<Staff::HeliStage>(stage)
+                                                                                         : Staff::HeliStage::Parked;
+        for (float *v : {&m.heliX, &m.heliY, &m.heliZ, &m.heliToX, &m.heliToY}) i.get(*v);
+        if (m.type >= 0 && !i.bad)
+          st.resumeWork(m);
+      }
+    } else if (version >= 24) {
       Staff::SavedJob job;
       i.get(job.job);
       if (job.job > 0) {
@@ -2439,6 +2521,11 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
       gs.list.push_back(g);
   }
   i.get(gs.nextId);
+  // (v26: each guide's followers, the guests read - Staff::resumeTour)
+  if (!i.bad)
+    for (const auto &[guide, followers] : tourFollowers)
+      if (const Staff::Member *m = st.member(guide); m && m->job == Staff::Job::Tour)
+        st.resumeTour(*m, followers);
   i.get(gs.clock);
   i.get(world.clock);
   Camera &cam = world.worldRenderer.getCamera();
@@ -3050,6 +3137,8 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
   }
   z.nextUnitId=next;z.cash=float(sim.money);z.rating=uint32_t(std::clamp(sim.zooRating,0.0,100.0));
   z.admission=hud.zooInfo().admission;z.marketing=hud.marketingLevel;
+  z.worldClock=world.ambient.worldClock(); // (the flyers' spawn clock: worldSave 0x47704c)
+  z.guestPathCost=world.guests.nonPathCost; // (ZTGuest::clearGoal 0x422763: cNonPathCost)
   auto researchValue=[&](int kind,int id,uint32_t value) {
     for(auto &record:z.research)if(record.kind==kind&&record.id==id){record.value=value;return;}
     z.research.push_back({kind,id,value});

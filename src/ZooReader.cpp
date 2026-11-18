@@ -2,6 +2,7 @@
 #include "OriginalConstants.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
@@ -254,6 +255,8 @@ void baseUnit(Cursor &r, ZooReader::ZooObject &o) {
 // The zoo unit (zoo.exe ZTUnit::load 0x454488), then the base unit
 void zooUnit(Cursor &r, ZooReader::ZooObject &o, bool guest) {
   const uint32_t v = r.v;
+  if (r.origin)
+    o.unitAt = size_t(r.p - r.origin);
   if (v <= 57)
     r.skip(1);
   r.skip(1 + 5);
@@ -802,8 +805,13 @@ bool ZooReader::readExact(const uint8_t *data, size_t size) {
   if (v >= 104)
     for (uint32_t k = 0, n = r.count(4); k < n && r.ok; ++k) usedNames.push_back(r.str());
   archive.cheatsEnd = size_t(r.p - data);
-  if (v >= 58)
-    r.skip(v <= 66 ? 12 : 8); // (the world clock)
+  // The world clock (worldLoad 0x452e13, last: +0x208 the milliseconds over
+  // a whole second, then +0x204 the whole seconds; 58-66 a longer one)
+  if (v >= 67) {
+    const uint32_t ms = r.u32(), seconds = r.u32();
+    worldClock = double(seconds) + double(ms % 1000) / 1000.0;
+  } else if (v >= 58)
+    r.skip(12);
   if (!r.ok)
     return failLate("the awards, marketing, cheats or the world clock");
   // Read to the end, every part where the original reads it: the saved
@@ -857,13 +865,23 @@ struct ZooFields {
   void text(const std::string &value) { if (kept) in.str(); out.text(value); }
   void oldText() { if (kept) out.text(in.str()); else out.text(""); }
 };
-void zooUnitOut(ZooOut &w, uint32_t v, bool guest, int mode) {
+// A zoo unit's own part as zoo.exe ZTUnit::save 0x478501 writes it (the order
+// ZTUnit::load 0x454488 reads): +0x24c, +0x22c, +0x25c; +0x238..+0x240 and
+// its target (+0x244 none: the no-place default 0x639370, -1); +0x214..,
+// +0x220..; +0x24d, +0x24e (0xff: wants nothing); +0x230 the path cost; not
+// a guest, +0x252 and +0x254 (a byte, the word only when it is 1); +0x24f,
+// +0x250. Written as a unit with its goal cleared (ZTUnit::clearGoal
+// 0x43e6ff: +0x214.. and +0x220.. the no-place default - measured: the
+// original's own saves hold these all 0, from the constructor 0x4f578d, or
+// all -1, never a mix; a guest's path cost cNonPathCost, ZTGuest::clearGoal
+// 0x422763; the others' 1, the constructor's), then UnitBase::save 0x478252
+void zooUnitOut(ZooOut &w, uint32_t v, bool guest, int mode, int32_t guestPathCost) {
   auto zero = [&](size_t n) { w.zeros(n); };
   auto position = [&](int n) { for (int i=0;i<n;++i) w.put(int32_t(-1)); };
   if (v <= 57) zero(1);
   zero(6); position(v <= 90 ? 2 : 3);
-  position(2); zero(8); position(v <= 85 ? 4 : 3);
-  w.put(uint8_t(255)); w.put(uint8_t(255)); w.put(uint32_t(guest ? 7 : 1));
+  position(2); position(2); position(v <= 85 ? 4 : 3);
+  w.put(uint8_t(255)); w.put(uint8_t(255)); w.put(int32_t(guest ? guestPathCost : 1));
   if (v >= 97 && !guest) zero(2);
   if (v >= 98) zero(2);
   zero(12); // UnitBase: flags, work and target counters
@@ -988,7 +1006,7 @@ void zooStaffOut(ZooOut &w, const ZooReader::ZooObject &o, uint32_t v) {
   if(v>=75)f.field(uint32_t(0));
   w.ok=w.ok&&f.out.ok&&(!f.kept||(f.in.ok&&f.in.left==0));w.bytes(f.out.b);
 }
-bool zooBodyOut(ZooOut &w,const ZooReader::ZooObject &o,uint32_t v) {
+bool zooBodyOut(ZooOut &w,const ZooReader::ZooObject &o,uint32_t v,int32_t guestPathCost) {
   const auto &c=o.className;
   const bool unit=o.hasAnimal||o.hasGuest||o.hasStaff;
   if(!o.decoded) {w.bytes(o.payload);return true;}
@@ -999,7 +1017,7 @@ bool zooBodyOut(ZooOut &w,const ZooReader::ZooObject &o,uint32_t v) {
   else if(c=="objects"||c=="food"||c=="paths"||c=="fences"||c=="tankwall"||c=="filter"||c=="rubble"||c=="building")
     w.put(int32_t(o.food));
   else return false;
-  if(unit)zooUnitOut(w,v,o.hasGuest,o.movementMode);
+  if(unit)zooUnitOut(w,v,o.hasGuest,o.movementMode,guestPathCost);
   w.put(o.x);w.put(o.y);w.put(o.z);w.put(o.direction);w.put(o.id);w.text(o.name);
   if(v<=62)w.text("");
   w.put(uint8_t(1));w.put(uint32_t(0));if(v>=58)w.put(uint8_t(0));
@@ -1080,7 +1098,7 @@ bool ZooReader::writeOriginal(std::vector<uint8_t> &out,std::string &error) cons
   for(const auto &o:objects) {
     w.text(o.className);w.text(o.subClass);w.text(o.typeName);
     ZooOut b;
-    if(!zooBodyOut(b,o,version) || !b.ok)return fail("An entity could not be encoded.");
+    if(!zooBodyOut(b,o,version,guestPathCost) || !b.ok)return fail("An entity could not be encoded.");
     w.put(uint32_t(b.b.size()));w.bytes(b.b);
   }
   const size_t tail=w.b.size();
@@ -1103,6 +1121,13 @@ bool ZooReader::writeOriginal(std::vector<uint8_t> &out,std::string &error) cons
   for(int k=0;k<8;++k)patch(archive.date+2*k,date[k]);
   patch(archive.cash,cash);
   if(version>=60)patch(archive.marketing,int32_t(marketing));
+  // The world clock, last (zoo.exe worldSave 0x47704c: +0x208 the
+  // milliseconds over a whole second, then +0x204 the whole seconds)
+  if(version>=67 && worldClock>=0 && archive.cheatsEnd+8==original.size()) {
+    const double seconds=std::floor(worldClock);
+    patch(archive.cheatsEnd,uint32_t(std::min(999.0,std::floor((worldClock-seconds)*1000.0))));
+    patch(archive.cheatsEnd+4,uint32_t(std::min(seconds,4294967295.0)));
+  }
   if(!w.ok)return fail("An original field is outside its validated section.");
   // Replace variable-size manager records from back to front, after all
   // fixed-field patches that use the source archive's offsets.
@@ -1215,7 +1240,7 @@ bool ZooReader::load(const AssetBuffer &buffer) {
   why.clear();
   language = nextUnitId = rating = 0;
   cash = 0;
-  research.clear(); thoughts.clear(); awards.clear(); marketing = 0; usedNames.clear(); books = {};
+  research.clear(); thoughts.clear(); awards.clear(); marketing = 0; usedNames.clear(); worldClock = -1; books = {};
   admission = 49.0f;
   std::fill(std::begin(date), std::end(date), 0);
   std::fill(std::begin(view), std::end(view), 0);

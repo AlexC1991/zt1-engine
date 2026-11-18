@@ -177,6 +177,44 @@ public:
   // playable"). Table 0x63244c is the base job (set by 0x413a43, every
   // job's destructor puts it back; its own destructor 0x6041a3): ours, the
   // Job value.
+  // The tasks over the jobs (unitMakeTask 0x413acd, each task its own class
+  // the same way): each constructor keeps the unit only if its type is of
+  // the task's class (isKindOf, type slot 0x1c), each destructor puts the
+  // base task table back (0x6323c4) and frees it if asked, each taskId gives
+  // its number. Read 2026-11-18 (rd.py, every one that plain). ours: the
+  // task is our Job (or the helicopter's HeliStage), set only on a member of
+  // that class, its number the value; nothing to free:
+  //   keeper (zookeepers, scientists, marine specialists): 0x65
+  //     Task65_KeeperGoToHabitat ctor 0x4a8811, dtor 0x44091a, destroy
+  //     0x440924, freeIfAsked 0x440931; 0x6e Task6e_DutiesInHabitat ctor
+  //     0x49f26e, dtor 0x49e97b, destroy 0x49e985, freeIfAsked 0x49e992,
+  //     taskId 0x423fda (Job::Visit's phases, keepersAt)
+  //   unit: 0x7e Task7e_StaffToHabitat ctor 0x49ac0a, dtor 0x49afc7, destroy
+  //     0x49afd1, freeIfAsked 0x49afde, taskId 0x49946a (a tank visit's way
+  //     in, phases 0 and 30) - begin 0x49ac9d: the habitat at its
+  //     destination (unit slot 0x248) there, Job22_GoToTank (0x16), ours the
+  //     route to its gate; atTarget 0x49b087: a keeper on to its duties
+  //     (task 0x6e), ours visitStep; 0x75 Task75_AvoidPredator ctor 0x4a585f, dtor
+  //     0x4a4dfd, destroy 0x4a4e07, freeIfAsked 0x4a4e14, taskId 0x4a5502
+  //     (Job::Flee)
+  //   tour: 0x76 Task76_GuideToViewingArea ctor 0x58a9ad, dtor 0x58ab32,
+  //     destroy 0x58ab3c, freeIfAsked 0x58ab49 (Job::Tour on the way); 0x77
+  //     Task77_GuideSpeak ctor 0x58ab6c, dtor 0x58aa40, destroy 0x58aa4a,
+  //     freeIfAsked 0x58aa57, taskId 0x58a858 (Job::Tour speaking)
+  //   maint: 0x78 Task78_MaintFindWork ctor 0x4a964c, dtor 0x4a958f, destroy
+  //     0x4a9599, freeIfAsked 0x4a95a6, taskId 0x439cca, begin 0x404a7e
+  //     (returns 1: nothing to begin) - Staff::findWork
+  //   helicopter (HeliStage): 0x6a Task6a_HeliWaitAtBase ctor 0x4e5598, dtor
+  //     0x4a0826, destroy 0x4a0830, freeIfAsked 0x4a083d, taskId 0x42a1d5;
+  //     0x69 Task69_HeliTakeoff ctor 0x48d4f2, dtor 0x48c00b, destroy
+  //     0x48c015, freeIfAsked 0x48c022, taskId 0x42a849; 0x67
+  //     Task67_HeliReturnToBase ctor 0x5a4709, dtor 0x5a4ad6, destroy
+  //     0x5a4ae0, freeIfAsked 0x5a4aed, taskId 0x42a0a5; 0x68 Task68_HeliLand
+  //     ctor 0x5a4a45, dtor 0x5a483d, destroy 0x5a4847, freeIfAsked 0x5a4854,
+  //     taskId 0x42a783
+  //   staff: 0x6f Task6f_Tranquilize ctor 0x50d62b, dtor 0x50d3a6, destroy
+  //     0x50d3b0, freeIfAsked 0x50d3bd, taskId 0x50cf55 (the helicopter's
+  //     Chase and Fire)
   enum class Job { None, Fence, Filter, Litter, Visit, Catch, Tour, Trash, Dung, Flee };
   // The helicopter's behaviour set playing (helicopt.ai), each in one of
   // the original's tasks: Parked - 0x6a waiting at base (bIdleGround);
@@ -192,6 +230,11 @@ public:
     // a DRT base's recoveries (ZTBuilding +0x19c, raised by ZTHelicopter
     // slot 0x320 0x48c434), saved from v23
     int recoveries = 0;
+    // a DRT base's facing (0-7, 0 north (-y), clockwise, as PlacedObjects;
+    // Hire Staff's rotate arrows - zoo.exe 0xe5c_click 0x618862, 0xe5d_click
+    // 0x618883: 0x63e46c, handed to the zoo view, +0x370, by 0x4df56d - turn
+    // it before it's put down); saved from v26, 0 before (as it was drawn)
+    int baseFacing = 0;
     float heliX = 0, heliY = 0, heliZ = 0;
     // the tile middle its chase flies to (Job13's route, 0x422238); -1 none
     float heliToX = -1, heliToY = -1;
@@ -295,11 +338,18 @@ public:
   Fences::Fit canPlace(float x, float y, const WorldMap &map, const Fences &fences) const;
   // For a type: a DRT base needs its whole footprint clear; staff a free
   // spot on zoo ground
-  std::pair<float, float> placementPoint(int type, float x, float y) const;
+  std::pair<float, float> placementPoint(int type, float x, float y, int facing = 0) const;
   Fences::Fit canPlaceType(int type, float x, float y, const WorldMap &map,
-                           const Fences &fences) const;
+                           const Fences &fences, int facing = 0) const;
+  // A DRT base's footprint (tiles) for its facing - turned east or west, a
+  // quarter turn, its sides swap (as a building's: PlacedObjects) - and a
+  // point given from its middle unturned (its slot's slotpos and exitpos)
+  // turned with it; its pad's facing turned with it
+  std::pair<int, int> baseFoot(int type, int facing) const;
+  static std::pair<float, float> baseTurn(int facing, float dx, float dy);
+  int padFacingOf(const Member &m) const;
   Fences::Fit canPlaceMember(float x, float y, const WorldMap &map, const Fences &fences) const;
-  int hire(int type, float x, float y, const WorldMap &map, const Fences &fences);
+  int hire(int type, float x, float y, const WorldMap &map, const Fences &fences, int facing = 0);
   void fire(int id);
   // Picked up (Move Staff Member) and put down again
   void moveTo(int id, float x, float y);
@@ -412,6 +462,7 @@ public:
   bool logRoutes = false;
   // The one being hired, at the cursor (type < 0: none)
   int previewType = -1;
+  int previewFacing = 0; // (a DRT base's, as it'll be put down)
   float previewX = 0, previewY = 0;
   Fences::Fit previewFit = Fences::Fit::Ok;
   bool previewPoor = false; // (it fits, but the first month's pay is more than the cash: red)
@@ -456,6 +507,14 @@ public:
   };
   static SavedJob savedJob(const Member &m, const Type &t);
   void restoreJob(Member &m, const SavedJob &s);
+  // From v26 every one's work is saved whole (SaveGame's staff block):
+  // whether one's is (not while in a marine show, which Shows keeps), and
+  // what a load puts back round it - the escaped animal claimed again, the
+  // helicopter's rotor loop on again in flight; a tour's followers sent on
+  // (resumeTour, once the guests are read)
+  bool keepsWork(const Member &m) const { return m.showTank < 0 && m.id != this->carried; }
+  void resumeWork(Member &m);
+  void resumeTour(const Member &m, const std::vector<std::pair<int, bool>> &followers);
 
 private:
   std::vector<WorkEntry> work;
@@ -500,6 +559,12 @@ public:
   // 0x44e4eb, after OK on its name): 0, or the message posted - 11000 "%s
   // is inaccessible to zoo staff.", 11001 "The entrance to %s is blocked..."
   int exhibitAccess(int exhibit, const WorldMap &map, const Fences &fences);
+  // Its walk's tests (Fences::accessWalk): gateCrossCheck 0x46676a for one
+  // pair of an exhibit's (code; cost the step's), and the router's route
+  // from the zoo's entrance to a tile (a marine specialist for a tank)
+  int gateCross(int exhibit, int ix, int iy, int ox, int oy, const WorldMap &map, const Fences &fences,
+                int &cost) const;
+  bool gateRoute(int exhibit, int ox, int oy, const WorldMap &map, const Fences &fences);
   // The keepers at their duties in an exhibit (the habitat's +0xf0: 0x4808ac
   // asks it of a starving sick animal)
   int keepersAtWork(int exhibit, const Fences &fences) const {
@@ -525,6 +590,7 @@ private:
   bool walkable(int x, int y, const WorldMap &map, const Fences &fences, int access = -1) const;
   bool canStep(int x, int y, int nx, int ny, const WorldMap &map, const Fences &fences,
                int access = -1) const;
+  static bool cornersMeet(int x, int y, int nx, int ny, const WorldMap &map);
   bool keeperWork(Member &m, const WorldMap &map, Fences &fences);
   void visitStep(Member &m, const WorldMap &map, Fences &fences);
   bool needsVisit(const Member &m, int exhibit, const Fences &fences) const;

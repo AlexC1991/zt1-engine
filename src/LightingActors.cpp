@@ -150,8 +150,8 @@ void DayNightLighting::collectActors(World &world) {
     if(t.kind==Staff::Kind::Helicopter) {
       const float ground=LightingAssets::terrainHeight(map,m.x,m.y);
       const bool parked=m.heliStage==Staff::HeliStage::Parked;
-      const float angle=t.padFacing*.7853981634f;
-      auto *a=staff.art(m,m.anim);const Point p=parked?Point{m.x+t.padX,m.y+t.padY,ground+t.padZ}:Point{m.heliX,m.heliY,m.heliZ};
+      const float angle=staff.padFacingOf(m)*.7853981634f;const auto pad=Staff::baseTurn(m.baseFacing,t.padX,t.padY);
+      auto *a=staff.art(m,m.anim);const Point p=parked?Point{m.x+pad.first,m.y+pad.second,ground+t.padZ}:Point{m.heliX,m.heliY,m.heliZ};
       const float fx=parked?std::sin(angle):m.fx,fy=parked?-std::cos(angle):m.fy;
       const auto owner=(uint64_t(1)<<54)|(uint64_t(uint32_t(m.id))<<3)|1;const int frame=staff.helicopterFrame(m,a);
       if(!parked){
