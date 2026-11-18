@@ -263,6 +263,10 @@ UiAction UiListBox::handleInputs(std::vector<Input>& inputs) {
             hover_index = getItemAtPoint(mx, my);
         }
         else if (input.event == InputEvent::LEFT_CLICK) {
+            // (a list switched off takes no pick - the original's lists'
+            // disable slot, 0x6c: the show script's while it's Never)
+            if (this->isDisabled())
+                continue;
             int clicked = getItemAtPoint(mx, my);
             if (toggle_select && clicked >= 0) {
                 items[clicked].checked = !items[clicked].checked;

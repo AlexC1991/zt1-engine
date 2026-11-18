@@ -2278,11 +2278,16 @@ void UiGameScreen::setPanelOpen(int id, bool open) {
       // in mulhab_Panel_show 0x46836c and mulhab_Panel_hide 0x4682f1; shut,
       // a selected gate deselected too - 0x4ef75b(0, 1), measured: the
       // arrow over it gone, #266)
-      if (id == 30 && open != e.open && this->exhibitPanel)
+      if (id == 30 && open != e.open && this->exhibitPanel) {
         if (UiListBox *list = dynamic_cast<UiListBox *>(this->exhibitPanel->getElementById(4305)))
           list->setSelectedIndex(-1);
+        // (and not picked again when the list is relisted: DAT_0063915c 0)
+        this->shownExhibit = -1;
+      }
       if (id == 30 && open != e.open)
         this->gateExhibit = -1;
+      if (id == 30 && open && !e.open)
+        this->exhibitPagesDue = true;
       e.open = open;
     }
 }
@@ -3621,7 +3626,9 @@ std::string UiGameScreen::objectToolFile(int &cost, int &facing) const {
 
 // The animal held comes from Adopt's Animals list while it's shown
 // (zoo.exe buya_Animals_show 0x4e2bda: the zoo view's +0x364 set to the
-// list, 0x7e3; buya_Animals_hide 0x4e2ba6: back to none, nothing held)
+// list, 0x7e3; buya_Animals_hide 0x4e2ba6: back to none, nothing held;
+// buya_Animals_off 0x4e2bb5, the Animals tab let go: setPlaceItem 0x4f189a
+// with none - nothing held)
 std::string UiGameScreen::animalToolFile(bool &female) const {
   female = this->animalPickFemale;
   if (!this->isPanelOpen(3))
@@ -3630,6 +3637,17 @@ std::string UiGameScreen::animalToolFile(bool &female) const {
     if (p.id == 3 && p.category == "animals")
       return this->animalPick;
   return "";
+}
+
+// zoo.exe buya_RotateRightButton_click 0x48e40f / buya_RotateLeftButton_click
+// 0x618c9c turn 0x63bb50 (0 to 3; 0 at each zoo, 0x4f0a84), the panel's
+// one facing for all its tabs; buya_Animals_click 0x4e2cf8 hands it to the
+// zoo view (0x4df56d: +0x370) with the animal
+int UiGameScreen::animalToolFacing() const {
+  for (const BuyPanel &p : this->buyPanels)
+    if (p.id == 3)
+      return p.facing;
+  return 0;
 }
 
 bool UiGameScreen::viewShown(int id) const {
@@ -3790,6 +3808,49 @@ void UiGameScreen::popupYesNo(const std::string &message, std::function<void()> 
     n->onClick = [this] { this->dialog.cancel = true; };
 }
 
+// zoo.exe showDialog 0x4fff2c (no text pointer: base [0x63b950] 45000,
+// confirm.lyt; the message by text number, the picture given - the question
+// - and the don't-show-again box, 45014/45015, hidden) -> 0x4ff63c style 3:
+// every button hidden, then Cancel shown at its x / y and Yes and No at
+// theirs (not their altx / alty); the game paused while it's up
+void UiGameScreen::askYesNoCancel(const std::string &message, std::function<void()> yes, std::function<void()> no) {
+  if (this->dialog.layout) {
+    this->dialogQueue.push_back([=] { this->askYesNoCancel(message, yes, no); });
+    return;
+  }
+  IniReader *ini = this->resource_manager->getIniReader("ui/confirm.lyt");
+  if (!ini)
+    return;
+  this->dialog.layout = new UiLayout(ini, this->resource_manager);
+  this->dialog.yes = yes;
+  this->dialog.no = no;
+  UiLayout *d = this->dialog.layout;
+  if (UiText *m = dynamic_cast<UiText *>(d->getElementById(45006)))
+    m->setMessage(message);
+  if (UiImage *icon = dynamic_cast<UiImage *>(d->getElementById(45002)))
+    icon->setImage("ui/sharedui/question/question");
+  if (UiElement *e = d->getElementById(45012)) // OK
+    e->setHidden(true);
+  if (UiButton *y = dynamic_cast<UiButton *>(d->getElementById(45010)))
+    y->onClick = [this] { this->dialog.submit = true; };
+  if (UiButton *n = dynamic_cast<UiButton *>(d->getElementById(45011)))
+    n->onClick = [this] { this->dialog.cancel = true; };
+  if (UiButton *c = dynamic_cast<UiButton *>(d->getElementById(45013)))
+    c->onClick = [this] { this->dialog.dismiss = true; };
+}
+
+UiElement *UiGameScreen::dialogElement(int id) const {
+  return this->dialog.layout ? this->dialog.layout->getElementById(id) : nullptr;
+}
+
+void UiGameScreen::cancelDialog() {
+  if (!this->dialog.layout)
+    return;
+  this->dialog.dismiss = true;
+  std::vector<Input> none;
+  this->handleDialog(none);
+}
+
 void UiGameScreen::askConfirm(const std::string &message, std::function<void()> yes) {
   if (this->dialog.layout) {
     this->dialogQueue.push_back([=] { this->askConfirm(message, yes); });
@@ -3826,6 +3887,10 @@ void UiGameScreen::handleDialog(std::vector<Input> &inputs) {
   for (const Input &in : inputs)
     if (in.event == InputEvent::KEY_DOWN && (in.key == SDLK_RETURN || in.key == SDLK_KP_ENTER))
       this->dialog.submit = true;
+  if (this->dialog.dismiss) {
+    this->closeDialog();
+    return;
+  }
   if (this->dialog.cancel) {
     auto no = this->dialog.no;
     this->closeDialog();
@@ -4864,6 +4929,11 @@ void UiGameScreen::refreshLists() {
     }
   };
   if (UiLayout *z = this->animalListPanel; z && this->animals && this->isPanelOpen(16)) {
+    // (zoo.exe animalListFill 0x45390c: the list 0xedd - 3805 - cleared,
+    // each animal in the zoo's list passing the filter (animalFilterMatches
+    // 0x4537fe) added, the selected one (selectedObject 0x410f84) picked,
+    // none picked otherwise; the six filters' counts (0x63e2f0) into their
+    // texts)
     std::vector<int> ids;
     for (int f = 0; f < 6; f++) {
       int n = 0;
@@ -5691,7 +5761,10 @@ void UiGameScreen::refreshAnimal() {
       this->animalSexImage = want;
     }
   }
-  // Thoughts: the latest five guests had about it
+  // Thoughts: the latest five guests had about it (zoo.exe animalInfoList
+  // 0x467a33: the list 0xc35 - 3125 - cleared, 0x467b37(animal, 5): the
+  // zoo's thought list from its newest, those about this animal (entry
+  // +0x24), at most 5, each a row as text)
   if (this->guests)
     if (UiListBox *l = dynamic_cast<UiListBox *>(z->getElementById(3125))) {
       std::vector<std::string> th = this->guests->thoughtsAbout(m->id, -1, 5);
@@ -5897,6 +5970,16 @@ void UiGameScreen::setFences(Fences *fences, std::function<void(float, float)> c
   this->centreOn = centreOn;
   this->shownListCount = -1;
   this->shownExhibit = -1;
+  this->tankPageShown = false;
+}
+
+UiElement *UiGameScreen::exhibitElement(int id) const {
+  return this->exhibitPanel ? this->exhibitPanel->getElementById(id) : nullptr;
+}
+
+void UiGameScreen::syncExhibitTabs() {
+  if (this->exhibitPanel)
+    this->exhibitPanel->syncTabs();
 }
 
 void UiGameScreen::refreshExhibits() {
@@ -5954,7 +6037,8 @@ void UiGameScreen::refreshExhibits() {
       if (!t->isBeingEdited())
         t->setText(s);
   };
-  if (id != this->shownExhibit) {
+  const bool picked = id != this->shownExhibit;
+  if (picked) {
     this->shownExhibit = id;
     // (zoo.exe mulhab_HabitatList_click 0x599ae7: the view to its gate's
     // tile, habitat +0x8c, through 0x59b90c - none, it stays)
@@ -5984,22 +6068,64 @@ void UiGameScreen::refreshExhibits() {
             this->setPanelOpen(info, false);
       }
     }
-    // The page: Modify Tank for a tank, else its status
+  }
+  // The page (zoo.exe 0x58b5ce, picked or the list opened): the page shown
+  // stays - only the first tank picked since the zoo loaded goes to Modify
+  // Tank (0x468b9d, once: DAT_0063ead5); anything else leaves Modify Tank
+  // for Status, and the tank tab is greyed (0x58b5f2). Then
+  // exhibitListRefresh 0x5b108b: one picked, Animals, Thoughts or
+  // Popularity (701-703) showing stays, else Status (700); none, Status
+  // hidden and the others left as they are, emptied. measured 2026-11-18
+  // (Play original): a first tank picked on Status -> Modify Tank; Animals
+  // kept from tank to tank, Thoughts from land to land and to a tank;
+  // Modify Tank kept from tank to tank (Status not shown under it), left
+  // for Status at a land exhibit; reopened on Thoughts, nothing showing
+  if (picked || this->exhibitPagesDue) {
+    this->exhibitPagesDue = false;
     UiButton *tankTab = dynamic_cast<UiButton *>(element(4365));
     UiButton *statusTab = dynamic_cast<UiButton *>(element(4310));
     if (tankTab)
       tankTab->setDisabled(!ex || !ex->tank);
-    if (ex && ex->tank && tankTab)
-      tankTab->choose();
-    else if (statusTab)
+    if (ex && ex->tank) {
+      if (!this->tankPageShown && tankTab)
+        tankTab->choose();
+      this->tankPageShown = true;
+    } else if (tankTab && tankTab->isToggledOn() && statusTab) {
       statusTab->choose();
+    }
+    if (ex && statusTab) {
+      bool page = false;
+      for (int tab : {4311, 4312, 4313, 4365})
+        if (UiButton *b = dynamic_cast<UiButton *>(element(tab)))
+          page = page || b->isToggledOn();
+      if (!page)
+        statusTab->choose();
+    }
     z->syncTabs();
   }
-  // Nothing picked: the information is empty
-  for (int sub : {700, 701, 702, 703, 704})
-    if (UiElement *l = element(sub))
-      if (!ex)
+  // Nothing picked: Status hidden (0x5b108b), the lists and Popularity
+  // emptied (0x467fc8(0), 0x467e76(0), 0x467c6f: no stars, $0.00)
+  if (!ex) {
+    for (int sub : {700, 704})
+      if (UiElement *l = element(sub))
         l->setHidden(true);
+    if (!this->listedExhibitAnimals.empty())
+      if (UiListBox *l = dynamic_cast<UiListBox *>(element(4326)))
+        l->clear();
+    if (!this->listedExhibitThoughts.empty())
+      if (UiListBox *l = dynamic_cast<UiListBox *>(element(4330)))
+        l->clear();
+    this->listedExhibitAnimals.clear();
+    this->listedExhibitThoughts.clear();
+    this->litExhibitAnimal = -1;
+    for (int eid : {4319, 4317, 4321})
+      text(eid, formatCents(0));
+    if (UiImage *stars = dynamic_cast<UiImage *>(element(4315))) {
+      std::vector<std::string> set = stars->getImageSet();
+      if (!set.empty() && stars->getImagePath() != set[0])
+        stars->setImage(set[0]);
+    }
+  }
   if (UiElement *name = element(4304))
     name->setHidden(!ex);
   if (!ex)
@@ -6055,10 +6181,15 @@ void UiGameScreen::refreshExhibits() {
       this->litExhibitAnimal = lit;
       animalList->setSelectedIndex(lit);
     }
+    // (a pick: the bulldozer put away, the animal selected and the view
+    // centred on it, its information shown - zoo.exe
+    // mulhab2_AnimalList_click 0x610755: bulldozeToolOff 0x443b60,
+    // ui_main_4b2322(it, 1), centreViewOn 0x59b90c at its tile)
     int pick = animalList->getSelectedIndex();
     if (pick != this->litExhibitAnimal && pick >= 0 && pick < (int)in.size()) {
       int aid = in[pick];
       this->litExhibitAnimal = pick;
+      this->bulldozerOff();
       this->showAnimal(aid);
       if (this->animalRequest)
         this->animalRequest(AnimalRequest::Select, aid);

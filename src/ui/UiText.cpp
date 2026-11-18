@@ -136,7 +136,9 @@ UiAction UiText::handleInputs(std::vector<Input> &inputs) {
     for (const Input &input : inputs) {
       if (input.event == InputEvent::LEFT_CLICK) {
         SDL_Point p = {input.x, input.y};
-        if (SDL_PointInRect(&p, &this->last_rect))
+        // (a box switched off can't be typed in - slot 0x6c: the show's
+        // admission while it's Never, zoo.exe ui_show1_615794)
+        if (SDL_PointInRect(&p, &this->last_rect) && !this->isDisabled())
           this->beginEdit();
         else if (s_editing == this)
           this->endEdit(true);

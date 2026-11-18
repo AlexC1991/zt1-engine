@@ -218,6 +218,13 @@ public:
     int building = -1;
     int showTank = -1, showStand = -1, showSeat = -1, showRating = 0;
     float showDoorX = 0, showDoorY = 0, showZ = 0, showExit = 0, showExitLength = 0;
+    // Seated in a grandstand: a trick's set (bGoodTrick ...) running line
+    // by line (Guests::standSetNext: the next line to run) and
+    // fPlayWithBase's base drawn under its animation while that plays ("" none;
+    // ours: not kept in saves)
+    std::vector<std::string> standLines;
+    size_t standLine = 0;
+    std::string baseAnim;
     std::string need;
     bool hidden = false;      // inside it
     bool trash = false;       // holding a wrapper or cup
@@ -559,7 +566,11 @@ public:
   bool standActive(const Guest &g) const;
   std::string standBase(const Guest &g) const;
   size_t standLinesLeft(const Guest &g) const;
-  void standClear(const Guest &g) { this->stand.erase(g.id); }
+  void standClear(Guest &g) {
+    g.standLines.clear();
+    g.standLine = 0;
+    g.baseAnim.clear();
+  }
 
 private:
   ResourceManager *rm = nullptr;
@@ -836,8 +847,10 @@ private:
   std::map<std::string, std::string> soundFile;
 
   bool walkable(int x, int y) const;
-  bool canStep(int x, int y, int nx, int ny) const;
-  bool walkTo(Guest &g, int tx, int ty, float speed, bool emergency = false);
+  bool canStep(int x, int y, int nx, int ny, int gateOf = -1) const;
+  // (inside: a guest standing in that exhibit - its ground and its gate
+  // passable too, #288)
+  bool walkTo(Guest &g, int tx, int ty, float speed, bool emergency = false, int inside = -1);
   // (joinTour's way to the guide's spot, 0x58d809)
   bool routeToTour(Guest &g, int tx, int ty);
   float walkSpeed(const Guest &g) const;
@@ -853,16 +866,6 @@ private:
   bool testFence(Guest &g);
   float groundAt(float x, float y) const;
   CompassDirection facing(const WorldRenderer &view, const Guest &g) const;
-private:
-  // Seated in a grandstand, by guest id: a trick's set (bGoodTrick ...)
-  // running line by line (standSetNext), and fPlayWithBase's base drawn
-  // under its animation while that plays (ours: not kept in saves)
-  struct StandSet {
-    std::vector<std::string> lines;
-    size_t line = 0;
-    std::string base;
-  };
-  std::map<int, StandSet> stand;
 };
 
 #endif // GUESTS_HPP

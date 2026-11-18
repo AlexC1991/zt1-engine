@@ -165,6 +165,9 @@ void TerrainTool::undo() {
       t->terrainType = static_cast<uint8_t>(o.terrain);
       t->height = o.height;
     }
+  // (ours: the side codes follow the ground put back, as 0x45e1c2 works
+  // them out)
+  sideCodes();
   this->baseline.clear();
   touch();
 }
@@ -172,6 +175,14 @@ void TerrainTool::undo() {
 // ----------------------------------------------------------------------------
 // Painting
 // ----------------------------------------------------------------------------
+// zoo.exe terrainCanPaint 0x4f8f0b: not on a tank's tile (+0x87 0: the
+// tank's tiles, 0x487a63), not outside the zoo (0x40fb8d), not the type it
+// is. Water to water or land to land: yes. Land to water (a lake): only
+// flat (+0x81, the corner raises, 0), every object in its cells able to be
+// under water (cSwims) and no unit there. Water to land: not when something
+// there must be under water (cOnlySwims) or a unit is there. (+0x85 & 0x20,
+// set with +0x87 0 on a tank's tiles, lets the tank's own floor be painted:
+// ours, Fences::makeTank)
 bool TerrainTool::canPaint(int x, int y, int type) const {
   const MapTile *t = this->map->getTile(x, y);
   if (!t || !owned(x, y) || tank(x, y) || t->terrainType == type)
@@ -180,11 +191,10 @@ bool TerrainTool::canPaint(int x, int y, int type) const {
   bool toWater = it != this->types.end() && it->second.water != 0;
   if (water(*t) == toWater)
     return true;
-  // Water only onto flat open ground
-  if (toWater)
-    return lowest(*t) == highest(*t) && !(this->hasBigObject && this->hasBigObject(x, y)) &&
-           !this->map->isPath(x, y);
-  return true;
+  const OnTile on = this->onTile ? this->onTile(x, y) : OnTile{};
+  if (!toWater)
+    return !on.onlySwims && !on.unit;
+  return lowest(*t) == highest(*t) && on.allSwim && !on.unit;
 }
 
 bool TerrainTool::isWater(int x, int y) const {
@@ -315,10 +325,21 @@ void TerrainTool::drag(int tx, int ty, float px, float py, float pixelsPerUnit) 
   for (int i = 0; i < n; i++)
     changed |= heightStep(target, contig, kind);
   this->flags.clear();
-  if (changed)
+  if (changed) {
+    sideCodes();
     touch();
-  else
+  } else
     this->sound.clear();
+}
+
+// zoo.exe 0x45d935, after a height step: each tile it changed, and each
+// tile round them, gets its four side codes worked out again (0x45e1c2).
+// ours: every tile changed since the tool came out, as the account keeps
+// them - those changed before already have theirs, so the codes come out
+// the same
+void TerrainTool::sideCodes() {
+  for (const auto &entry : this->baseline)
+    this->map->updateSideCodesAround(entry.first.first, entry.first.second);
 }
 
 // ----------------------------------------------------------------------------

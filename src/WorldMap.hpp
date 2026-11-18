@@ -75,6 +75,13 @@ public:
     // (dev console) a corner raised or lowered, its neighbours' matching
     // corners with it (so the ground stays joined: a ramp, not a cliff)
     void raiseVertex(int vx, int vy, int by);
+    // A tile's four side codes (MapTile::edgeBits: cliffs) worked out again
+    // from its corners and its neighbours', and each neighbour's side facing
+    // it with them (zoo.exe 0x45e1c2 for sides 0, 2, 4, 6, as 0x45d935 does
+    // for each tile a terrain edit changed); updateSideCodesAround: the tile and
+    // the eight round it (0x45d935 marks the changed area and a tile round it)
+    void updateSideCodes(int x, int y);
+    void updateSideCodesAround(int x, int y);
 
     // Incremented on every successful load, so renderers can tell when
     // cached per-map data is stale

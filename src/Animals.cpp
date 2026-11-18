@@ -1254,7 +1254,7 @@ bool Animals::canStep(int x, int y, int nx, int ny, const WorldMap &map, const F
 }
 
 Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
-                              const Fences &fences) const {
+                              const Fences &fences, int facing) const {
   if (type < 0 || type >= static_cast<int>(this->typeList.size()))
     return Fences::Fit::Outside;
   int tx = static_cast<int>(std::floor(x)), ty = static_cast<int>(std::floor(y));
@@ -1264,7 +1264,7 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
   this->placeMessage = 0;
   // A big one's whole footprint (0x4f7fbd, from animalPlacementRule
   // 0x4f86fb before tankCheckPlacement, which runs only when it fits)
-  const bool footOk = footprintFits(type, x, y, map, fences);
+  const bool footOk = footprintFits(type, x, y, map, fences, facing);
   // In a tank (zoo.exe 0x4df688): one that lives underwater ("This animal
   // doesn't swim in tanks..."), with water ("...a tank with water in it.")
   // deep enough for it (cDepth: "...a deeper tank.")
@@ -1358,10 +1358,15 @@ Fences::Fit Animals::canPlace(int type, float x, float y, const WorldMap &map,
 //   first two columns - with no fence (tile +0x14 + side * 2) and not a
 //   cliff (tile +0x82 >> side & 3 over 1)
 // It refuses with no message of its own (+0x14 left as it was).
-// ours: the quarter is our tile index's whole tile; the footprint isn't
-// swapped for the facing (0x4272d4 swaps x and y when +0x12c & 3 isn't 0;
-// a placed animal's +0x12c comes from the view, 0x4e00d3, not read)
-bool Animals::footprintFits(int type, float x, float y, const WorldMap &map, const Fences &fences) const {
+// Both footprints swap x and y when its facing +0x12c & 3 isn't 0 (slot
+// 0x98 0x4272d4; slot 0x94 0x410803 - crate, egg - and 0x40f916): a new
+// one's facing is zooViewMouse 0x4e00d3's ((Adopt's rotation 0x63bb50,
+// given the view at +0x370 by 0x4df56d - the view's rotation) * 2 - 4) & 7,
+// here `facing` (World::worldFacing of the panel's); one picked up and put
+// down again keeps its own (that branch needs setPlaceItem's new-unit flag)
+// ours: the quarter is our tile index's whole tile
+bool Animals::footprintFits(int type, float x, float y, const WorldMap &map, const Fences &fences,
+                            int facing) const {
   if (type < 0 || type >= static_cast<int>(this->typeList.size()))
     return false;
   const Type &t = this->typeList[type];
@@ -1369,14 +1374,19 @@ bool Animals::footprintFits(int type, float x, float y, const WorldMap &map, con
   if (held && held->type != type)
     held = nullptr;
   const bool egg = held && held->egg, boxed = held && held->boxed;
+  if (held)
+    facing = facingOf(*held);
+  const bool turned = (facing & Original::footprintSwapMask) != 0;
   int fx = t.footX, fy = t.footY;
   if (egg)
     fx = t.eggX, fy = t.eggY;
   else if (boxed)
     fx = t.boxX, fy = t.boxY;
+  if (turned)
+    std::swap(fx, fy);
   if (fx <= Original::animalFootprintCheckOver && fy <= Original::animalFootprintCheckOver)
     return true; // (0x4f86fb doesn't call it)
-  const int gx = t.footX, gy = t.footY;
+  const int gx = turned ? t.footY : t.footX, gy = turned ? t.footX : t.footY;
   if (fx == 0 || fy == 0)
     return false;
   const bool lenient = !boxed, swims = !egg && t.swims;
@@ -1420,9 +1430,16 @@ bool Animals::footprintFits(int type, float x, float y, const WorldMap &map, con
       }
     }
   }
-  ZT_STEP("0x4f7fbd", "A big animal's whole footprint checked", {"species", t.key}, {"across (half tiles)", gx}, {"along", gy},
-          {"from its crate", boxed ? 1 : 0}, {"verdict", ok ? "fits" : "doesn't fit"});
+  ZT_STEP("0x4f7fbd", "A big animal's whole footprint checked", {"species", t.key}, {"facing (+0x12c)", facing},
+          {"along x (half tiles)", gx}, {"along y", gy}, {"from its crate", boxed ? 1 : 0},
+          {"verdict", ok ? "fits" : "doesn't fit"});
   return ok;
+}
+
+// The facing +0x12c (0 to 7: 0 N, 2 E, 4 S, 6 W, as the original's and
+// World::worldFacing's) nearest its fx, fy. ours (ours keeps a vector)
+int Animals::facingOf(const Member &m) {
+  return (static_cast<int>(std::lround(std::atan2(m.fx, -m.fy) / (3.14159265f / 4.0f))) % 8 + 8) % 8;
 }
 
 // zoo.exe ZTAnimal's class slot 0x94 (0x410803): an egg (+0x395) its type's
@@ -1498,9 +1515,9 @@ float Animals::placementDepth(int type,int tank) const {
 }
 
 int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
-                   const Fences &fences, bool restoring) {
+                   const Fences &fences, bool restoring, int facing) {
   ZT_FN("", "Adopt an animal");
-  Fences::Fit fit = canPlace(type, x, y, map, fences);
+  Fences::Fit fit = canPlace(type, x, y, map, fences, facing >= 0 ? facing : Original::placedUnitFacing);
   ZT_STEP("", "Can it go there?", {"species", type >= 0 && type < static_cast<int>(this->typeList.size()) ? this->typeList[type].key : "?"},
           {"x", x}, {"y", y}, {"fit", fit == Fences::Fit::Ok ? "yes" : fit == Fences::Fit::InTheWay ? "another's there" : "no"},
           {"message", this->placeMessage});
@@ -1548,9 +1565,18 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   m.notHappyCheck = start(10);
   this->markDirty(m.exhibit);
   m.lastAte = m.lastSlept = this->now;
-  float a = std::uniform_real_distribution<float>(0, 6.2831853f)(this->rng);
-  m.fx = std::cos(a);
-  m.fy = std::sin(a);
+  // Facing as it was put down (zoo.exe zooViewMouse 0x4e00d3: +0x12c from
+  // Adopt's rotation and the view's, World::worldFacing); ours: none given
+  // (the check fixtures, a zoo read in) any way
+  if (facing >= 0) {
+    const float a = (facing & 7) * 3.14159265f / 4.0f;
+    m.fx = std::sin(a);
+    m.fy = -std::cos(a);
+  } else {
+    float a = std::uniform_real_distribution<float>(0, 6.2831853f)(this->rng);
+    m.fx = std::cos(a);
+    m.fy = std::sin(a);
+  }
   play(m, "stand", Member::Mode::Loop, 1.0f);
   // (put down in the water: in the water)
   m.waterMode = isWater(map, static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y)));
@@ -3687,6 +3713,9 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
   if (this->previewType >= 0) {
     Member preview;preview.type=this->previewType;preview.female=this->previewFemale;
     preview.x=this->previewX;preview.y=this->previewY;
+    // (drawn facing as it'll go down: setPlaceItem 0x4f189a / 0x4e00d3's
+    // +0x12c into the frame, animSetFrame)
+    {const float a=(this->previewFacing&7)*3.14159265f/4.0f;preview.fx=std::sin(a);preview.fy=-std::cos(a);}
     const int tank=this->tankAt?this->tankAt(preview.x,preview.y):-1;
     const bool include=this->onlyTank==-2?tank<0:tank==this->onlyTank;
     preview.swimZ=this->placementDepth(preview.type,tank);
@@ -3697,7 +3726,7 @@ void Animals::collect(const WorldRenderer &view, const WorldMap &map,
         float sx,sy,depth;
         view.worldToScreenF(preview.x,preview.y,groundAt(map,preview.x,preview.y)+preview.swimZ,sx,sy,depth);
         const SDL_Color tint=this->previewFit==Fences::Fit::Ok && !this->previewPoor?SDL_Color{0,255,0,255}:SDL_Color{255,60,60,255};
-        out.push_back({depth,sx,sy,a,CompassDirection::SE,tint,true});
+        out.push_back({depth,sx,sy,a,this->facing(view,preview),tint,true});
       }
     }
   }

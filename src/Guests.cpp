@@ -508,9 +508,11 @@ bool Guests::walkable(int x, int y) const {
   return this->map->isPath(x, y) && this->fences->exhibitAt(x, y) < 0;
 }
 
-bool Guests::canStep(int x, int y, int nx, int ny) const {
+// gateOf: that exhibit's gate is no fence (a guest walking out of it, #288)
+bool Guests::canStep(int x, int y, int nx, int ny, int gateOf) const {
   Fences::Edge e = nx != x ? Fences::Edge{false, std::max(x, nx), y} : Fences::Edge{true, x, std::max(y, ny)};
-  if (this->fences->at(e))
+  if (const Fences::Piece *p = this->fences->at(e);
+      p && !(gateOf >= 0 && p->gate && p->tank < 0 && this->fences->exhibitOf(e) == gateOf))
     return false;
   const MapTile *a = this->map->getTile(x, y), *b = this->map->getTile(nx, ny);
   if (!a || !b)
@@ -582,7 +584,7 @@ float Guests::walkSpeed(const Guest &g) const {
   return Original::unitTilesPerSecond(Original::guestWalkRate(static_cast<int>(g.tired)));
 }
 
-bool Guests::walkTo(Guest &g, int tx, int ty, float speed, bool emergency) {
+bool Guests::walkTo(Guest &g, int tx, int ty, float speed, bool emergency, int inside) {
   int sx = static_cast<int>(std::floor(g.x)), sy = static_cast<int>(std::floor(g.y));
   // Running from a predator (zoo.exe chooseTask's task 0x75 sets +0x230 to
   // cNonPathCostEmergency, else cNonPathCost; the route finder asks it back
@@ -591,8 +593,13 @@ bool Guests::walkTo(Guest &g, int tx, int ty, float speed, bool emergency) {
   // running, back the same way, a step off the paths costing cNonPathCost
   const bool open = emergency || !walkable(sx, sy);
   const float offCost = static_cast<float>(emergency ? this->nonPathCostEmergency : this->nonPathCost);
-  auto pass = [&](int x, int y) { return open ? fleeGround(x, y) : walkable(x, y); };
-  auto step = [&](int x, int y, int nx, int ny) { return canStep(x, y, nx, ny); };
+  // (#288: a guest in an exhibit - ZTGuest's passable 0x428f76 takes its
+  // habitat's tiles and zoo ground - walks over it and out by its gate;
+  // measured, the original's guest left a paddock through its gate)
+  auto pass = [&](int x, int y) {
+    return open ? fleeGround(x, y) || (inside >= 0 && this->fences->exhibitAt(x, y) == inside) : walkable(x, y);
+  };
+  auto step = [&](int x, int y, int nx, int ny) { return canStep(x, y, nx, ny, inside); };
   auto cost = [&](int x, int y) { return walkable(x, y) ? 1.0f : std::max(1.0f, offCost); };
   std::vector<std::pair<int, int>> tiles;
   if (!Pathfinder::find(this->map->getWidth(), this->map->getHeight(), sx, sy, tx, ty, pass, step, tiles, 20000,
@@ -1484,13 +1491,37 @@ bool Guests::walkAbout(Guest &g) {
     return here >= 0 ? this->fences->exhibitAt(x, y) == here || fleeGround(x, y) : fleeGround(x, y);
   };
   const float speed = this->typeList[g.type].speed;
-  // First its own pick (ZTGuest's class slot 0x1f4, 0x42909f): on zoo
-  // ground, a path tile on a ring round it (ZTUnit's 0x428cc9: its own
-  // roll of the half widths, the ring's tiles that are paths and passable
-  // for it, one at random), routed to unless it's its own tile; only none
-  // routed, the ring below. ours: in an exhibit (0x42909f: the tile by its
-  // gate, habitatFromHere 0x49ebce) not yet - #288
-  if (here < 0) {
+  // First its own pick (ZTGuest's class slot 0x1f4, guestWalkAboutPick
+  // 0x42909f), routed to unless it's its own tile; only none routed, the
+  // ring below. In a habitat (slot 0x24c, ZTUnit::habitat 0x410642, its
+  // +0x2c clear): habitatFromHere 0x49ebce - the tile past its gate
+  // (0x411285), then one of the 3 x 3 round it (it too) at random on that
+  // side of the fence that its step cost (slot 0x164) doesn't refuse
+  // (habitatNeighbourTile 0x49e9c2); no gate, no pick. On zoo ground, a path
+  // tile on a ring round it (ZTUnit's 0x428cc9: its own roll of the half
+  // widths, the ring's tiles that are paths and passable for it, one at
+  // random). ours: the step cost's refusal is passable() from outside
+  if (here >= 0) {
+    int ox, oy;
+    if (this->fences->pastGateTile(here, ox, oy)) {
+      const int side = this->fences->exhibitAt(ox, oy);
+      std::vector<std::pair<int, int>> round;
+      for (int dx = -1; dx <= 1; dx++)
+        for (int dy = -1; dy <= 1; dy++) {
+          const int x = ox + dx, y = oy + dy;
+          if (x >= 0 && y >= 0 && x < W && y < H && this->fences->exhibitAt(x, y) == side &&
+              (walkable(x, y) || fleeGround(x, y)))
+            round.push_back({x, y});
+        }
+      ZT_STEP("0x49ebce", "Walk about from inside a habitat: a tile by its gate, outside", {"gate x", ox},
+              {"gate y", oy}, {"tiles", static_cast<int>(round.size())});
+      if (!round.empty()) {
+        auto [gx, gy] = round[static_cast<size_t>(rnd(static_cast<int>(round.size())))];
+        if (!(gx == sx && gy == sy) && walkTo(g, gx, gy, speed, false, here))
+          return true;
+      }
+    }
+  } else {
     const int px = rnd(Original::aiWalkRandomGuest) + 1 + Original::aiWalkBase;
     const int py = rnd(Original::aiWalkRandomGuest) + 1 + Original::aiWalkBase;
     std::vector<std::pair<int, int>> paths;
@@ -1515,13 +1546,13 @@ bool Guests::walkAbout(Guest &g) {
           {"half height", ry}, {"tiles", static_cast<int>(ring.size())});
   if (!ring.empty()) {
     auto [gx, gy] = ring[static_cast<size_t>(rnd(static_cast<int>(ring.size())))];
-    if (walkTo(g, gx, gy, speed))
+    if (walkTo(g, gx, gy, speed, false, here))
       return true;
   }
   const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
   for (int i = rnd(4); i < 4; i++) {
     const int nx = sx + d[i][0], ny = sy + d[i][1];
-    if (passable(nx, ny) && canStep(sx, sy, nx, ny) && walkTo(g, nx, ny, speed))
+    if (passable(nx, ny) && canStep(sx, sy, nx, ny) && walkTo(g, nx, ny, speed, false, here))
       return true;
   }
   return false;
@@ -2797,12 +2828,11 @@ void Guests::startStandSet(Guest &g, const std::string &set) {
                 : this->behaviourSets.end();
   if (it == this->behaviourSets.end())
     it = this->behaviourSets.find("behaviorset\\" + s);
-  StandSet &st = this->stand[g.id];
-  st.lines = it != this->behaviourSets.end() ? it->second : std::vector<std::string>{};
-  st.line = 0;
-  st.base.clear();
+  g.standLines = it != this->behaviourSets.end() ? it->second : std::vector<std::string>{};
+  g.standLine = 0;
+  g.baseAnim.clear();
   ZT_STEP("0x43c6c5", "A trick: the audience's set started", {"guest", g.name}, {"set", set},
-          {"lines", static_cast<int>(st.lines.size())});
+          {"lines", static_cast<int>(g.standLines.size())});
   standSetNext(g);
 }
 
@@ -2826,11 +2856,10 @@ bool Guests::standSetNext(Guest &g) {
       return -1.0f;
     return a->frameTimeMs() > 0 && a->frameCount() > 0 ? a->frameCount() * a->frameTimeMs() / 1000.0f : 1.0f;
   };
-  StandSet &st = this->stand[g.id];
-  const std::string held = !st.base.empty() ? st.base : g.anim;
-  st.base.clear();
-  while (st.line < st.lines.size()) {
-    const std::string line = lower(st.lines[st.line++]);
+  const std::string held = !g.baseAnim.empty() ? g.baseAnim : g.anim;
+  g.baseAnim.clear();
+  while (g.standLine < g.standLines.size()) {
+    const std::string line = lower(g.standLines[g.standLine++]);
     const size_t open = line.find('(');
     std::string fn = line.substr(0, open);
     fn.erase(0, fn.find_first_not_of(" \t"));
@@ -2867,31 +2896,24 @@ bool Guests::standSetNext(Guest &g) {
       if (loop < 0)
         break;
       play(g, args[1], loop);
-      st.base = args[0];
+      g.baseAnim = args[0];
       return true;
     }
   }
   // Over (or held at fKeepControl): seated, what it last showed under it
-  this->stand.erase(g.id);
+  standClear(g);
   if (!held.empty() && t && t->anims.count(held))
     play(g, held, 0.0f);
   return false;
 }
 
 bool Guests::standActive(const Guest &g) const {
-  auto it = this->stand.find(g.id);
-  return it != this->stand.end() && (it->second.line < it->second.lines.size() || !it->second.base.empty());
+  return g.standLine < g.standLines.size() || !g.baseAnim.empty();
 }
 
-std::string Guests::standBase(const Guest &g) const {
-  auto it = this->stand.find(g.id);
-  return it != this->stand.end() ? it->second.base : std::string();
-}
+std::string Guests::standBase(const Guest &g) const { return g.baseAnim; }
 
-size_t Guests::standLinesLeft(const Guest &g) const {
-  auto it = this->stand.find(g.id);
-  return it != this->stand.end() ? it->second.lines.size() - it->second.line : 0;
-}
+size_t Guests::standLinesLeft(const Guest &g) const { return g.standLines.size() - g.standLine; }
 
 bool Guests::heldBy(int guest, int animal) const {
   for (const Guest &g : this->list)
@@ -4889,13 +4911,21 @@ void Guests::collect(const WorldRenderer &view, const WorldMap &map, std::vector
       continue;
     }
     // (fPlayWithBase 0x5a90eb: its base under the animation layered on it)
-    if (const auto st = this->stand.find(g.id); st != this->stand.end() && !st->second.base.empty())
-      if (Animation *base = this->art(g, st->second.base)) {
+    if (!g.baseAnim.empty())
+      if (Animation *base = this->art(g, g.baseAnim)) {
         const float bms = base->frameTimeMs() ? static_cast<float>(base->frameTimeMs()) : 100.0f;
         Fences::Drawable b{depth - 0.00001f, sx, sy, base, facing(view, g), SDL_Color{255, 255, 110, 255}, false};
         b.frame = static_cast<int>(g.animTime * 1000.0f / bms);
         out.push_back(b);
       }
+    // Its animation runs on, over and over, between the sets it's given
+    // (zoo.exe unitBehaviourUpdate 0x435cfb: no set running and none asked
+    // for, each frame, startBehaviour - ZTGuest's class slot 0x48 0x422498
+    // -> 0x43ca83 -> 0x43cb33 - its [AmbientAnims] set by happiness: guests.ai
+    // has only -100..100 bZooRoutine, fGuestRoutine 0x4224f5 -> 0x4224b0: a
+    // guest (isKindOf / isA 0x638700) -> 0x42201e: the line's done flag from
+    // +0xf9, one more play of its current animation, unitPlayCurrentAnim
+    // 0x421eb7). Its moves are its task's (Task1::tick 0x436244), not the set's
     Fences::Drawable d{depth, sx, sy, a, facing(view, g), SDL_Color{255, 255, 110, 255}, g.id == this->hovered};
     d.frame = static_cast<int>(g.animTime * 1000.0f / ms);
     if (g.reverse && a->frameCount() > 0) // (fPlayReverse: last frame first)

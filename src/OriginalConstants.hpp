@@ -435,6 +435,20 @@ inline constexpr int footprintEdgesOver = 2;
 // ... a cliff being an edge whose code (tile +0x82, 2 bits a side; byte 6
 // of a map's tile) is over this
 inline constexpr int footprintCliffCodeMax = 1;
+// A unit's facing +0x12c (0 to 7) as a new one is put down (zooViewMouse
+// 0x4e00d3: ((its panel's rotation - the view's) * 2 - 4) & 7; setPlaceItem
+// 0x4f189a the same with the panel's 0): this with both at 0. Its
+// footprints swap x and y when facing & 3 isn't 0 (0x4272d4, 0x40f916,
+// 0x410803's crate and egg)
+inline constexpr int placedUnitFacing = 4;
+inline constexpr int footprintSwapMask = 3;
+// A side's code as terrain edits work it out again (zoo.exe 0x45e1c2): the
+// two tiles' edges level and flat, level and sloped alike, or not joined -
+// the tile below the cliff, the one above it
+inline constexpr int sideCodeFlat = 0;
+inline constexpr int sideCodeSloped = 1;
+inline constexpr int sideCodeCliffBelow = 2;
+inline constexpr int sideCodeCliffAbove = 3;
 
 // The rename cheats (zoo.exe 0x44940b and what reads their flags)
 namespace Cheat {

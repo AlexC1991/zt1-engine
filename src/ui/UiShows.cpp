@@ -13,6 +13,14 @@
 #include <cstdio>
 namespace {
 std::string showMoney(long cents) { char value[64];std::snprintf(value,sizeof value,"$%.2f",cents/100.0);return value; }
+// The frequency list's rows and a show's frequency (ours: -1 never, 0
+// continuous, 1 frequent, 2 infrequent): zoo.exe's row i sets the show's
+// interval to the table at 0x642c58 - never (-1), infrequentShowInterval,
+// frequentShowInterval, continuousShowInterval (showtime_list_click
+// 0x6156da), and the panel picks the row whose interval the show has
+// (ui_show1_468968)
+int showFrequencyOf(int row) { static const int of[4]={-1,2,1,0};return row>=0 && row<4?of[row]:-1; }
+int frequencyRow(int frequency) { for(int row=0;row<4;row++)if(showFrequencyOf(row)==frequency)return row;return 0; }
 }
 
 void UiGameScreen::setupShows() {
@@ -24,9 +32,12 @@ void UiGameScreen::setupShows() {
   button(11123,[this,z]{if(auto *e=z->getElementById(45))e->setHidden(!e->isHidden());});
   button(11108,[this,z]{if(auto *e=z->getElementById(44))e->setHidden(!e->isHidden());});
   if(auto *l=list(11196))l->setSelectionAction(static_cast<UiAction>(71001));
+  // (the frequencies in the original's order, zoo.exe loadShowSettings
+  // 0x5167ca: the rows of the table at 0x642c50, 11192 to 11195 - Never,
+  // then each more often; showFrequencyOf / frequencyRow below)
   if(auto *l=list(11191)) {
     l->clear();
-    for(int id:{11195,11194,11193,11192})l->addItem(resource_manager->getString(id));
+    for(int row=0;row<4;row++)l->addItem(resource_manager->getString(11192+row));
     l->setSelectionAction(static_cast<UiAction>(71002));
   }
   // (Add: zoo.exe show1_AddButton_click 0x47594f - a script already
@@ -76,7 +87,18 @@ void UiGameScreen::showShow(int id) {
   if(auto *b=dynamic_cast<UiButton*>(showPanelLayout->getElementById(11126)))b->choose();
   showPanelLayout->syncTabs();
   for(int sub:{44,45})if(auto *e=showPanelLayout->getElementById(sub))e->setHidden(true);
+  // (the script's lists start with nothing picked, so Add, Remove and the
+  // moves start off: zoo.exe ui_show1_468968 empties both lists, 0x2b67 and
+  // 0x2b6b, before filling them; show1_Panel_show 0x4746a2 turns the four
+  // buttons off and hides the frequency list)
+  for(int id:{11111,11115})if(auto *l=dynamic_cast<UiListBox*>(showPanelLayout->getElementById(id)))l->setSelectedIndex(-1);
   refreshShow();
+}
+
+void UiGameScreen::pickShowFrequency(int row) {
+  if(auto *l=showPanelLayout?dynamic_cast<UiListBox*>(showPanelLayout->getElementById(11191)):nullptr) {
+    l->setSelectedIndex(row);showSelection(static_cast<UiAction>(71002));
+  }
 }
 
 bool UiGameScreen::showSelection(UiAction a) {
@@ -85,7 +107,7 @@ bool UiGameScreen::showSelection(UiAction a) {
   bool species=static_cast<int>(a)==71001;
   if(auto *l=dynamic_cast<UiListBox*>(showPanelLayout->getElementById(species?11196:11191))) {
     if(species)shows->selectSpecies(shownShow,l->getSelectedData());
-    else {int selected=l->getSelectedIndex();shows->setFrequency(shownShow,selected==3?-1:selected);}
+    else shows->setFrequency(shownShow,showFrequencyOf(l->getSelectedIndex()));
   }
   if(auto *e=showPanelLayout->getElementById(species?45:44))e->setHidden(true);
   showListSignature.clear();refreshShow();return true;
@@ -106,10 +128,15 @@ void UiGameScreen::refreshShow() {
   if(auto *ex=fences?fences->exhibit(shownShow):nullptr)text(11102,ex->name);
   text(11104,showMoney(std::lround(s->admission*100)));
   text(11120,std::to_string(shows->benefit(shownShow)));
-  if(auto *b=button(11123))b->setLabel(s->species.empty()?"Select species":speciesName(s->species));
-  int frequencyIndex=s->frequency==-1?3:s->frequency;
+  // (the species picked on its button, 11123; with none, nothing on it -
+  // show.lyt gives it no text, and only a pick sets one: zoo.exe
+  // showspec_list_click 0x6158a0, its name by the type's name id, +0x1c)
+  if(auto *b=button(11123))b->setLabel(s->species.empty()?std::string():speciesName(s->species));
+  // (the frequency's row picked and its words on the button, 11108:
+  // zoo.exe ui_show1_468968, showtime_list_click 0x6156da - text 0x642c50[row])
+  int frequencyIndex=frequencyRow(s->frequency);
   if(auto *l=dynamic_cast<UiListBox*>(z->getElementById(11191)))l->setSelectedIndex(frequencyIndex);
-  if(auto *b=button(11108))b->setLabel(resource_manager->getString(11195-frequencyIndex));
+  if(auto *b=button(11108))b->setLabel(resource_manager->getString(11192+frequencyIndex));
   std::string status=s->status;
   if(s->phase==Shows::Phase::Gathering)status="Preparing show: gathering performers.";
   else if(s->phase==Shows::Phase::Performing)status="Show in progress.";
@@ -118,7 +145,17 @@ void UiGameScreen::refreshShow() {
   if(auto *t=dynamic_cast<UiText*>(z->getElementById(71100)))
     if(t->getText()!=status)t->setMessage(status);
   bool active=s->phase!=Shows::Phase::Waiting;
+  // A show set to Never can't be changed: Add, Remove, the moves, Select
+  // Species, both trick lists, the admission and its arrows all off
+  // (zoo.exe ui_show1_615794, the flag 0x64e808 set); else on again
+  // (ui_show_4745a7), the arrows each off at its limit - up at
+  // maxShowAdmission, down at minShowAdmission (ui_show_468865)
+  const bool never=s->frequency<0;
+  active=active || never;
   for(int id:{11113,11114,11117,11118,11123})if(auto *b=button(id))b->setDisabled(active);
+  for(int id:{11111,11115,11104})if(auto *e=z->getElementById(id))e->setDisabled(never);
+  if(auto *b=button(11105))b->setDisabled(never || s->admission>=shows->settings.admissionMax);
+  if(auto *b=button(11106))b->setDisabled(never || s->admission<=shows->settings.admissionMin);
   std::string signature=s->species+"|";
   for(const auto &file:choices)signature+=file+";";
   for(const auto &key:s->script)signature+=key+",";

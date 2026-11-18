@@ -607,6 +607,7 @@ void Shows::actorStep(Show &s,Actor &a,float seconds) {
   if(a.elapsed>180) {giveUp();return;}
   if(a.stage==0) { if(walk(hp)){a.stage=1;a.elapsed=0;}else if(noRoute)giveUp();return; }
   if(a.stage==1) { if(walk({a.stageX,a.stageY})){a.stage=2;a.elapsed=0;m->exhibit=s.tank;}else if(noRoute)giveUp();return; }
+  // (the way home, Task86 0x5a2f25: see cancel() for its rules)
   if(a.stage==3) {
     if(m->inside)animals.leaveShelter(*m);
     if(walk(sp)){a.stage=4;a.elapsed=0;}return;
@@ -651,6 +652,44 @@ void Shows::actorStep(Show &s,Actor &a,float seconds) {
   std::string refusal=unavailable(s.tank,s.species,trick);
   const auto &type=animals.typeList[m->type];
   if(!refusal.empty() || m->sick) {++a.skipped;++s.tricksSkipped;++a.index;a.elapsed=0;return;}
+  // zoo.exe 0x5a66c0 (the unit's trick call, class slot 0x210): a trick of kind
+  // 3, the treat, is not played where the animal is - ZTAnimal's slot 0x208
+  // (0x5a745e) starts task 0x7d, Task7d_GetTrickFood. Its whileGoing
+  // (0x5a25cd): with no target yet, one tile at random of the 3 x 3 round the
+  // inside of the tank's gate (0x4a8a23 -> 0x410349, the tile the specialist
+  // stands by, then habitatNeighbourTile 0x49e9c2: the same tank's tiles),
+  // routed to ("Going to get trick food"); no tile or no route, the task is
+  // over ("Stopped going to get trick food") and the treat is not given.
+  // atTarget (0x5a6cb2) then plays the trick as an ordinary one (slot 0x20c).
+  // ours: the specialist's tile is its inside tile (inX, inY); the tank's
+  // tiles stand for the habitat grid, the swim for the move (0x422127)
+  if(trick.kind==3) {
+    if(!a.food) {
+      const auto *trainer=world->staff.member(s.trainer);
+      std::vector<std::pair<int,int>> round;
+      if(trainer && tank)
+        for(int dx=-1;dx<=1;++dx)for(int dy=-1;dy<=1;++dy) {
+          const int x=static_cast<int>(std::floor(trainer->inX))+dx,y=static_cast<int>(std::floor(trainer->inY))+dy;
+          if(tank->tiles.count({x,y}))round.push_back({x,y});
+        }
+      if(round.empty()) {
+        ZT_STEP("0x5a25cd","Trick food: no tile by the specialist, task over",{"animal",m->id});
+        ++a.skipped;++s.tricksSkipped;++a.index;a.elapsed=0;return;
+      }
+      const auto pick=round[std::uniform_int_distribution<size_t>(0,round.size()-1)(animals.rng)];
+      a.foodX=pick.first+0.5f;a.foodY=pick.second+0.5f;a.food=true;
+      ZT_STEP("0x5a25cd","Going to get trick food: a tile of the 3 x 3 by the specialist",{"animal",m->id},{"x",pick.first},{"y",pick.second});
+    }
+    if(!walk({a.foodX,a.foodY})) {
+      if(noRoute) {
+        ZT_STEP("0x5a25cd","Stopped going to get trick food (no route)",{"animal",m->id});
+        a.food=false;++a.skipped;++s.tricksSkipped;++a.index;a.elapsed=0;
+      }
+      return;
+    }
+    a.food=false;
+    ZT_STEP("0x5a6cb2","Trick food: there, the trick plays as an ordinary one",{"animal",m->id});
+  }
   std::string set="b"+trick.behavior;
   if(trick.kind==1) {
     const PlacedObjects::Object *object=nullptr;
@@ -706,6 +745,13 @@ void Shows::cancel(int tank,const std::string &why) {
       int linkedShow=-1,linkedHome=-1;
       const auto *home=world->fences.exhibit(a.home),*pool=world->fences.exhibit(tank);
       const bool portal=world->fences.showPortal(a.portal,linkedShow,linkedHome) && linkedShow==tank && linkedHome==a.home;
+      // zoo.exe 0x5a2f25 (Task86_ReturnHomeTank whileGoing): already in its
+      // home tank - "Already in home tank", the task over at once, no swim to
+      // the portal. Elsewhere, the show gate to home (tankGateTo 0x59e0a9), its
+      // tile across the gate (0x40fa92) at the home tank's water, routed
+      // (0x4221c3, 0x422127(1, 1)); a failed route gives up at once - the show
+      // flag +0x250 cleared, 11004 posted, the task over - where ours (stages
+      // 3 and 4) tries again for 180 s first (ours:)
       if(actual==a.home) {
         m->exhibit=a.home;m->showTank=m->showHome=-1;a.stage=5;
       } else if(!m->boxed && home && pool && home->filling && pool->filling && portal) {
@@ -776,7 +822,11 @@ void Shows::update(float seconds) {
       const auto inside=aIn?a:b,outside=aIn?b:a;
       if(world->fences.exhibitAt(static_cast<int>(outside.first),static_cast<int>(outside.second))>=0)continue;
       havePlatform=true;safeX=outside.first;safeY=outside.second;
-      samePlatform |= trainer && std::hypot(trainer->inX-inside.first,trainer->inY-inside.second)<0.01f;
+      // ours: the same platform is the same edge - its tile in the tank and
+      // the bank the specialist stepped off (a gate moved round its corner,
+      // the access walk's convex turn 0x487f34, keeps the tank tile)
+      samePlatform |= trainer && std::hypot(trainer->inX-inside.first,trainer->inY-inside.second)<0.01f &&
+        std::hypot(trainer->outX-outside.first,trainer->outY-outside.second)<0.01f;
     }
     if(trainer && havePlatform && !samePlatform) {
       trainer->dropX=trainer->outX=safeX;trainer->dropY=trainer->outY=safeY;

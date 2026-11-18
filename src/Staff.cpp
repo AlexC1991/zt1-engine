@@ -1253,37 +1253,84 @@ bool Staff::walkAbout(Member &m, const WorldMap &map, const Fences &fences) {
   auto rnd = [&](int n) { return std::uniform_int_distribution<int>(0, n - 1)(this->rng); };
   const int rx = rnd(Original::aiWalkRandomStaff) + 1 + Original::aiWalkBase;
   const int ry = rnd(Original::aiWalkRandomStaff) + 1 + Original::aiWalkBase;
-  // First its own pick (ZTStaff's class slot 0x1f4, 0x423a7e, every staff
-  // class): on zoo ground with no habitat from slot 0x328 (a maintenance
-  // worker's always none), a path tile on a ring round it (ZTUnit's
-  // 0x428cc9: its own roll of the half widths, the ring's path tiles
-  // passable for it, one at random), routed to unless it's its own tile;
-  // only none routed, the ring below with slot 0x168 - 0x423ac2's test
+  // First its own pick (ZTStaff's class slot 0x1f4, staffWalkAboutPick
+  // 0x423a7e, every staff class), routed to unless it's its own tile; only
+  // none, or none routed, the ring below with slot 0x168 - 0x423ac2's test
   // passes grass, only a tour guide's 0x61b639 keeps to the paths from a
-  // path. (measured: 2026-11-17, #243 - every staff member's walk about
-  // that started on a path ended on one, 38 of 38, in zoos with paths
-  // about: the path ring's pick; one from grass ended on grass.) ours: in
-  // an exhibit (the tile by its gate, habitatFromHere 0x49ebce) and on zoo
-  // ground a habitat's gate (slot 0x328: a keeper's 0x49db62, a guide's
-  // 0x58af73, 0x61101d; then the tile past its gate 0x411285) not yet - #288
-  if (here < 0) {
-    const int px = rnd(Original::aiWalkRandomStaff) + 1 + Original::aiWalkBase;
-    const int py = rnd(Original::aiWalkRandomStaff) + 1 + Original::aiWalkBase;
-    std::vector<std::pair<int, int>> paths;
-    for (int dx = -px; dx <= px; dx++)
-      for (int dy = -py; dy <= py; dy++) {
-        const int x = sx + dx, y = sy + dy;
-        if ((dx == px || dx == -px || dy == py || dy == -py) && x >= 0 && y >= 0 && x < W && y < H &&
-            map.isPath(x, y) && walkable(x, y, map, fences, m.access))
-          paths.push_back({x, y});
+  // path.
+  // - Standing in a habitat (habitatAt, slot 0x248, its +0x2c clear):
+  //   habitatFromHere 0x49ebce - the tile past its gate (0x411285), then
+  //   habitatNeighbourTile 0x49e9c2: one of the 3 x 3 tiles round it (it
+  //   too) at random, on the same side of the fence (the habitat grid's) and
+  //   one the unit's step cost (slot 0x164) doesn't refuse. No gate: no pick.
+  // - On zoo ground: slot 0x328's habitat (walkAboutExhibit) and the tile
+  //   past its gate (0x411285); none, no gate, or its own tile: a path tile
+  //   on a ring round it (ZTUnit's 0x428cc9: its own roll of the half
+  //   widths, the ring's path tiles passable for it, one at random).
+  // (measured: 2026-11-17, #243 - every staff member's walk about that
+  // started on a path ended on one, 38 of 38, in zoos with paths about: the
+  // path ring's pick; one from grass ended on grass.) (measured: 2026-11-18,
+  // #288 - two paddocks, 5 minutes: keepers done in one walked to the 3 x 3
+  // round the tile past its gate, outside; on zoo ground a keeper assigned
+  // to both and one assigned none went to the tile past either gate at
+  // random, and from that tile to a path tile on a ring; a guide assigned
+  // to one the same with its gate.)
+  // ours: the step cost's refusal is walkable() with its access; tanks have
+  // no gate here (Fences::pastGateTile), so in one it's the ring
+  {
+    int gx = -1, gy = -1;
+    bool picked = false;
+    if (in) {
+      int ox, oy;
+      if (fences.pastGateTile(here, ox, oy)) {
+        const int side = fences.exhibitAt(ox, oy);
+        std::vector<std::pair<int, int>> round;
+        for (int dx = -1; dx <= 1; dx++)
+          for (int dy = -1; dy <= 1; dy++) {
+            const int x = ox + dx, y = oy + dy;
+            if (x >= 0 && y >= 0 && x < W && y < H && fences.exhibitAt(x, y) == side &&
+                walkable(x, y, map, fences, m.access))
+              round.push_back({x, y});
+          }
+        if (!round.empty()) {
+          std::tie(gx, gy) = round[static_cast<size_t>(rnd(static_cast<int>(round.size())))];
+          picked = true;
+        }
+        ZT_STEP("0x49ebce", "Walk about from inside a habitat: a tile by its gate, outside",
+                {"gate x", ox}, {"gate y", oy}, {"tiles", static_cast<int>(round.size())});
       }
-    ZT_STEP("0x428cc9", "Walk about: first a path tile on a ring round it", {"half width", px}, {"half height", py},
-            {"tiles", static_cast<int>(paths.size())});
-    if (!paths.empty()) {
-      auto [gx, gy] = paths[static_cast<size_t>(rnd(static_cast<int>(paths.size())))];
-      if (findPath(m, gx, gy, map, fences, gx + 0.5f, gy + 0.5f))
-        return true;
+    } else {
+      const int hab = walkAboutExhibit(m, fences);
+      int ox, oy;
+      if (hab >= 0 && fences.pastGateTile(hab, ox, oy) && !(ox == sx && oy == sy)) {
+        gx = ox;
+        gy = oy;
+        picked = true;
+      }
+      ZT_STEP("0x423a7e", "Walk about: first the tile past one of its habitats' gates",
+              {"habitat", hab >= 0 && fences.exhibit(hab) ? fences.exhibit(hab)->name : std::string("none")},
+              {"picked", picked ? "yes" : "no"});
+      if (!picked) {
+        const int px = rnd(Original::aiWalkRandomStaff) + 1 + Original::aiWalkBase;
+        const int py = rnd(Original::aiWalkRandomStaff) + 1 + Original::aiWalkBase;
+        std::vector<std::pair<int, int>> paths;
+        for (int dx = -px; dx <= px; dx++)
+          for (int dy = -py; dy <= py; dy++) {
+            const int x = sx + dx, y = sy + dy;
+            if ((dx == px || dx == -px || dy == py || dy == -py) && x >= 0 && y >= 0 && x < W && y < H &&
+                map.isPath(x, y) && walkable(x, y, map, fences, m.access))
+              paths.push_back({x, y});
+          }
+        ZT_STEP("0x428cc9", "Walk about: first a path tile on a ring round it", {"half width", px},
+                {"half height", py}, {"tiles", static_cast<int>(paths.size())});
+        if (!paths.empty()) {
+          std::tie(gx, gy) = paths[static_cast<size_t>(rnd(static_cast<int>(paths.size())))];
+          picked = true;
+        }
+      }
     }
+    if (picked && !(gx == sx && gy == sy) && findPath(m, gx, gy, map, fences, gx + 0.5f, gy + 0.5f))
+      return true;
   }
   const bool pathOnly = map.isPath(sx, sy) && this->typeList[m.type].kind == Kind::Guide;
   auto passable = [&](int x, int y) {
@@ -1310,6 +1357,73 @@ bool Staff::walkAbout(Member &m, const WorldMap &map, const Fences &fences) {
       return true;
   }
   return false;
+}
+
+// A walk about's habitat from zoo ground: the staff class's slot 0x328.
+// - The ZTKeeper class (zookeeper, scientist, marine specialist; 0x49db62):
+//   with +0x2a0 clear, one of its assigned habitats (+0x260) at random; none
+//   assigned, one at random of the habitat manager's (+0x1c) it may serve
+//   (staffCanAssignToExhibit 0x423e01(keeper, 0, 1) giving 0, mayServe).
+// - A tour guide (0x58af73): with +0x298 clear, one of its assigned (+0x260)
+//   at random; none, one with animals (habitatsWithAnimals 0x440d9a).
+// - A maintenance worker (0x4a95c9): none. (The helicopter's, ZTStaff's
+//   0x61101d, any habitat at random: ours flies its own way, no walk about.)
+// ours: +0x2a0 and +0x298 aren't kept (measured clear in task 1); the
+// habitats are the named exhibits
+int Staff::walkAboutExhibit(const Member &m, const Fences &fences) {
+  const Kind k = this->typeList[m.type].kind;
+  std::vector<int> list;
+  if (k == Kind::Keeper || k == Kind::Scientist || k == Kind::Trainer) {
+    for (int id : m.exhibits)
+      if (fences.exhibit(id))
+        list.push_back(id);
+    if (list.empty())
+      for (const Fences::Exhibit &e : fences.exhibits())
+        if (e.named && !e.pocket && mayServe(m, e) == 0)
+          list.push_back(e.id);
+  } else if (k == Kind::Guide) {
+    for (int id : m.exhibits)
+      if (fences.exhibit(id))
+        list.push_back(id);
+    if (list.empty())
+      for (const Fences::Exhibit &e : fences.exhibits())
+        if (e.named && !e.pocket && e.animals > 0)
+          list.push_back(e.id);
+  }
+  if (list.empty())
+    return -1;
+  return list[std::uniform_int_distribution<size_t>(0, list.size() - 1)(this->rng)];
+}
+
+// zoo.exe 0x423e01 (staffCanAssignToExhibit), as the keeper's walk about
+// pick 0x49db62 asks it, (keeper, 0, 1); 0 for any unit not of the ZTKeeper
+// class. 1: the habitat's tile list (+0x40) under 2. 2: a tank and not a
+// marine specialist, or land and one (habitat slot 0x20 against the staff
+// slot 0x16c). Else 0 with an animal there it looks after (+0x6c,
+// staffCaresForAnimal 0x423f00), dirt on its tiles it cleans (slot 0x324),
+// a tank's purity (+0x1a8) under its cCleanTankThreshold (+0x208), or a
+// show tank and a marine specialist (type 9552); else 2.
+// ours: a show tank's linked performers (0x498958's list) aren't asked
+// apart; the show tank's own rule covers the marine specialist
+int Staff::mayServe(const Member &m, const Fences::Exhibit &ex) const {
+  const Type &t = this->typeList[m.type];
+  if (!(t.kind == Kind::Keeper || t.kind == Kind::Scientist || t.kind == Kind::Trainer))
+    return 0;
+  if (ex.tiles.size() < 2)
+    return 1;
+  if (ex.tank != (t.kind == Kind::Trainer))
+    return 2;
+  if (this->animals)
+    for (const Animals::Member &a : this->animals->members())
+      if (a.exhibit == ex.id && !a.boxed && caresFor(m, a.type))
+        return 0;
+  if (!dungFor(m, ex.id).empty())
+    return 0;
+  if (ex.tank && ex.purity < static_cast<float>(t.cleanTankThreshold))
+    return 0;
+  if (ex.tank && ex.show && t.kind == Kind::Trainer)
+    return 0;
+  return 2;
 }
 
 // measured: 2026-11-17 (#243, the Lab's Play original, the unit read 20
@@ -2270,9 +2384,13 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
       const int ax=edge.alongX?edge.x:edge.x-1,ay=edge.alongX?edge.y-1:edge.y;
       const bool aIn=fences.exhibitAt(ax,ay)==m.visit;
       const float ix=(aIn?ax:edge.x)+0.5f,iy=(aIn?ay:edge.y)+0.5f;
-      if(std::hypot(m.inX-ix,m.inY-iy)<0.01f)break;
+      const float ox=(aIn?edge.x:ax)+0.5f,oy=(aIn?edge.y:ay)+0.5f;
+      if(fences.exhibitAt(aIn?edge.x:ax,aIn?edge.y:ay)>=0)continue; // (a portal into another tank, not its platform)
+      // (ours: the same platform is the same edge - a gate moved round its
+      // corner keeps the tank tile, 0x487f34's convex turn)
+      if(std::hypot(m.inX-ix,m.inY-iy)<0.01f && std::hypot(m.outX-ox,m.outY-oy)<0.01f)break;
       m.inX=ix;m.inY=iy;
-      m.outX=(aIn?edge.x:ax)+0.5f;m.outY=(aIn?edge.y:ay)+0.5f;
+      m.outX=ox;m.outY=oy;
       m.path.clear();m.pathAt=0;m.playsLeft=0;
       done();return;
     }
@@ -2642,14 +2760,33 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     // heal"), the job ends and the keeper says so (11004, priority 2, the
     // keeper's name and the animal's). The list is emptied as its duties in
     // a habitat begin (0x49f3ca) and end (0x49ebe7). Job3's atTarget
-    // (0x470010) starts Job4_HealAnimal (0x470121)
+    // (0x470010) starts Job4_HealAnimal (0x470121).
+    // The job only when habitatAnimalsToHealCount 0x49f165 (from 0x42400a)
+    // counts one: of the habitat's animals, those it cares for (0x423f00),
+    // not on its +0x270 list, sickly (animalIsSickly 0x4a88cf), on a tile
+    // no staff member stands on (tile +0x85 & 4: set where a staff member
+    // is, its slot 0x2d8 0x416692) and not on water (+0x83 & 3). The pick
+    // 0x4705b9 leaves out the same but for water (ours: not crated)
     if (this->animals) {
+      auto staffOn = [&](const Animals::Member &a) {
+        const int ax = static_cast<int>(std::floor(a.x)), ay = static_cast<int>(std::floor(a.y));
+        for (const Member &s : this->list)
+          if (static_cast<int>(std::floor(s.x)) == ax && static_cast<int>(std::floor(s.y)) == ay)
+            return true;
+        return false;
+      };
+      auto toHeal = [&](const Animals::Member &a) {
+        return a.exhibit == m.visit && !a.boxed && this->animals->needsHealing(a) && caresFor(m, a.type) &&
+               std::find(m.unreachable.begin(), m.unreachable.end(), a.id) == m.unreachable.end() && !staffOn(a);
+      };
+      int count = 0;
+      for (const Animals::Member &a : this->animals->members())
+        count += toHeal(a) && !Animals::isWater(map, static_cast<int>(std::floor(a.x)), static_cast<int>(std::floor(a.y)));
       const Animals::Member *nearest = nullptr;
       long long best = 0;
       const int kx = static_cast<int>(std::floor(m.x)), ky = static_cast<int>(std::floor(m.y));
       for (const Animals::Member &a : this->animals->members()) {
-        if (a.exhibit != m.visit || a.boxed || !this->animals->needsHealing(a) ||
-            std::find(m.unreachable.begin(), m.unreachable.end(), a.id) != m.unreachable.end())
+        if (count == 0 || !toHeal(a))
           continue;
         const long long dx = static_cast<int>(std::floor(a.x)) - kx, dy = static_cast<int>(std::floor(a.y)) - ky;
         if (!nearest || dx * dx + dy * dy < best) {

@@ -30,6 +30,11 @@ public:
     float stageX = 0, stageY = 0; // derived gathering positions, rebuilt on load
     Fences::Edge portal;
     std::vector<int> benefit;
+    // Going for trick food (task 0x7d, Task7d_GetTrickFood; ours: not
+    // saved - picked again on loading): the tile it swims to, by the
+    // specialist
+    bool food = false;
+    float foodX = 0, foodY = 0;
   };
   struct Show {
     int tank = -1;

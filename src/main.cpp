@@ -855,6 +855,27 @@ static SDL_Rect gameViewRect(SDL_Renderer *renderer) {
           static_cast<int>(std::lround(UI_LAYOUT_H * t.scale))};
 }
 
+// A dialog over the Options window (it's drawn after the HUD): drawn again
+// on top, so a question it asked - Exit Game's, Main Menu's - shows
+static void drawDialogOverOptions(SDL_Renderer *renderer, ResourceManager *rm) {
+  if (!g_hud || !g_hud->optionsOpen() || !g_hud->hasDialog())
+    return;
+  UiTransform t = getUiTransform(renderer);
+  drawUiScaled(renderer, rm, t, [&](SDL_Renderer *r) {
+    if (g_widescreen) {
+      SDL_Rect rect = hudLayoutRect(renderer, t);
+      g_hud->drawDialog(r, &rect);
+      return;
+    }
+    SDL_Rect viewport = {static_cast<int>(std::lround(t.offsetX / t.scale)),
+                         static_cast<int>(std::lround(t.offsetY / t.scale)), UI_LAYOUT_W, UI_LAYOUT_H};
+    SDL_SetRenderViewport(r, &viewport);
+    SDL_Rect layoutRect = {0, 0, UI_LAYOUT_W, UI_LAYOUT_H};
+    g_hud->drawDialog(r, &layoutRect);
+    SDL_SetRenderViewport(r, nullptr);
+  });
+}
+
 static void drawHud(SDL_Renderer *renderer, ResourceManager *rm) {
   if (!g_hud)
     return;
@@ -1564,7 +1585,7 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
     std::string file = g_hud->bulldozerOn() ? "" : g_hud->animalToolFile(female);
     Animals &an = g_world->getAnimals();
     int type = file.empty() ? -1 : an.typeOfFile(file);
-    g_world->setAnimalTool(type, female);
+    g_world->setAnimalTool(type, female, g_hud->animalToolFacing());
   }
   // The Paths tab's walkway line
   g_hud->setWalkwayLabel(g_world->getBuildHeight() > 0
@@ -3405,6 +3426,55 @@ static bool gameSave(const std::string &given = "") {
   return ok;
 }
 
+// Exit Game, Main Menu and Load Game ask first whether to save the zoo
+// (zoo.exe gameopt1_ExitGame_click 0x501713 -> 0x501699, string 151;
+// gameopt1_Startnew_click 0x501df6 -> 0x501d71, string 153;
+// gameopt1_LoadGame_click 0x4cb9b4 -> 0x4cb8ed, string 152): unless Save
+// Game (1502) is switched off (state 2), showDialog 0x4fff2c style 3 with
+// the question picture. Yes: the Save dialog (saveZooDialog 0x4769ac), and
+// on only once it saved; No: on at once; Cancel: stays. Load Game with Load
+// Game itself (1501) switched off does nothing. "On" is the same action
+// queued again, which doesn't ask. Gives true when the action stops here.
+static std::string g_saveFirstFile; // (checks: the Yes answer's file, in place of the Save dialog)
+
+// Save Game clicked: nothing while it's switched off; the Save dialog, and
+// once it saved, Game Options closes (zoo.exe gameopt1_SaveGame_click
+// 0x477041 -> 0x477004: saveZooDialog 0x4769ac, then uiFind 5 hidden) - and
+// the Options window in its place. (checks: the file given)
+static void saveGameClicked(const std::string &given = "") {
+  UiElement *save = g_hud ? g_hud->getElementById(1502) : nullptr;
+  if (save && save->isDisabled())
+    return;
+  if (gameSave(given) && g_hud) {
+    if (g_hud->isPanelOpen(5))
+      g_hud->toggleGameMenu();
+    if (g_hud->optionsOpen())
+      g_hud->options->close();
+  }
+}
+static bool askSaveFirst(ResourceManager *rm, UiAction action) {
+  if (!g_hud)
+    return false;
+  auto off = [](int id) {
+    UiElement *e = g_hud->getElementById(id);
+    return e && e->isDisabled();
+  };
+  if (action == UiAction::GAME_LOAD && off(1501))
+    return true;
+  if (off(1502))
+    return false;
+  const int text = action == UiAction::GAME_EXIT ? 151 : action == UiAction::GAME_LOAD ? 152 : 153;
+  const int queued = static_cast<int>(action);
+  g_hud->askYesNoCancel(
+      rm->getString(text),
+      [queued] {
+        if (gameSave(g_saveFirstFile))
+          g_queuedActions.push_back(queued);
+      },
+      [queued] { g_queuedActions.push_back(queued); });
+  return true;
+}
+
 // Load Game: "Load a zoo..." (or the file given): its map started afresh
 // with a new screen, then the save put back over it
 static bool gameLoad(ResourceManager *rm, const std::string &given = "") {
@@ -4170,6 +4240,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       // (the Options window over it, as the game's loop draws it)
       if (g_hud->optionsOpen())
         drawOptions(renderer, rm, g_hud->options);
+      drawDialogOverOptions(renderer, rm);
       if (frame < 2)
         SDL_RenderPresent(renderer);
     }
@@ -5046,6 +5117,7 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       const int video=runLightingVideo(*world,rm,renderer,[&] {
         world->setView(gameViewRect(renderer),getUiTransform(renderer).scale);world->draw(renderer);drawHud(renderer,rm);
         if(g_hud->optionsOpen())drawOptions(renderer,rm,g_hud->options);
+        drawDialogOverOptions(renderer, rm);
       },showOptions);
       if(timings)std::fclose(timings);return video;
     }
@@ -5067,6 +5139,21 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     extern std::string buildTourZoo(World &, ZooSim &, UiGameScreen &, ResourceManager *, const std::string &, const std::string &);
     const std::string r = buildTourZoo(*world, g_sim, *g_hud, rm, g_currentMapPath, tourZoo);
     SDL_Log("[TourZoo] %s", r.c_str());
+    if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
+  }
+  // ours: ZT_SHOW_ZOO=<file.zoo>: a show to watch in the original (#301)
+  if (const char *showZoo = std::getenv("ZT_SHOW_ZOO")) {
+    extern std::string buildShowZoo(World &, ZooSim &, UiGameScreen &, const std::string &, const std::string &);
+    const std::string r = buildShowZoo(*world, g_sim, *g_hud, g_currentMapPath, showZoo);
+    SDL_Log("[ShowZoo] %s", r.c_str());
+    if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
+  }
+  // ours: ZT_WALK_ZOO=<file.zoo>: two paddocks and their keepers, for
+  // measuring walking about in the original (#288)
+  if (const char *walkZoo = std::getenv("ZT_WALK_ZOO")) {
+    extern std::string buildWalkZoo(World &, ZooSim &, UiGameScreen &, const std::string &, const std::string &);
+    const std::string r = buildWalkZoo(*world, g_sim, *g_hud, g_currentMapPath, walkZoo);
+    SDL_Log("[WalkZoo] %s", r.c_str());
     if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
   }
   // ours: ZT_ACCESS_ZOO=<file.zoo>: exhibits with their gates reachable or
@@ -7433,6 +7520,126 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             keeper->exhibits.clear();
         } else {
           check("keeper's exhibit picked: an exhibit with a gate to give the keeper", false);
+        }
+      }
+      // #290, the Exhibit List's pages (zoo.exe 0x58b5ce, 0x468b9d,
+      // 0x58b5f2, exhibitListRefresh 0x5b108b), as measured 2026-11-18 in
+      // Play original: two tanks laid by a land exhibit for it
+      {
+        WorldMap &wm = world->getMap();
+        int land = -1;
+        for (const Fences::Exhibit &e : fn.exhibits())
+          if (e.named && !e.tank && land < 0)
+            land = e.id;
+        int tx = -1, ty = -1;
+        for (int y = 4; y < wm.getHeight() - 8 && tx < 0; ++y)
+          for (int x = 4; x < wm.getWidth() - 14 && tx < 0; ++x) {
+            bool ok = true;
+            for (int yy = y - 1; yy <= y + 5 && ok; ++yy)
+              for (int xx = x - 1; xx <= x + 11 && ok; ++xx)
+                ok = fn.exhibitAt(xx, yy) < 0 && fn.insideZoo(xx, yy) && !wm.isPath(xx, yy);
+            for (const auto &o : world->getObjects().objects())
+              ok = ok && !(o.x > x - 2 && o.x < x + 13 && o.y > y - 2 && o.y < y + 7);
+            if (ok) {
+              tx = x;
+              ty = y;
+            }
+          }
+        const int atl = fn.typeIndex("atltank");
+        if (land >= 0 && tx >= 0 && atl >= 0) {
+          int drag = 9000;
+          auto tank = [&](int x, int y, const char *name) {
+            for (int k = 0; k < 4; ++k) {
+              fn.place({true, x + k, y}, atl, drag, wm);
+              fn.place({true, x + k, y + 4}, atl, drag + 1, wm);
+              fn.place({false, x, y + k}, atl, drag + 2, wm);
+              fn.place({false, x + 4, y + k}, atl, drag + 3, wm);
+            }
+            drag += 4;
+            for (int id : fn.updateExhibits(wm, 1, 0, 1))
+              fn.finishExhibit(id, name, wm);
+            return fn.exhibitAt(x + 1, y + 1);
+          };
+          const int tankA = tank(tx, ty, "Pages tank A"), tankB = tank(tx + 6, ty, "Pages tank B");
+          world->reindex();
+          // (as a zoo just loaded: no tank picked yet this game)
+          g_hud->restartExhibitPages();
+          g_hud->setPanelOpen(30, true);
+          g_hud->refreshExhibits();
+          UiListBox *list = dynamic_cast<UiListBox *>(g_hud->getElementById(4305));
+          auto pick = [&](int want) {
+            if (list) {
+              list->setSelectedIndex(g_hud->exhibitRow(want));
+              g_hud->refreshExhibits();
+            }
+          };
+          auto tab = [&](int id) {
+            if (UiButton *b = dynamic_cast<UiButton *>(g_hud->exhibitElement(id)))
+              b->choose();
+            g_hud->syncExhibitTabs();
+          };
+          auto on = [&](int id) {
+            UiButton *b = dynamic_cast<UiButton *>(g_hud->exhibitElement(id));
+            return b && b->isToggledOn();
+          };
+          auto shown = [&](int id) {
+            UiElement *e = g_hud->exhibitElement(id);
+            return e && !e->isHidden();
+          };
+          auto state = [&]() {
+            std::string s;
+            for (int p : {700, 701, 702, 703, 704})
+              s += shown(p) ? "1" : "0";
+            s += "/";
+            for (int t : {4310, 4311, 4312, 4313, 4365})
+              s += on(t) ? "1" : "0";
+            return s;
+          };
+          // Opened, nothing picked: no page
+          const bool openEmpty = !shown(700) && !shown(704);
+          const std::string openState = state();
+          pick(tankA);
+          const bool firstTank = on(4365) && shown(704) && !shown(700);
+          const std::string firstState = state() + " row " + std::to_string(g_hud->exhibitRow(tankA)) + " shown " +
+                                         std::to_string(g_hud->shownExhibitId()) + " of " + std::to_string(tankA);
+          tab(4311);
+          pick(tankB);
+          const bool animalsKept = on(4311) && shown(701);
+          tab(4365);
+          pick(tankA);
+          const bool tankKept = on(4365) && shown(704) && !shown(700);
+          pick(land);
+          UiButton *tankTab = dynamic_cast<UiButton *>(g_hud->exhibitElement(4365));
+          const bool landStatus = on(4310) && shown(700) && !shown(704) && tankTab && tankTab->isDisabled();
+          tab(4312);
+          pick(tankB);
+          const bool thoughtsKept = on(4312) && shown(702) && !(tankTab && tankTab->isDisabled());
+          g_hud->setPanelOpen(30, false);
+          g_hud->setPanelOpen(30, true);
+          g_hud->refreshExhibits();
+          const bool reopened = g_hud->shownExhibitId() < 0 && on(4312) && !shown(700) && !shown(704);
+          capture("exhibit_list_pages");
+          g_hud->setPanelOpen(30, false);
+          for (int id : {tankA, tankB})
+            if (fn.exhibit(id))
+              fn.drainExhibit(id);
+          for (int x0 : {tx, tx + 6})
+            for (int k = 0; k < 4; ++k) {
+              fn.remove({true, x0 + k, ty}, wm);
+              fn.remove({true, x0 + k, ty + 4}, wm);
+              fn.remove({false, x0, ty + k}, wm);
+              fn.remove({false, x0 + 4, ty + k}, wm);
+            }
+          fn.updateExhibits(wm, 1, 0, 1);
+          world->reindex();
+          check(("#290: Exhibit List pages as the original (0x58b5ce, 0x5b108b; open " + std::to_string(openEmpty) +
+                 ", first tank " + std::to_string(firstTank) + ", animals kept " + std::to_string(animalsKept) +
+                 ", tank kept " + std::to_string(tankKept) + ", land status " + std::to_string(landStatus) +
+                 ", thoughts kept " + std::to_string(thoughtsKept) + ", reopened " + std::to_string(reopened) + "; pages/tabs at open " + openState + ", first tank " + firstState + ")")
+                    .c_str(),
+                openEmpty && firstTank && animalsKept && tankKept && landStatus && thoughtsKept && reopened);
+        } else {
+          check("#290: room for two tanks by a land exhibit", false);
         }
       }
       g_hud->showPanel(0, "");
@@ -11417,6 +11624,74 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   check("esc closes the game menu", !g_hud->isPanelOpen(5));
   g_hud->toggleGameMenu();
   check("esc opens the game menu", g_hud->isPanelOpen(5));
+  // Exit Game, Main Menu and Load Game ask whether to save first (zoo.exe
+  // 0x501699 string 151, 0x501d71 153, 0x4cb8ed 152; showDialog 0x4fff2c
+  // style 3): Yes, No and Cancel at their x / y with the question picture;
+  // Cancel stays, No goes on, Yes saves and then goes on; with Save Game
+  // switched off it isn't asked. Then Save Game closes Game Options once it
+  // saved (0x477004)
+  {
+    struct Ask {
+      UiAction action;
+      int text;
+      const char *name;
+    };
+    const Ask asks[] = {{UiAction::GAME_EXIT, 151, "exit game"},
+                        {UiAction::GAME_MAIN_MENU, 153, "main menu"},
+                        {UiAction::GAME_LOAD, 152, "load game"}};
+    const std::string file = outDir + "/save_first.zt1save";
+    for (const Ask &k : asks) {
+      const std::vector<int> on = {static_cast<int>(k.action)};
+      g_queuedActions.clear();
+      const bool stops = askSaveFirst(rm, k.action);
+      const bool asked = g_hud->hasDialog() && g_hud->dialogMessage() == rm->getString(k.text) && !rm->getString(k.text).empty();
+      auto shown = [](int id) {
+        UiElement *e = g_hud->dialogElement(id);
+        return e && !e->isHidden();
+      };
+      bool buttons = shown(45010) && shown(45011) && shown(45013) && !shown(45012);
+      if (k.action == UiAction::GAME_EXIT) {
+        // (drawn: Yes, No, Cancel left to right, evenly - their x 20, 144, 268)
+        capture("save_first_question");
+        auto x = [](int id) { return g_hud->dialogElement(id) ? g_hud->dialogElement(id)->getLastRect().x : 0; };
+        const int gap = x(45011) - x(45010);
+        buttons = buttons && gap > 0 && std::abs(x(45013) - x(45011) - gap) <= 1;
+      }
+      g_hud->cancelDialog();
+      const bool stayed = !g_hud->hasDialog() && g_queuedActions.empty();
+      askSaveFirst(rm, k.action);
+      g_hud->answerDialog(false);
+      const bool no = !g_hud->hasDialog() && g_queuedActions == on;
+      g_queuedActions.clear();
+      std::filesystem::remove(file);
+      g_saveFirstFile = file;
+      askSaveFirst(rm, k.action);
+      g_hud->answerDialog(true);
+      g_saveFirstFile.clear();
+      const bool yes = std::filesystem::exists(file) && g_queuedActions == on;
+      g_queuedActions.clear();
+      std::filesystem::remove(file);
+      check((std::string(k.name) + " asks to save first (" + std::to_string(k.text) + "): asked " + std::to_string(stops && asked) +
+             ", Yes/No/Cancel " + std::to_string(buttons) + ", Cancel stays " + std::to_string(stayed) + ", No goes on " +
+             std::to_string(no) + ", Yes saves then goes on " + std::to_string(yes))
+                .c_str(),
+            stops && asked && buttons && stayed && no && yes);
+    }
+    UiElement *save = g_hud->getElementById(1502);
+    if (save)
+      save->setDisabled(true);
+    const bool goesOn = save && !askSaveFirst(rm, UiAction::GAME_EXIT) && !g_hud->hasDialog();
+    if (save)
+      save->setDisabled(false);
+    check("Save Game switched off: Exit Game isn't asked", goesOn);
+    const bool menuWas = g_hud->isPanelOpen(5);
+    saveGameClicked(file);
+    const bool closed = menuWas && std::filesystem::exists(file) && !g_hud->isPanelOpen(5);
+    std::filesystem::remove(file);
+    check("Save Game saved: Game Options closes", closed);
+    if (!g_hud->isPanelOpen(5))
+      g_hud->toggleGameMenu();
+  }
 
   // (last: a few hundred seconds go by, which would move everyone about
   // for the tests after it)
@@ -12109,6 +12384,7 @@ int main(int argc, char *argv[]) {
       action = UiAction::SCENARIO_BACK_TO_MAIN_MENU;
     // A scenario's ending chose (scenarioComplete): the next tutorial, or a
     // menu screen, one step a frame
+    bool queuedAction = false;
     if (!g_nextScenario.empty() && g_currentState == LayoutState::GAME_LOOP) {
       const std::string next = g_nextScenario;
       g_nextScenario.clear();
@@ -12121,6 +12397,9 @@ int main(int argc, char *argv[]) {
     } else if (!g_queuedActions.empty()) {
       action = static_cast<UiAction>(g_queuedActions.front());
       g_queuedActions.erase(g_queuedActions.begin());
+      // (queued by a dialog's answer or a scenario's ending: Exit Game,
+      // Main Menu and Load Game go on without asking to save)
+      queuedAction = true;
     }
 
     switch (action) {
@@ -12214,22 +12493,32 @@ int main(int argc, char *argv[]) {
       }
       break;
     }
-    // Save Game: the Windows "Save a zoo..." dialog, as the original
+    // Save Game: the Windows "Save a zoo..." dialog, as the original; once
+    // it saved, Game Options closes (zoo.exe gameopt1_SaveGame_click 0x477041
+    // -> 0x477004: nothing while Save Game is switched off; uiFind 5 hidden)
     case UiAction::GAME_SAVE:
-      gameSave();
+      saveGameClicked();
       break;
-    // Load Game: "Load a zoo...", its map started afresh, then the save
+    // Load Game: asked to save first (askSaveFirst); then "Load a zoo...",
+    // its map started afresh, then the save
     case UiAction::GAME_LOAD: {
+      if (!queuedAction && askSaveFirst(&resource_manager, action))
+        break;
       const std::string path = SaveGame::askLoadPath();
       if (!path.empty() && gameLoad(&resource_manager, path))
         SaveGame::setLastFile(path); // (zoo.exe loadZooDialog 0x4cc0d7)
       break;
     }
-    // The game menu: Exit Game quits; Main Menu leaves the game
+    // The game menu: Exit Game quits; Main Menu leaves the game - each asked
+    // to save first (askSaveFirst)
     case UiAction::GAME_EXIT:
+      if (!queuedAction && askSaveFirst(&resource_manager, action))
+        break;
       running = false;
       break;
     case UiAction::GAME_MAIN_MENU:
+      if (!queuedAction && askSaveFirst(&resource_manager, action))
+        break;
       destroyHud();
       [[fallthrough]];
     case UiAction::CREDITS_EXIT:
@@ -12580,6 +12869,7 @@ int main(int argc, char *argv[]) {
       drawToolCost(window.renderer, &resource_manager);
       if (g_hud)
         drawOptions(window.renderer, &resource_manager, g_hud->options);
+      drawDialogOverOptions(window.renderer, &resource_manager);
       if (g_snapshot == 2) { // (the screen as it is)
         g_snapshot = 0;
         takeSnapshot(window.renderer, &resource_manager);

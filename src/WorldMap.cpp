@@ -1,4 +1,5 @@
 #include "WorldMap.hpp"
+#include "OriginalConstants.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <climits>
@@ -194,6 +195,64 @@ void WorldMap::raiseVertex(int vx, int vy, int by) {
     maxHeight = std::max(maxHeight, t.cornerHeight[corner[i]]);
   }
   touch();
+}
+
+// zoo.exe 0x45e1c2 (one side; 0x45d935 asks it for sides 0, 2, 4, 6 of each
+// changed tile): the side's edge on this tile and the facing edge on the
+// neighbour there (0x40fa92: side 0 -y, 2 +x, 4 +y, 6 -x), each by its first
+// corner's height and its rise along the edge (the tile's +0x3c height and
+// +0x81 corner raises; ours, MapTile::cornerHeight). The same rise from the
+// same height: flat (0) or sloped (1) alike; else the lower tile's side 2
+// and the higher's 3 - by the first corners only when the rises differ.
+// No neighbour: 0. Each set with 0x4f16a3 (side s: bits s..s+1 of +0x82 -
+// ours, edgeBits as the map's byte 6 holds them: side s at bits 6 - s)
+void WorldMap::updateSideCodes(int x, int y) {
+  if (x < 0 || y < 0 || x >= width || y >= height)
+    return;
+  auto setCode = [](MapTile &t, int side, int code) {
+    const int shift = 6 - side;
+    t.edgeBits = static_cast<uint8_t>((t.edgeBits & ~(3 << shift)) | (code << shift));
+  };
+  MapTile &t = tiles[y][x];
+  // Per side: the neighbour's offset, this tile's edge (first corner, last)
+  // and the neighbour's facing edge (first, last), as 0x45e1c2's cases
+  struct Side {
+    int dx, dy, a0, a1, b0, b1;
+  };
+  static const Side sides[4] = {
+      {0, -1, CORNER_X0Y0, CORNER_X1Y0, CORNER_X0Y1, CORNER_X1Y1},  // 0
+      {1, 0, CORNER_X1Y0, CORNER_X1Y1, CORNER_X0Y0, CORNER_X0Y1},   // 2
+      {0, 1, CORNER_X0Y1, CORNER_X1Y1, CORNER_X0Y0, CORNER_X1Y0},   // 4
+      {-1, 0, CORNER_X0Y0, CORNER_X0Y1, CORNER_X1Y0, CORNER_X1Y1}}; // 6
+  for (int i = 0; i < 4; i++) {
+    const Side &s = sides[i];
+    const int side = 2 * i, nx = x + s.dx, ny = y + s.dy;
+    if (nx < 0 || ny < 0 || nx >= width || ny >= height) {
+      setCode(t, side, Original::sideCodeFlat);
+      continue;
+    }
+    MapTile &n = tiles[ny][nx];
+    const int here = t.cornerHeight[s.a0], there = n.cornerHeight[s.b0];
+    const int riseHere = t.cornerHeight[s.a1] - here, riseThere = n.cornerHeight[s.b1] - there;
+    int code, back;
+    if (riseHere == riseThere && here == there)
+      code = back = riseHere == 0 ? Original::sideCodeFlat : Original::sideCodeSloped;
+    else if (here < there) {
+      code = Original::sideCodeCliffBelow;
+      back = Original::sideCodeCliffAbove;
+    } else {
+      code = Original::sideCodeCliffAbove;
+      back = Original::sideCodeCliffBelow;
+    }
+    setCode(t, side, code);
+    setCode(n, (side + 4) & 7, back);
+  }
+}
+
+void WorldMap::updateSideCodesAround(int x, int y) {
+  for (int dy = -1; dy <= 1; dy++)
+    for (int dx = -1; dx <= 1; dx++)
+      updateSideCodes(x + dx, y + dy);
 }
 
 int WorldMap::getPathType(int x, int y) const {

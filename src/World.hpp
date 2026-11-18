@@ -245,8 +245,8 @@ public:
     // Its footprint in half tiles (cFootprintX, cFootprintY)
     std::pair<int, int> footprint(const std::string &file) { return footprintOf(file); }
     // Adopting animals (a type of getAnimals().types(), male or female;
-    // -1: none)
-    void setAnimalTool(int type, bool female);
+    // -1: none), with Adopt's rotation (0 to 3, as its icons)
+    void setAnimalTool(int type, bool female, int facing = 0);
     int getAnimalTool() const { return animalTool; }
     Animals &getAnimals() { return animals; }
     Guests &getGuests() { return guests; }
@@ -517,6 +517,8 @@ private:
       int height = 0;
       bool walkable = false, walkableByTall = false, rubbleable = false;
       bool show = false; // cShow (entity type +0x6f, loadConfig 0x4b4903): a show tank's
+      // cSwims, cOnlySwims (scenery type +0x12f, +0x133, == 1: 0x4ba5b0)
+      bool swims = false, onlySwims = false;
     };
     std::map<std::string, TankFlags> tankFlags;
     const TankFlags &tankFlagsOf(const std::string &file);
@@ -525,6 +527,7 @@ private:
     void snapObject(const std::string &file, int facing, float &x, float &y);
     int animalTool = -1;
     bool animalFemale = false;
+    int animalFacing = 0; // (Adopt's rotation, zoo.exe 0x63bb50)
     double clock = 0;               // seconds of play (not paused)
     DayNightLighting lighting;      // addition: resources owned by this zoo
     std::vector<int> frameTanks;    // ours: each tile's tank (-1 none) while a frame is drawn

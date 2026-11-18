@@ -309,6 +309,13 @@ bool World::loadFreeform(const std::string &path) {
   placedObjects.load(zooReader, resourceManager);
   ambient.load(resourceManager);
   ambient.clear();
+  // The map's world clock carries on (worldLoad 0x452e13 reads it from the
+  // map's .zoo). measured 2026-11-18: a new freeform game on Basic Grass
+  // (maps/default.zoo, its clock 100.444 s) had the world at +0x204 110 s
+  // a few seconds after Play - kept, not started again at 0 - so its flyers
+  // come as soon as the clock passes their cFrequency
+  if (zooReader.getWorldClock() >= 0)
+    ambient.setWorldClock(zooReader.getWorldClock());
   ambient.setAllowed(actualPath == path ? std::vector<int>{} : ambientIds);
   staff.loadTypes(resourceManager);
   staff.viewingAreas().setObjects(&placedObjects);
@@ -627,6 +634,63 @@ bool World::loadFreeform(const std::string &path) {
   terrain.hasBigObject = [this](int x, int y) {
     WorldIndex::What w = this->index.at(x, y);
     return w == WorldIndex::What::Object || w == WorldIndex::What::Building;
+  };
+  // zoo.exe 0x4f8f0b's look at a tile: the objects in its four cells - each
+  // object whose footprint reaches into it, its path, food, dung and litter
+  // (ours: in its cells, as tankContents takes them) - each by its type's
+  // cSwims (0x4de3f7, class slot 0xbc -> type slot 0x44) and cOnlySwims
+  // (0x489540, slot 0xc0 -> type slot 0x48; the fences on its four edges
+  // too); and the units on its list (0x4f8f0b: any whose type isn't
+  // cIsTransient - the water effects alone are): animals on their map
+  // footprint (0x4137df), staff, guests not in a building
+  terrain.onTile = [this](int x, int y) {
+    TerrainTool::OnTile on;
+    auto look = [&](const std::string &file) {
+      const TankFlags &flags = this->tankFlagsOf(file);
+      on.allSwim = on.allSwim && flags.swims;
+      on.onlySwims = on.onlySwims || flags.onlySwims;
+    };
+    auto here = [x, y](float fx, float fy) {
+      return static_cast<int>(std::floor(fx)) == x && static_cast<int>(std::floor(fy)) == y;
+    };
+    for (const PlacedObjects::Object &o : this->placedObjects.objects()) {
+      if (o.fence || o.className == "fences")
+        continue;
+      const std::string file = PlacedObjects::fileOf(o);
+      auto [fx, fy] = this->footprintOf(file);
+      fx = std::max(1, fx);
+      fy = std::max(1, fy);
+      if ((o.facing & 6) == 2 || (o.facing & 6) == 6)
+        std::swap(fx, fy);
+      const float hx = fx / 4.0f, hy = fy / 4.0f;
+      if (o.x + hx > x + 0.01f && o.x - hx < x + 1 - 0.01f && o.y + hy > y + 0.01f && o.y - hy < y + 1 - 0.01f)
+        look(file);
+    }
+    const int path = this->worldMap.getPathType(x, y);
+    if (path >= 0)
+      look("paths/" + this->worldMap.getPathTypes()[static_cast<size_t>(path)] + ".ai");
+    for (const ZooItems::Item &it : this->items.items())
+      if (here(it.x, it.y))
+        look(it.kind == ZooItems::Kind::Food ? ZooItems::foodFile(it.food)
+             : it.kind == ZooItems::Kind::Dung ? std::string(ZooItems::dinoDung(it) ? "scenery/other/dinopoo.ai" : "scenery/other/poo.ai")
+                                               : std::string("scenery/other/trash.ai"));
+    for (const Fences::Edge &e : {Fences::Edge{true, x, y}, Fences::Edge{true, x, y + 1}, Fences::Edge{false, x, y},
+                                  Fences::Edge{false, x + 1, y}})
+      if (const Fences::Piece *pc = this->fences.at(e))
+        if (pc->type >= 0 && pc->type < static_cast<int>(this->fences.types().size()) &&
+            this->tankFlagsOf(this->fences.types()[static_cast<size_t>(pc->type)].file).onlySwims)
+          on.onlySwims = true;
+    for (const Animals::Member &m : this->animals.members()) {
+      if (m.id == this->animals.carried)
+        continue;
+      for (auto [tx, ty] : this->animals.mapTiles(m))
+        on.unit = on.unit || (tx == x && ty == y);
+    }
+    for (const Staff::Member &m : this->staff.members())
+      on.unit = on.unit || here(m.x, m.y);
+    for (const Guests::Guest &g : this->guests.guests())
+      on.unit = on.unit || (!g.hidden && here(g.x, g.y));
+    return on;
   };
   walkways.clear();
   reindex();
@@ -3384,6 +3448,8 @@ const World::TankFlags &World::tankFlagsOf(const std::string &file) {
     f.walkableByTall = ai->getInt(ints, "walkablebytall", 0) == 1;
     f.rubbleable = ai->getInt(ints, "crubbleable", 0) == 1;
     f.show = ai->getInt(ints, "cshow", 0) == 1; // (0x4b4c13: sete, == 1)
+    f.swims = ai->getInt(ints, "cswims", 0) == 1;
+    f.onlySwims = ai->getInt(ints, "conlyswims", 0) == 1;
     delete ai;
   }
   return this->tankFlags[file] = f;
@@ -3532,7 +3598,9 @@ void World::updateDeadLooks() {
   }
 }
 
-void World::setAnimalTool(int type, bool female) {
+void World::setAnimalTool(int type, bool female, int facing) {
+  // (Adopt's rotation handed to the zoo view, zoo.exe 0x4df56d: +0x370)
+  this->animalFacing = facing;
   if (type == this->animalTool && female == this->animalFemale)
     return;
   this->animalTool = type;
@@ -4073,7 +4141,11 @@ void World::mouseMove(int x, int y) {
     this->animals.previewFemale = this->animalFemale;
     this->animals.previewX = wx;
     this->animals.previewY = wy;
-    this->animals.previewFit = this->animals.canPlace(this->animalTool, wx, wy, this->worldMap, this->fences);
+    // (its facing +0x12c, zoo.exe zooViewMouse 0x4e00d3: from Adopt's
+    // rotation and the view's - worldFacing, as staff and objects)
+    this->animals.previewFacing = this->worldFacing(this->animalFacing);
+    this->animals.previewFit = this->animals.canPlace(this->animalTool, wx, wy, this->worldMap, this->fences,
+                                                      this->animals.previewFacing);
     // (zoo.exe 0x5ce19f: more than the cash, red - #71)
     this->animals.previewPoor =
         this->animals.previewFit == Fences::Fit::Ok && !this->canAfford(this->animals.types()[this->animalTool].cost);
@@ -4814,7 +4886,9 @@ World::ToolResult World::mouseDown(int x, int y) {
     if(this->animals.previewType<0)return r;
     wx=this->animals.previewX;wy=this->animals.previewY;
     int ex = this->fences.exhibitAt(static_cast<int>(std::floor(wx)), static_cast<int>(std::floor(wy)));
-    bool fits = this->animals.canPlace(this->animalTool, wx, wy, this->worldMap, this->fences) == Fences::Fit::Ok;
+    const int facing = this->worldFacing(this->animalFacing);
+    bool fits = this->animals.canPlace(this->animalTool, wx, wy, this->worldMap, this->fences, facing) ==
+                Fences::Fit::Ok;
     if (fits && !this->canAfford(this->animals.types()[this->animalTool].cost)) {
       Sound::get().play("sounds/noplace"); // (red: refused, no message - zoo.exe 0x5ce19f, #71)
       this->mouseMove(x, y);
@@ -4822,7 +4896,8 @@ World::ToolResult World::mouseDown(int x, int y) {
     }
     if (fits)
       this->animals.snapshot(ex, this->worldMap, this->fences, Animals::Change::Animal);
-    int id = this->animals.adopt(this->animalTool, this->animalFemale, wx, wy, this->worldMap, this->fences);
+    int id = this->animals.adopt(this->animalTool, this->animalFemale, wx, wy, this->worldMap, this->fences, false,
+                                 facing);
     ZT_STEP("", id >= 0 ? "Adopted" : "Can't go there", {"animal", id}, {"exhibit", ex},
             {"message", id >= 0 ? 0 : this->animals.placeMessage});
     if (id >= 0) {
@@ -4843,7 +4918,7 @@ World::ToolResult World::mouseDown(int x, int y) {
       this->animals.react(ex, Animals::Change::Animal, "", this->animalTool, false, this->worldMap, this->fences);
     } else {
       Sound::get().play("sounds/noplace");
-      if (this->animals.canPlace(this->animalTool, wx, wy, this->worldMap, this->fences) ==
+      if (this->animals.canPlace(this->animalTool, wx, wy, this->worldMap, this->fences, facing) ==
           Fences::Fit::Outside)
         // ("Animals can only be placed in exhibits, ..."; a tank's reasons its own)
         r.messageId = this->animals.placeMessage ? this->animals.placeMessage : 10108;

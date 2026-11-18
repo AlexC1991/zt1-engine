@@ -131,6 +131,9 @@ public:
   // Adopt Animals: the animal picked and then its male or female button
   // (its .ai file; empty: none). A right click drops it.
   std::string animalToolFile(bool &female) const;
+  // Adopt Animals' facing (0-3, as its icons), its rotate arrows' (zoo.exe
+  // 0x63bb50), handed to the zoo view with the animal (0x4df56d)
+  int animalToolFacing() const;
   // An object picked to place: Buy Objects' shelters, toys, buildings and
   // scenery, Adopt Animals' shelters and toys, Buy Habitat's foliage and
   // rocks (its .ai file and price; empty: none), and the facing its icon
@@ -215,6 +218,14 @@ public:
   // The same popup with Yes and No (zoo.exe 0x4ff63c's 4: the scenario's
   // ending, scenarioComplete 0x48a408)
   void popupYesNo(const std::string &message, std::function<void()> yes, std::function<void()> no);
+  // A question with Yes, No and Cancel (zoo.exe showDialog 0x4fff2c ->
+  // 0x4ff63c style 3: confirm.lyt 45000 with its question picture, Yes
+  // 45010, No 45011 and Cancel 45013 at their x / y, OK hidden; the answer
+  // 6 / 7 / 2 from the buttons' targets). Cancel only closes it
+  void askYesNoCancel(const std::string &message, std::function<void()> yes, std::function<void()> no);
+  // (checks) Cancel pressed; an element of the dialog up
+  void cancelDialog();
+  UiElement *dialogElement(int id) const;
   bool dialogOpen() const { return this->dialog.layout != nullptr; }
   // The awards the zoo has received (Zoo Status: Zoo Awards, list 4124)
   void setAwards(const std::vector<int> &awards) { this->awards = awards; this->awardsListed = -1; }
@@ -241,6 +252,8 @@ public:
   void setShows(Shows *shows) { this->shows = shows; }
   void showShow(int id);
   void refreshShow();
+  // (checks) the frequency list's row picked, as a click on it does
+  void pickShowFrequency(int row);
   // Opens a tank filter's panel (filter.lyt: its name, Sell, its status
   // and upkeep)
   void showFilter(int index);
@@ -289,6 +302,18 @@ public:
   bool selectBuyItem(int panel, const std::string &file);
   // The exhibit (or tank) whose information is open, or -1
   int shownExhibitId() const { return this->isPanelOpen(30) ? this->shownExhibit : -1; }
+  // ours (checks): an exhibit's row in the Exhibit List; its tabs' pages
+  // shown as the tabs say (a tab clicked)
+  int exhibitRow(int id) const {
+    for (size_t i = 0; i < this->listedExhibits.size(); i++)
+      if (this->listedExhibits[i] == id)
+        return static_cast<int>(i);
+    return -1;
+  }
+  void syncExhibitTabs();
+  // ours (checks): the Exhibit List as a zoo just loaded leaves it (the UI's setup 0x5191b7: DAT_0063ead5 clear)
+  void restartExhibitPages() { this->tankPageShown = false; }
+  UiElement *exhibitElement(int id) const; // (in the Exhibit List only: ids 700-704 recur in other panels)
   // The exhibit whose gate the Exhibit List picked, selected (the arrow over
   // it), or -1: the list's own pick, not a keeper's (#266)
   int selectedGateExhibit() const {
@@ -521,6 +546,7 @@ private:
     std::function<void()> yes;
     std::function<void()> no; // (No pressed)
     bool submit = false, cancel = false;
+    bool dismiss = false; // (Cancel pressed: closed, nothing done)
   } dialog;
   std::vector<std::function<void()>> dialogQueue; // waiting their turn
   void closeDialog();
@@ -623,6 +649,10 @@ private:
   std::vector<std::string> listedExhibitThoughts;
   int shownExhibit = -1, shownListCount = -1;
   int gateExhibit = -1;      // (the gate selected: selectedGateExhibit)
+  // (the first tank picked since the zoo loaded has gone to Modify Tank:
+  // zoo.exe DAT_0063ead5, set by 0x58b5ce, cleared by the UI's setup
+  // 0x5191b7; the list just opened, its pages to settle: 0x46836c)
+  bool tankPageShown = false, exhibitPagesDue = false;
   bool keeperPicking = false; // (a keeper's exhibit pick shows the list without selecting the gate)
   void setupExhibits();
 

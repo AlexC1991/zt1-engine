@@ -439,6 +439,8 @@ public:
   // The (named) exhibit a tile is in, or a piece walls (-1: none)
   int exhibitAt(int x, int y) const;
   int exhibitOf(const Edge &e) const;
+  // The tile past an exhibit's gate, outside it (false: no gate)
+  bool pastGateTile(int exhibit, int &x, int &y) const;
   // A low tank shore inside a fenced land exhibit, at the water's level.
   bool shoreAccess(const Edge &e, const WorldMap &map, int &tank, int &land) const;
   int habitatRoot(int exhibit, const WorldMap &map) const;

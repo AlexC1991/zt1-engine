@@ -620,6 +620,11 @@ private:
                 float endX, float endY);
   void wander(Member &m, const WorldMap &map, const Fences &fences);
   bool walkAbout(Member &m, const WorldMap &map, const Fences &fences);
+  // A walk about's exhibit from zoo ground (class slot 0x328), -1 none
+  int walkAboutExhibit(const Member &m, const Fences &fences);
+  // zoo.exe 0x423e01 (staffCanAssignToExhibit) with (keeper, 0, 1): 0 it
+  // may serve the exhibit, 1 under 2 tiles, 2 nothing there for it
+  int mayServe(const Member &m, const Fences::Exhibit &ex) const;
   // The original's staff with nothing to do (#243): who keeps to it, and
   // its step when standing (work on arrival, the keeper's stand, the walk)
   bool idleOriginal(const Member &m) const;

@@ -38,6 +38,15 @@ public:
   }
   // Tiles with objects bigger than a quarter tile move as flat blocks
   std::function<bool(int x, int y)> hasBigObject;
+  // What is on a tile, as painting asks it (zoo.exe 0x4f8f0b): whether
+  // every object in its cells can be under water (class slot 0xbc, the
+  // type's cSwims: 0x4de3f7), whether one in its cells or on its edges must
+  // be (slot 0xc0, cOnlySwims: 0x489540), and whether a unit is there (on
+  // the tile's list, its type not cIsTransient +0x6d)
+  struct OnTile {
+    bool allSwim = true, onlySwims = false, unit = false;
+  };
+  std::function<OnTile(int x, int y)> onTile;
 
   // The tool picked (a tab of the terraform page) or not; picking it
   // starts a fresh account
@@ -121,6 +130,7 @@ private:
   void smooth(int x, int y, bool raise);
   void follow(int x, int y, int corner, int h, bool raise, int depth);
   void touch();
+  void sideCodes();
 };
 
 #endif // TERRAIN_TOOL_HPP

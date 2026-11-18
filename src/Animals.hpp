@@ -521,11 +521,17 @@ public:
 
   // Where one can go: an exhibit's ground (a land exhibit for a zoo
   // animal), not water, not on top of another
-  Fences::Fit canPlace(int type, float x, float y, const WorldMap &map, const Fences &fences) const;
+  // (facing: the world facing, 0 to 7, a new one goes down with - World's
+  // worldFacing of Adopt's rotation; the one carried keeps its own)
+  Fences::Fit canPlace(int type, float x, float y, const WorldMap &map, const Fences &fences,
+                       int facing = Original::placedUnitFacing) const;
   // The footprint-wide check (zoo.exe 0x4f7fbd) for one put down at x, y:
   // a big one's every half tile on the map and in the zoo, no fence or
   // cliff inside it (and, from its crate, more: see Animals.cpp)
-  bool footprintFits(int type, float x, float y, const WorldMap &map, const Fences &fences) const;
+  bool footprintFits(int type, float x, float y, const WorldMap &map, const Fences &fences,
+                     int facing = Original::placedUnitFacing) const;
+  // Its facing as the original's +0x12c (0 N, 2 E, 4 S, 6 W) from fx, fy
+  static int facingOf(const Member &m);
   // Its footprint in half tiles (class slot 0x94, ZTAnimal 0x410803): an
   // egg's cEggFootprint, a crate's cBoxFootprint, else with `map` its
   // cMapFootprint both ways, without its cFootprintX/Y
@@ -534,7 +540,7 @@ public:
   std::vector<std::pair<int, int>> mapTiles(const Member &m) const;
   float placementDepth(int type,int tank) const;
   int adopt(int type, bool female, float x, float y, const WorldMap &map, const Fences &fences,
-            bool restoring = false);
+            bool restoring = false, int facing = -1);
   // (restoring: an animal of a saved zoo put back as it was - wherever it
   // stood, loose ones too, and as it is: no egg made of a grown dinosaur)
   void remove(int id);
@@ -713,6 +719,7 @@ public:
   // The one being adopted, at the cursor (type < 0: none)
   int previewType = -1;
   bool previewFemale = false;
+  int previewFacing = Original::placedUnitFacing; // (world facing, 0 to 7)
   float previewX = 0, previewY = 0;
   Fences::Fit previewFit = Fences::Fit::Ok;
   bool previewPoor = false; // (it fits, but costs more than the cash: red)

@@ -725,6 +725,13 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     out<<runPanelMessageChecks(world,rm,passed,total);
     a.clear();st.clear();g.clear();world.reindex();
   }
+  // Terrain edits: the side codes (#294) and lakes painted or drained
+  // (#292): src/TerrainChecks.cpp, its ground put back after
+  {
+    extern std::string runTerrainChecks(World &, ResourceManager *, int &, int &);
+    out<<runTerrainChecks(world,rm,passed,total);
+    a.clear();st.clear();g.clear();world.reindex();
+  }
   int drag=200;
   auto rectangle=[&](int x,int y,int w,int h,int type,const std::string &name) {
     for(int k=0;k<w;++k){f.place({true,x+k,y},type,drag,map);f.place({true,x+k,y+h},type,drag+1,map);}
@@ -2179,7 +2186,8 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       Fences::Fit slopeCrate=Fences::Fit::Ok,flatCrate=Fences::Fit::InTheWay;
       const int id=a.adopt(allo,false,33.5f,35.5f,map,f,true);
       if(Animals::Member *m=a.member(id)) {
-        m->boxed=true;a.carried=id;
+        // (held, it keeps its own facing - south, its footprint along y)
+        m->boxed=true;a.carried=id;m->fx=0;m->fy=1;
         slopeCrate=fit(allo,30.5f,midY);
         for(int c=0;c<4;++c)side->cornerHeight[c]=was[c];
         flatCrate=fit(allo,30.5f,midY);
@@ -2194,6 +2202,43 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
             (ta.footX>2||ta.footY>2)&&mid==Fences::Fit::Ok&&nearFence==Fences::Fit::InTheWay&&zebraNear==Fences::Fit::Ok&&
             nearMsg==0&&overCliff==Fences::Fit::InTheWay&&overLow==Fences::Fit::Ok&&slopeLoose==Fences::Fit::Ok&&
             slopeCrate==Fences::Fit::InTheWay&&flatCrate==Fences::Fit::Ok);
+      // #293: the footprints turned with its facing (+0x12c & 3 not 0:
+      // x and y swapped, 0x4272d4 / 0x410803), a new one's facing from
+      // Adopt's rotation and the view's (zooViewMouse 0x4e00d3, ((r - view)
+      // * 2 - 4) & 7: worldFacing). Facing east (2) its long side runs
+      // along x: by the north fence it fits, by the west fence not
+      const int longSide=std::max(ta.footX,ta.footY),shortSide=std::min(ta.footX,ta.footY);
+      const float nearN=28.0f+0.25f*(ta.footY-1)-0.25f,nearW=26.0f+0.25f*(ta.footY-1)-0.25f;
+      const auto fitF=[&](float x,float y,int facing){return a.canPlace(allo,x,y,map,f,facing);};
+      const Fences::Fit northS=fitF(30.5f,nearN,4),northE=fitF(30.5f,nearN,2),westS=fitF(nearW,32.5f,4),
+                        westE=fitF(nearW,32.5f,2),westW=fitF(nearW,32.5f,6),northN=fitF(30.5f,nearN,0);
+      // (Adopt's rotation 0..3 against the view's: an odd difference turns it)
+      bool viewTurns=true;std::string ways;
+      for(int turn=0;turn<4;++turn) {
+        for(int r=0;r<4;++r) {
+          const int w=world.worldFacing(r);
+          ways+=std::to_string(w);
+          viewTurns=viewTurns&&((w&3)!=0)==(((r+turn)&1)!=0)&&(w&1)==0;
+        }
+        ways+=" ";
+        world.rotateView(1);
+      }
+      // (the one adopted faces that way: its fx, fy back to the facing)
+      int facedAs=-1;
+      {
+        const int id2=a.adopt(allo,false,30.5f,32.5f,map,f,false,2);
+        if(const Animals::Member *m=a.member(id2))facedAs=Animals::facingOf(*m);
+        if(id2>=0)a.remove(id2);
+      }
+      out<<"FOOTPRINT FACING allosaurus "<<ta.footX<<"x"<<ta.footY<<": north fence S/E/N "<<int(northS)<<"/"<<int(northE)<<"/"
+         <<int(northN)<<", west fence S/E/W "<<int(westS)<<"/"<<int(westE)<<"/"<<int(westW)<<", panel->world facings "<<ways
+         <<"adopted facing "<<facedAs<<"\n";
+      check("#293: a placed animal's facing turns its footprint - an allosaurus facing east or west by the west fence refused, "
+            "facing north or south fine, and by the north fence the other way round; Adopt's rotation against the view's "
+            "turns it on an odd difference; the one adopted faces that way (0x4272d4, 0x410803, 0x4e00d3)",
+            longSide>2&&shortSide<=2&&ta.footY==longSide&&northS==Fences::Fit::InTheWay&&northN==Fences::Fit::InTheWay&&
+            northE==Fences::Fit::Ok&&westS==Fences::Fit::Ok&&westE==Fences::Fit::InTheWay&&westW==Fences::Fit::InTheWay&&
+            viewTurns&&facedAs==2);
     } else check("#279: the allosaurus and zebra load",false);
   }
   for(int y=24;y<42;++y)for(int x=23;x<40;++x)
@@ -3554,6 +3599,34 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
               sf && pf && sf->terrainType==17 && pf->terrainType==2);
         check("#251: an exhibit tank starts with walls 5 high, sunk 4 (initialHeight, initialSink)",
               p && p->tank && !p->show && p->wallSub==5 && p->floorHeight==std::clamp(plainGround-4,-12,12));
+        // #289, zoo.exe fenceEdgeAllowed 0x4e027a: on a tank's own tiles only
+        // a tank wall (+0x193) of the tank's kind (+0x6f against habitat +4)
+        // - measured 2026-11-18: an exhibit tank's inner edge takes exhibit
+        // tank walls, not a show wall nor an iron bar fence
+        {
+          const int toolWas=f.previewType,iron=f.typeIndex("ironbar"),chain=f.typeIndex("chainlnk"),atl=f.typeIndex("atltank");
+          const int land=iron>=0?iron:chain;
+          auto fitWith=[&](int type,const Fences::Edge &e){f.previewType=type;return f.fit(e,map);};
+          const Fences::Edge inPlain{false,tx+8,ty+1},inShow{false,tx+2,ty+1};
+          const Fences::Fit plainAtl=fitWith(atl,inPlain),plainShow=fitWith(showWall,inPlain),plainLand=fitWith(land,inPlain);
+          const Fences::Fit showShow=fitWith(showWall,inShow),showAtl=fitWith(atl,inShow);
+          // (one laid there: a loose piece in the tank, the tank kept)
+          f.previewType=atl;
+          f.place(inPlain,atl,drag++,map);
+          for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,"Split?",map);
+          const Fences::Piece *laid=f.at(inPlain);
+          const Fences::Exhibit *pk=f.exhibit(plain);
+          const bool kept=laid&&laid->tank<0&&pk&&pk->tank&&f.exhibitAt(tx+7,ty+1)==plain&&f.exhibitAt(tx+9,ty+1)==plain;
+          f.remove(inPlain,map);f.updateExhibits(map,1,0,1);
+          f.previewType=toolWas;
+          auto fitName=[](Fences::Fit v){return v==Fences::Fit::Ok?"ok":v==Fences::Fit::InTheWay?"in the way":"outside";};
+          out<<"TANKEDGE exhibit tank: atltank "<<fitName(plainAtl)<<", show wall "<<fitName(plainShow)<<", land fence "<<fitName(plainLand)
+             <<" | show tank: show wall "<<fitName(showShow)<<", atltank "<<fitName(showAtl)<<" | laid "<<(laid?1:0)<<" kept "<<kept<<"\n";
+          check("#289: a tank's inner edge takes a tank wall of its own kind only (0x4e027a, measured)",
+                land>=0 && plainAtl==Fences::Fit::Ok && plainShow==Fences::Fit::InTheWay && plainLand==Fences::Fit::InTheWay &&
+                showShow==Fences::Fit::Ok && showAtl==Fences::Fit::InTheWay);
+          check("#289: a tank wall laid inside a tank stands loose in it, the tank kept",kept);
+        }
         for(int id:{show,plain})if(f.exhibit(id))f.drainExhibit(id);
         for(int x0:{tx,tx+6})for(int k=0;k<4;++k){f.remove({true,x0+k,ty},map);f.remove({true,x0+k,ty+4},map);f.remove({false,x0,ty+k},map);f.remove({false,x0+4,ty+k},map);}
         f.updateExhibits(map,1,0,1);world.reindex();
@@ -3669,11 +3742,12 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         // Three show sides, one exhibit side
         side(tx,0,showWall);side(tx,1,showWall);side(tx,2,showWall);side(tx,3,plainWall);drag+=4;
         for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,"Mixed tank",map);
-        const Fences::Exhibit *mixed=f.exhibit(f.exhibitAt(tx+1,ty+1));
         // An exhibit tank, then a show tank against it on its east wall
         const int plain=rectangle(tx+6,ty,4,4,plainWall,"Plain tank");
         side(tx+10,0,showWall);side(tx+10,1,showWall);side(tx+10,3,showWall);drag+=4;
         for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,"Show beside",map);
+        // (looked up after the last updateExhibits: it can grow the exhibit list)
+        const Fences::Exhibit *mixed=f.exhibit(f.exhibitAt(tx+1,ty+1));
         const Fences::Exhibit *beside=f.exhibit(f.exhibitAt(tx+11,ty+1)),*p=f.exhibit(plain);
         int sharedType=-1;
         if(const Fences::Piece *pc=f.at({false,tx+10,ty+1}))sharedType=pc->type;
@@ -4773,6 +4847,49 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
             animal=="heal"&&egg=="healegg"&&eggBack);
       if(sci>=0)st.fire(sci);
     }
+    // Which sick animal a keeper goes to heal (habitatAnimalsToHealCount
+    // 0x49f165, keeperPickAnimalToHeal 0x4705b9): one it cares for
+    // (0x423f00 - a zookeeper the zebra, a scientist not), not on water,
+    // not on a tile a staff member stands on (tile +0x85 & 4, 0x416692)
+    if(z>=0&&a.member(z)) {
+      for(int id:items.ofKind(ZooItems::Kind::Dung,land))items.remove(id);
+      Animals::Member *y=a.member(z);
+      const float was=y->health;
+      y->health=0.5f*a.typeList[y->type].maxHits;
+      auto goes=[&](const char *file){
+        const int t=st.typeOfFile(file);
+        const int k=t>=0?st.hire(t,22.5f,30.5f,map,f):-1;
+        Staff::Member *km=st.member(k);
+        if(!km)return -2;
+        km->x=27.5f;km->y=34.5f;km->path.clear();km->pathAt=0;km->playsLeft=0;km->steps.clear();
+        km->job=Staff::Job::Visit;km->visit=land;km->access=land;km->phase=3;km->inX=27.5f;km->inY=29.5f;
+        km->outX=27.5f;km->outY=27.5f;km->invalid.clear();km->unreachable.clear();km->jobAnimal=-1;
+        st.visitStep(*km,map,f);
+        km=st.member(k);
+        const int picked=km&&km->phase==8?km->jobAnimal:-1;
+        st.fire(k);
+        return picked;
+      };
+      const int onLand=goes("staff/keeper.ai"),bySci=goes("staff/scient.ai");
+      int onWater=-2,byStaff=-2;
+      if(MapTile *tile=map.getTileMutable(static_cast<int>(std::floor(y->x)),static_cast<int>(std::floor(y->y)))) {
+        const auto terrain=tile->terrainType;tile->terrainType=9;
+        onWater=goes("staff/keeper.ai");
+        tile->terrainType=terrain;
+      }
+      {
+        const int t=st.typeOfFile("staff/maint.ai");
+        const int other=t>=0?st.hire(t,22.5f,30.5f,map,f):-1;
+        if(Staff::Member *o=st.member(other)){o->x=y->x+0.1f;o->y=y->y;o->path.clear();o->pathAt=0;}
+        byStaff=goes("staff/keeper.ai");
+        if(other>=0)st.fire(other);
+      }
+      if((y=a.member(z)))y->health=was;
+      out<<"STAFF heal pick: zookeeper "<<onLand<<", scientist "<<bySci<<", on water "<<onWater<<", a staff member on its tile "
+         <<byStaff<<" (zebra "<<z<<")\n";
+      check("a sick zebra: a zookeeper goes to heal it, a scientist not; not when it's on water or a staff member stands on its "
+            "tile (0x49f165, 0x4705b9)",onLand==z&&bySci==-1&&onWater==-1&&byStaff==-1);
+    }
     // A trash can it can't get to (Job9_GoToTrashCan's whileGoing, zoo.exe
     // 0x4271a1): the can's tile on its list, then one of its four
     // neighbours picked at random - on the list too when there's no way
@@ -5587,15 +5704,16 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         }
         // #229 (staffpaths off, the original): its duties done, the keeper
         // is in task 1 where it stands and walks about (0x49dafe, 0x43d948):
-        // to a tile on a ring round it, half widths 2..10 (zoo.ini [AI]
-        // mRandomXStaff / mRandomYStaff 9 + 1 + BaseX / BaseY 1), in the
-        // paddock or out through its gate; and one left standing in it with
-        // no work walks about from there too (before, it couldn't move)
+        // standing in a habitat, its own pick first (#288, 0x423a7e) - out
+        // to a tile by its gate; and one left standing in it with no work
+        // walks about from there too (before, it couldn't move)
         if(in.size()==3&&ex) {
           const bool oldPaths=Features::staffPaths;
           Features::staffPaths=false;
-          int runs=0,routed=0,onRing=0,inside=0,outsideEnds=0,taskOne=0;
+          int runs=0,routed=0,onRing=0,inside=0,outsideEnds=0,taskOne=0,byGate=0;
           int minR=99,maxR=0;
+          int gox=-9,goy=-9;
+          const bool gated=f.pastGateTile(home,gox,goy);
           const int k=keeperAt(in[0].first+0.5f,in[0].second+0.5f);
           for(int i=0;i<60;i++) {
             Staff::Member *km=st.member(k);
@@ -5613,6 +5731,7 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
               minR=std::min(minR,r);maxR=std::max(maxR,r);
               if(r>=2&&r<=10)onRing++;
               (f.exhibitAt(gx,gy)==home?inside:outsideEnds)++;
+              byGate+=std::max(std::abs(gx-gox),std::abs(gy-goy))<=1&&f.exhibitAt(gx,gy)==f.exhibitAt(gox,goy);
             }
           }
           // one standing in the paddock with nothing to do (task 1, its access cleared)
@@ -5627,11 +5746,12 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
           Features::staffPaths=oldPaths;
           out<<"STAFF #229 walk about: "<<runs<<" keepers done in the paddock, task 1 "<<taskOne<<", routed "<<routed
              <<", ends on the ring "<<onRing<<" (rings "<<minR<<".."<<maxR<<"), inside "<<inside<<", outside "<<outsideEnds
-             <<"; one standing in it idle: "<<idle<<"\n";
+             <<", by the gate ("<<gox<<","<<goy<<") "<<byGate<<"; one standing in it idle: "<<idle<<"\n";
           check("its duties done (staffpaths off), the keeper is in task 1 where it stands, \"Monitoring zoo\" (0x49dafe; measured)",
                 runs>0&&taskOne==runs);
-          check("it walks about to a tile on a ring 2..10 round it (0x43d948, zoo.ini [AI] 9 + 1 + 1), in the paddock or out by its gate",
-                routed==runs&&onRing==routed&&inside>0&&outsideEnds>0);
+          check("from inside the paddock it walks about to a tile by its gate, outside (#288: 0x423a7e in a habitat, habitatFromHere 0x49ebce: "
+                "the tile past the gate 0x411285 and one of the 3 x 3 round it 0x49e9c2)",
+                gated&&routed==runs&&byGate==routed&&inside==0);
           check("a keeper standing in a paddock with nothing to do walks about from there (0x43d948)",idle=="walks about");
         }
         // #243 (staffpaths off, the original; measured 2026-11-17): staff
@@ -5735,6 +5855,11 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
           for(int y=0;y<map.getHeight();y++)for(int x=0;x<map.getWidth();x++)openTiles+=st.walkable(x,y,map,f,-1);
           if(px>=0)for(int dx=-4;dx<=10;dx++){map.setPath(px+dx,py,"path");laid.push_back({px+dx,py});}
           int walks=0,onPath=0,fromGrass=0,grassEnds=0;
+          // (#288: with no habitat for its own pick - the exhibits hidden - a
+          // keeper on zoo ground takes the path ring, 0x428cc9)
+          std::vector<int> hiddenHabitats;
+          for(const Fences::Exhibit &e:f.exhibits())if(!e.pocket)hiddenHabitats.push_back(e.id);
+          for(int id:hiddenHabitats)f.exhibit(id)->pocket=true;
           if(Staff::Member *km=st.member(k);km&&px>=0)for(int i=0;i<40;i++){
             still(*km,px+0.5f,py+0.5f);
             if(st.walkAbout(*km,map,f)&&!km->path.empty()){walks++;onPath+=map.isPath(static_cast<int>(std::floor(km->path.back().first)),static_cast<int>(std::floor(km->path.back().second)));}
@@ -5779,11 +5904,84 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
             }
             farGrass=std::to_string(grass)+"/"+std::to_string(ends);
           }
+          for(int id:hiddenHabitats)f.exhibit(id)->pocket=false;
           out<<"STAFF #280 at ("<<bx<<","<<by<<"), no path near: guide with no walk about to make "<<boxed<<"; keeper ends on grass "<<farGrass<<"\n";
           check("no walk about to make: it tries again the next update (#280: walkOnWhenRouteDone 0x43dd1d, task 1 again 0x5c1357)",
                 boxed=="tries again next update, then walks");
           check("no path on its ring: a keeper's walk about ends on the grass (#280: 0x43d948's ring, 0x423ac2)",
                 farGrass=="20/20");
+          // #288: on zoo ground, the walk about's own pick first (0x423a7e):
+          // a habitat from slot 0x328 and the tile past its gate (0x411285).
+          // A keeper assigned to the paddock (0x49db62: +0x260), or with none
+          // assigned and the paddock's zebra one it looks after (0x423e01
+          // giving 0), walks to the tile past its gate; standing on that tile,
+          // the path ring (0x428cc9); a tour guide assigned to it (0x58af73)
+          // the same; a maintenance worker has none (0x4a95c9). A guest in
+          // the paddock heads out by its gate (0x42909f: 0x49ebce)
+          {
+            int gox=-9,goy=-9;
+            const bool gated=f.pastGateTile(home,gox,goy);
+            // (from a zoo-ground tile 12 off the gate, on the zoo's side)
+            int fx=-1,fy=-1;
+            for(int r=12;r<=18&&fx<0;r++)for(int dy=-r;dy<=r&&fx<0;dy++)for(int dx=-r;dx<=r&&fx<0;dx++)
+              if((std::abs(dx)==r||std::abs(dy)==r)&&f.exhibitAt(gox+dx,goy+dy)<0&&st.walkable(gox+dx,goy+dy,map,f,-1)&&
+                 [&]{std::vector<std::pair<int,int>> rt;return st.testRoute(gox+dx,goy+dy,gox,goy,map,f,rt);}())fx=gox+dx,fy=goy+dy;
+            auto ends=[&](Staff::Member &m,float x,float y,const std::vector<int> &assigned,int &atGate,int &onPath){
+              int n=0;atGate=0;onPath=0;
+              for(int i=0;i<20;i++){
+                still(m,x,y);m.exhibits=assigned;
+                if(!st.walkAbout(m,map,f)||m.path.empty())continue;
+                n++;
+                const int ex2=static_cast<int>(std::floor(m.path.back().first)),ey2=static_cast<int>(std::floor(m.path.back().second));
+                atGate+=ex2==gox&&ey2==goy;onPath+=map.isPath(ex2,ey2);
+              }
+              return n;
+            };
+            std::string assignedK="?",unassignedK="?",onGate="?",guideA="?",maintW="?",guestIn="?";
+            if(Staff::Member *km=st.member(k);km&&gated&&fx>=0) {
+              int at=0,p=0;
+              int n=ends(*km,fx+0.5f,fy+0.5f,{home},at,p);assignedK=std::to_string(at)+"/"+std::to_string(n);
+              n=ends(*km,fx+0.5f,fy+0.5f,{},at,p);unassignedK=std::to_string(at)+"/"+std::to_string(n);
+              const bool gatePath=map.isPath(gox,goy);
+              if(!gatePath)map.setPath(gox,goy,"path");
+              n=ends(*km,gox+0.5f,goy+0.5f,{home},at,p);onGate=std::to_string(at)+" at it, "+std::to_string(p)+" on a path, of "+std::to_string(n);
+              if(!gatePath)map.setPath(gox,goy,"");
+            }
+            if(const int guideType=st.typeOfFile("staff/tour.ai");guideType>=0&&gated&&fx>=0) {
+              const int gd=st.hire(guideType,26.5f,24.5f,map,f);
+              if(Staff::Member *gm=st.member(gd)){int at=0,p=0;const int n=ends(*gm,fx+0.5f,fy+0.5f,{home},at,p);guideA=std::to_string(at)+"/"+std::to_string(n);}
+              if(gd>=0)st.fire(gd);
+            }
+            if(Staff::Member *wm=st.member(w);wm&&gated&&fx>=0){int at=0,p=0;const int n=ends(*wm,fx+0.5f,fy+0.5f,{home},at,p);maintW=std::to_string(at)+"/"+std::to_string(n);}
+            // (a guest in the paddock: its walk about out by the gate)
+            {
+              const size_t before=g.list.size();
+              g.admit(0);
+              if(g.list.size()>before&&gated) {
+                Guests::Guest &q=g.list.back();
+                int n=0,out3=0;
+                for(int i=0;i<20;i++){
+                  q.x=in[0].first+0.5f;q.y=in[0].second+0.5f;q.path.clear();q.pathAt=0;
+                  if(!g.walkAbout(q)||q.path.empty())continue;
+                  n++;
+                  const int ex2=static_cast<int>(std::floor(q.path.back().first)),ey2=static_cast<int>(std::floor(q.path.back().second));
+                  out3+=std::max(std::abs(ex2-gox),std::abs(ey2-goy))<=1&&f.exhibitAt(ex2,ey2)!=home;
+                }
+                guestIn=std::to_string(out3)+"/"+std::to_string(n);
+              }
+              g.clear();
+            }
+            out<<"STAFF #288 own pick (gate past "<<gox<<","<<goy<<", from "<<fx<<","<<fy<<"): keeper assigned "<<assignedK
+               <<", unassigned "<<unassignedK<<"; standing on that tile "<<onGate<<"; guide assigned "<<guideA
+               <<"; maintenance worker "<<maintW<<"; guest in the paddock out by its gate "<<guestIn<<"\n";
+            check("a keeper on zoo ground walks about to the tile past one of its habitats' gates, assigned or not (#288: 0x423a7e, 0x49db62, 0x423e01, 0x411285)",
+                  gated&&assignedK=="20/20"&&unassignedK=="20/20");
+            check("standing on that tile, it takes the path ring instead (#288: 0x423a7e - its own tile, 0x428cc9)",
+                  onGate.rfind("0 at it, 20 on a path, of 20",0)==0);
+            check("a tour guide walks about to the tile past its habitat's gate (#288: 0x58af73)",guideA=="20/20");
+            check("a maintenance worker has no habitat for it (#288: 0x4a95c9): the path ring",maintW!="?"&&maintW.rfind("20/",0)!=0);
+            check("a guest in a habitat walks about out by its gate (#288: 0x42909f, 0x49ebce)",guestIn=="20/20");
+          }
           st.fire(k);if(w>=0)st.fire(w);
           Features::staffPaths=oldPaths;
           out<<"STAFF #243 nothing to do: keeper stands "<<stand<<" s (its idle "<<standWant<<" s) then "<<after<<"; no habitats: "<<noHabitat
@@ -6760,6 +6958,92 @@ std::string buildTourZoo(World &world, ZooSim &sim, UiGameScreen &hud, ResourceM
   r<<"ok paddock at "<<bx<<","<<by<<" ("<<W<<"x"<<H<<"), entrance "<<ex<<","<<ey<<", animals "<<a.countIn(paddock)
    <<", staff "<<st.members().size()<<", guests "<<g.guests().size()<<", viewing tiles "<<g.viewingTiles(paddock).size();
   return r.str();
+}
+
+// ours: ZT_WALK_ZOO=<file.zoo> - the zoo for measuring walking about in the
+// original (#288): two zebra paddocks near the entrance, each with a path
+// round it, A's gate on its top side and B's on its bottom; a zookeeper
+// assigned to both, one assigned to none, one standing inside A, a tour
+// guide assigned to B; saved as a shared .zoo the original loads too
+std::string buildWalkZoo(World &world, ZooSim &sim, UiGameScreen &hud, const std::string &mapPath,
+                         const std::string &file) {
+  auto &map=world.getMap(); auto &f=world.getFences(); auto &a=world.getAnimals(); auto &st=world.getStaff();
+  auto &g=world.getGuests();
+  int ex=-1,ey=-1;
+  if(!g.entrance(ex,ey))world.update(SDL_GetKeyboardState(nullptr),0.01f);
+  if(!g.entrance(ex,ey))return "no entrance";
+  int W=6,H=6;
+  int best=-1,bx=0,by=0;
+  // (smaller paddocks when 6 x 6 ones don't fit near the entrance)
+  for(;W>=4&&best<0;--W,--H)
+  for(int oy=ey-40;oy<=ey+40;++oy)for(int ox=ex-40;ox<=ex+40;++ox) {
+    const int AW=2*W+4,AH=H+2;
+    const int d=std::abs(ox+AW/2-ex)+std::abs(oy+AH/2-ey);
+    if(d<8 || (best>=0 && d>=best))continue;
+    bool ok=true;
+    for(int y=oy-1;y<=oy+H&&ok;++y)for(int x=ox-1;x<=ox+2*W+2&&ok;++x)ok=world.canLayPath(x,y);
+    if(ok){best=d;bx=ox;by=oy;}
+  }
+  if(best<0)return "no room near the entrance";
+  ++W;++H;
+  const int AW=2*W+4;
+  const int type=f.typeIndex("chainlnk");
+  int drag=900;
+  std::ostringstream r;
+  std::set<std::pair<int,int>> ring;
+  auto pen=[&](int x,int name,const Fences::Edge &gate)->int {
+    for(int k=0;k<W;++k){f.place({true,x+k,by},type,drag,map);f.place({true,x+k,by+H},type,drag+1,map);}
+    for(int k=0;k<H;++k){f.place({false,x,by+k},type,drag+2,map);f.place({false,x+W,by+k},type,drag+3,map);}
+    drag+=4;
+    const std::string nm=std::string("Paddock ")+static_cast<char>('A'+name);
+    for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,nm,map);
+    const int id=f.exhibitAt(x+1,by+1);
+    if(auto *e=f.exhibit(id))e->name=nm;
+    f.moveGate(gate);
+    for(int y=by-1;y<=by+H;++y)for(int xx=x-1;xx<=x+W;++xx)
+      if(xx==x-1||xx==x+W||y==by-1||y==by+H){map.setPath(xx,y,"path");ring.insert({xx,y});}
+    r<<nm<<" #"<<id<<" at "<<x<<","<<by<<" gate "<<gate.x<<","<<gate.y<<"; ";
+    return id;
+  };
+  const int pa=pen(bx,0,{true,bx+W/2,by});
+  const int pb=pen(bx+W+2,1,{true,bx+W+2+W/2,by+H});
+  if(pa<0||pb<0)return "a paddock didn't close";
+  // (a path from the entrance to the rings)
+  std::map<std::pair<int,int>,std::pair<int,int>> from;
+  std::vector<std::pair<int,int>> q={{ex,ey}};from[{ex,ey}]={ex,ey};
+  std::pair<int,int> hit{-1,-1};
+  for(size_t i=0;i<q.size()&&hit.first<0;++i) {
+    const auto c=q[i];
+    if(ring.count(c)){hit=c;break;}
+    const int d[4][2]={{1,0},{-1,0},{0,1},{0,-1}};
+    for(auto &dd:d) {
+      std::pair<int,int> n={c.first+dd[0],c.second+dd[1]};
+      if(from.count(n)||!(ring.count(n)||world.canLayPath(n.first,n.second)||n==std::make_pair(ex,ey)))continue;
+      if(f.exhibitAt(n.first,n.second)>=0)continue;
+      from[n]=c;q.push_back(n);
+    }
+  }
+  if(hit.first<0)return "no way from the entrance";
+  for(auto c=hit;c!=std::make_pair(ex,ey);c=from[c])map.setPath(c.first,c.second,"path");
+  map.setPath(ex,ey,"path");
+  world.reindex();
+  const int zebra=a.typeOfFile("animals/zebra.ai");
+  if(zebra<0)return "no zebra";
+  for(int i=0;i<2;++i){a.adopt(zebra,i==0,bx+1.5f+2*i,by+3.5f,map,f,true);a.adopt(zebra,i==0,bx+W+3.5f+2*i,by+3.5f,map,f,true);}
+  for(int id:{pa,pb})if(auto *e=f.exhibit(id))e->animals=a.countIn(id);
+  const int keeper=st.typeOfFile("staff/keeper.ai"),guide=st.typeOfFile("staff/tour.ai");
+  if(keeper<0||guide<0)return "no keeper or guide";
+  const int k1=st.hire(keeper,bx-0.5f,by+2.5f,map,f);
+  st.assign(k1,pa,f);st.assign(k1,pb,f);
+  const int k2=st.hire(keeper,bx+AW-1.5f,by-0.5f,map,f);
+  const int k3=st.hire(keeper,bx+2.5f,by+4.5f,map,f);
+  st.assign(k3,pa,f);
+  const int t1=st.hire(guide,bx+W+0.5f,by+2.5f,map,f);
+  st.assign(t1,pb,f);
+  r<<"keepers "<<k1<<" (A, B) "<<k2<<" (none) "<<k3<<" (A, inside A), guide "<<t1<<" (B); entrance "<<ex<<","<<ey;
+  world.reindex();
+  if(!SaveGame::save(file,world,sim,hud,mapPath))return "save failed: "+SaveGame::lastError();
+  return "ok "+r.str();
 }
 
 // ours: ZT_ACCESS_ZOO=<file.zoo> - exhibits whose staff access differs, to

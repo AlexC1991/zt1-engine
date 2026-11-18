@@ -17,6 +17,48 @@
 #include "OriginalConstants.hpp"
 #include <climits>
 
+// ours: ZT_SHOW_ZOO=<file.zoo> (ZT_FLAT_LAB=1, sm_aqua) - a show to watch in
+// the original (#301): a show tank joined to a home tank by a portal, two
+// orcas, a marine specialist, the show scripted (continuous) with enough
+// tricks that the treat trick (kind 3) comes up, a few guests; saved as a
+// shared .zoo the original loads too
+std::string buildShowZoo(World &world,ZooSim &sim,UiGameScreen &hud,const std::string &mapPath,const std::string &file) {
+  auto &f=world.getFences();auto &map=world.getMap();auto &a=world.getAnimals();auto &st=world.getStaff();auto &shows=world.getShows();
+  auto &gs=world.getGuests();
+  shows.clear();a.clear();st.clear();
+  int drag=10;
+  auto rectangle=[&](int x,int y,int w,int h,int type) {
+    int base=drag;drag+=4;
+    for(int i=x;i<x+w;i++){f.place({true,i,y},type,base,map);f.place({true,i,y+h},type,base+1,map);}
+    for(int j=y;j<y+h;j++){f.place({false,x,j},type,base+2,map);f.place({false,x+w,j},type,base+3,map);}
+    for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,"Marine test "+std::to_string(id),map);
+    return f.exhibitAt(x,y);
+  };
+  const int tank=rectangle(42,24,10,10,f.typeIndex("tankwal3"));
+  const int home=rectangle(28,24,14,14,f.typeIndex("tankwal2"));
+  if(tank<0||home<0)return "the tanks didn't form";
+  for(int id:{tank,home})while(f.exhibit(id)->wallTop()<f.exhibit(home)->floorHeight+10 && f.canAdjustWall(id,1))f.adjustWall(id,1);
+  for(int k=0;k<100;++k)world.update(SDL_GetKeyboardState(nullptr),0.05f);
+  shows.refresh();
+  if(!shows.show(tank))return "no show tank";
+  const int one=a.adopt(a.typeOfFile("animals/orca.ai"),false,34.5f,31.5f,map,f);
+  const int two=a.adopt(a.typeOfFile("animals/orca.ai"),false,36.5f,31.5f,map,f);
+  if(one<0||two<0)return "no orcas";
+  for(int k=0;k<40;++k)world.update(SDL_GetKeyboardState(nullptr),0.05f);
+  if(!shows.selectSpecies(tank,"animals/orca.ai"))return "species refused";
+  for(const char *t:{"finswim","spit","finswim","spit","finswim","spit"})shows.add(tank,t);
+  const int specialist=st.hire(st.typeOfFile("staff/trainer.ai"),54.5f,24.5f,map,f);
+  if(specialist<0)return "no specialist hired";
+  if(const int refused=st.assign(specialist,home,f);refused!=0)return "specialist not assigned: "+std::to_string(refused);
+  shows.setFrequency(tank,0);
+  for(int i=0;i<6;i++)gs.admit(i%4);
+  world.reindex();
+  if(!SaveGame::save(file,world,sim,hud,mapPath))return "save failed: "+SaveGame::lastError();
+  std::ostringstream r;
+  r<<"ok show tank #"<<tank<<" home #"<<home<<", script "<<shows.show(tank)->script.size()<<" tricks, orcas "<<one<<","<<two<<", specialist "<<specialist;
+  return r.str();
+}
+
 // Lab-only real-time soak setup. Uses stock definitions and ordinary needs;
 // it changes the initial zoo, never keeps animals healthy during the run.
 std::string prepareMarineSoak(World &world,ResourceManager *rm) {
@@ -154,6 +196,29 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
     check("a typed admission: $3.10 kept as it is, $1,000 the most (0x61536b)",
           std::abs(typed-3.1)<0.001 && std::abs(most-shows.settings.admissionMax)<0.001);
   } else check("a typed admission (the admission text 11104)",false);
+  // The frequency list as the original's (zoo.exe loadShowSettings 0x5167ca,
+  // showtime_list_click 0x6156da): Never, Infrequent, Frequent, Continuous;
+  // Never locks the script, its lists, the admission and its arrows
+  // (ui_show1_615794); the arrows each off at their limit (ui_show_468865)
+  {
+    auto off=[&hud](int id){auto *e=hud.getElementById(id);return e && e->isDisabled();};
+    auto *freq=dynamic_cast<UiListBox*>(hud.getElementById(11191));
+    int picked[4]={9,9,9,9};bool locked=false,unlocked=false;
+    for(int row:{3,2,1,0}) {
+      hud.pickShowFrequency(row);picked[row]=shows.show(tank)->frequency;hud.refreshShow();
+      if(row==0)locked=off(11113) && off(11123) && off(11111) && off(11115) && off(11104) && off(11105) && off(11106);
+    }
+    hud.pickShowFrequency(3);hud.refreshShow();
+    unlocked=!off(11123) && !off(11111) && !off(11115) && !off(11104);
+    shows.setAdmission(tank,shows.settings.admissionMax);hud.refreshShow();
+    const bool atMost=off(11105) && !off(11106);
+    shows.setAdmission(tank,shows.settings.admissionMin);hud.refreshShow();
+    const bool atLeast=!off(11105) && off(11106);
+    check("show frequency rows: Never, Infrequent, Frequent, Continuous ("+std::to_string(picked[0])+" "+std::to_string(picked[1])+" "+
+          std::to_string(picked[2])+" "+std::to_string(picked[3])+"), Never locks the panel "+std::to_string(locked)+", else not "+
+          std::to_string(unlocked)+", arrows off at their limits "+std::to_string(atMost)+std::to_string(atLeast)+" (0x6156da, 0x615794, 0x468865)",
+          freq && freq->getItemCount()==4 && picked[0]==-1 && picked[1]==2 && picked[2]==1 && picked[3]==0 && locked && unlocked && atMost && atLeast);
+  }
   shows.setAdmission(tank,5.5);shows.setFrequency(tank,2);
   hud.showPanel(0,"");
   check("grandstand placed",world.objectsMutable().add("scenery/building/gstand.ai",55.5f,29.5f,6));
@@ -416,6 +481,44 @@ int runShowChecks(World &world,UiGameScreen &hud,ZooSim &sim,const std::string &
     if(auto *m=a.member(two)){m->boxed=false;m->x=keepX;m->y=keepY;m->exhibit=home;m->path.clear();m->pathAt=0;}
     if(auto *m=st.member(specialist)){m->water=false;m->climbing=false;m->job=Staff::Job::None;m->showTank=-1;m->x=54.5f;m->y=24.5f;}
     run(1);
+  }
+  // zoo.exe 0x5a66c0 / 0x5a745e / 0x5a25cd / 0x5a6cb2 (#301): a treat trick
+  // (kind 3, put in the script when the tricks' complexity adds up to
+  // returnToKeeperThreshold, 0x474826) sends the animal to a tile of the
+  // 3 x 3 by the specialist (Task7d_GetTrickFood), where the trick then plays
+  {
+    while(shows.remove(tank,0)){}
+    a.clear();st.moveTo(specialist,54.5f,24.5f);
+    const int first=a.adopt(a.typeOfFile("animals/orca.ai"),false,34.5f,31.5f,map,f);
+    const int second=a.adopt(a.typeOfFile("animals/orca.ai"),false,36.5f,31.5f,map,f);run(1);
+    const bool selected=shows.selectSpecies(tank,"animals/orca.ai");
+    for(const char *t:{"finswim","spit","finswim","spit","finswim","spit","finswim","spit"})shows.add(tank,t);
+    const int before=s->completed;
+    const bool started=selected&&first>=0&&second>=0&&shows.start(tank,why);
+    check("a show with enough tricks for a treat starts",started);
+    std::map<int,bool> going;int trips=0,byTheSpecialist=0,wentOff=0;float farthest=0;
+    if(started)for(int i=0;i<1600;i++) {
+      run(0.25f);
+      if(const auto *sh=shows.show(tank))
+        if(const auto *tr=st.member(specialist))
+          for(const auto &ac:sh->actors) {
+            const auto *am=a.member(ac.id);
+            if(going[ac.id] && !ac.food && am && am->showTrick) {
+              ++trips;
+              const float far=std::hypot(am->x-tr->inX,am->y-tr->inY);
+              farthest=std::max(farthest,far);
+              byTheSpecialist+=far<=2.0f;
+            }
+            if(!going[ac.id] && ac.food)++wentOff;
+            going[ac.id]=ac.food;
+          }
+      if(s->completed>before && s->phase==Shows::Phase::Waiting)break;
+    }
+    report<<"Trick food: "<<wentOff<<" set off, "<<trips<<" trips played, "<<byTheSpecialist<<" by the specialist, farthest "<<farthest<<" tiles\n";
+    check("a treat trick: the animal swims to a tile by the specialist first, then plays it (Task7d 0x5a25cd, 0x5a6cb2)",
+          trips>0 && byTheSpecialist==trips);
+    check("the show with treats completes and the orcas go home",s->completed==before+1 && s->phase==Shows::Phase::Waiting &&
+          a.member(first) && a.member(second) && a.member(first)->exhibit==home && a.member(second)->exhibit==home);
   }
   for(const char *file:{"animals/dolphin.ai","animals/sealion.ai","animals/seaotter.ai","animals/gwshark.ai","animals/jellyfsh.ai"}) {
     while(shows.remove(tank,0)){}
@@ -870,9 +973,14 @@ std::string runShowManagementChecks(World &world,ResourceManager *rm) {
   m=st.member(trainer);
   if(m) {
     // Relocating a platform during a show must not strand its specialist on the old bank.
+    // (its platform: the show tank's gate onto open ground, as Shows::update
+    // finds it - not a portal into a home tank, a gate of the tank too since
+    // #277 made gates where the access walk settles)
+    int portalGates=0;
     for(const auto &[edge,piece]:f.pieces())if(piece.gate && f.exhibitOf(edge)==tank) {
       const int ax=edge.alongX?edge.x:edge.x-1,ay=edge.alongX?edge.y-1:edge.y;
       const bool aIn=f.exhibitAt(ax,ay)==tank;
+      if(f.exhibitAt(aIn?edge.x:ax,aIn?edge.y:ay)>=0){++portalGates;continue;}
       m->inX=(aIn?ax:edge.x)+0.5f;m->inY=(aIn?ay:edge.y)+0.5f;
       m->dropX=m->outX=(aIn?edge.x:ax)+0.5f;m->dropY=m->outY=(aIn?edge.y:ay)+0.5f;
       break;
@@ -883,6 +991,13 @@ std::string runShowManagementChecks(World &world,ResourceManager *rm) {
     int blocker=-1;
     if(objects.add("scenery/building/gstand.ai",oldX,oldY,0))blocker=objects.last()->id;
     world.reindex();shows.refresh();shows.update(0.05f);
+    out<<"PLATFORM MOVE portal gates passed over "<<portalGates<<", blocker "<<blocker<<" old "<<oldX<<","<<oldY<<" phase "<<static_cast<int>(s->phase)<<" showTank "<<m->showTank
+       <<" z "<<m->z<<" at "<<m->x<<","<<m->y<<" in "<<f.exhibitAt(static_cast<int>(m->x),static_cast<int>(m->y))
+       <<" blocked "<<f.platformBlocked(static_cast<int>(m->x),static_cast<int>(m->y))
+       <<" old blocked "<<f.platformBlocked(static_cast<int>(oldX),static_cast<int>(oldY))<<" gates";
+    for(const auto &[edge,piece]:f.pieces())if(piece.gate && (piece.tank==tank || piece.tank2==tank))
+      out<<" "<<edge.alongX<<":"<<edge.x<<","<<edge.y;
+    out<<" trainer in "<<m->inX<<","<<m->inY<<" job "<<static_cast<int>(m->job)<<"\n";
     check("moving an active show platform releases its specialist onto the new clear bank",
       blocker>=0 && s->phase==Shows::Phase::Waiting && m->showTank<0 && m->z==0 &&
       std::hypot(m->x-oldX,m->y-oldY)>0.1f && f.exhibitAt(static_cast<int>(m->x),static_cast<int>(m->y))<0 &&
@@ -893,6 +1008,7 @@ std::string runShowManagementChecks(World &world,ResourceManager *rm) {
     for(const auto &[edge,piece]:f.pieces())if(piece.gate && f.exhibitOf(edge)==tank) {
       const int ax=edge.alongX?edge.x:edge.x-1,ay=edge.alongX?edge.y-1:edge.y;
       const bool aIn=f.exhibitAt(ax,ay)==tank;
+      if(f.exhibitAt(aIn?edge.x:ax,aIn?edge.y:ay)>=0)continue;
       m->inX=(aIn?ax:edge.x)+0.5f;m->inY=(aIn?ay:edge.y)+0.5f;
       m->outX=(aIn?edge.x:ax)+0.5f;m->outY=(aIn?edge.y:ay)+0.5f;
       break;

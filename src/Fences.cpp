@@ -731,12 +731,21 @@ Fences::Fit Fences::fit(const Edge &e, const WorldMap &map) const {
   // along a path's side is fine
   if (Features::noFenceOnPath && map.isPath(ax, ay) && map.isPath(e.x, e.y))
     return Fit::InTheWay;
-  // Not inside a tank (its water): a wall there stood on the water at the
-  // ground's height, over the tank's own (its edge has its wall already,
-  // refused above)
+  // Inside a tank (zoo.exe fenceEdgeAllowed 0x4e027a: the tile's habitat a
+  // tank, slot 0x20): only a tank wall (type +0x193, [TankFence]) of the
+  // tank's own kind (+0x6f cIsShowFence against a show tank, habitat +0x4)
+  // - measured 2026-11-18 in Play original: an exhibit tank's inner edges
+  // take Concrete Edge and Glass and the Atlantean wall, not Striped
+  // Scooped Edges (a show wall) nor an iron bar fence. (The original asks
+  // of the tile under the cursor; an edge with no piece and a tank on one
+  // side only isn't left by a closed tank, so either side's tank is asked)
+  const FenceType *tool = this->previewType >= 0 && this->previewType < static_cast<int>(this->typeList.size())
+                              ? &this->typeList[this->previewType]
+                              : nullptr;
   for (auto [tx, ty] : {std::make_pair(ax, ay), std::make_pair(e.x, e.y)})
     if (const Exhibit *x = this->exhibit(this->exhibitAt(tx, ty)); x && x->tank)
-      return Fit::InTheWay;
+      if (!tool || !tool->tank || tool->showFence != x->show)
+        return Fit::InTheWay;
   Fit worst = Fit::Ok;
   for (auto [tx, ty] : {std::make_pair(ax, ay), std::make_pair(e.x, e.y)}) {
     Fit f = this->tileFit(tx, ty, map);
@@ -793,6 +802,29 @@ int Fences::exhibitOf(const Edge &e) const {
   // The tiles either side of it
   int a = e.alongX ? this->exhibitAt(e.x, e.y - 1) : this->exhibitAt(e.x - 1, e.y);
   return a >= 0 ? a : this->exhibitAt(e.x, e.y);
+}
+
+// zoo.exe 0x411285 (habitatPastGateTile): the habitat's gate tile (+0x8c)
+// stepped across its gate's side (+0x90, 0x40fa92) when that tile is the
+// habitat's own, else the gate tile itself - the tile outside the gate; no
+// gate, 0. ours: the gate is the land exhibit's gate piece (the original
+// keeps one, set by 0x435a0d); tanks have none here
+bool Fences::pastGateTile(int exhibit, int &x, int &y) const {
+  const Exhibit *ex = this->exhibit(exhibit);
+  if (!ex || ex->tank)
+    return false;
+  for (const auto &[e, p] : this->edges) {
+    if (!p.gate || p.tank >= 0)
+      continue;
+    const int ax = e.alongX ? e.x : e.x - 1, ay = e.alongX ? e.y - 1 : e.y;
+    const bool aIn = this->exhibitAt(ax, ay) == exhibit, bIn = this->exhibitAt(e.x, e.y) == exhibit;
+    if (aIn == bIn)
+      continue;
+    x = aIn ? e.x : ax;
+    y = aIn ? e.y : ay;
+    return true;
+  }
+  return false;
 }
 
 void Fences::updateGates(float seconds, const std::function<bool(const Edge &)> &someoneNear) {
@@ -1519,6 +1551,10 @@ void Fences::makeTank(Exhibit &ex, WorldMap &map) {
       t->height = ex.floorHeight;
       t->terrainType = ex.show ? kTankTerrainShow : kTankTerrain;
     }
+  // (the floor's tiles and those round them get their side codes again -
+  // the walls' cliffs: 0x45b92f -> 0x45bbbb -> 0x45d935, 0x45e1c2)
+  for (auto [x, y] : ex.tiles)
+    map.updateSideCodesAround(x, y);
   // Paths inside go: the original clears each tank tile's path piece (tile
   // +0x81, the path's shape - 0x416504 - set to 0 at zoo.exe 0x45e8c8, in
   // 0x45b92f; not while a zoo loads, and this isn't reached then)
@@ -1577,6 +1613,8 @@ void Fences::restoreGround(Exhibit &ex, WorldMap &map) {
         t->terrainType = 0;
       }
     }
+  for (auto [x, y] : ex.tiles)
+    map.updateSideCodesAround(x, y); // (ours: the side codes follow, 0x45e1c2)
   ex.before.clear();
   map.touch();
 }
@@ -1736,6 +1774,9 @@ void Fences::adjustBase(int id, int step) {
         t->cornerHeight[c] = ex->floorHeight;
       t->height = ex->floorHeight;
     }
+  // (the side codes again, as the original's 0x45d935 after Adjust Base)
+  for (auto [x, y] : ex->tiles)
+    this->mapEdit->updateSideCodesAround(x, y);
   this->mapEdit->touch();
 }
 
