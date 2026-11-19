@@ -3856,32 +3856,83 @@ void UiGameScreen::tell(const std::string &message) {
 }
 
 void UiGameScreen::popup(const std::string &image, const std::string &message) {
+  ScenarioPopup spec;
+  spec.image1 = image;
+  spec.text = message;
+  this->popup(spec);
+}
+
+// zoo.exe loadScenarioPopup 0x5a1b15: the popup's layout is its layout= key
+// (the tutorials' 45100 confirml.lyt, a time limit's or an award's 45200
+// confirmm.lyt, 45000 confirm.lyt); each part is the element the layout's id
+// + 1 (background), + 2 (icon), + 4 (image 1), + 5 (image 2) and + 6 (the
+// message) say, set when the key gives one; OK alone
+void UiGameScreen::popup(const ScenarioPopup &spec) {
   if (this->dialog.layout) {
-    this->dialogQueue.push_back([=] { this->popup(image, message); });
+    this->dialogQueue.push_back([=] { this->popup(spec); });
     return;
   }
-  IniReader *ini = this->resource_manager->getIniReader("ui/confirmm.lyt");
+  const int base = spec.layout == 45100 || spec.layout == 45000 ? spec.layout : 45200;
+  IniReader *ini = this->resource_manager->getIniReader(base == 45100   ? "ui/confirml.lyt"
+                                                        : base == 45000 ? "ui/confirm.lyt"
+                                                                        : "ui/confirmm.lyt");
   if (!ini)
     return;
   this->dialog.layout = new UiLayout(ini, this->resource_manager);
   this->dialog.yes = nullptr;
   UiLayout *d = this->dialog.layout;
-  if (UiText *m = dynamic_cast<UiText *>(d->getElementById(45206)))
-    m->setMessage(message);
-  if (UiImage *icon = dynamic_cast<UiImage *>(d->getElementById(45204)))
-    if (!image.empty())
-      icon->setImage(image);
-  for (int id : {45210, 45211, 45213}) // just OK
+  if (UiText *m = dynamic_cast<UiText *>(d->getElementById(base + 6)))
+    m->setMessage(spec.text);
+  auto picture = [&](int id, const std::string &art) {
+    if (art.empty())
+      return;
+    if (UiImage *img = dynamic_cast<UiImage *>(d->getElementById(id)))
+      img->setImage(art);
+  };
+  picture(base + 1, spec.background);
+  picture(base + 2, spec.icon);
+  picture(base + 4, spec.image1);
+  picture(base + 5, spec.image2);
+  for (int id : {base + 10, base + 11, base + 13}) // just OK
     if (UiElement *e = d->getElementById(id))
       e->setHidden(true);
-  if (UiButton *ok = dynamic_cast<UiButton *>(d->getElementById(45212)))
+  if (UiButton *ok = dynamic_cast<UiButton *>(d->getElementById(base + 12)))
     ok->onClick = [this] { this->dialog.submit = true; };
+}
+
+int UiGameScreen::listSelection(int id) {
+  UiListBox *list = id == 22900 && this->filter.list ? this->filter.list : dynamic_cast<UiListBox *>(this->getElementById(id));
+  if (!list)
+    return -1;
+  return list->getSelectedIndex();
+}
+
+std::string UiGameScreen::listText(int id) {
+  UiListBox *list = id == 22900 && this->filter.list ? this->filter.list : dynamic_cast<UiListBox *>(this->getElementById(id));
+  return list ? list->getSelectedText() : "";
+}
+
+UiAction UiGameScreen::clickElement(int id) {
+  UiElement *e = this->getElementById(id);
+  if (!e || e->isHidden())
+    return UiAction::NONE;
+  SDL_Rect r = e->getLastRect();
+  Input in{};
+  in.type = InputType::POSITIONED;
+  in.event = InputEvent::LEFT_CLICK;
+  in.position = {r.x + r.w / 2, r.y + r.h / 2};
+  in.x = in.position.x;
+  in.y = in.position.y;
+  std::vector<Input> inputs = {in};
+  this->handleInputs(inputs);
+  std::vector<Input> none;
+  return this->handleInputs(none); // the action it asked for
 }
 
 std::string UiGameScreen::dialogMessage() const {
   if (!this->dialog.layout)
     return "";
-  for (int id : {45206, 45006})
+  for (int id : {45206, 45106, 45006})
     if (UiText *m = dynamic_cast<UiText *>(this->dialog.layout->getElementById(id)))
       return m->getText();
   return "";

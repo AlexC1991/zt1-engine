@@ -4,6 +4,8 @@
 #include "CompassDirection.hpp"
 #include <algorithm>
 #include <cmath>
+#include <array>
+#include <functional>
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -73,7 +75,9 @@ struct BuildJob {
   struct View {int w,h;float ax,ay;std::vector<unsigned char> mask;};
   std::array<View,4> views{};float halfX=0,halfY=0,top=0;int assetId=0;bool actor=false;uint64_t cacheKey=0;
 };
-std::shared_ptr<const BuildJob> prepareBuild(Animation &art,const Definition &asset,float halfX,float halfY,int pose,bool actor,Model &cached,bool &hit) {
+// (the art's frames asked for by side and frame: the art itself, or a pose's four views copied for a worker)
+using FrameSource=std::function<Animation::LightingFrame(CompassDirection,int)>;
+static std::shared_ptr<const BuildJob> prepareFrom(const FrameSource &frameOf,int frameCount,const Definition &asset,float halfX,float halfY,int pose,bool actor,Model &cached,bool &hit) {
   hit=false;
   auto job=std::make_shared<BuildJob>();
   using View=BuildJob::View;auto &views=job->views;
@@ -81,13 +85,13 @@ std::shared_ptr<const BuildJob> prepareBuild(Animation &art,const Definition &as
   const CompassDirection sides[]={CompassDirection::NE,CompassDirection::SE,CompassDirection::SW,CompassDirection::NW};
   float top=0;
   for(int k=0;k<4;++k) {
-    const auto native=art.lightingFrame(sides[k],std::max(0,pose));
+    const auto native=frameOf(sides[k],std::max(0,pose));
     SDL_Surface *s=native.surface;if(!s)return {};
     const float l=native.mirrored?native.anchor.x-s->w:-native.anchor.x,t=-native.anchor.y;
     auto &v=views[k];v.w=s->w;v.h=s->h;v.ax=-l;v.ay=-t;v.mask.resize(v.w*v.h);
     std::fill(v.mask.begin(),v.mask.end(),1);
-    for(int frame=pose>=0?pose:0;frame<(pose>=0?pose+1:std::max(1,art.frameCount()));frame+=std::max(1,art.frameCount()/8)) {
-      const auto nf=art.lightingFrame(sides[k],frame);auto *f=nf.surface;if(!f)continue;
+    for(int frame=pose>=0?pose:0;frame<(pose>=0?pose+1:std::max(1,frameCount));frame+=std::max(1,frameCount/8)) {
+      const auto nf=frameOf(sides[k],frame);auto *f=nf.surface;if(!f)continue;
       for(int y=0;y<v.h;++y)for(int x=0;x<v.w;++x) {
         const int sx=nf.mirrored?f->w-1-x:x;
         if(sx<0 || sx>=f->w || y>=f->h){v.mask[y*v.w+x]=0;continue;}
@@ -121,6 +125,31 @@ std::shared_ptr<const BuildJob> prepareBuild(Animation &art,const Definition &as
   job->halfX=halfX;job->halfY=halfY;job->top=top;job->assetId=asset.id;job->actor=actor;job->cacheKey=cacheKey;
   if(loadModelCache(cacheKey,cached))hit=true;
   return job;
+}
+std::shared_ptr<const BuildJob> prepareBuild(Animation &art,const Definition &asset,float halfX,float halfY,int pose,bool actor,Model &cached,bool &hit) {
+  return prepareFrom([&](CompassDirection side,int frame){return art.lightingFrame(side,frame);},art.frameCount(),asset,halfX,halfY,pose,actor,cached,hit);
+}
+// ours: a pose's four views copied (on the main thread, a few small memory
+// copies: the art's own frames are made lazily and shared with the drawing)
+// so the rest - the silhouettes, the disk cache, the solid, the cache written -
+// runs on a worker
+struct ActorSnapshot {
+  std::array<SDL_Surface*,4> surface{};std::array<SDL_Point,4> anchor{};std::array<bool,4> mirrored{};
+  std::array<std::vector<uint64_t>,4> runs;std::array<bool,4> hasRuns{};
+  ActorSnapshot()=default;ActorSnapshot(const ActorSnapshot &)=delete;ActorSnapshot &operator=(const ActorSnapshot &)=delete;
+  ~ActorSnapshot(){for(auto *s:surface)if(s)SDL_DestroySurface(s);}
+};
+std::shared_ptr<const ActorSnapshot> snapshotActor(Animation &art,int pose) {
+  auto snapshot=std::make_shared<ActorSnapshot>();
+  const CompassDirection sides[]={CompassDirection::NE,CompassDirection::SE,CompassDirection::SW,CompassDirection::NW};
+  for(int k=0;k<4;++k) {
+    const auto native=art.lightingFrame(sides[k],std::max(0,pose));
+    if(!native.surface)return nullptr;
+    snapshot->surface[k]=SDL_DuplicateSurface(native.surface);if(!snapshot->surface[k])return nullptr;
+    snapshot->anchor[k]=native.anchor;snapshot->mirrored[k]=native.mirrored;
+    if(native.shadowRuns){snapshot->runs[k]=*native.shadowRuns;snapshot->hasRuns[k]=true;}
+  }
+  return snapshot;
 }
 Model runBuild(const BuildJob &job) {
   using View=BuildJob::View;const auto &views=job.views;
@@ -259,6 +288,17 @@ Model runBuildInBackground(const BuildJob &job) {
 #else
   return runBuild(job);
 #endif
+}
+Model buildActorInBackground(const ActorSnapshot &snapshot,const Definition &asset,float halfX,float halfY,int pose) {
+  Model model;bool hit=false;
+  // (pose is 0 or more: prepareFrom reads that one frame, the snapshot's)
+  const auto job=prepareFrom([&](CompassDirection side,int){
+    const int k=side==CompassDirection::NE?0:side==CompassDirection::SE?1:side==CompassDirection::SW?2:3;
+    return Animation::LightingFrame{snapshot.surface[k],snapshot.anchor[k],snapshot.mirrored[k],snapshot.hasRuns[k]?&snapshot.runs[k]:nullptr};
+  },1,asset,halfX,halfY,pose,true,model,hit);
+  if(!job)return {};
+  if(hit)return model;
+  model=runBuildInBackground(*job);finishBuild(*job,model);return model;
 }
 Model build(Animation &art,const Definition &asset,float halfX,float halfY,int pose,bool actor) {
   Model model;bool hit=false;

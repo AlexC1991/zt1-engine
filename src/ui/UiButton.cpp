@@ -55,6 +55,7 @@ UiButton::~UiButton() {
 }
 
 std::function<void()> UiButton::clickSound;
+std::function<void(int)> UiButton::clickObserver;
 
 UiAction UiButton::handleInputs(std::vector<Input> &inputs) {
   UiAction action = UiAction::NONE;
@@ -141,6 +142,8 @@ UiAction UiButton::handleInputs(std::vector<Input> &inputs) {
       }
       if (this->onClick)
         this->onClick();
+      if (clickObserver)
+        clickObserver(this->getId());
       if (this->repeating) {
         this->pressed = true;
         this->press_time = this->last_repeat = SDL_GetTicks();

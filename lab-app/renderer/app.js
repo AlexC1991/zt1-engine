@@ -2270,6 +2270,13 @@ const ACTIONS = {
     d.querySelector('[data-x="no"]').classList.add('hidden');
   },
   playStart: async (testFolder) => {
+    // (the Play view's up, and nothing over it, before the engine's window is
+    // placed: started by a caller from another tab - lab_action playStart -
+    // or with a Where-used dialog left open, its window was sent "nowhere"
+    // and stayed hidden on Loading the game until the Play tab was shown
+    // again, #106; Play original does the same)
+    closeStrayDialog();
+    if (S.tab !== 'play') setTab('play');
     S.play.starting = true;
     renderPlay();
     const r = await lab.playStart(testFolder || undefined);

@@ -5,6 +5,8 @@
 #include "RenderSettings.hpp"
 #include "LightingCache.hpp"
 #include <algorithm>
+#include <cstring>
+#include <set>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -105,6 +107,27 @@ int runLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,co
   if(std::unique_ptr<Animation> orca{rm->getAnimation("animals/orca/m/subswim/subswim")})
     check("original orca definition preserves its black body pixels",orca->lightingFrame(CompassDirection::SE,0).shadowRuns==nullptr);
   auto &map=world.getMap();auto &objects=world.objectsMutable();
+  {
+    // measured: the jungle restaurant's two torches carry flames only in its "used" art (guests inside); its idle art
+    // shows bare posts, so they light by use as the original draws them (zoo.exe has no time of day: lighting
+    // them while it's empty would draw flames the original never shows - #113)
+    const auto *asset=LightingAssets::find("junrest");
+    if(asset && objects.add("scenery/building/junrest.ai",20.5f,20.5f,0)) {
+      const auto &o=objects.objects().back();int idleFlame=0,usedFlame=0;
+      auto flames=[&](Animation *a){int pixels=0;if(!a)return 0;
+        for(auto side:{CompassDirection::NE,CompassDirection::SE,CompassDirection::SW,CompassDirection::NW})for(int f=0;f<a->frameCount();++f) {
+          const auto native=a->lightingFrame(side,f);auto *s=native.surface;if(!s)continue;const auto v=LightingAssets::viewIndex(int(side));
+          for(const auto &r:asset->views[v])if(r.pixels==LightingAssets::PixelMask::Flame)for(int y=0;y<s->h;++y)for(int x=0;x<s->w;++x) {
+            float px=x+.5f-native.anchor.x;if(native.mirrored)px=-px;if(!LightingAssets::inside(r,px,y+.5f-native.anchor.y))continue;
+            Uint8 red,green,blue,alpha;ZT_GetRGBA(reinterpret_cast<const Uint32*>(static_cast<const Uint8*>(s->pixels)+y*s->pitch)[x],s->format,&red,&green,&blue,&alpha);
+            pixels+=alpha>0 && LightingAssets::pixelAllowed(LightingAssets::PixelMask::Flame,red,green,blue);
+          }
+        }return pixels;};
+      idleFlame=flames(o.art);usedFlame=flames(o.used);
+      report<<"junrest flame pixels: idle "<<idleFlame<<", used "<<usedFlame<<"\n";
+      check("the jungle restaurant's torches have flames only in its used art, as the original draws them",o.used && idleFlame==0 && usedFlame>0);
+    } else check("jungle restaurant can be placed for the torch check",false);
+  }
   // Asset-specific checks: glass anchors come from pixels, not a guessed
   // building height; a broken post must not emit through its empty head.
   for(const auto &test:std::vector<std::pair<std::string,int>>{{"scenery/other/lamp.ai",Animation::LampGlass},
@@ -143,6 +166,23 @@ int runLightingChecks(World &world,ResourceManager *rm,SDL_Renderer *renderer,co
   }
   report<<"Fixture has "<<shops<<" buildings, "<<lamps<<" lamps, "<<scenery<<" scenery, "<<animals<<" animals.\n";
   check("animal sprites included in the populated fixture",animals>=12);
+  {
+    // ours (#98): a pose made on a worker from its copied views is the model the main thread makes: same solid, same faces
+    int compared=0,same=0;auto &members=world.getAnimals().members();std::set<std::string> seen;
+    for(const auto &m:members) {
+      auto *art=world.getAnimals().art(m,m.anim);if(!art || !seen.insert(art->lightingKey()).second)continue;
+      for(int pose:{0,std::max(0,art->frameCount()/2),std::max(0,art->frameCount()-1)}) {
+        LightingAssets::Definition body{0,"animated body"};auto snapshot=LightingAssets::snapshotActor(*art,pose);if(!snapshot)continue;
+        const auto direct=LightingAssets::build(*art,body,.5f,.5f,pose,true);const auto worker=LightingAssets::buildActorInBackground(*snapshot,body,.5f,.5f,pose);
+        ++compared;same+=!direct.faces.empty() && direct.nx==worker.nx && direct.ny==worker.ny && direct.nz==worker.nz && direct.occupied==worker.occupied && direct.solid==worker.solid
+          && direct.faces.size()==worker.faces.size() && std::memcmp(direct.faces.data(),worker.faces.data(),direct.faces.size()*sizeof(LightingAssets::Face))==0
+          && std::memcmp(&direct.minimum,&worker.minimum,sizeof direct.minimum)==0 && std::memcmp(&direct.step,&worker.step,sizeof direct.step)==0;
+      }
+      if(seen.size()>=6)break;
+    }
+    report<<"pose models made on a worker: "<<same<<" of "<<compared<<" the same as made directly\n";
+    check("an animal pose made on a worker is exactly the model made directly",compared>=12 && same==compared);
+  }
   world.setPaused(true);double clock=world.getClock();
   world.update(SDL_GetKeyboardState(nullptr),1);
   check("pausing the zoo stops the cycle clock",world.getClock()==clock);

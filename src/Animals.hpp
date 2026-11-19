@@ -125,6 +125,9 @@ public:
     // what it thinks of objects and of the other animals, its trees, rocks
     // and hills
     int genus = 0, family = 0;
+    // cLocation (+0x1f4) and cHabitat (+0x1f0): goal rules 4, 5 and 6 count
+    // animals by them (zoo.exe 0x41d665, 0x4f0ff2)
+    int location = 0, habitatKind = 0;
     int era = 0; // cEra (Dinosaur Digs: 9621 Jurassic, 9623 Ice Age) - goal rule 6/5
     int compatTerrain[18] = {};
     std::map<int, int> suitable, compatible;
@@ -456,6 +459,10 @@ public:
     // exhibit), the keeper after it
     bool tranquilised = false, boxed = false;
     float boxTimer = 0;
+    // A crate that stays shut: the time to its next check (cBoxedCheck), the
+    // time its rattle (box_used) has left, how often it has rattled
+    float boxCheck = 0, rattleLeft = 0;
+    int rattles = 0;
     int claimedBy = -1;
     // Breaking out: the fence it's going over, and whether it breaks it
     Fences::Edge crossing = {false, -1, -1};
@@ -769,6 +776,9 @@ public:
   std::vector<std::string> labAnims(int id) const;
   std::vector<std::string> labSets(int id) const;
   std::string awarenessReport() const;
+  // zoo.exe 0x63cb35: a lion, a tiger and a grizzly have shared an exhibit
+  bool bearsSeen() const { return this->lionTigerBears; }
+
 private:
   // The space an animal occupies, from its species' footprint and the height
   // of its own art - an oriented box, not one radius for every species. In a
@@ -838,11 +848,16 @@ private:
   bool goToBuilding(Member &m, const WorldMap &map, const Fences &fences);
   struct Evaluation {
     float timerMs = 0;
+    float speciesMs = 0; // zoo.exe tankTick 0x4357c6's second timer (+0x88)
     bool dirty = true;
     int tiles = 0, dung = -1;
     std::map<int, Rating> kinds; // per animal type
   };
   std::map<int, Evaluation> evaluations;
+  // zoo.exe 0x447dc1 (every 8 s per exhibit, 0x63cb35): a lion, a tiger and
+  // a grizzly bear in one exhibit - the Yellow Brick Path's key
+  bool lionTigerBears = false;
+  void lookAtSpecies(int exhibit);
   const Rating *rating(const Member &m, const WorldMap &map, const Fences &fences);
   void evaluate(int exhibit, const WorldMap &map, const Fences &fences);
   // How many share its exhibit: its own kind (young too), its kind's

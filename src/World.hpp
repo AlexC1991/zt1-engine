@@ -20,6 +20,7 @@
 #include "Shows.hpp"
 #include "DayNightLighting.hpp"
 #include <SDL3/SDL.h>
+#include <cmath>
 #include <map>
 #include <string>
 
@@ -161,6 +162,10 @@ public:
     // Where the mouse last was over the map (the held object shown again
     // there at once when it's turned with Q / E)
     int lastMouseX = -1, lastMouseY = -1;
+    // ours: (a check reads them) the held thing shown at the cursor, and how turned
+    bool objectGhostShown() const { return objectGhost; }
+    int ghostFacingOf() const { return ghostFacing; }
+    bool ghostCentreIs(float x, float y) const { return std::fabs(ghostX - x) <= 1.01f && std::fabs(ghostY - y) <= 1.01f; }
     ToolResult mouseDown(int x, int y);
     ToolResult mouseUp(int x, int y);
     // A right click: a drag taken back (true), or else what's assigned

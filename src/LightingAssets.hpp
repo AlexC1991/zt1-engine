@@ -75,6 +75,13 @@ Model build(Animation &,const Definition &,float halfX,float halfY,int frame=-1,
 struct BuildJob;
 std::shared_ptr<const BuildJob> prepareBuild(Animation &,const Definition &,float halfX,float halfY,int frame,bool actor,Model &cached,bool &hit);
 Model runBuild(const BuildJob &);
+// ours: an animal's, guest's or keeper's pose, made ahead without holding a
+// frame: its four views copied on the main thread (a few small memory copies),
+// then the silhouettes, the disk cache, the solid and the cache written all on
+// a worker thread (buildActorInBackground). The picture is the one build gives.
+struct ActorSnapshot;
+std::shared_ptr<const ActorSnapshot> snapshotActor(Animation &,int pose);
+Model buildActorInBackground(const ActorSnapshot &,const Definition &,float halfX,float halfY,int pose);
 // runBuild on a worker thread below the game's priority (put back after: the
 // pool's threads are reused) - on a laptop the builds' cores share the power
 // the game's thread runs on, and slowed every frame while they ran

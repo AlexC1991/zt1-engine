@@ -73,10 +73,18 @@ public:
     int getRowHeight() const { return item_height; }
 
     void setSelectionAction(UiAction action) { selection_action = action; }
+    // A row clicked twice (the layout's handledoubleclicks=1: the Scenario
+    // list's "pick", zoo.exe scenario_ScenarioList_pick 0x4cb2f8 - the Play
+    // button pressed when it's lit); within the time Windows gives a double
+    // click (500 ms, ours: the system's)
+    void setDoubleClickAction(UiAction action) { double_click_action = action; }
     // A row clicked, each click (the same row again too): the original's
     // list handlers run on every click (zoo.exe infostf2_AssignList_click
     // 0x61861b) - ours: a hook for them
     std::function<void(int)> onPick;
+    // Told the id of every list a row of which is clicked (zoo.exe's click
+    // observer 0x5b0f51, which the tutorials' rules 10 and 11 register)
+    static std::function<void(int)> clickObserver;
 
     // toggleselect=1 lists (the research categories): every item has a
     // checkbox, drawn in the miniconwidth column; clicking toggles it
@@ -136,6 +144,9 @@ private:
     void wrapItems(SDL_Renderer* renderer);
 
     UiAction selection_action = UiAction::NONE;
+    UiAction double_click_action = UiAction::NONE;
+    int last_click_row = -1;
+    unsigned long long last_click_tick = 0;
     SDL_Rect cached_rect = {0, 0, 0, 0};
 
     void parseColors(IniReader* ini, const std::string& section, const std::string& key, SDL_Color& color);

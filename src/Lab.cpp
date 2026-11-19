@@ -3997,10 +3997,10 @@ void LabApp::setupGoals() {
       return months;
     return 0;
   };
-  h.popup = [this](const std::string &, const std::string &text, bool pause) {
-    note("A goal's popup: " + text);
+  h.popup = [this](const Goals::Hooks::Popup &popup) {
+    note("A goal's popup: " + popup.text);
     // (pause=1: the game waits on it - so does the lab zoo)
-    if (pause) {
+    if (popup.pause) {
       goalPaused = true;
       if (playing) {
         playing = false;

@@ -23,6 +23,7 @@ import collections
 import json
 import os
 import re
+import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SRC = os.path.join(ROOT, "src")
@@ -258,6 +259,16 @@ def main():
     out = {"ours": ours, "oursTotals": dict(totals), "original": systems,
            "originalTotals": {s: {"ported": len(v["ported"]), "missing": len(v["missing"]), "plumbing": len(v["plumbing"])}
                            for s, v in systems.items()}}
+    # the functions gameplay reaches that still have no name (re/lab/unnamed.py)
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import unnamed
+        found = unnamed.reach()
+        by_sys = collections.Counter(e["system"] for e in found.values())
+        out["unnamedReached"] = {"count": len(found), "bySystem": dict(by_sys),
+                                 "addresses": ["0x%06x" % va for va in sorted(found)]}
+    except Exception as ex:  # needs pefile, capstone, zoo.exe and the Ghidra list
+        out["unnamedReached"] = {"error": str(ex)}
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     with open(a.out, "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=1)
@@ -271,6 +282,11 @@ def main():
         for s, v in out["originalTotals"].items():
             print("  %-24s %4d / %d%s" % (s, v["ported"], v["ported"] + v["missing"],
                                           "   (+%d developer-only or plumbing)" % v["plumbing"] if v["plumbing"] else ""))
+        u = out["unnamedReached"]
+        if "count" in u:
+            print("Unnamed zoo.exe functions gameplay reaches (python re/lab/unnamed.py lists them): %d" % u["count"])
+        else:
+            print("Unnamed zoo.exe functions gameplay reaches: not counted (%s)" % u["error"])
         print("->", a.out)
 
 

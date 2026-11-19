@@ -93,6 +93,10 @@ public:
   // month rule; cleared when a game starts. true when it changed anything
   bool setAvailable(const CatalogItem &item, bool available);
   void clearAvailable() { this->forced.clear(); }
+  // What the goals made available or not, by file: kept with a saved zoo
+  // (the original keeps the types' flags in it) and put back
+  const std::map<std::string, bool> &forcedState() const { return this->forced; }
+  void restoreForced(const std::map<std::string, bool> &state) { this->forced = state; }
   bool isAvailable(const CatalogItem &item) const;
   // The game's kind: a scenario (a type's own flag starts on - only its
   // triggers hide one), or freeform; unlockAll: freeform with every item

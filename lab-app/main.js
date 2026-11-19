@@ -351,8 +351,17 @@ ipcMain.handle('lab:updateInstall', async () => {
     const active = updateWorkReason();
     if (active) { updateHandoffActive = false; return {ok:false,message:active}; }
     const r = await labUpdater.install(true);
-    if (r.ok) setTimeout(() => app.quit(), 300);
-    else updateHandoffActive = false;
+    if (r.ok) {
+      // (app.quit() never sends window-all-closed, which is where the engine
+      // is stopped on a normal close: left running, it kept the files of the
+      // folder being updated open and the Lab's own engine from the new one.
+      // Asked to quit now, killed if it hasn't gone when the Lab does, #107)
+      if (host.sock) host.sock.write('{"cmd":"quit"}\n');
+      setTimeout(() => {
+        try { if (host.proc) host.proc.kill(); } catch {}
+        app.quit();
+      }, 300);
+    } else updateHandoffActive = false;
     return r;
   } catch (e) {
     updateHandoffActive = false;

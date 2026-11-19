@@ -39,6 +39,7 @@ constexpr float kTickMs = 1000.0f;
 constexpr int kHabitatCheck = 20, kCaptivityCheck = 20, kSocialCheck = 30, kOtherCheck = 40,
               kHungerCheck = 30, kZapCheck = 5, kEnergyCheck = 30, kHealthCheck = 30;
 constexpr float kRateEveryMs = 7000.0f;
+constexpr float kSpeciesEveryMs = 8000.0f; // (zoo.exe 0x4357c6: the second timer)
 // measured: cMurkyWaterCheck (zoo.exe 0x6393e4, read at 0x45fcde) is 5 in
 // the running original (Lab memPeek; animals.ai has no such key, every
 // other check's global matched animals.ai)
@@ -53,6 +54,14 @@ constexpr float kDefenseRadius = 3.0f;
 // breath it's kept within: type +0x208 and +0x204, which no file sets
 // (setDefaults 0x4b659e: 0 and 100)
 constexpr int kBreathCheck = 30, kBreathMin = 0, kBreathMax = 100;
+// A crate that stays shut (zoo.exe 0x4377fc, animalUpdate's boxed check):
+// every cBoxedCheck ticks (ai.ztd animals.ai: 2) it rattles with chance
+// cRattleChance per cent (animals.ai: 20) - bRattle plays box_used with the
+// animal's placesound
+constexpr int kBoxedCheck = 2, kRattleChance = 20;
+// ours: a swimmer's height this near its tank's level is at the surface
+// (the original's z moves in 16ths of a unit, so 0.03 is under one step)
+constexpr float kSurfaceSlack = 0.03f;
 // ours: how soon an animal whose behaviour line couldn't run picks again
 // (the original's does at its next update, every frame)
 constexpr float kLineRetry = 0.1f;
@@ -348,6 +357,8 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.rampageTimeMax = num("crampagetimemax", 0);
     t.genus = num("cgenus", 0);
     t.family = num("cfamily", 0);
+    t.location = num("clocation", 0);
+    t.habitatKind = num("chabitat", 0);
     t.era = num("cera", 0);
     t.treePref = num("ctreepref", 0);
     t.rockPref = num("crockpref", 0);
@@ -618,6 +629,18 @@ void Animals::rehome(const WorldMap &map, const Fences &fences) {
     // cBoxedCheck, 2 ticks: about two seconds)
     if (m.boxed && ex >= 0) {
       if(e && e->show && m.showTank<0)continue; // A cancelled performer must be moved home before unboxing.
+      // zoo.exe 0x4377fc (animalBoxedCheck): the crate opens on land only for
+      // an animal that doesn't live only underwater, in a tank only when the
+      // tank is filled (+0x198) and has water depth (+0x188 over 0): a sea
+      // animal's crate in a drained tank or on a land exhibit stays shut
+      {
+        const bool tankHere = e && e->tank;
+        const bool opens = tankHere ? (e->filling && fences.waterLevel(*e) > 0) : !type.onlyUnderwater;
+        if (!opens) {
+          m.boxTimer = 0;
+          continue;
+        }
+      }
       if (m.boxTimer >= 2.0f) {
         m.boxed = false;
         m.escaped = false;
@@ -802,6 +825,22 @@ void Animals::moveOf(const Member &m, const std::string &setName, std::string &a
       }
 }
 
+// zoo.exe 0x447dc1, for one exhibit: the lion (cNameID 5006), the tiger (5007)
+// and the grizzly (5016) all in it sets 0x63cb35 (the first flag, ours: it
+// stays on, as the original's does until the program ends)
+void Animals::lookAtSpecies(int exhibit) {
+  bool lion = false, tiger = false, grizzly = false;
+  for (const Member &m : this->list)
+    if (m.exhibit == exhibit && m.type >= 0 && m.type < static_cast<int>(this->typeList.size())) {
+      const int nameId = this->typeList[m.type].nameId;
+      lion |= nameId == 5006;
+      tiger |= nameId == 5007;
+      grizzly |= nameId == 5016;
+    }
+  if (lion && tiger && grizzly)
+    this->lionTigerBears = true;
+}
+
 // Busy: crated, darted, carried, dying, caught, killing, in a shelter, or
 // being seen to by a keeper - not hunted, not hunting
 bool Animals::busy(const Member &m) const {
@@ -812,11 +851,20 @@ bool Animals::busy(const Member &m) const {
 // The original's water state 4 (unit +0x258, set by 0x410857 from where it
 // is in its tank; read by the breath check 0x4389f7, the surfacing test
 // 0x43750c and the underwater mood list 0x43ca83 through unitWaterState
-// 0x410919, class slot 0x2c8, which returns it). ours: under the water as
-// the mood sets take it - in a tank, below its surface band
+// 0x410919, class slot 0x2c8, which returns it). In a tank (not at its gate
+// or past it - the climbing states 1 and 2 are the staff's) the state is 4
+// while its height is under the tank's level (+0x188 x 16) and its type is
+// not cSurface (type +0x17d), else 3, the surface. measured: 193 samples of
+// two orcas in two tanks, no exception (the state flips at z = level x 16
+// exactly, 206 of 208 is still 4). ours: a hair under the level counts
+// (kSurfaceSlack, below the original's one-16th step) for a float that never
+// quite lands; none of the original's land cases (a unit outside every tank
+// is 4 only if it lives only underwater) or gate states
 bool Animals::underwaterNow(const Member &m) const {
   const int tank = this->tankAt ? this->tankAt(m.x, m.y) : -1;
-  return tank >= 0 && this->tankDepth && m.swimZ < this->tankDepth(tank) - 0.35f;
+  if (tank < 0 || !this->tankDepth || m.type < 0 || m.type >= static_cast<int>(this->typeList.size()))
+    return false;
+  return !this->typeList[m.type].surfaceOnly && m.swimZ < this->tankDepth(tank) - kSurfaceSlack;
 }
 
 // zoo.exe 0x440a37 (animalStartBehaviour's, animalCheckTiredness's and
@@ -1116,7 +1164,7 @@ Animation *Animals::art(const Member &m, const std::string &nameIn, bool orStand
   // ours the plain subswim -; at the surface, 3, its surface swim; on water
   // its swim; else its type's walk, slot 0xa8)
   if (t.underwater && this->tankAt && this->tankAt(m.x, m.y) >= 0 && this->tankDepth) {
-    bool top=m.swimZ >= this->tankDepth(this->tankAt(m.x,m.y))-0.35f;
+    bool top=!underwaterNow(m);
     std::string alias;
     if(name=="walk" || name=="run" || name=="trot")alias=top?"surfswim":"subswim";
     else if(name=="stand" || name=="idle")alias=top?"surfidle":"subidle";
@@ -1163,6 +1211,9 @@ Animation *Animals::crate(const Member &m) const {
   if (m.type >= 0 && m.type < static_cast<int>(this->typeList.size())) {
     const Type &t = this->typeList[m.type];
     int s = sub(m);
+    if (m.rattleLeft > 0)
+      if (Animation *a = this->art(m, "box_used", false))
+        return a;
     if (t.anims[s].count("box_idle") || t.anims[0].count("box_idle"))
       if (Animation *a = this->art(m, "box_idle"))
         return a;
@@ -1954,7 +2005,7 @@ void Animals::chooseBehaviour(Member &m) {
   int h =static_cast<int>(std::lround(m.happiness));
   // (in a tank: its surface or underwater list, by where it swims)
   if (t.underwater && this->tankAt && this->tankAt(m.x, m.y) >= 0) {
-    bool top = this->tankDepth && m.swimZ >= this->tankDepth(this->tankAt(m.x,m.y)) - 0.35f;
+    bool top = !this->tankDepth || !underwaterNow(m);
     for (const Ambient &a : top ? t.ambientSurface : t.ambientUnder)
       if (h >= a.lo && h <= a.hi && this->set(m, a.set)) {
         pushSet(m, a.set);
@@ -3168,6 +3219,15 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
   // Exhibits are rated again every 7 seconds, and when their poo changes
   for (auto &[id, e] : this->evaluations) {
     e.timerMs += seconds * 1000.0f;
+    // zoo.exe 0x4357c6 (tankTick), its second timer: every 8000 ms (then back
+    // to a random 0 to 199) 0x447dc1 looks at the exhibit's animals - the
+    // lion (cNameID 5006), the tiger (5007) and the grizzly (5016) all there
+    // sets 0x63cb35, which 0x4f7ebe takes as the Yellow Brick Path's key
+    e.speciesMs += seconds * 1000.0f;
+    if (e.speciesMs >= kSpeciesEveryMs) {
+      e.speciesMs = static_cast<float>(std::uniform_int_distribution<int>(0, 199)(this->rng));
+      this->lookAtSpecies(id);
+    }
     if (e.timerMs >= kRateEveryMs)
       e.dirty = true;
     // (an exhibit made bigger or smaller: rated again at once)
@@ -3237,6 +3297,24 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
     if (m.boxed) {
       int ex = fences.exhibitAt(static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y)));
       m.boxTimer = ex >= 0 ? m.boxTimer + seconds : 0;
+      // zoo.exe 0x4377fc (animalUpdate's boxed check, each cBoxedCheck ticks):
+      // a crate that doesn't open (here: one outside every exhibit) rattles
+      // with chance cRattleChance - bRattle = fPlayWithSound(box_used,
+      // placesound). ours: the crate in an exhibit opens at rehome's timer
+      if (m.rattleLeft > 0) {
+        m.rattleLeft -= seconds;
+        m.animTime += seconds;
+      }
+      m.boxCheck += seconds;
+      if (m.boxCheck >= kBoxedCheck) {
+        m.boxCheck -= kBoxedCheck;
+        if (ex < 0 && std::uniform_int_distribution<int>(0, 99)(this->rng) < kRattleChance && art(m, "box_used", false)) {
+          play(m, "box_used", Member::Mode::Once);
+          m.rattleLeft = animSeconds(m, "box_used");
+          ++m.rattles;
+          playSound(m, "placesound");
+        }
+      }
       continue;
     }
     // Caught: still under the dust ball till it's over
@@ -3324,7 +3402,7 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
           // the dust ball if it hasn't the one asked for)
           std::string ball = "dustball";
           if (this->tankAt && this->tankAt(m.x, m.y) >= 0) {
-            bool top = this->tankDepth && m.swimZ >= this->tankDepth(this->tankAt(m.x,m.y)) - 0.35f;
+            bool top = !this->tankDepth || !underwaterNow(m);
             ball = top ? "surfaceball" : "submergedball";
           } else if (onWater(m)) {
             ball = "waterball";

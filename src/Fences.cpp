@@ -1904,6 +1904,8 @@ void Fences::update(float seconds) {
       f.filterClock -= k.filterDelay;
       float amount = static_cast<float>(f.health > k.decayedHealth ? k.clean : k.decayedClean);
       ex->purity = std::min(100.0f, ex->purity + amount);
+      // zoo.exe filterPayUpkeep 0x49bec7: the cost spent (upkeepOwed, taken by
+      // main) and added to the month's (+0x16c) and lifetime (+0x170) upkeep
       this->upkeepOwed += k.upkeep;
       f.upkeepCurrent += k.upkeep;
       f.upkeepTotal += k.upkeep;

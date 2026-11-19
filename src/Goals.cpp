@@ -74,11 +74,15 @@ void Goals::clear() {
   this->scnPath.clear();
   this->awards.clear();
   this->clock = 0;
+  // (the tutorial's click record put away, 0x592ea4)
+  this->clicks.clear();
+  this->clickWatching = false;
+  this->lastPopupSection = 0;
 }
 
 // A scenario file opened (scenarioOpen 0x58de19, class slot 4: read as a
 // config, then its goals, goalsLoad 0x58de8a)
-void Goals::load(ResourceManager *rm, const std::string &scnPath) {
+void Goals::load(ResourceManager *rm, const std::string &scnPath, bool resume) {
   this->clear();
   this->rm = rm;
   if (!rm)
@@ -105,8 +109,11 @@ void Goals::load(ResourceManager *rm, const std::string &scnPath) {
   for (const std::string &extra : scn->getList("start", "extragoals"))
     for (const std::string &file : extraFiles(rm, extra))
       this->readGoals(file, lower(file) == lower(trim(extra)));
-  // [start] triggers=: each section's trigger fired once, at once (not kept)
-  for (const std::string &t : scn->getList("start", "triggers")) {
+  // [start] triggers=: each section's trigger fired once, at once (not kept:
+  // 0x591375 makes each and fires it). A saved zoo put back runs the
+  // [resume] ones in their place (resumeScript 0x58fb34 -> applyStartSettings
+  // 0x58ed1f with "resume")
+  for (const std::string &t : scn->getList(resume ? "resume" : "start", "triggers")) {
     Goal g;
     g.file = scnPath;
     std::string sec = trim(t);
@@ -339,9 +346,17 @@ void Goals::evaluateAll() {
 // so; 6-8 failed when v < / >= / != value, else met. A change to a new
 // state fires the trigger; back to 0 resets quietly. Sticky: once only.
 int Goals::result(const Goal &g) const {
-  if (!this->hooks.measure)
+  int v;
+  if (g.rulea == 9)
+    v = this->countState(g.ruleb);
+  else if (g.rulea == 10)
+    v = this->clickRule(g);
+  else if (g.rulea == 11)
+    v = this->listRule(g);
+  else if (!this->hooks.measure)
     return 0;
-  int v = this->hooks.measure(g);
+  else
+    v = this->hooks.measure(g);
   switch (g.type) {
   case 0: return v >= g.value ? 1 : 0;
   case 1: return v < g.value ? 1 : 0;
@@ -354,6 +369,76 @@ int Goals::result(const Goal &g) const {
   case 8: return v != g.value ? 2 : 1;
   default: return 0;
   }
+}
+
+// Rule 9, the tutorials' step counter (zoo.exe 0x4f04be): the scenario
+// manager's goals (0x638ff8 +0x34, each asked its state, slot 8) counted
+// when their state is ruleb. Its list starts with the scenario's own goal -
+// the time limit, met from the start when there is none - so a tutorial's
+// first goal, "1 goal in state 1", is met at once, the next "2", and so on
+// as each step's goals are met
+int Goals::countNodes(const Node &n, int s) const {
+  int count = this->nodeState(n) == s ? 1 : 0;
+  for (const Node &c : n.children)
+    count += this->countNodes(c, s);
+  return count;
+}
+int Goals::countState(int s) const {
+  int count = this->durationState == s ? 1 : 0;
+  for (const Node &n : this->roots)
+    count += this->countNodes(n, s);
+  return count;
+}
+
+// Rule 10 (zoo.exe 0x4f0506): ruleb 0 the element is there and not hidden,
+// else the element has been clicked - and gives the goal's value then, 0
+// if not
+int Goals::clickRule(const Goal &g) const {
+  if (g.ruleb == 0)
+    return this->hooks.visible && this->hooks.visible(g.arga) ? g.value : 0;
+  return this->takeClick(g.arga) ? g.value : 0;
+}
+
+// Rule 11 (zoo.exe 0x61bb06): a list is there and has been clicked (0x4f052c);
+// ruleb 0 gives its picked row, else 1 when that row's text is the string
+// argb and -2 when it isn't (no list, or not clicked: -2 too)
+int Goals::listRule(const Goal &g) const {
+  const int none = -2;
+  if (!this->hooks.listIndex || this->hooks.listIndex(g.arga) < 0)
+    return none;
+  if (!this->takeClick(g.arga))
+    return none;
+  if (g.ruleb == 0)
+    return this->hooks.listIndex(g.arga);
+  const std::string text = this->hooks.listText ? this->hooks.listText(g.arga) : "";
+  return !text.empty() && this->rm && text == this->rm->getString(static_cast<uint32_t>(g.argb)) ? 1 : none;
+}
+
+// 0x4f052c: the first time it's asked, the click observer is registered
+// (0x5b0f51) and it answers no; then an element not yet known is entered
+// (nothing clicked) and no; a known one clicked since (bit 2 of its flags
+// set by the observer) answers yes, once
+bool Goals::takeClick(int element) const {
+  if (!this->clickWatching) {
+    this->clickWatching = true;
+    return false;
+  }
+  auto it = this->clicks.find(element);
+  if (it == this->clicks.end()) {
+    this->clicks[element] = 0;
+    return false;
+  }
+  if ((it->second & 2) == 0)
+    return false;
+  it->second = it->second != 2 ? 1 : 0;
+  return true;
+}
+
+// 0x5b0f51: an element asked about before gets bit 2
+void Goals::noteClick(int element) {
+  auto it = this->clicks.find(element);
+  if (it != this->clicks.end())
+    it->second |= 2;
 }
 
 void Goals::evaluate(Goal &g) {
@@ -515,11 +600,13 @@ void Goals::restoreOriginal(const std::vector<int> &states, uint32_t version) {
   }
 }
 
-// A popup section of the goal's file, read over its [default]: the picture
+// zoo.exe goalPopup 0x4fc812 (a trigger's popup number above 0, not quiet,
+// goes to loadScenarioPopup 0x5a1b15). A popup section of the goal's file,
+// read over its [default]: the picture
 // (image1) and text (longText1: a string id, or a lang0.dll TEXT name such
 // as AWARD_AWARD1, whose words the map folder's award1.txt holds)
 void Goals::showPopup(const std::string &file, int section) {
-  if (!this->hooks.popup || !this->rm)
+  if (!this->hooks.popup || !this->rm || section <= 0)
     return;
   IniReader *ini = this->rm->getIniReader(file);
   if (!ini)
@@ -529,8 +616,19 @@ void Goals::showPopup(const std::string &file, int section) {
     std::string v = trim(ini->get(sec, k));
     return v.empty() ? trim(ini->get("default", k)) : v;
   };
-  std::string image = key("image1"), longText = key("longtext1");
-  bool pause = std::atoi(key("pause").c_str()) != 0;
+  std::string longText = key("longtext1");
+  Hooks::Popup popup;
+  popup.layout = std::atoi(key("layout").c_str());
+  popup.background = key("background");
+  popup.icon = key("icon");
+  popup.image1 = key("image1");
+  popup.image2 = key("image2");
+  // (a pause of exactly 1: 0x5a1b15 passes pause == 1 on; modal reads into the same place)
+  popup.pause = std::atoi(key("pause").c_str()) == 1 || std::atoi(key("modal").c_str()) == 1;
+  popup.ok = std::atoi(key("ok").c_str()) != 0;
+  popup.cancel = std::atoi(key("cancel").c_str()) != 0;
+  const int shortText1 = std::atoi(key("shorttext1").c_str()), shortText2 = std::atoi(key("shorttext2").c_str());
+  const std::string longText2 = key("longtext2");
   const std::string persistent = key("persistentshorttext");
   delete ini;
   // The reminder bar (0x5a1b15: persistentShortText, -1 the first goal still
@@ -562,8 +660,17 @@ void Goals::showPopup(const std::string &file, int section) {
       text = trim(text);
     }
   }
+  // (a longText1 gives the message by its name; without one, shortText1's string:
+  // 0x5a1b15 sets the message element from either)
+  if (text.empty() && longText.empty() && shortText1 > 0)
+    text = this->rm->getString(static_cast<uint32_t>(shortText1));
+  if (!longText2.empty() && !std::all_of(longText2.begin(), longText2.end(), ::isdigit))
+    popup.text2 = langText(longText2);
+  if (popup.text2.empty() && shortText2 > 0)
+    popup.text2 = this->rm->getString(static_cast<uint32_t>(shortText2));
+  popup.text = text;
   if (!text.empty())
-    this->hooks.popup(image, text, pause);
+    this->hooks.popup(popup);
 }
 
 // (0x5a1b15 with a persistentShortText of -1: the scenario's goals in turn,
@@ -601,6 +708,14 @@ void Goals::fire(const Goal &g, bool quiet) {
     case 0:
       if (!quiet)
         this->showPopup(g.file, g.targa);
+      break;
+    case 1: // the tutorial clicks the element itself (0x5a0a10: 0x506f04 presses it
+    case 2: // and lets go), then the popup targb - not when a saved game's put back
+      if (!quiet) {
+        if (this->hooks.click)
+          this->hooks.click(g.targa);
+        this->showPopup(g.file, g.targb);
+      }
       break;
     case 3:
     case 4:
@@ -707,6 +822,39 @@ void Goals::fire(const Goal &g, bool quiet) {
     }
     break;
   }
+  case 5:
+    // An animal given (0x5a17a8, not when a saved game's states are put
+    // back): of species targa and subtype m, f or y (truleb 0-2), put down
+    // by the entrance, in its crate; then popup targb - none when no animal of that
+    // species is made or no tile takes it
+    if (quiet || g.truleb < 0 || g.truleb > 2)
+      break;
+    if (this->hooks.giveAnimal && this->hooks.giveAnimal(g.targa, g.truleb) && g.targb > 0)
+      this->showPopup(g.file, g.targb);
+    break;
+  case 8:
+    // Animals removed (0x61c27d, a loaded game too): those whose truleb 0
+    // cNameID (the class slot 0x20), 1 family, 2 genus, 3 species (+0x1ec) is
+    // targa; then popup targb
+    if (this->hooks.removeAnimals)
+      this->hooks.removeAnimals(g.truleb, g.targa);
+    if (!quiet && g.targb > 0)
+      this->showPopup(g.file, g.targb);
+    break;
+  case 9:
+    // Sell Animal allowed (targa above 0) or greyed (0x61c408: 0x592fe3);
+    // then popup targb
+    if (this->hooks.sellAnimals)
+      this->hooks.sellAnimals(g.targa > 0);
+    if (!quiet && g.targb > 0)
+      this->showPopup(g.file, g.targb);
+    break;
+  case 10:
+    // Every research program done (0x47e76a -> 0x47e657, a loaded game
+    // too; targa above 0 fills their progress)
+    if (this->hooks.researchAll)
+      this->hooks.researchAll(g.targa > 0);
+    break;
   case 6:
     if (std::find(this->awards.begin(), this->awards.end(), g.targa) == this->awards.end()) {
       this->awards.push_back(g.targa);

@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -47,14 +48,29 @@ public:
     std::function<int(const Goal &)> measure;
     // Whether measure knows the goal's rule (rules it doesn't know read 0)
     std::function<bool(const Goal &)> measures;
-    // A popup: its picture and text; pause=1: the game waits on it
-    std::function<void(const std::string &image, const std::string &text, bool pause)> popup;
+    // A popup (loadScenarioPopup 0x5a1b15): the keys of its section over its
+    // [default]
+    struct Popup {
+      int layout = 0;                           // layout: 45100, 45200 or 45000 (confirml, confirmm, confirm)
+      std::string background, icon, image1, image2;
+      std::string text, text2;                  // longText1 / shortText1, longText2 / shortText2
+      bool ok = true, cancel = false, pause = false;
+    };
+    std::function<void(const Popup &)> popup;
     // The tutorials' reminder bar (objectve.lyt) shown with this text, as a
     // popup with a persistentShortText sets it (loadScenarioPopup 0x5a1b15)
     std::function<void(const std::string &text)> objective;
     // A UI element disabled (true) or enabled; true when that changed it
     std::function<bool(int element, bool disable)> disable;
     std::function<void(int element, bool hide)> hide;
+    // A UI element there and not hidden (rule 10, ruleb 0: 0x5ee058)
+    std::function<bool(int element)> visible;
+    // A list's picked row and its text (rule 11, 0x61bb06; -1: no such list)
+    std::function<int(int element)> listIndex;
+    std::function<std::string(int element)> listText;
+    // A UI element clicked by the tutorial itself (goalFire 2/1, 2/2:
+    // 0x506f04 presses the element, which then does what a click does)
+    std::function<void(int element)> click;
     // Cash: 0 booked and added, 1 added, 2 set to
     std::function<void(int amount, int mode)> cash;
     std::function<void(int stringId)> message;
@@ -70,17 +86,31 @@ public:
     std::function<int()> months;
     // The scenario over (allGoalsMet 0x48a726): 1 won, 2 lost
     std::function<void(int outcome)> ended;
+    // goalFire 5 (0x5a17a8): an animal of that species (cNameID) and subtype
+    // (0 m, 1 f, 2 y) put down near the entrance; true when it was placed
+    std::function<bool(int species, int subtype)> giveAnimal;
+    // goalFire 8 (0x61c27d): every animal removed whose kind is id (0 species,
+    // 1 family, 2 genus, 3 species +0x1ec)
+    std::function<void(int kind, int id)> removeAnimals;
+    // goalFire 9 (0x61c408): Sell Animal in Animal Information allowed or not
+    std::function<void(bool allowed)> sellAnimals;
+    // goalFire 10 (0x47e76a): all research done (0x47e657); finish: the
+    // programs' progress filled too
+    std::function<void(bool finish)> researchAll;
   };
 
   void setHooks(Hooks hooks) { this->hooks = std::move(hooks); }
   const Hooks &getHooks() const { return this->hooks; } // (checks)
-  // A map's goals (and its [start] triggers= fired once)
-  void load(ResourceManager *rm, const std::string &scnPath);
+  // A map's goals (and its [start] triggers= fired once; a saved zoo put
+  // back (resume), its [resume] ones instead - zoo.exe resumeScript 0x58fb34)
+  void load(ResourceManager *rm, const std::string &scnPath, bool resume = false);
   void clear();
   void update(float seconds);
   // Every goal checked now (tests)
   void evaluateAll();
   const std::vector<Goal> &all() const { return this->goals; }
+  // (checks) the state a goal's rule gives now: 0 not met, 1 met, 2 failed
+  int stateNow(const Goal &g) const { return this->result(g); }
   std::vector<Goal> &mutableAll() { return this->goals; }
   // Awards received, in order
   std::vector<int> awards;
@@ -127,6 +157,10 @@ public:
   // The reminder bar clicked (objectve_Message_click 0x4a09f8): the last
   // popup that set it opened again, while there is one
   void reopenPopup();
+  // A button clicked (the click observer 0x5b0f51, registered with the UI
+  // by the first rule 10 asked, 0x4f052c): rule 10 sees it, once, if it
+  // was asked about this element before
+  void noteClick(int element);
 
   // The scenario page's words (Scenario Information, ui/zooinfo4.lyt, filled
   // by zoo.exe 0x4f004a): the scenario's name (its [desc] name= string, via
@@ -167,6 +201,16 @@ private:
   int result(const Goal &g) const;
   void fire(const Goal &g, bool quiet);
   void showPopup(const std::string &file, int section);
+  // Rule 9 (0x4f04be): how many goals of the scenario's list - the time
+  // limit first, a composite and its children - are in state s
+  int countState(int s) const;
+  int countNodes(const Node &n, int s) const;
+  // Rule 10 (0x4f0506)
+  int clickRule(const Goal &g) const;
+  int listRule(const Goal &g) const;
+  bool takeClick(int element) const;
+  mutable bool clickWatching = false;       // (0x63e370: the observer registered)
+  mutable std::map<int, int> clicks;        // (0x63e360: element -> flags, 2 clicked)
   // The last popup that set the reminder bar (the original's record at
   // 0x638f28: its section, kept until a popup without one), and the text a
   // persistentShortText of -1 gives

@@ -699,7 +699,11 @@ int Staff::monthlyWages() const {
 // ----------------------------------------------------------------------------
 // In a tank (trainer.ai): under the water walking is its swim (bWalksub
 // subswim) and standing subidle; at the surface surfswim (bWalksurf) and
-// surfidle
+// surfidle. (zoo.exe unitStartMoveSet 0x4a8cfb, which every Job's go-to
+// tick calls: "bFly" for a flyer (+0x1bc 1), else "bRun" when its argument
+// is set - only Job16 and Job26 pass one, unmeasured - else "bWalk"; ours
+// takes the walk from the type's own animation names, so one move set
+// reads as the other)
 std::string Staff::inWater(const Member &m, const std::string &name) const {
   if (m.water == 3) {
     if (name == "walk" || name == "run")
@@ -2610,7 +2614,13 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
         return;
       [[fallthrough]];
     case 27: { // up the inside of the wall to its rim (Job28_ClimbUpB:
-      // bClimbUp)
+      // bClimbUp). The original keeps a unit on the gate or past-gate tile
+      // between two heights, habitatPastGatePoint 0x49b1cc's and
+      // habitatGateEntryPoint 0x49b231's (the tank's entry point z),
+      // clamped by the unit water state 0x410857 each update; ours climbs
+      // between the same two (the ground and the wall's rim) by its own
+      // interpolation, so nothing pushes it out of them (ours:, not
+      // compared number for number)
       const float ex0 = (m.inX + m.outX) * 0.5f, ey0 = (m.inY + m.outY) * 0.5f;
       m.phase = 26;
       climb(m, ex0, ey0, ex->wallTop() - groundAt(map, ex0, ey0), false, true, 1, map);

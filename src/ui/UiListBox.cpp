@@ -259,6 +259,8 @@ SDL_Texture* UiListBox::loadIconTexture(SDL_Renderer* renderer, const std::strin
     }
 }
 
+std::function<void(int)> UiListBox::clickObserver;
+
 UiAction UiListBox::handleInputs(std::vector<Input>& inputs) {
     UiAction result = UiAction::NONE;
     for (const Input& input : inputs) {
@@ -274,12 +276,24 @@ UiAction UiListBox::handleInputs(std::vector<Input>& inputs) {
             if (this->isDisabled())
                 continue;
             int clicked = getItemAtPoint(mx, my);
+            if (clicked >= 0 && clickObserver)
+                clickObserver(this->getId());
             if (toggle_select && clicked >= 0) {
                 items[clicked].checked = !items[clicked].checked;
                 if (selection_action != UiAction::NONE) result = selection_action;
             } else if (clicked >= 0 && clicked != selected_index) {
                 selected_index = clicked;
                 if (selection_action != UiAction::NONE) result = selection_action;
+            }
+            if (double_click_action != UiAction::NONE && clicked >= 0) {
+                const unsigned long long now = SDL_GetTicks();
+                if (clicked == last_click_row && now - last_click_tick <= 500) {
+                    result = double_click_action;
+                    last_click_row = -1;
+                } else {
+                    last_click_row = clicked;
+                    last_click_tick = now;
+                }
             }
             if (!toggle_select && clicked >= 0 && onPick) {
                 selected_index = clicked;

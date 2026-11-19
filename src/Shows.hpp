@@ -4,6 +4,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include "Animals.hpp"
 #include "Fences.hpp"
 #include "Guests.hpp"
 
@@ -143,6 +144,7 @@ private:
   void releaseAudience(Show &s, bool cancelled);
   void notice(Show &s, const std::string &text);
   void post(int id, int kind, int animal, const std::vector<std::string> &values);
+  void giveUpHome(Animals::Member &m, const Fences::Exhibit &home, int actual);
 };
 
 #endif

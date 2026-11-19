@@ -57,6 +57,8 @@ void WorldIndex::rebuild(const WorldMap &map, const PlacedObjects &objects, cons
   this->w = map.getWidth();
   this->h = map.getHeight();
   this->grid.assign(static_cast<size_t>(this->w) * this->h, What::Nothing);
+  this->quarters.assign(static_cast<size_t>(this->w) * this->h, 0);
+  this->avoiders.assign(static_cast<size_t>(this->w) * this->h, 0);
   // The map's objects (rocks, trees, the entrance building)
   for (const PlacedObjects::Object &o : objects.objects()) {
     if (o.fence)
@@ -69,6 +71,7 @@ void WorldIndex::rebuild(const WorldMap &map, const PlacedObjects &objects, cons
       std::swap(fx, fy);
     float hx = fx / 4.0f, hy = fy / 4.0f; // half the footprint, in tiles
     What what = o.className == "building" ? What::Building : What::Object;
+    const bool avoids = o.className != "building" && this->avoidEdges(o.subClass, o.typeName, rm);
     // The quarter-tiles it covers (zoo.exe keeps four object slots a tile:
     // a quarter is taken when its middle is under the footprint), and a
     // tile with any taken is blocked - a one-tile rock on a tile corner
@@ -77,8 +80,15 @@ void WorldIndex::rebuild(const WorldMap &map, const PlacedObjects &objects, cons
     for (int qy = static_cast<int>(std::floor((o.y - hy) * 2)); qy <= static_cast<int>(std::floor((o.y + hy) * 2)); qy++)
       for (int qx = static_cast<int>(std::floor((o.x - hx) * 2)); qx <= static_cast<int>(std::floor((o.x + hx) * 2)); qx++) {
         float mx = qx * 0.5f + 0.25f, my = qy * 0.5f + 0.25f;
-        if (mx > o.x - hx && mx < o.x + hx && my > o.y - hy && my < o.y + hy)
-          this->addBlock(static_cast<int>(std::floor(mx)), static_cast<int>(std::floor(my)), 1, 1, what);
+        if (mx > o.x - hx && mx < o.x + hx && my > o.y - hy && my < o.y + hy) {
+          const int tx = static_cast<int>(std::floor(mx)), ty = static_cast<int>(std::floor(my));
+          this->addBlock(tx, ty, 1, 1, what);
+          if (tx >= 0 && ty >= 0 && tx < this->w && ty < this->h) {
+            const size_t cell = static_cast<size_t>(ty) * this->w + tx;
+            this->quarters[cell] |= static_cast<unsigned char>(1 << ((qx & 1) + 2 * (qy & 1)));
+            this->avoiders[cell] |= avoids ? 1 : 0;
+          }
+        }
       }
   }
   // Tank filters
@@ -86,6 +96,41 @@ void WorldIndex::rebuild(const WorldMap &map, const PlacedObjects &objects, cons
     const Fences::FilterType &k = fences.filterType(f.file);
     this->addBlock(f.x, f.y, k.footprintX, k.footprintY, What::Filter);
   }
+}
+
+int WorldIndex::quarterMask(int x, int y) const {
+  if (x < 0 || y < 0 || x >= this->w || y >= this->h || this->quarters.empty())
+    return 0;
+  return this->quarters[static_cast<size_t>(y) * this->w + x];
+}
+
+bool WorldIndex::quarterAvoids(int x, int y) const {
+  if (x < 0 || y < 0 || x >= this->w || y >= this->h || this->avoiders.empty())
+    return false;
+  return this->avoiders[static_cast<size_t>(y) * this->w + x] != 0;
+}
+
+// A scenery type's cAvoidEdges is 1 (zoo.exe sceneryTypeLoad 0x4ba5b0 sets
+// type +0x56, which the object's class slot 0xb4, 0x40fbbd, returns)
+bool WorldIndex::avoidEdges(const std::string &subClass, const std::string &type, ResourceManager *rm) {
+  const std::string key = Utils::string_to_lower(subClass) + "/" + Utils::string_to_lower(type);
+  auto found = this->avoidCache.find(key);
+  if (found != this->avoidCache.end())
+    return found->second;
+  bool avoids = false;
+  if (rm)
+    for (const char *ext : {".ai", ".ucs", ".ucb", ".uca"}) {
+      const std::string file = "scenery/" + key + ext;
+      if (!rm->hasResource(file))
+        continue;
+      if (IniReader *ai = rm->getIniReader(file)) {
+        avoids = ai->getInt("characteristics/integers", "cavoidedges", 0) == 1;
+        delete ai;
+      }
+      break;
+    }
+  this->avoidCache[key] = avoids;
+  return avoids;
 }
 
 void WorldIndex::addBlock(int x0, int y0, int bw, int bh, What what) {

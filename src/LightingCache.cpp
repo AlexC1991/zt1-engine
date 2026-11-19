@@ -16,11 +16,13 @@
 #endif
 #include <windows.h>
 #endif
+#include <mutex>
 namespace LightingAssets {
 namespace {
 constexpr uint32_t format=1,maxPayload=16*1024*1024;
 constexpr uint64_t maxCacheBytes=256ull*1024*1024;
 CacheStats counts;
+std::mutex countLock; // ours: a pose is read from and written to the cache on a worker thread, as the buildings' are on the main one
 struct Header {uint64_t magic,key;uint32_t version,rawBytes,packedBytes,checksum;};
 constexpr uint64_t magic=0x314548434143544cull;
 static_assert(sizeof(Header)==32 && sizeof(Point)==12 && sizeof(Face)==72);
@@ -58,7 +60,7 @@ void prune(const std::filesystem::path &dir) {
  size_t left=entries.size();for(const auto &e:entries){if(total<=maxCacheBytes && left<=2048)break;if(remove(e.name,ec)){total-=e.bytes;--left;}ec.clear();}
 }
 }
-CacheStats modelCacheStats(){return counts;}
+CacheStats modelCacheStats(){std::lock_guard<std::mutex> g(countLock);return counts;}
 // addition: local compressed geometry with bounded allocation, checksum and
 // structural validation. A malformed cache is a miss, not a gameplay error.
 std::vector<unsigned char> encodeModelCache(uint64_t key,const Model &m) {
@@ -88,13 +90,13 @@ bool decodeModelCache(uint64_t key,const std::vector<unsigned char> &data,Model 
  out=std::move(m);return true;
 }
 bool loadModelCache(uint64_t key,Model &out) {
- counts.lastKey=key;const auto path=file(key);std::error_code ec;
- if(path.empty() || !std::filesystem::is_regular_file(path,ec)){++counts.misses;return false;}
- const auto length=std::filesystem::file_size(path,ec);if(ec || length>maxPayload+sizeof(Header)){++counts.rejected;++counts.misses;return false;}
+ {std::lock_guard<std::mutex> g(countLock);counts.lastKey=key;}const auto path=file(key);std::error_code ec;
+ if(path.empty() || !std::filesystem::is_regular_file(path,ec)){std::lock_guard<std::mutex> g(countLock);++counts.misses;return false;}
+ const auto length=std::filesystem::file_size(path,ec);if(ec || length>maxPayload+sizeof(Header)){std::lock_guard<std::mutex> g(countLock);++counts.rejected;++counts.misses;return false;}
  std::vector<unsigned char> bytes(size_t(length),0);std::ifstream in(path,std::ios::binary);
- if(!in.read(reinterpret_cast<char*>(bytes.data()),std::streamsize(bytes.size())) || !decodeModelCache(key,bytes,out)){++counts.rejected;++counts.misses;return false;}
+ if(!in.read(reinterpret_cast<char*>(bytes.data()),std::streamsize(bytes.size())) || !decodeModelCache(key,bytes,out)){std::lock_guard<std::mutex> g(countLock);++counts.rejected;++counts.misses;return false;}
  std::filesystem::last_write_time(path,std::filesystem::file_time_type::clock::now(),ec);
- ++counts.hits;return true;
+ {std::lock_guard<std::mutex> g(countLock);++counts.hits;}return true;
 }
 void saveModelCache(uint64_t key,const Model &model) {
  const auto path=file(key);if(path.empty())return;auto bytes=encodeModelCache(key,model);if(bytes.empty())return;
@@ -108,6 +110,6 @@ void saveModelCache(uint64_t key,const Model &model) {
 #else
  std::filesystem::rename(temp,path,ec);if(ec){std::filesystem::remove(temp,ec);return;}
 #endif
- ++counts.writes;if(counts.writes==1 || counts.writes%32==0)prune(path.parent_path());
+ uint64_t writes;{std::lock_guard<std::mutex> g(countLock);writes=++counts.writes;}if(writes==1 || writes%32==0)prune(path.parent_path());
 }
 }

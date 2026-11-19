@@ -214,6 +214,29 @@ void Ambient::guestArrived(const WorldMap &map) {
   }
   if (this->month == 9 && this->day == 31)
     send(5084, nullptr, 0);
+  // The dated items (0x4f7ebe's other half): each on its day, off again the
+  // day after - a latch (0x63cb39, 0x63cb3a, 0x63cb38) says which is out
+  if (this->setTypeAvailable) {
+    auto dated = [&](bool today, bool &out, int nameId) {
+      if (today && !out) {
+        this->setTypeAvailable(nameId, true);
+        out = true;
+      } else if (!today && out) {
+        this->setTypeAvailable(nameId, false);
+        out = false;
+      }
+    };
+    const bool christmas = this->month == 11 && this->day == 25;
+    dated(christmas, this->snowmanOn, 7079);
+    dated(christmas, this->treeOn, 7077);
+    if (!Ambient::halloweenDone()) // (0x63cb37 set: left on from the start)
+      dated(this->month == 9 && this->day == 31, this->pumpkinOn, 7078);
+    // the Yellow Brick Path, once (0x63cb36): lions and tigers and bears
+    if (this->bearsTogether && !this->yellowDone) {
+      this->setTypeAvailable(9111, true);
+      this->yellowDone = true;
+    }
+  }
   if (this->month == 8 && this->day == 15) {
     if (!this->biplaneSent) {
       this->biplaneSent = true;

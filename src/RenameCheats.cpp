@@ -288,6 +288,24 @@ RenameCheats::Flags g_flags;
 void RenameCheats::setHooks(const Hooks &hooks) { g_hooks = hooks; }
 const RenameCheats::Hooks &RenameCheats::hooks() { return g_hooks; }
 
+// zoo.exe 0x591426 (applyHolidayStart), the part under isRealDate 0x412c22
+// (the system clock: day 31, month 10): the first time in a run (0x63cb37 off)
+// the witch (cNameID 5084) put back with its frequency 30 (0x607a78),
+// every guest's clothes 10 / 2 / 11 (0x60739a), every building's colours 7 / 5
+// (0x6072e4); then, every time, the Jack-O'-Lantern available
+bool RenameCheats::halloweenStart(World &world, int day, int month) {
+  if (day != 31 || month != 10)
+    return false;
+  if (!Ambient::halloweenDone()) {
+    Ambient::halloweenDone() = true;
+    world.getAmbient().setFrequency(5084, 30);
+    recolour(world, 10, 2, 11, 7, 5);
+  }
+  if (g_hooks.typeAvailable)
+    g_hooks.typeAvailable(7078);
+  return true;
+}
+
 // zoo.exe 0x44940b, a guest's names (exact, case and all - the string's
 // bytes and length, 0x40da1d)
 static std::string guestCheat(World &world, int guest, const std::string &name) {

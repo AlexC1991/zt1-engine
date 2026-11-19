@@ -117,6 +117,33 @@ public:
   // with last 0)
   void dueNow();
   bool santaSent = false, biplaneSent = false; // zoo.exe 0x63e256, 0x63e25c
+  // The dated items (zoo.exe 0x4f7ebe, with guestArrived): Holiday Tree (7077)
+  // and Snowman (7079) from 25 December, Jack-O'-Lantern (7078) on 31
+  // October, the Yellow Brick Path (9111) once a lion, a tiger and a grizzly
+  // share an exhibit (bearsTogether, set by Animals: 0x447dc1, 0x63cb35).
+  // availability is the world's (ItemCatalog); the latches are 0x63cb39,
+  // 0x63cb3a, 0x63cb38, 0x63cb36
+  std::function<void(int nameId, bool on)> setTypeAvailable;
+  bool bearsTogether = false;
+  // zoo.exe 0x607a78 (kind id, frequency): the kind put in the world's list
+  // again with its last 0 (0x59148e) and its frequency (+0x10c) set. false
+  // when the zoo has no such kind
+  bool setFrequency(int nameId, int seconds) {
+    const int kind = this->kindOf(nameId);
+    if (kind < 0)
+      return false;
+    this->allow(nameId);
+    this->kinds[kind].last = 0;
+    this->kinds[kind].frequency = seconds;
+    return true;
+  }
+  // 0x63cb37: the real-date Halloween start ran (once a run; the 31 October
+  // pumpkin's daily switching stands down after it)
+  static bool &halloweenDone() {
+    static bool done = false;
+    return done;
+  }
+  bool snowmanOn = false, treeOn = false, pumpkinOn = false, yellowDone = false;
   // One at a place, going a way (tiles, tiles a second) for a while
   void spawnAt(int kind, float x, float y, float vx, float vy, float life) {
     if (kind >= 0 && kind < static_cast<int>(this->kinds.size())) {

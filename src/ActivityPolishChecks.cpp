@@ -1624,7 +1624,7 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       Animals::Member d;d.id=900002;d.type=dol;d.x=30.5f;d.y=32.5f;d.swimZ=1.0f;
       d.breathCheck=0;a.breathTick(d);
       const bool rose=d.breath==dt.breathIncrement&&d.breathCheck==29;
-      d.breathCheck=0;d.swimZ=5.9f;a.breathTick(d);const int atTop=d.breath;
+      d.breathCheck=0;d.swimZ=6.0f;a.breathTick(d);const int atTop=d.breath; // (the surface is the level exactly: measured, #311)
       d.swimZ=1.0f;for(int k=0;k<200;++k)a.breathTick(d);
       const bool stuck=d.breath==atTop&&d.breathCheck<0;
       out<<"BREATH dolphin inc "<<dt.breathIncrement<<" threshold "<<dt.breathThreshold<<" rose "<<rose
@@ -1945,6 +1945,78 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
          <<", again next year "<<santasNextYear<<", 14 Sep "<<otherDay<<"\n";
       check("the special days' flyers come with the guests: a witch each on 31 Oct, Santa once on 25 Dec, none other days (0x4f7ebe, #219)",
             witch>=0&&witches==3&&witchesNoGuest==3&&santas==1&&santasNextYear==2&&otherDay==0);
+      // The dated items (zoo.exe 0x4f7ebe, the same call): Snowman 7079 and
+      // Holiday Tree 7077 are out on 25 December and gone the day after,
+      // Jack-O'-Lantern 7078 on 31 October; the Yellow Brick Path 9111 not
+      // before a lion, a tiger and a grizzly share an exhibit (0x447dc1),
+      // then once, whatever the day
+      {
+        std::map<int,bool> avail;
+        amb.setTypeAvailable=[&](int id,bool on){avail[id]=on;};
+        amb.snowmanOn=amb.treeOn=amb.pumpkinOn=amb.yellowDone=amb.bearsTogether=false;
+        amb.clear();amb.setAllowed({});
+        amb.setDate(14,8);amb.guestArrived(map);
+        const bool plain=avail.empty();
+        amb.setDate(25,11);amb.guestArrived(map);
+        const bool xmas=avail[7079]&&avail[7077]&&!avail.count(7078);
+        amb.setDate(26,11);amb.guestArrived(map);
+        const bool xmasGone=!avail[7079]&&!avail[7077];
+        amb.setDate(31,9);amb.guestArrived(map);
+        const bool halloween=avail[7078]&&!avail[7079];
+        amb.setDate(1,10);amb.guestArrived(map);
+        const bool halloweenGone=!avail[7078]&&!avail.count(9111);
+        amb.bearsTogether=true;amb.guestArrived(map);
+        const bool yellow=avail[9111];
+        avail[9111]=false;amb.guestArrived(map);
+        const bool once=!avail[9111];
+        out<<"DATED ITEMS plain "<<plain<<" xmas "<<xmas<<" gone "<<xmasGone<<" halloween "<<halloween<<" gone "<<halloweenGone
+           <<" yellow "<<yellow<<" once "<<once<<std::endl;
+        check("the dated items come and go with the days: Snowman and Holiday Tree 25 Dec, Jack-O'-Lantern 31 Oct, the Yellow Brick Path once with its animals (0x4f7ebe)",
+              plain&&xmas&&xmasGone&&halloween&&halloweenGone&&yellow&&once);
+        // ... and the exhibit's look at its animals (0x447dc1, each 8 s)
+        {
+          const int lion=a.typeOfFile("animals/lion.ai"),tiger=a.typeOfFile("animals/tiger.ai"),
+                    grizzly=a.typeOfFile("animals/grizzly.ai");
+          bool two=false,three=false;
+          if(lion>=0&&tiger>=0&&grizzly>=0) {
+            a.lionTigerBears=false;a.list.clear();
+            Animals::Member base;
+            for(int t:{lion,tiger}){base.id=910100+t;base.type=t;base.exhibit=77;a.list.push_back(base);}
+            a.lookAtSpecies(77);two=!a.lionTigerBears;
+            base.id=910199;base.type=grizzly;base.exhibit=78;a.list.push_back(base);
+            a.lookAtSpecies(77);const bool elsewhere=!a.lionTigerBears;
+            a.list.back().exhibit=77;a.lookAtSpecies(77);three=a.lionTigerBears&&elsewhere;
+            a.lionTigerBears=false;a.list.clear();
+          }
+          check("a lion, a tiger and a grizzly bear in one exhibit are the Yellow Brick Path's key; two, or three in two exhibits, are not (0x447dc1)",
+                two&&three);
+        }
+        // The real-date Halloween start (zoo.exe 0x591426 under 0x412c22): only
+        // on 31 October of the clock; then the witch's frequency 30 and the
+        // pumpkin available, once a run for the rest
+        {
+          Ambient &wa=world.getAmbient();
+          const int witchKind=wa.kindOf(5084);
+          std::vector<int> made;
+          RenameCheats::Hooks keep=RenameCheats::hooks(),hk=keep;
+          hk.typeAvailable=[&](int id){made.push_back(id);};
+          RenameCheats::setHooks(hk);
+          const bool wasDone=Ambient::halloweenDone();
+          Ambient::halloweenDone()=false;
+          const bool other=RenameCheats::halloweenStart(world,30,10)||RenameCheats::halloweenStart(world,31,9);
+          const bool day=RenameCheats::halloweenStart(world,31,10);
+          const bool witches=witchKind<0||wa.frequencyOf(witchKind)==30;
+          const bool oncePerRun=Ambient::halloweenDone();
+          const size_t first=made.size();
+          RenameCheats::halloweenStart(world,31,10);
+          const bool pumpkinAgain=made.size()==first+1;
+          Ambient::halloweenDone()=wasDone;RenameCheats::setHooks(keep);
+          check("the real 31 October (the PC's clock) brings the witch every 30 s and the pumpkin, once per run for the rest; no other day does (0x591426)",
+                !other&&day&&witches&&oncePerRun&&first==1&&pumpkinAgain);
+        }
+        amb.setTypeAvailable=nullptr;amb.bearsTogether=false;
+        amb.snowmanOn=amb.treeOn=amb.pumpkinOn=amb.yellowDone=false;amb.clear();
+      }
       // Their own sounds (0x4f7ebe: sounds/sleigh.wav, sounds/biplane.wav
       // 1000 more), stopped with the flight (0x41e1fd)
       std::string sound;int atten=-1,channel=-1;
@@ -3880,6 +3952,24 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     check("an idle pair really is standing on each other first",together<1.0f);
     check("the idle animal plans a step off the other",a.list[0].pathAt<a.list[0].path.size());
     out<<"IDLE together="<<together<<" steps="<<a.list[0].path.size()<<"\n";
+  }
+  // zoo.exe 0x4377fc (animalUpdate's boxed check): a crate that stays shut -
+  // here on open ground - rattles with chance cRattleChance (20) every
+  // cBoxedCheck (2) ticks, bRattle = box_used with the animal's placesound
+  {
+    Animals::Member crate=a.list[0];
+    float cx=40.5f,cy=54.5f;
+    for(int y=8;y<60;++y)for(int x=8;x<60;++x)
+      if(f.exhibitAt(x,y)<0 && (!a.tankAt || a.tankAt(x+0.5f,y+0.5f)<0)){cx=x+0.5f;cy=y+0.5f;y=x=100;}
+    crate.id=910013;crate.x=cx;crate.y=cy;crate.boxed=true;crate.exhibit=-1;
+    crate.boxCheck=0;crate.rattleLeft=0;crate.rattles=0;
+    a.list={crate};world.reindex();
+    const bool hasArt=a.art(a.list[0],"box_used",false)!=nullptr;
+    for(int k=0;k<2400;++k)a.update(0.05f,a.now+0.05,map,f);
+    const int rattled=a.list[0].rattles;
+    out<<"CRATE RATTLE art="<<hasArt<<" rattles in 120 s="<<rattled<<std::endl;
+    check("a crate left shut on open ground rattles now and then (0x4377fc: 20 in 100 every 2 ticks)",
+      hasArt && rattled>=1 && rattled<=60 && a.list[0].boxed);
   }
   a.clear();world.reindex();
   Guests::Guest arrived;arrived.arrived=0;

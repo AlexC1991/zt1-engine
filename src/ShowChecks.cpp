@@ -1213,6 +1213,20 @@ std::string runShowManagementChecks(World &world,ResourceManager *rm) {
     out<<"FIRED SPECIALIST: started "<<going<<" ("<<why<<") trainer "<<fired<<" phase "<<int(s->phase)<<"\n";
     SDL_Log("[ShowCheck] fired specialist: started %d (%s) trainer %d",int(going),why.c_str(),fired);
   }
+  // measured (#301, Task86 0x5a2f25 in the running original): the home tank's
+  // link to the show tank gone mid-show (tankGateTo gives none) - the task
+  // gives up at once and the animal stays in the show tank, not crated
+  {
+    auto *m=a.member(first);
+    if(m) {
+      m->boxed=false;m->x=47.5f;m->y=29.5f;m->exhibit=tank;m->showTank=tank;m->showHome=home;
+      Shows::Actor actor;actor.id=first;actor.home=home;actor.portal=Fences::Edge();actor.portal.x=-9;actor.portal.y=-9;
+      s->actors={actor};s->phase=Shows::Phase::Performing;s->trainer=-1;
+      shows.cancel(tank,"Link-gone regression");run(3);
+    }
+    check("with the way home gone the animal is left in the show tank, not crated (Task86 give-up)",
+      m && !m->boxed && m->showTank<0 && m->showHome<0 && m->exhibit==tank && s->phase==Shows::Phase::Waiting);
+  }
   // If the portal is removed, keep a transport capsule closed until placed home.
   auto *stranded=a.member(first);
   if(stranded) {
@@ -1227,6 +1241,18 @@ std::string runShowManagementChecks(World &world,ResourceManager *rm) {
   if(stranded){stranded->x=34.5f;stranded->y=31.5f;run(3);}
   check("placing that capsule back in the home tank releases the animal",
     stranded && !stranded->boxed && stranded->exhibit==home);
+  // zoo.exe 0x4377fc (animalBoxedCheck): a crate in a tank opens only when the
+  // tank is filled and has depth - one in a tank that isn't stays shut, and
+  // opens once it is
+  if(stranded) {
+    auto *pool=f.exhibit(home);
+    const bool was=pool->filling;
+    pool->filling=false;stranded->boxed=true;stranded->boxTimer=0;run(3);
+    const bool shut=stranded->boxed;
+    pool->filling=was;run(3);
+    check("a crate in a tank that isn't filled stays shut, and opens once it is (0x4377fc)",
+      shut && !stranded->boxed);
+  }
   // An automatic home-tank visit must reach food sites past ladder-side plants.
   st.clear();world.getItems().clear();float entryX=0,entryY=0,bankX=0,bankY=0;bool entry=false;
   for(const auto &[edge,piece]:f.pieces())if(piece.gate && f.exhibitOf(edge)==home) {

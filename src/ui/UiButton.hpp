@@ -68,6 +68,9 @@ public:
 
   // Played as any button is pressed (the original's uiclick.wav)
   static std::function<void()> clickSound;
+  // Told the id of every button clicked (zoo.exe's click observer 0x5b0f51,
+  // which the tutorials' rule 10 registers): the goals' "button clicked"
+  static std::function<void(int)> clickObserver;
   // A button whose layout lists several animations: show that one
   void chooseAnimation(size_t index);
   // The layout's animation= and stringData= (e.g. a tab's category)

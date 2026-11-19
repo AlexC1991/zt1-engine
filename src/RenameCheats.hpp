@@ -31,6 +31,14 @@ struct Hooks {
 };
 void setHooks(const Hooks &hooks);
 const Hooks &hooks();
+// zoo.exe 0x591426 (applyHolidayStart), its real-date part: when the PC's own
+// date (isRealDate 0x412c22: the system clock, not the zoo's calendar) is 31
+// October, the first time in a run - witches every 30 seconds (0x607a78,
+// kind 5084), every guest's clothes 10 / 2 / 11 (0x60739a), every
+// building's colours 7 / 5 (0x6072e4) and the Jack-O'-Lantern available;
+// the later zoos of that run only get the pumpkin. Returns whether it came
+// in at all (day and month of the clock, month 1 to 12)
+bool halloweenStart(World &world, int day, int month);
 // A guest renamed (its index in Guests::list); the name already set.
 // Returns the cheat's address ("" none) - for the checks.
 std::string guestRenamed(World &world, int guest, const std::string &name);

@@ -531,7 +531,18 @@ The place tool says when the game put nothing down (an iceberg off a tank's wate
 - **The game** (`zt1-engine.exe --embed <window>`) is a borderless window
   kept over the Play view, moving and hiding with the Lab.
 
-Both close when the Lab closes.
+Both close when the Lab closes - and when the Lab quits to update (`app.quit()`
+sends no `window-all-closed`, so the engine is stopped by `lab:updateInstall`
+itself; left running it kept the install folder's files open). Play (both
+games) starts with the Play tab up and no dialog over it, whichever tab asked
+for it: the game's window is placed "nowhere" while another view or a dialog
+is up, and a start from another tab (`lab_action playStart`) used to stay on
+Loading the game until the Play tab was shown again.
+
+`node lab-app/tools/update-restart-check.js <folder on B:>` tries the Restart to
+update path with no release: a small Electron app with the real hand-off code
+and `zt1-update-helper.exe` quits, the helper runs a stand-in installer and
+starts the app again, and the app acknowledges it (PASS or FAIL).
 
 Ghidra comes in through the `ZT1_LabBridge` script (127.0.0.1:18489). The
 Lab starts it for itself: when nothing answers there as it opens, it runs a

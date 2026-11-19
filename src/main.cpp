@@ -1,8 +1,10 @@
 #define SDL_MAIN_HANDLED
+#include <ctime>
 #include <SDL3/SDL_main.h>
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -259,6 +261,22 @@ static void setScenarioPreview(UiImage *img, ResourceManager *rm,
       lockFileName = "lockk";
     }
 
+    // The picture the scenario itself names ([desc] lockedpicture, a folder
+    // and file such as ui/scenario/lockj/lockj: zoo.exe 0x6000ac); the guess
+    // above only when it names none
+    if (IniReader *ini = rm->getIniReader(scnPath)) {
+      std::string pic = ini->get("desc", "lockedpicture");
+      delete ini;
+      while (!pic.empty() && std::isspace(static_cast<unsigned char>(pic.back())))
+        pic.pop_back();
+      while (!pic.empty() && std::isspace(static_cast<unsigned char>(pic.front())))
+        pic.erase(pic.begin());
+      const size_t slash = pic.find_last_of('/');
+      if (slash != std::string::npos && pic.find('.') == std::string::npos) {
+        lockFolder = pic.substr(0, slash);
+        lockFileName = pic.substr(slash + 1);
+      }
+    }
     // Try PNG first (custom images), then fall back to ZT1 format
     std::string lockPng = lockFolder + "/" + lockFileName + ".png";
     std::string lockRaw = lockFolder + "/N";
@@ -2766,7 +2784,25 @@ static void updateScenarioDetails(UiLayout *layout,
   if (g_scenarioDescText) {
     if (g_scenarioDescText) {
       if (isLocked) {
-        if (!scenario->stateMessage.empty()) {
+        // The scenario's own words ([desc] lockedstory, a string id or a
+        // lang0.dll TEXT name such as SCENARIO_LOCK_STORY_0: zoo.exe
+        // scenario_ScenarioList_click 0x58e9bb -> 0x600085 -> 0x4f0264)
+        std::string lockedStory;
+        if (IniReader *ini = resourceManager->getIniReader(scenario->scenarioPath)) {
+          std::string key = ini->get("desc", "lockedstory");
+          delete ini;
+          while (!key.empty() && std::isspace(static_cast<unsigned char>(key.back())))
+            key.pop_back();
+          while (!key.empty() && std::isspace(static_cast<unsigned char>(key.front())))
+            key.erase(key.begin());
+          if (!key.empty() && std::all_of(key.begin(), key.end(), ::isdigit))
+            lockedStory = resourceManager->getString(static_cast<uint32_t>(std::atoi(key.c_str())));
+          else if (!key.empty())
+            lockedStory = langText(key);
+        }
+        if (!lockedStory.empty()) {
+          g_scenarioDescText->setText(lockedStory);
+        } else if (!scenario->stateMessage.empty()) {
           g_scenarioDescText->setText(scenario->stateMessage);
         } else {
           // Fallback for scenarios not in database
@@ -2877,6 +2913,10 @@ static void populateScenarioList(UiLayout *layout,
     if (g_scenarioListBox) {
       g_scenarioListBox->clear();
       g_scenarioListBox->setSelectionAction(UiAction::SCENARIO_LIST_SELECTION);
+      // (zoo.exe scenario_ScenarioList_pick 0x4cb2f8, the layout's
+      // handledoubleclicks: a second click on a row presses Play, when it is
+      // lit - the handler of the Play button starts open ones only)
+      g_scenarioListBox->setDoubleClickAction(UiAction::PLAY_SCENARIO_START);
 
       for (const auto &scenario : scenarioManager->getScenarios()) {
         std::string iconPath = scenario.iconPath;
@@ -3092,6 +3132,35 @@ static void keepReward(int nameId) {
       g_hud->refreshCatalog();
 }
 
+static void applyResearch(const ResearchProgram &p);
+// Goal rule 2 (zoo.exe 0x41d869) counts every entity of the world (the vector
+// at world +0x80) whose type's name (slot 0x20 of its type, +0x128) is
+// nameId: besides the animals, the staff, the objects and fences, and the
+// path tiles of that path type (the tutorials count keepers, paths, stands)
+static int otherEntitiesNamed(int nameId) {
+  if (!g_world || nameId <= 0)
+    return 0;
+  int n = 0;
+  const auto &staffTypes = g_world->getStaff().types();
+  for (const Staff::Member &m : g_world->getStaff().members())
+    n += m.type >= 0 && m.type < static_cast<int>(staffTypes.size()) && staffTypes[m.type].nameId == nameId ? 1 : 0;
+  for (const PlacedObjects::Object &o : g_world->getObjects().objects())
+    n += o.nameId == nameId ? 1 : 0;
+  WorldMap &map = g_world->getMap();
+  const std::vector<std::string> &pathTypes = map.getPathTypes();
+  int pathType = -1;
+  if (const CatalogItem *item = ItemCatalog::get().findName(nameId))
+    if (item->registrySection == "paths")
+      for (size_t i = 0; i < pathTypes.size(); i++)
+        if (pathTypes[i] == item->registryKey)
+          pathType = static_cast<int>(i);
+  if (pathType >= 0)
+    for (int y = 0; y < map.getHeight(); y++)
+      for (int x = 0; x < map.getWidth(); x++)
+        n += map.getPathType(x, y) == pathType ? 1 : 0;
+  return n;
+}
+
 static void setupGoals(ResourceManager *rm) {
   Goals::Hooks h;
   h.measure = [](const Goals::Goal &g) -> int {
@@ -3154,38 +3223,164 @@ static void setupGoals(ResourceManager *rm) {
       default: return 0;
       }
     }
-    if (g.rulea == 2 && g.ruleb == 2) { // animals of a species (arga) and kind (argb: 0 m, 1 f, 3 young)
+    // The entities' count (zoo.exe 0x41d869 rule 2): each animal whose species
+    // (cNameID) is arga (a) and whose subtype - 'm', 'f', 'p' or 'y', the
+    // table at 0x639280 - is the one argb names (b); ruleb 0 counts a, 1 b,
+    // 2 both, 3 either
+    if (g.rulea == 2 && g.ruleb >= 0 && g.ruleb <= 3) {
       int n = 0;
       for (const Animals::Member &m : an.members()) {
-        if (an.types()[m.type].nameId != g.arga)
-          continue;
-        int kind = m.baby ? 3 : m.female ? 1 : 0;
-        n += kind == g.argb ? 1 : 0;
+        const bool a = an.types()[m.type].nameId == g.arga;
+        const bool b = (m.baby ? 3 : m.female ? 1 : 0) == g.argb;
+        n += g.ruleb == 0 ? a : g.ruleb == 1 ? b : g.ruleb == 2 ? (a && b) : (a || b);
+      }
+      // (the entities that are not animals have no subtype: counted by their name)
+      if (g.ruleb == 0 || g.ruleb == 3)
+        n += otherEntitiesNamed(g.arga);
+      return n;
+    }
+    // The animals counted by what they are (zoo.exe 0x4f0ff2, rule 4; arga
+    // the wanted value, argb the second where there is one): 0 family, 1
+    // genus, 2 species, 3 location, 4 habitat; 5-9 a pair of them (5 family
+    // and location, 6 genus and location, 7 family and habitat, 8 genus and
+    // habitat, 9 habitat and location); 10 those in a crate, 11-12 in a crate
+    // of that family or genus; 13 eggs, 14-15 eggs of that family or genus;
+    // 19 of that expansion (the type's +0x54)
+    if (g.rulea == 4 && ((g.ruleb >= 0 && g.ruleb <= 15) || g.ruleb == 19)) {
+      int n = 0;
+      for (const Animals::Member &m : an.members()) {
+        const Animals::Type &t = an.types()[m.type];
+        bool hit = false;
+        switch (g.ruleb) {
+        case 0: hit = t.family == g.arga; break;
+        case 1: hit = t.genus == g.arga; break;
+        case 2: hit = t.nameId == g.arga; break;
+        case 3: hit = t.location == g.arga; break;
+        case 4: hit = t.habitatKind == g.arga; break;
+        case 5: hit = t.family == g.arga && t.location == g.argb; break;
+        case 6: hit = t.genus == g.arga && t.location == g.argb; break;
+        case 7: hit = t.family == g.arga && t.habitatKind == g.argb; break;
+        case 8: hit = t.genus == g.arga && t.habitatKind == g.argb; break;
+        case 9: hit = t.habitatKind == g.arga && t.location == g.argb; break;
+        case 10: hit = m.boxed; break;
+        case 11: hit = m.boxed && t.family == g.arga; break;
+        case 12: hit = m.boxed && t.genus == g.arga; break;
+        case 13: hit = m.egg; break;
+        case 14: hit = m.egg && t.family == g.arga; break;
+        case 15: hit = m.egg && t.genus == g.arga; break;
+        case 19: hit = t.expansionId == g.arga; break;
+        }
+        n += hit ? 1 : 0;
       }
       return n;
     }
-    // At least arga exhibits whose animals average value or more (zoo.exe
-    // 0x41da81): ruleb 0 every animal, 1 those whose type's cFamily (+0x1e4)
-    // is argb, 5 those whose cEra (+0x1f8) is - an exhibit with none of them
-    // doesn't count; none counted, not met
-    if (g.rulea == 6 && (g.ruleb == 0 || g.ruleb == 1 || g.ruleb == 5)) {
+    // The exhibits' suitability (zoo.exe 0x4b0c83 rule 5, 0x41da81 rule 6):
+    // each exhibit with animals averages its animals' suitability (only
+    // those that ruleb picks - 0 every animal, 1 a family, 2 a genus, 3 a
+    // species, 4 a location, 5 an era, 6 a habitat kind - of the value arga
+    // in rule 5, argb in rule 6; an exhibit with none of them doesn't
+    // count). Rule 5: every exhibit counted must average value or more (and
+    // one at least); rule 6: at least arga of them. Met: the value; else 0
+    if ((g.rulea == 5 || g.rulea == 6) && g.ruleb >= 0 && g.ruleb <= 6) {
+      const int want = g.rulea == 5 ? g.arga : g.argb;
       auto keep = [&](const Animals::Member &m) {
         const Animals::Type &t = an.types()[m.type];
-        return g.ruleb == 1 ? t.family == g.argb : g.ruleb == 5 ? t.era == g.argb : true;
+        switch (g.ruleb) {
+        case 1: return t.family == want;
+        case 2: return t.genus == want;
+        case 3: return t.nameId == want;
+        case 4: return t.location == want;
+        case 5: return t.era == want;
+        case 6: return t.habitatKind == want;
+        default: return true;
+        }
       };
-      int count = 0;
+      int counted = 0, met = 0;
       for (const Fences::Exhibit &ex : g_world->getFences().exhibits()) {
         if (ex.animals <= 0)
           continue;
         const int s = an.exhibitSuitability(ex.id, keep);
-        count += s >= 0 && s >= g.value ? 1 : 0;
+        if (s < 0)
+          continue;
+        counted++;
+        met += s >= g.value ? 1 : 0;
       }
-      return count >= std::max(1, g.arga) ? g.value : 0;
+      if (g.rulea == 5)
+        return counted > 0 && met == counted ? g.value : 0;
+      return met > 0 && met >= std::max(1, g.arga) ? g.value : 0;
     }
     if (g.rulea == 7) // (the month, the year, or both as months)
       return g.ruleb == 0 ? month : g.ruleb == 1 ? year : g.ruleb == 2 ? months : 0;
     if (g.rulea == 3 && g.ruleb == 0) // (the exhibits: habitatMgr's list)
       return static_cast<int>(g_world->getFences().exhibits().size());
+    if (g.rulea == 3 && g.ruleb == 1) { // (the exhibits with animals in, 0x412167)
+      int n = 0;
+      for (const Fences::Exhibit &ex : g_world->getFences().exhibits())
+        n += ex.animals > 0 ? 1 : 0;
+      return n;
+    }
+    if (g.rulea == 3 && g.ruleb == 2) { // (the species in exhibits, ratingKindsCount 0x41f0a6)
+      std::set<int> kinds;
+      for (const Animals::Member &m : an.members())
+        if (m.exhibit >= 0)
+          kinds.insert(m.type);
+      return static_cast<int>(kinds.size());
+    }
+    // The books (zoo.exe 0x41dd64 rule 0): row ruleb of the lifetime column
+    // (arga 2): 14 the net, every booking's sum, 15 the zoo's value
+    if (g.rulea == 0 && g.arga == 2 && g.ruleb == 14) {
+      double net = 0;
+      for (const ZooSim::Month &mo : g_sim.history())
+        net += mo.total();
+      return static_cast<int>(net);
+    }
+    if (g.rulea == 0 && g.arga == 2 && g.ruleb == 15)
+      return g_hud ? static_cast<int>(g_hud->zooInfo().value) : 0;
+    // Research done (zoo.exe 0x61bf58 rule 13): the programs of the ids in
+    // arga that are finished (a branch's or category's own id: no scenario
+    // uses one)
+    if (g.rulea == 13 && g.ruleb == 0) {
+      int n = 0;
+      for (ResearchBranch &b : Research::get().branches())
+        for (ResearchCategory &c : b.categories)
+          for (ResearchProgram &p : c.programs)
+            if (p.nameId == g.arga && (p.done || p.cost <= 0))
+              n++;
+      return n;
+    }
+    // The shows' books (zoo.exe 0x59ef30 rule 15): the sum over the shows
+    // (those of species arga, when arga is 1 or more) of 0 last month's
+    // income, 1 the income in all, 2 last month's profit (the income less the
+    // upkeep), 3 the profit in all, 4 the visitors in all
+    if (g.rulea == 15 && g.ruleb >= 0 && g.ruleb <= 4) {
+      double sum = 0;
+      for (const auto &entry : g_world->getShows().all()) {
+        const Shows::Show &s = entry.second;
+        if (g.arga >= 1) {
+          const int type = an.typeOfFile(s.species);
+          if (type < 0 || an.types()[type].nameId != g.arga)
+            continue;
+        }
+        switch (g.ruleb) {
+        case 0: sum += s.incomeLast; break;
+        case 1: sum += s.income; break;
+        case 2: sum += s.incomeLast - s.upkeepLast; break;
+        case 3: sum += s.income - s.upkeepTotal; break;
+        case 4: sum += s.visitors; break;
+        }
+      }
+      return static_cast<int>(std::llround(sum));
+    }
+    // The tanks by their walls (zoo.exe 0x48a0e3 rule 16: the habitats that are
+    // tanks, their wall height +0x184 - steps, 5 a new tank's): ruleb 0 those
+    // arga high or less, 1 arga or more, 2 exactly arga
+    if (g.rulea == 16 && g.ruleb >= 0 && g.ruleb <= 2) {
+      int n = 0;
+      for (const Fences::Exhibit &ex : g_world->getFences().exhibits())
+        if (ex.tank)
+          n += g.ruleb == 0 ? ex.wallSub <= g.arga : g.ruleb == 1 ? ex.wallSub >= g.arga : ex.wallSub == g.arga;
+      return n;
+    }
     if (g.rulea == 99) // (arga itself)
       return g.arga;
     return 0;
@@ -3193,20 +3388,32 @@ static void setupGoals(ResourceManager *rm) {
   h.measures = [](const Goals::Goal &g) {
     if (g.rulea == 1)
       return (g.ruleb >= 0 && g.ruleb <= 7) || g.ruleb == 11;
-    return (g.rulea == 2 && g.ruleb == 2) || (g.rulea == 6 && (g.ruleb == 0 || g.ruleb == 1 || g.ruleb == 5)) ||
+    return g.rulea == 9 || g.rulea == 10 || g.rulea == 11 || (g.rulea == 16 && g.ruleb >= 0 && g.ruleb <= 2) ||
+           (g.rulea == 2 && g.ruleb >= 0 && g.ruleb <= 3) ||
+           (g.rulea == 4 && ((g.ruleb >= 0 && g.ruleb <= 15) || g.ruleb == 19)) ||
+           ((g.rulea == 5 || g.rulea == 6) && g.ruleb >= 0 && g.ruleb <= 6) ||
            (g.rulea == 7 && g.ruleb >= 0 && g.ruleb <= 2) ||
-           (g.rulea == 3 && g.ruleb == 0) || g.rulea == 99;
+           (g.rulea == 3 && g.ruleb >= 0 && g.ruleb <= 2) ||
+           (g.rulea == 0 && g.arga == 2 && (g.ruleb == 14 || g.ruleb == 15)) || (g.rulea == 13 && g.ruleb == 0) ||
+           (g.rulea == 15 && g.ruleb >= 0 && g.ruleb <= 4) || g.rulea == 99;
   };
   h.objective = [](const std::string &text) {
     if (g_hud)
       g_hud->setObjective(text);
   };
-  h.popup = [](const std::string &image, const std::string &text, bool pause) {
+  h.popup = [](const Goals::Hooks::Popup &popup) {
     if (!g_hud)
       return;
-    g_hud->popup(image, text);
+    UiGameScreen::ScenarioPopup spec;
+    spec.layout = popup.layout;
+    spec.background = popup.background;
+    spec.icon = popup.icon;
+    spec.image1 = popup.image1;
+    spec.image2 = popup.image2;
+    spec.text = popup.text;
+    g_hud->popup(spec);
     // (pause=1: the game waits until it's been read)
-    if (pause && g_world && !g_world->isPaused()) {
+    if (popup.pause && g_world && !g_world->isPaused()) {
       setGamePaused(true);
       g_popupPaused = true;
     }
@@ -3221,6 +3428,21 @@ static void setupGoals(ResourceManager *rm) {
   h.hide = [](int element, bool hidden) {
     if (UiElement *e = g_hud ? g_hud->getElementById(element) : nullptr)
       e->setHidden(hidden);
+  };
+  h.listIndex = [](int element) { return g_hud ? g_hud->listSelection(element) : -1; };
+  h.listText = [](int element) { return g_hud ? g_hud->listText(element) : std::string(); };
+  h.visible = [](int element) {
+    UiElement *e = g_hud ? g_hud->getElementById(element) : nullptr;
+    return e && !e->isHidden();
+  };
+  // (the tutorial presses the button itself: a click in its middle, whose
+  // action the game then does)
+  h.click = [](int element) {
+    if (!g_hud)
+      return;
+    const UiAction action = g_hud->clickElement(element);
+    if (action != UiAction::NONE)
+      g_queuedActions.push_back(static_cast<int>(action));
   };
   h.cash = [](int amount, int mode) {
     if (mode == 2)
@@ -3253,6 +3475,121 @@ static void setupGoals(ResourceManager *rm) {
     return changed;
   };
   h.reward = [](int nameId) { keepReward(nameId); };
+  // goalFire 5, an animal given (zoo.exe 0x5a17a8): the first type of that
+  // cNameID is made as the subtype names (m, f or y) and put down on the best
+  // tile found round the entrance - rings of 3 to 20 tiles (the diamonds of
+  // tiles whose x and y distances add to the ring; each ring from its far x
+  // end, a tile's two y sides in turn). A tile counts when it is the zoo's
+  // own ground (0x40fb8d: inside the zoo wall; its habitat +0x2c: no exhibit),
+  // dry, with nothing standing on it; it scores a point each for a flat
+  // tile with no path (+0x81 is 0), for none of its four quarter slots held,
+  // and for one empty or held by a cAvoidEdges scenery (class slot 0xb4);
+  // the first of 3 ends the search, else the first best of the rings
+  h.giveAnimal = [](int species, int subtype) {
+    if (!g_world)
+      return false;
+    Animals &an = g_world->getAnimals();
+    int type = -1;
+    for (size_t i = 0; i < an.types().size() && type < 0; i++)
+      if (an.types()[i].nameId == species)
+        type = static_cast<int>(i);
+    // (the entrance is found in a world's first frames: asked for here too)
+    if (!g_world->getGuests().hasEntrance())
+      SaveGame::locateEntrance(*g_world);
+    int ex = 0, ey = 0;
+    if (type < 0 || !g_world->getGuests().entrance(ex, ey))
+      return false;
+    const WorldMap &map = g_world->getMap();
+    const Fences &fn = g_world->getFences();
+    WorldIndex &index = g_world->getIndex();
+    auto standing = [&](int x, int y) {
+      auto on = [x, y](float ux, float uy) { return static_cast<int>(std::floor(ux)) == x && static_cast<int>(std::floor(uy)) == y; };
+      for (const PlacedObjects::Object &o : g_world->getObjects().objects())
+        if (!o.fence && on(o.x, o.y))
+          return true;
+      for (const Animals::Member &m : an.members())
+        if (on(m.x, m.y))
+          return true;
+      for (const Staff::Member &m : g_world->getStaff().members())
+        if (on(m.x, m.y))
+          return true;
+      for (const Guests::Guest &g : g_world->getGuests().guests())
+        if (!g.hidden && on(g.x, g.y))
+          return true;
+      return false;
+    };
+    int bestX = -1, bestY = -1, bestScore = INT_MIN;
+    for (int ring = 3; ring <= 20 && bestScore < 3; ring++)
+      for (int dx = -ring; dx <= ring && bestScore < 3; dx++)
+        for (int side = 0; side < 2 && bestScore < 3; side++) {
+          const int dy = side == 0 ? -(ring - std::abs(dx)) : ring - std::abs(dx);
+          const int x = ex + dx, y = ey + dy;
+          const MapTile *tile = map.getTile(x, y);
+          if (!tile || x < 0 || y < 0 || x >= map.getWidth() || y >= map.getHeight() || !fn.insideZoo(x, y) ||
+              fn.exhibitAt(x, y) >= 0 || tile->terrainType == 9 || tile->terrainType == 10 || standing(x, y))
+            continue;
+          const bool flat = tile->cornerHeight[0] == tile->cornerHeight[1] && tile->cornerHeight[1] == tile->cornerHeight[2] &&
+                            tile->cornerHeight[2] == tile->cornerHeight[3];
+          const int mask = index.quarterMask(x, y);
+          const int score = (flat && !map.isPath(x, y) ? 1 : 0) + (mask == 0 ? 1 : 0) +
+                            (mask != 15 || index.quarterAvoids(x, y) ? 1 : 0);
+          if (score > bestScore) {
+            bestScore = score;
+            bestX = x;
+            bestY = y;
+          }
+        }
+    if (bestScore == INT_MIN)
+      return false;
+    // (put down as the original's world slot 0x18 adds it: no fit check)
+    const int id = an.adopt(type, subtype == 1, bestX + 0.5f, bestY + 0.5f, map, fn, true);
+    if (id < 0)
+      return false;
+    if (subtype == 2)
+      if (Animals::Member *m = an.member(id)) {
+        m->baby = true;
+        m->grow = 0;
+      }
+    an.box(id); // (it comes in its crate: 0x505941)
+    return true;
+  };
+  // goalFire 8, animals removed (zoo.exe 0x61c27d)
+  h.removeAnimals = [](int kind, int id) {
+    if (!g_world)
+      return;
+    Animals &an = g_world->getAnimals();
+    std::vector<int> gone;
+    for (const Animals::Member &m : an.members()) {
+      const Animals::Type &t = an.types()[m.type];
+      if ((kind == 0 || kind == 3) ? t.nameId == id : kind == 1 ? t.family == id : kind == 2 && t.genus == id)
+        gone.push_back(m.id);
+    }
+    for (int member : gone)
+      an.remove(member);
+  };
+  // goalFire 9, Sell Animal in Animal Information (zoo.exe 0x592fe3: the
+  // button, element 0xc27)
+  h.sellAnimals = [](bool allowed) {
+    if (UiElement *e = g_hud ? g_hud->getElementById(3111) : nullptr)
+      e->setDisabled(!allowed);
+  };
+  // goalFire 10, all research done (zoo.exe 0x47e657: each program's effect
+  // done and, finishing, its progress filled; ours: a program done already
+  // isn't applied twice)
+  h.researchAll = [](bool finish) {
+    for (ResearchBranch &b : Research::get().branches())
+      for (ResearchCategory &c : b.categories)
+        for (ResearchProgram &p : c.programs) {
+          if (!p.done)
+            applyResearch(p);
+          if (finish) {
+            p.done = true;
+            p.progress = p.cost;
+          }
+        }
+    if (g_hud)
+      g_hud->refreshCatalog();
+  };
   h.messageAbout = [rm](int id, int nameId) {
     if (!g_hud)
       return;
@@ -3267,6 +3604,9 @@ static void setupGoals(ResourceManager *rm) {
     g_scenarioOutcome = outcome;
   };
   g_goals.setHooks(h);
+  // (every button clicked, told to the goals as 0x5b0f51 is)
+  UiButton::clickObserver = [](int id) { g_goals.noteClick(id); };
+  UiListBox::clickObserver = [](int id) { g_goals.noteClick(id); };
 }
 
 // ----------------------------------------------------------------------------
@@ -3432,7 +3772,7 @@ static void setRenameHooks(ResourceManager *rm) {
 }
 
 // A map's goals, started as it is
-static void startGoals(ResourceManager *rm, const std::string &mapPath) {
+static void startGoals(ResourceManager *rm, const std::string &mapPath, bool resume = false) {
   SaveGame::goals = &g_goals;
   setupGoals(rm);
   Research::get().restart();
@@ -3452,13 +3792,42 @@ static void startGoals(ResourceManager *rm, const std::string &mapPath) {
   ItemCatalog::get().clearAvailable();
   const bool scenario = mapPath.rfind("scenario/", 0) == 0;
   ItemCatalog::get().setMode(scenario, Features::allUnlocked);
+  // zoo.exe 0x591426 (applyStartSettings's dated items, run as a zoo starts or
+  // loads): Holiday Tree 7077, Jack-O'-Lantern 7078, Snowman 7079 and the
+  // Yellow Brick Path 9111 start unavailable, in a scenario too; their day
+  // (or lions, tigers and bears together) brings each in (Ambient). The
+  // flyers' latches are cleared as well (0x63e256, 0x63e25c)
+  for (int dated : {7077, 7078, 7079, 9111})
+    if (const CatalogItem *item = ItemCatalog::get().findName(dated))
+      ItemCatalog::get().setAvailable(*item, false);
+  if (g_world) {
+    Ambient &amb = g_world->getAmbient();
+    amb.snowmanOn = amb.treeOn = amb.pumpkinOn = amb.yellowDone = false;
+    amb.santaSent = amb.biplaneSent = false;
+    {
+      // (the real date, GetLocalTime 0x412c22: 31 October of the PC's clock)
+      const std::time_t now = std::time(nullptr);
+      std::tm local{};
+      localtime_s(&local, &now);
+      RenameCheats::halloweenStart(*g_world, local.tm_mday, local.tm_mon + 1);
+    }
+    amb.setTypeAvailable = [](int nameId, bool on) {
+      if (const CatalogItem *item = ItemCatalog::get().findName(nameId))
+        if (ItemCatalog::get().setAvailable(*item, on) && g_hud)
+          g_hud->refreshCatalog();
+    };
+  }
   // The scenario page (zooinfo4.lyt) lists this scenario's goals, and its
   // button is for a scenario only (greyed in a freeform zoo, as measured;
   // before the goals load: a tutorial's [start] triggers may disable it)
   if (g_hud)
     if (UiElement *button = g_hud->getElementById(4107))
       button->setDisabled(!scenario);
-  g_goals.load(rm, mapPath);
+  // (Sell Animal allowed again: a scenario's [start] may grey it, trigger 9)
+  if (g_hud)
+    if (UiElement *sell = g_hud->getElementById(3111))
+      sell->setDisabled(false);
+  g_goals.load(rm, mapPath, resume);
   if (g_hud) {
     g_hud->setObjective("");
     g_hud->onObjectiveClick = [] { g_goals.reopenPopup(); };
@@ -3635,12 +4004,19 @@ static bool gameLoad(ResourceManager *rm, const std::string &given = "") {
   g_nextHud = savedHud.release();
   createHud(rm, g_world, g_currentStartingCash);
   g_currentMapPath = mapPath;
-  startGoals(rm, goalsPath);
+  startGoals(rm, goalsPath, true);
   g_sim = std::move(savedBooks);
   g_hud->setZooInfo(restoredInfo);
   if (goalsPath.size() >= 4 && SDL_strcasecmp(goalsPath.c_str() + goalsPath.size() - 4, ".scn") == 0)
     applyScenarioEconomy(rm, goalsPath);
   g_goals.restore(restoredStates);
+  // (what the goals had made available, as the saved zoo kept it: over the
+  // [resume] triggers, which leave out the [start] ones that unlock)
+  if (SaveGame::availabilityKept) {
+    ItemCatalog::get().restoreForced(SaveGame::availability);
+    if (g_hud)
+      g_hud->refreshCatalog();
+  }
   g_goals.awards = restoredAwards;
   g_hud->setAwards(restoredAwards);
   Research::get().branches() = restoredResearch;
@@ -4130,18 +4506,12 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         // (objectve_Message_click 0x4a09f8 -> loadScenarioPopup 0x5a1b15)
         if (const ScenarioInfo *tutorial = find("scenario/scn01a/scn01a.scn")) {
           startScenario(rm, *tutorial);
-          // (the tutorial's step counter, rule 9, isn't measured yet: the goal
-          // that shows that popup is met by hand)
-          for (Goals::Goal &goal : g_goals.mutableAll()) {
-            if (goal.name == "options_dialog" && goal.file == tutorial->scenarioPath) {
-              goal.rulea = 99;
-              goal.arga = 2;
-            }
-            // (goals whose measures aren't known read 0 and some count as met:
-            // the ones that would put the bar away again stay quiet)
+          // (the step counter, rule 9, brings its popup by itself; the goal that
+          // would put the bar away again reads the guests' happiness, which
+          // the map's zoo decides: it stays quiet)
+          for (Goals::Goal &goal : g_goals.mutableAll())
             if (goal.file == tutorial->scenarioPath && goal.trulea == 2 && goal.targa == 8)
               goal.trulea = 0;
-          }
           g_goals.evaluateAll();
           int seenPopups = 0;
           for (int tries = 0; g_hud && g_hud->hasDialog() && tries < 20; tries++) {
@@ -4163,6 +4533,211 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                 shown && closed && again);
           startScenario(rm, *small);
           check("a scenario without one has no reminder bar", g_hud && g_hud->objectiveText().empty() && !g_hud->isPanelOpen(45400));
+        }
+        // The tutorials' steps (#100): rule 9 counts the goals in a state (the
+        // scenario's own goal, its time limit, met at once, among them, so a
+        // tutorial's first goal "1 goal in state 1" fires at the start, the
+        // next "2" with it...), rule 10 waits for a click on a button - one
+        // made after the goal first asked about it (0x4f052c: the first ask
+        // registers the observer, the second enters the button) - and the
+        // popups come out in order. Each tutorial is run from start to end
+        // here: the buttons are clicked on the HUD itself; what needs the
+        // player's building (rules 1, 2, 3, 5 and 6: a fence, a tiger, a
+        // keeper, paths, trees) is met by hand, one goal at a time in the
+        // goals' order, as the zoo would
+        {
+          // (a click on a HUD button, and what the game does for Pause and Play)
+          auto press = [&](int id) {
+            drawHud(renderer, rm); // (the buttons' places, as the player sees them)
+            const UiAction a = g_hud->clickElement(id);
+            if (a == UiAction::HUD_PAUSE || a == UiAction::HUD_PLAY)
+              setGamePaused(a == UiAction::HUD_PAUSE);
+            g_queuedActions.clear();
+          };
+          auto drain = [&](std::vector<std::string> *shown) {
+            for (int tries = 0; g_hud && g_hud->hasDialog() && tries < 60; tries++) {
+              if (shown)
+                shown->push_back(g_hud->dialogMessage());
+              g_hud->answerDialog(true);
+            }
+            resumeAfterPopup();
+          };
+          if (const ScenarioInfo *t1 = find("scenario/scn01a/scn01a.scn")) {
+            // Clicks before the goal asked twice don't count
+            startScenario(rm, *t1);
+            drawHud(renderer, rm);
+            g_goals.evaluateAll(); // (its first pass: the observer is registered)
+            drain(nullptr);
+            press(1004);           // (Game Options, shown by the goal show_options)
+            g_goals.evaluateAll(); // (the second ask: the button is entered; the click was before it)
+            drain(nullptr);
+            auto stateOf = [&](const char *name) {
+              for (const Goals::Goal &goal : g_goals.all())
+                if (goal.name == name && goal.file == t1->scenarioPath)
+                  return goal.state;
+              return -1;
+            };
+            const bool lost = stateOf("GAME_OPTIONS") == 0;
+            press(1004);
+            g_goals.evaluateAll();
+            const bool found = stateOf("GAME_OPTIONS") == 1;
+            drain(nullptr);
+            check("rule 10: a click before the goal's second look is lost, one after it counts (once)", lost && found);
+          }
+          struct Run {
+            const char *path;
+            const char *label;
+            int popups;
+          };
+          for (const Run &run : {Run{"scenario/scn01a/scn01a.scn", "Tutorial 1", 8}, Run{"scenario/scn01/scn01.scn", "Tutorial 2", 13},
+                                 Run{"scenario/scn02/scn02.scn", "Tutorial 3", 10},
+                                 Run{"scenario/scn19/scn19.scn", "Dinosaur Digs Tutorial", 11},
+                                 Run{"scenario/scn27/scn27.scn", "Marine Mania Tutorial 1", 12},
+                                 Run{"scenario/scn28/scn28.scn", "Marine Mania Tutorial 2", 10},
+                                 Run{"scenario/scn28b/scn28b.scn", "Marine Mania Tutorial 3", 6}}) {
+            const ScenarioInfo *t = find(run.path);
+            if (!t)
+              continue;
+            startScenario(rm, *t);
+            // (the guests' happiness in the map's zoo, and goals whose element isn't there, are the
+            // player's to do)
+            std::vector<std::string> shown, byHand;
+            std::map<std::string, int> tries; // (rounds a button has been waited for or pressed)
+            int clicked = 0, rounds = 0;
+            for (; rounds < 400; rounds++) {
+              drawHud(renderer, rm); // (the buttons the tutorial presses are where the player sees them)
+              g_goals.evaluateAll();
+              drain(&shown);
+              bool acted = false;
+              for (Goals::Goal &goal : g_goals.mutableAll()) {
+                if (goal.file != t->scenarioPath || goal.state != 0 || goal.rulea == 9)
+                  continue;
+                if (goal.rulea == 10 && goal.ruleb != 0) {
+                  UiElement *e = g_hud->getElementById(goal.arga);
+                  // (a button the check can't reach - in a panel it doesn't open, or that its
+                  // click doesn't get to - is told as clicked by hand after a few rounds)
+                  if (++tries[goal.name] > 6) {
+                    g_goals.noteClick(goal.arga);
+                    byHand.push_back("click " + std::to_string(goal.arga));
+                    tries[goal.name] = -1000;
+                    acted = true;
+                    break;
+                  }
+                  // (Undo is greyed until the player has put something down: that is theirs to do)
+                  if (e && goal.arga == 1075 && !e->isHidden() && e->isDisabled()) {
+                    e->setDisabled(false);
+                    byHand.push_back("something to undo");
+                  }
+                  if (e && !e->isHidden() && !e->isDisabled()) {
+                    press(goal.arga);
+                    clicked++;
+                    acted = true;
+                    break;
+                  }
+                  continue;
+                }
+                if (goal.rulea == 99 || (goal.type != 0 && goal.type != 1 && goal.type != 2))
+                  continue;
+                byHand.push_back(goal.name);
+                goal.arga = goal.type == 1 ? goal.value - 1 : goal.value;
+                goal.rulea = 99;
+                acted = true;
+                break;
+              }
+              if (!acted && !g_hud->hasDialog() && rounds > 3) {
+                bool open = false;
+                for (const Goals::Goal &goal : g_goals.all())
+                  open = open || (goal.file == t->scenarioPath && goal.state == 0);
+                if (!open)
+                  break;
+              }
+            }
+            int met = 0, total = 0;
+            std::string waiting;
+            for (const Goals::Goal &goal : g_goals.all())
+              if (goal.file == t->scenarioPath) {
+                total++;
+                met += goal.state == 1 ? 1 : 0;
+                if (goal.state != 1)
+                  waiting += (waiting.empty() ? "" : ", ") + goal.name;
+              }
+            const std::string first = shown.empty() ? "" : shown.front().substr(0, 30);
+            std::string order;
+            for (const std::string &s : shown)
+              {
+                std::string t = s.substr(0, 60);
+                std::replace_if(t.begin(), t.end(), [](char c) { return c == 10 || c == 13; }, 32);
+                order += (order.empty() ? "" : " | ") + t;
+              }
+            rep << "  " << run.label << " popups: " << order << "\n  by hand: ";
+            for (const std::string &s : byHand)
+              rep << s << " ";
+            rep << "\n";
+            check(std::string(run.label) + " runs to its end: " + std::to_string(met) + " of " + std::to_string(total) +
+                      " goals met (waiting: " + waiting + "), " + std::to_string(shown.size()) + " popups (" +
+                      std::to_string(run.popups) + "), " + std::to_string(clicked) + " button clicks, " +
+                      std::to_string(byHand.size()) + " goals by hand, " + std::to_string(rounds) + " rounds; first \"" + first +
+                      "...\"; the reminder bar " + (g_hud->objectiveText().empty() ? "put away" : "\"" + g_hud->objectiveText() + "\""),
+                  met == total && (run.popups < 0 || static_cast<int>(shown.size()) == run.popups) && g_hud->objectiveText().empty());
+          }
+          // Rule 11 (a list picked, 0x61bb06) with a list made up (the first ask registers, the
+          // second enters it, a click then counts once): ruleb 0 its row against value, else the
+          // row's text against the string argb; rule 16 (0x48a0e3) counts a map's tanks by wall height
+          {
+            const Goals::Hooks saved = g_goals.getHooks();
+            Goals::Hooks fake = saved;
+            int row = 0;
+            std::string text = "Zoo Tycoon";
+            fake.listIndex = [&](int) { return row; };
+            fake.listText = [&](int) { return text; };
+            g_goals.setHooks(fake);
+            Goals::Goal byRow, byText;
+            byRow.rulea = 11, byRow.ruleb = 0, byRow.arga = 22900, byRow.value = 2, byRow.type = 2; // (scn19's SORT_DINO)
+            byText.rulea = 11, byText.ruleb = 1, byText.arga = 22900, byText.argb = 22903, byText.value = 1; // (scn27's FILTER_MARINE)
+            const int firstAsk = g_goals.stateNow(byRow), secondAsk = g_goals.stateNow(byRow); // (nothing clicked)
+            g_goals.noteClick(22900);
+            row = 1;
+            const int wrongRow = g_goals.stateNow(byRow); // (clicked, row 1: not 2; the click is used up)
+            g_goals.noteClick(22900);
+            row = 2;
+            const int rightRow = g_goals.stateNow(byRow);
+            const int usedUp = g_goals.stateNow(byRow); // (no new click: no)
+            g_goals.noteClick(22900);
+            const int wrongText = g_goals.stateNow(byText);
+            text = rm->getString(22903);
+            g_goals.noteClick(22900);
+            const int rightText = g_goals.stateNow(byText);
+            g_goals.setHooks(saved);
+            check("rule 11: a list pick counts after a click, once - by its row (" + std::to_string(rightRow) + " at 2, " +
+                      std::to_string(wrongRow) + " at 1) and by its text (\"" + rm->getString(22903) + "\": " +
+                      std::to_string(rightText) + ", another's " + std::to_string(wrongText) + ")",
+                  firstAsk == 0 && secondAsk == 0 && wrongRow == 0 && rightRow == 1 && usedUp == 0 && wrongText == 0 && rightText == 1);
+          }
+          if (const ScenarioInfo *mm = find("scenario/scn27/scn27.scn")) {
+            startScenario(rm, *mm);
+            int tanks = 0, five = 0, atLeastSix = 0, atMostFive = 0;
+            for (const Fences::Exhibit &ex : g_world->getFences().exhibits())
+              if (ex.tank) {
+                tanks++;
+                five += ex.wallSub == 5;
+                atLeastSix += ex.wallSub >= 6;
+                atMostFive += ex.wallSub <= 5;
+              }
+            Goals::Goal g;
+            g.rulea = 16, g.arga = 5, g.value = 1, g.ruleb = 2;
+            const int equalsFive = g_goals.getHooks().measure(g);
+            g.ruleb = 1;
+            g.arga = 6;
+            const int sixOrMore = g_goals.getHooks().measure(g);
+            g.ruleb = 0;
+            g.arga = 5;
+            const int fiveOrLess = g_goals.getHooks().measure(g);
+            check("rule 16: the map's " + std::to_string(tanks) + " tanks by wall height (" + std::to_string(equalsFive) + " exactly 5, " +
+                      std::to_string(sixOrMore) + " 6 or more, " + std::to_string(fiveOrLess) + " 5 or less)",
+                  equalsFive == five && sixOrMore == atLeastSix && fiveOrLess == atMostFive);
+          }
+          startScenario(rm, *small);
+          drain(nullptr);
         }
         // The scenario page's icons follow the goals' states (0x4f048c: the
         // [desc] iconp, iconc, iconf, then iconc again), the time limit's
@@ -4244,6 +4819,22 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           const bool lockedGrey = burk && choose(burk) && play && play->isDisabled();
           const bool openLit = choose(s3) && play && !play->isDisabled();
           check("the Play button: greyed for a locked scenario, lit for an open one", lockedGrey && openLit);
+          // A locked scenario tells its own story ([desc] lockedstory, the
+          // lang0.dll TEXT of that name, zoo.exe 0x600085), not ours
+          {
+            std::string want;
+            if (burk)
+              if (IniReader *ini = rm->getIniReader(burk->scenarioPath)) {
+                std::string key = ini->get("desc", "lockedstory");
+                delete ini;
+                while (!key.empty() && std::isspace(static_cast<unsigned char>(key.back())))
+                  key.pop_back();
+                want = langText(key);
+              }
+            const bool shown = burk && choose(burk) && g_scenarioDescText && !want.empty() &&
+                               g_scenarioDescText->getText() == want;
+            check("a locked scenario shows its own lockedstory text (\"" + want.substr(0, 40) + "...\")", shown);
+          }
           g_scenarioListBox = nullptr;
           g_scenarioDescText = nullptr;
           g_scenarioMap = nullptr;
@@ -4280,6 +4871,197 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           g_currentMapPath = keepMap;
           if (!token.empty())
             Settings::setInt("scenario", token, keptToken);
+        }
+        // Goal rules and triggers the scenarios use (zoo.exe 0x41d665
+        // measures, 0x4fc783 fires): an animal given by trigger 5, counted
+        // by rules 2 and 4, taken away by trigger 8; Sell Animal greyed by
+        // 9; every program researched by 10
+        {
+          auto measure = [&](int a, int b, int arga, int argb = 0) {
+            Goals::Goal t;
+            t.rulea = a;
+            t.ruleb = b;
+            t.arga = arga;
+            t.argb = argb;
+            return g_goals.getHooks().measure ? g_goals.getHooks().measure(t) : -1;
+          };
+          auto fireNamed = [&](const std::string &name) {
+            for (Goals::Goal &goal : g_goals.mutableAll())
+              if (goal.trulea == 5 && goal.name != name && goal.state == 0) {
+                goal.rulea = 99; // (the scenario's other gifts held back: never met)
+                goal.arga = 0;
+                goal.value = 1;
+                goal.type = 0;
+              }
+            for (Goals::Goal &goal : g_goals.mutableAll())
+              if (goal.name == name) {
+                goal.rulea = 99; // (met at once: arga 1 against value 1)
+                goal.arga = 1;
+                goal.value = 1;
+                goal.type = 0;
+              }
+            g_goals.evaluateAll();
+            while (g_hud->hasDialog())
+              g_hud->answerDialog(true);
+          };
+          if (const ScenarioInfo *s04 = find("scenario/scn04/scn04.scn")) {
+            startScenario(rm, *s04);
+            Animals &an = g_world->getAnimals();
+            const int species = 5004; // (the zebra: scenario 4 goals h, a male, and i, a female)
+            const int before = static_cast<int>(an.members().size());
+            const int sp0 = measure(2, 0, species), m0 = measure(2, 2, species, 0), f0 = measure(2, 2, species, 1);
+            const int either0 = measure(2, 3, species, 1), kind0 = measure(4, 2, species);
+            int bigType = -1;
+            for (size_t i = 0; i < an.types().size(); i++)
+              if (an.types()[i].nameId == species)
+                bigType = static_cast<int>(i);
+            const int expansion = bigType >= 0 ? an.types()[bigType].expansionId : 0;
+            const int exp0 = measure(4, 19, expansion);
+            int ex = 0, ey = 0;
+            if (!g_world->getGuests().hasEntrance())
+              SaveGame::locateEntrance(*g_world);
+            g_world->getGuests().entrance(ex, ey);
+            // The tile the original takes (0x5a17a8): the nearest ring, 3 to 20,
+            // that has a tile scoring 3 (the zoo's own flat ground, no path, dry,
+            // nothing on it, no quarter held) - found here from the map
+            int wantRing = -1;
+            {
+              const WorldMap &wm = g_world->getMap();
+              for (int ring = 3; ring <= 20 && wantRing < 0; ring++)
+                for (int dx = -ring; dx <= ring && wantRing < 0; dx++)
+                  for (int side = 0; side < 2 && wantRing < 0; side++) {
+                    const int x = ex + dx, y = ey + (side == 0 ? -(ring - std::abs(dx)) : ring - std::abs(dx));
+                    const MapTile *t = wm.getTile(x, y);
+                    if (!t || !g_world->getFences().insideZoo(x, y) || g_world->getFences().exhibitAt(x, y) >= 0 ||
+                        t->terrainType == 9 || t->terrainType == 10 || wm.isPath(x, y) ||
+                        g_world->getIndex().quarterMask(x, y) != 0 ||
+                        !(t->cornerHeight[0] == t->cornerHeight[1] && t->cornerHeight[1] == t->cornerHeight[2] &&
+                          t->cornerHeight[2] == t->cornerHeight[3]))
+                      continue;
+                    bool taken = false;
+                    for (const Animals::Member &m : an.members())
+                      taken = taken || (static_cast<int>(m.x) == x && static_cast<int>(m.y) == y);
+                    for (const PlacedObjects::Object &o : g_world->getObjects().objects())
+                      taken = taken || (!o.fence && static_cast<int>(o.x) == x && static_cast<int>(o.y) == y);
+                    for (const Staff::Member &m : g_world->getStaff().members())
+                      taken = taken || (static_cast<int>(m.x) == x && static_cast<int>(m.y) == y);
+                    for (const Guests::Guest &gu : g_world->getGuests().guests())
+                      taken = taken || (!gu.hidden && static_cast<int>(gu.x) == x && static_cast<int>(gu.y) == y);
+                    if (!taken)
+                      wantRing = ring;
+                  }
+            }
+            fireNamed("h");
+            int gotRing = -1;
+            if (!an.members().empty()) {
+              const Animals::Member &first = an.members().back();
+              gotRing = std::abs(static_cast<int>(first.x) - ex) + std::abs(static_cast<int>(first.y) - ey);
+            }
+            fireNamed("i");
+            bool placed = static_cast<int>(an.members().size()) == before + 2 && measure(2, 0, species) == sp0 + 2,
+                 near = true, kinds = false;
+            for (const Animals::Member &m : an.members()) {
+              if (an.types()[m.type].nameId != species)
+                continue;
+              const int d = std::abs(static_cast<int>(m.x) - ex) + std::abs(static_cast<int>(m.y) - ey);
+              near = near && d >= 3 && d <= 20 && m.boxed;
+            }
+            kinds = measure(2, 0, species) == sp0 + 2 && measure(2, 2, species, 0) == m0 + 1 &&
+                    measure(2, 2, species, 1) == f0 + 1 && measure(2, 3, species, 1) == either0 + 2 &&
+                    measure(4, 2, species) == kind0 + 2 && measure(4, 19, expansion) == exp0 + 2;
+            check("trigger 5: goals h and i each put a zebra (a male, a female) in a crate 3-20 tiles from the entrance (" +
+                      std::to_string(placed) + std::to_string(near) + "); rules 2/0-3 and 4/2, 4/19 count them (" +
+                      std::to_string(kinds) + ")",
+                  placed && near && kinds);
+            check("trigger 5: the first lands in the nearest ring with a full-score tile (ring " + std::to_string(gotRing) +
+                      ", wanted " + std::to_string(wantRing) + ")",
+                  wantRing < 0 || gotRing == wantRing);
+          } else {
+            check("scenario 4 in the list", false);
+          }
+          if (const ScenarioInfo *s32 = find("scenario/scn32/scn32.scn")) {
+            startScenario(rm, *s32);
+            UiElement *sell = g_hud ? g_hud->getElementById(3111) : nullptr;
+            check("trigger 9: scenario 32's [start] disable_animalsell greys Sell Animal", sell && sell->isDisabled());
+            const int manatee = 5416;
+            const bool two = g_goals.getHooks().giveAnimal && g_goals.getHooks().giveAnimal(manatee, 0) &&
+                             g_goals.getHooks().giveAnimal(manatee, 1);
+            SDL_Log("[ScenarioChecks] manatees given: %d", two ? 1 : 0);
+            const int with = measure(2, 0, manatee);
+            // (REMOVE_MANATEE, 8 / 3 / 5416, comes after the gift and the care
+            // chain in scenario 32's in-order chain: each met here by hand,
+            // which gives a third manatee on the way)
+            for (const char *name : {"DONATE_MANATEE_MALE", "EXHIBIT_75_MANATEE", "RESEARCH_MANATEE", "REMOVE_MANATEE"})
+              for (Goals::Goal &goal : g_goals.mutableAll())
+                if (goal.name == name) {
+                  goal.rulea = 99;
+                  goal.arga = 1;
+                  goal.value = 1;
+                  goal.type = 0;
+                }
+            for (int pass = 0; pass < 4; pass++) {
+              g_goals.evaluateAll();
+              while (g_hud->hasDialog())
+                g_hud->answerDialog(true);
+            }
+            const int without = measure(2, 0, manatee);
+            check("trigger 8: scenario 32's REMOVE_MANATEE takes away the manatees (" + std::to_string(with) + " -> " +
+                      std::to_string(without) + ", given " + std::to_string(two) + ")",
+                  two && with >= 2 && without == 0);
+          } else {
+            check("scenario 32 in the list", false);
+          }
+          {
+            const std::string keepMap = g_currentMapPath;
+            g_currentMapPath = "freeform/med_kids.scn";
+            startGoals(rm, g_currentMapPath);
+            size_t programs = 0, done = 0;
+            for (ResearchBranch &b : Research::get().branches())
+              for (ResearchCategory &c : b.categories)
+                for (ResearchProgram &p : c.programs) {
+                  programs++;
+                  done += p.done ? 1 : 0;
+                }
+            check("trigger 10: the Kids' map starts with every research program done (" + std::to_string(done) + " of " +
+                      std::to_string(programs) + ")",
+                  programs > 0 && done == programs);
+            g_currentMapPath = keepMap;
+            Research::get().restart();
+          }
+        }
+        // A saved scenario put back runs its [resume] triggers, not [start]
+        // (zoo.exe resumeScript 0x58fb34), and keeps what the goals made
+        // available (the types' flags): scenario 2's [start] unlocks the lion
+        // (lion_unlocked) and [resume] leaves that out
+        if (const ScenarioInfo *s02 = find("scenario/scn02/scn02.scn")) {
+          startScenario(rm, *s02);
+          const CatalogItem *lion = ItemCatalog::get().findName(5006);
+          const bool startedWithLion = lion && ItemCatalog::get().isAvailable(*lion);
+          std::filesystem::create_directories("B:/zt1-shots/r16-goals");
+          const std::string saved = "B:/zt1-shots/r16-goals/resume-check.zt1save";
+          const bool wrote = SaveGame::save(saved, *g_world, g_sim, *g_hud, g_currentMapPath);
+          // (the part the save keeps is all that gives the lion back: the
+          // game's flags are cleared and the world's UI reset by the load)
+          ItemCatalog::get().clearAvailable();
+          const bool loaded = wrote && gameLoad(rm, saved);
+          const CatalogItem *lionAfter = ItemCatalog::get().findName(5006);
+          UiElement *construct = g_hud ? g_hud->getElementById(1002) : nullptr;
+          check(std::string("scenario 2 saved (") + (wrote ? "ok" : "failed") + ") and loaded: [resume] runs (Construct greyed by "
+                "disableUI), the lion kept available (" + std::to_string(startedWithLion) + " at the start)",
+                startedWithLion && loaded && construct && construct->isDisabled() && lionAfter &&
+                    ItemCatalog::get().isAvailable(*lionAfter));
+          if (const ScenarioInfo *s32b = find("scenario/scn32/scn32.scn")) {
+            startScenario(rm, *s32b);
+            const bool wrote32 = SaveGame::save(saved, *g_world, g_sim, *g_hud, g_currentMapPath);
+            const bool loaded32 = wrote32 && gameLoad(rm, saved);
+            UiElement *sell = g_hud ? g_hud->getElementById(3111) : nullptr;
+            check("scenario 32 saved and loaded: its [resume] disable_animalsell greys Sell Animal again",
+                  loaded32 && sell && sell->isDisabled());
+          }
+          std::error_code removed;
+          std::filesystem::remove(saved, removed);
+        } else {
+          check("scenario 2 in the list", false);
         }
         // Freeform: every map starts with hideall (4/9); with every item
         // from the start (the switch) the catalogue's whole, with timed
@@ -5891,6 +6673,44 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   capture("rotate2");
   click(2054);
   capture("rotate3");
+  // The thing held stays shown, and turned, at the cursor when it's turned
+  // (Q / E) or the view is turned (#103: it vanished for a moment): ours
+  {
+    int cost = 0, facing = 0;
+    const std::string held = g_hud->objectToolFile(cost, facing);
+    float cx = 0, cy = 0;
+    int sx = 0, sy = 0;
+    const bool placed = !held.empty() && world->viewCentre(cx, cy);
+    bool shownEveryTime = false, turnedEveryTime = false, viewKept = false;
+    if (placed) {
+      world->setObjectTool(held, cost, facing);
+      world->pointToWindow(cx + 2.0f, cy + 1.0f, 0, sx, sy); // (off the middle, which a turn keeps)
+      world->mouseMove(sx, sy);
+      shownEveryTime = world->objectGhostShown();
+      turnedEveryTime = true;
+      for (int step : {1, 1, 1, 1, -1, -1, -1, -1}) { // (round again: the panel keeps its facing)
+        const int before = world->objectGhostShown() ? world->ghostFacingOf() : -1;
+        g_hud->rotateHeld(step);
+        // (the frame's own: the picked thing and its facing handed on)
+        const std::string again = g_hud->objectToolFile(cost, facing);
+        world->setObjectTool(again, cost, facing);
+        shownEveryTime = shownEveryTime && world->objectGhostShown();
+        turnedEveryTime = turnedEveryTime && world->ghostFacingOf() != before;
+      }
+      // (the view turned under it: shown again where the cursor is, with no
+      // move of the mouse)
+      world->rotateView(1);
+      float gx = 0, gy = 0;
+      viewKept = world->objectGhostShown() && world->groundAt(sx, sy, gx, gy) &&
+                 world->ghostCentreIs(gx, gy);
+      world->rotateView(-1);
+      world->setObjectTool("", 0, 0);
+    }
+    check("a thing held shows at the cursor, turned, in the frame it is turned (Q / E; #103)",
+          placed && shownEveryTime && turnedEveryTime);
+    check("a thing held shows at the cursor again after the view turns, the mouse not moved (#103)",
+          placed && viewKept);
+  }
   // (each panel keeps its own facing, as the original - zoo.exe 0x48e40f,
   // 0x4e5134: Adopt turned once on, Objects still as it was)
   {
@@ -13111,7 +13931,8 @@ int main(int argc, char *argv[]) {
         }
       }
       resumeAfterPopup();
-      // Tank filters bill each time they clean
+      // Tank filters bill each time they clean (zoo.exe filterPayUpkeep
+      // 0x49bec7: its cost spent and booked as the buildings' upkeep)
       if (int upkeep = g_world->getFences().takeUpkeep())
         g_sim.spend(ZooSim::Upkeep, upkeep);
       if (g_sim.changed()) {

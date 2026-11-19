@@ -601,16 +601,20 @@ void Shows::actorStep(Show &s,Actor &a,float seconds) {
   };
   if(a.stage<=1 && frozen()){giveUp();return;}
   a.elapsed+=seconds;
-  // ours: an approach (stages 0-1) gives up at its first failed route, as
-  // the original's task start does; the way back (stages 3-4), which the
-  // original walks in other tasks, still has 180 s before it gives up
+  // ours: a 180 s limit on the whole trip (the original has none)
   if(a.elapsed>180) {giveUp();return;}
   if(a.stage==0) { if(walk(hp)){a.stage=1;a.elapsed=0;}else if(noRoute)giveUp();return; }
   if(a.stage==1) { if(walk({a.stageX,a.stageY})){a.stage=2;a.elapsed=0;m->exhibit=s.tank;}else if(noRoute)giveUp();return; }
-  // (the way home, Task86 0x5a2f25: see cancel() for its rules)
+  // (the way home, Task86 0x5a2f25: see cancel() for its rules). A route
+  // that fails gives up at the first failure (giveUpHome), as the original's
+  // task does (measured, #301), where ours used to try again for 180 s
+  auto giveUpReturn=[&]{
+    giveUpHome(*m,*home,fences.exhibitAt(static_cast<int>(std::floor(m->x)),static_cast<int>(std::floor(m->y))));
+    m->showTank=m->showHome=-1;a.stage=5;
+  };
   if(a.stage==3) {
     if(m->inside)animals.leaveShelter(*m);
-    if(walk(sp)){a.stage=4;a.elapsed=0;}return;
+    if(walk(sp)){a.stage=4;a.elapsed=0;}else if(noRoute)giveUpReturn();return;
   }
   if(a.stage==4) {
     auto landing=hp;
@@ -618,6 +622,7 @@ void Shows::actorStep(Show &s,Actor &a,float seconds) {
     if(a.portal.alongX)landing.second+=(hp.second<sp.second?-clearance:clearance);
     else landing.first+=(hp.first<sp.first?-clearance:clearance);
     if(walk(landing)) {m->showTank=m->showHome=-1;m->showTrick=false;m->showDone=false;m->exhibit=a.home;a.stage=5;m->stack.clear();m->stepping=false;a.elapsed=0;}
+    else if(noRoute)giveUpReturn();
     return;
   }
   if(a.stage==5 || s.phase!=Phase::Performing)return;
@@ -744,6 +749,19 @@ void Shows::actorStep(Show &s,Actor &a,float seconds) {
   ZT_STEP("0x5a66c0","Performs a show trick",{"animal",m->id},{"trick",trick.key},{"show",s.tank});
 }
 
+// zoo.exe 0x5a2f25 (Task86 whileGoing), its failure end 0x5e9280, measured in
+// the running original (#301, the home tank's link taken away mid-show):
+// the show flag (+0x250) is cleared, 11004 "%s is having trouble getting to
+// %s." is posted (priority 2; the animal and its home tank), the task ends
+// and the animal stays where it is - in the show tank, swimming about as any
+// animal there. It was not sent home or crated in the 45 s watched.
+void Shows::giveUpHome(Animals::Member &m,const Fences::Exhibit &home,int actual) {
+  m.showTrick=m.showDone=false;
+  m.path.clear();m.pathAt=0;m.stack.clear();m.stepping=false;
+  if(actual>=0)m.exhibit=actual;
+  post(11004,2,m.id,{m.name,home.name});
+}
+
 void Shows::cancel(int tank,const std::string &why) {
   auto *s=show(tank);if(!s || !world)return;
   if(s->phase!=Phase::Waiting)++s->cancelled;
@@ -763,15 +781,24 @@ void Shows::cancel(int tank,const std::string &why) {
       // the portal. Elsewhere, the show gate to home (tankGateTo 0x59e0a9), its
       // tile across the gate (0x40fa92) at the home tank's water, routed
       // (0x4221c3, 0x422127(1, 1)); a failed route gives up at once - the show
-      // flag +0x250 cleared, 11004 posted, the task over - where ours (stages
-      // 3 and 4) tries again for 180 s first (ours:)
+      // flag +0x250 cleared, 11004 posted, the task over, the animal left
+      // where it is (measured, #301: giveUpHome)
       if(actual==a.home) {
         m->exhibit=a.home;m->showTank=m->showHome=-1;a.stage=5;
       } else if(!m->boxed && home && pool && home->filling && pool->filling && portal) {
         m->showTank=tank;m->showHome=a.home;a.stage=3;a.elapsed=0;returning=true;
+      } else if(!m->boxed && home && pool && home->filling && pool->filling && !portal) {
+        // measured (#301, Task86 0x5a2f25 in the running original, the home
+        // tank's link to the show tank taken away mid-show): tankGateTo
+        // 0x59e0a9 gives none, so the task gives up at once - the show flag
+        // +0x250 cleared, 11004 posted - and the animal stays where it is,
+        // in the show tank, swimming about as any animal there; nothing sent
+        // it home in the 45 s watched (no crate)
+        giveUpHome(*m,*home,actual);
+        m->showTank=m->showHome=-1;a.stage=5;
       } else {
-        // A removed portal cannot be swum through. Keep the capsule closed
-        // in the show tank until the player places it into a valid home.
+        // ours: a drained tank or a capsule already closed: keep the capsule
+        // closed in the show tank until the player places it into a valid home.
         if(!m->boxed)world->animals.box(m->id);
         m->showTank=m->showHome=-1;a.stage=5;
       }

@@ -218,6 +218,23 @@ public:
   // A scenario popup (confirmm.lyt, 45200: its picture, the text, OK) - an
   // award's, a donation's
   void popup(const std::string &image, const std::string &message);
+  // The same with a scenario's own keys (zoo.exe loadScenarioPopup 0x5a1b15):
+  // its layout (45100 confirml: the tutorials' bigger one; 45200 confirmm;
+  // 45000 confirm) and the pictures and words set on the elements at the
+  // layout's id + 1 background, + 2 icon, + 4 image 1, + 5 image 2, + 6 message
+  struct ScenarioPopup {
+    int layout = 45200;
+    std::string background, icon, image1, image2, text;
+  };
+  void popup(const ScenarioPopup &spec);
+  // A list's picked row as the tutorials' rule 11 reads it (zoo.exe 0x61bb06:
+  // the list's +0x37c; -1 no such list) and its text. The content filter's
+  // list is 22900: All, Zoo Tycoon, Dinosaur Digs, Marine Mania
+  int listSelection(int id);
+  std::string listText(int id);
+  // A button pressed by the game itself (the tutorials' goalFire 2/1, 0x506f04):
+  // a click in its middle, as the player's; the action it asked for
+  UiAction clickElement(int id);
   // The same popup with Yes and No (zoo.exe 0x4ff63c's 4: the scenario's
   // ending, scenarioComplete 0x48a408)
   void popupYesNo(const std::string &message, std::function<void()> yes, std::function<void()> no);

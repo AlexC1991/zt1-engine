@@ -342,7 +342,15 @@ bool World::loadFreeform(const std::string &path) {
   guests.setObjects(&placedObjects, &items);
   // (zoo.exe 0x4f6e3c, a guest made at the gate, ends with 0x4f7ebe: the
   // special days' flyers)
-  guests.onArrive = [this]() { this->ambient.guestArrived(this->worldMap); };
+  guests.onArrive = [this]() {
+    this->ambient.bearsTogether = this->animals.bearsSeen();
+    this->ambient.guestArrived(this->worldMap);
+  };
+  // (zoo.exe typesSetAvailable 0x591325: every type of that cNameID)
+  ambient.setTypeAvailable = [](int nameId, bool on) {
+    if (const CatalogItem *item = ItemCatalog::get().findName(nameId))
+      ItemCatalog::get().setAvailable(*item, on);
+  };
   staff.setGuests(&guests);
   staff.setShows(&shows);
   animals.findPrey = [this](float x, float y, float r) { return this->guests.nearestPrey(x, y, r); };
@@ -1626,6 +1634,11 @@ void World::rotateView(int steps) {
   wy = std::clamp(wy, 0.5f, this->worldMap.getHeight() - 0.5f);
   worldRenderer.rotateView(steps);
   this->centreOn(wx, wy);
+  // ours: (not measured in the original) a thing held is shown again at the
+  // cursor, which the turned view has put over other ground - it stayed where
+  // it was on the ground, away from the cursor, until the mouse next moved
+  if (this->objectGhost && !this->objectTool.empty() && this->lastMouseX >= 0)
+    this->mouseMove(this->lastMouseX, this->lastMouseY);
 }
 
 void World::zoomStep(int direction) {

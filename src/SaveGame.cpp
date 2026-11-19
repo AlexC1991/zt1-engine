@@ -36,7 +36,7 @@
 namespace {
 constexpr uint32_t kMagic = 0x5A543153; // "S1TZ"
 constexpr uint32_t kMapMagic = 0x504D3153; // "S1MP": a map design (saveMap)
-constexpr uint32_t kVersion = 26; // 26: every staff member's work (keepers' visits, chases, tours and their followers, running from a predator, the helicopter's flight, the set it's playing), its look-for-a-hunter countdown, DRT bases' facing. // 25: the rename cheats' names used once only. // 24: maintenance workers' jobs (their work, its target, route and destination). // 23: DRT bases' recoveries. // 22: guests attacked by a predator. // 21: the flyers in flight, their spawn clock and special days' marks; rubble pieces' groups and types. // 20: guests' visited lists as tiles and their visit counts. // 19: each month's guests in the zoo (books row 25). // 18: guests' recent-species lists. // 17: tank filters' built and serviced days and months in operation. // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
+constexpr uint32_t kVersion = 27; // 27: what the goals made available or not (the types' flags). // 26: every staff member's work (keepers' visits, chases, tours and their followers, running from a predator, the helicopter's flight, the set it's playing), its look-for-a-hunter countdown, DRT bases' facing. // 25: the rename cheats' names used once only. // 24: maintenance workers' jobs (their work, its target, route and destination). // 23: DRT bases' recoveries. // 22: guests attacked by a predator. // 21: the flyers in flight, their spawn clock and special days' marks; rubble pieces' groups and types. // 20: guests' visited lists as tiles and their visit counts. // 19: each month's guests in the zoo (books row 25). // 18: guests' recent-species lists. // 17: tank filters' built and serviced days and months in operation. // 16: buildings' opening day (openedDay). // 15: animals' mates, mothers and fathers. // 14: file-based guest favourites and recent exhibits. // 12: imported identity, facing, inventory and status/check timers. // 11: retain tranquilized animals across save/load. // 9: filter definition paths persist per placed filter. // (7: before tanks kept the ground they sank from; 1: before visitors and exhibit books; 2: research progress whole; 3: no shared tank walls; 4: tank walls in height units; 5: no view turn; 6: tank walls in half units)
 
 // A little binary writer and reader: numbers as they are, strings with
 // their length, vectors with their count
@@ -2164,6 +2164,16 @@ bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameSc
   // kept in the original's zoo too: cheatsSave 0x47a10c)
   o.raw(static_cast<uint32_t>(RenameCheats::usedNames().size()));
   for (const std::string &name : RenameCheats::usedNames()) o.str(name);
+  // Version 27: what the goals made available or not (the original keeps it
+  // in the zoo: the types' own flags, set by goalFire 4 and 7)
+  {
+    const std::map<std::string, bool> &kept = ItemCatalog::get().forcedState();
+    o.raw(static_cast<uint32_t>(kept.size()));
+    for (const auto &entry : kept) {
+      o.str(entry.first);
+      o.raw(static_cast<uint8_t>(entry.second ? 1 : 0));
+    }
+  }
 
   std::string extension=std::filesystem::path(path).extension().string();
   std::transform(extension.begin(),extension.end(),extension.begin(),::tolower);
@@ -2609,6 +2619,17 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
     std::vector<std::string> used(i.count(100000, 4));
     for (std::string &name : used) name = i.str();
     if (!i.bad) world.zooReader.usedNames = used;
+  }
+  availability.clear();
+  availabilityKept = false;
+  if (version >= 27 && !i.bad) {
+    const uint32_t n = i.count(100000, 5);
+    for (uint32_t k = 0; k < n && !i.bad; k++) {
+      std::string file = i.str();
+      const bool on = i.raw<uint8_t>() != 0;
+      if (!i.bad) availability[file] = on;
+    }
+    if (!i.bad) availabilityKept = true;
   }
   // (the flyers' list and lasts as the original makes them on a load; the
   // lasts saved since version 21 are ours and give way)
@@ -3556,3 +3577,9 @@ bool SaveGame::applyMap(const std::vector<char> &b, World &world) {
 }
 
 Goals *SaveGame::goals = nullptr;
+std::map<std::string, bool> SaveGame::availability;
+bool SaveGame::availabilityKept = false;
+
+void SaveGame::locateEntrance(World &world) {
+  world.findEntrance();
+}

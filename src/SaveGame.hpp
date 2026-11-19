@@ -2,6 +2,7 @@
 #define SAVE_GAME_HPP
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,13 @@ class SaveGame {
 public:
   // The game's goals (states and awards kept with the zoo)
   static Goals *goals;
+  // What the goals had made available or not, as the last native zoo read
+  // held it (version 27; availabilityKept false: that zoo held none)
+  static std::map<std::string, bool> availability;
+  static bool availabilityKept;
+  // The zoo's entrance found now (the first frames find it; a goal's trigger
+  // may ask before them)
+  static void locateEntrance(World &world);
   // Where saved zoos go (Documents/zt1-engine/Saved Games), made if need be
   static std::string folder();
   static const std::string &lastError();

@@ -1,6 +1,7 @@
 #ifndef WORLD_INDEX_HPP
 #define WORLD_INDEX_HPP
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,12 @@ public:
 
   What at(int x, int y) const;
   bool blocked(int x, int y) const { return at(x, y) != What::Nothing; }
+  // The tile's four quarter slots (zoo.exe tile +4..+0x10): which of them an
+  // object's footprint holds (bits 0-3: NW, NE, SW, SE) and whether one of
+  // those objects is a scenery of cAvoidEdges 1 (the object's class slot
+  // 0xb4, type +0x56: sceneryTypeLoad 0x4ba5b0)
+  int quarterMask(int x, int y) const;
+  bool quarterAvoids(int x, int y) const;
 
   // Who's where: set every frame
   void clearMovers();
@@ -53,6 +60,9 @@ public:
 private:
   int w = 0, h = 0;
   std::vector<What> grid;
+  std::vector<unsigned char> quarters, avoiders;
+  std::map<std::string, bool> avoidCache;
+  bool avoidEdges(const std::string &subClass, const std::string &type, ResourceManager *rm);
   // Movers bucketed by tile (index -> first in 'movers', linked)
   std::vector<Mover> movers;
   std::vector<int> heads, nexts;

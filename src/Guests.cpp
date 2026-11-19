@@ -3498,6 +3498,8 @@ void Guests::viewDone(Guest &g) {
       d += d;
     if (d > 0) {
       d = std::min(d, 10.0);
+      // (zoo.exe guestBookDonation 0x42ec49: into the zoo's books and takings
+      // and the guest's own +0xfc / +0x104 donated totals)
       this->donations += d;
       this->exhibitBooks[g.target].donated += d;
     }
