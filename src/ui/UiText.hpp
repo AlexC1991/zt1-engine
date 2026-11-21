@@ -27,6 +27,7 @@ public:
     bar->attach(this);
     this->linked = true;
   }
+  bool scrollLinked() const { return this->linked; }
   // UiScrollable (rows)
   int getScrollPosition() const override { return this->rowScroll; }
   int getScrollMaximum() const override { return std::max(0, static_cast<int>(this->rows.size()) - this->viewRows); }

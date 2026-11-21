@@ -26,6 +26,7 @@ bool g_showDiagnostics = false;
 // steps), as games present HDR
 namespace {
 SDL_Texture *g_hdrFrame = nullptr;
+SDL_Window *g_mainWindow = nullptr; // (the game's window, for hdrNote)
 SDL_Window *g_hdrWindow = nullptr;
 bool hdrFrameFits(SDL_Renderer *r) {
   int w = 0, h = 0;
@@ -155,8 +156,33 @@ Window::Window(const std::string &title, int width, int height, float fps_target
     // it can't be made, the ordinary one
     this->renderer = nullptr;
     Features::hdrOutput = Settings::getInt("user", "hdroutput", 0) != 0;
+    {
+      // ours: each monitor's HDR as Windows reports it (for a player's log)
+      int displays = 0;
+      SDL_DisplayID *ids = SDL_GetDisplays(&displays);
+      const SDL_DisplayID mine = SDL_GetDisplayForWindow(this->window);
+      for (int d = 0; ids && d < displays; d++) {
+        const SDL_PropertiesID p = SDL_GetDisplayProperties(ids[d]);
+        SDL_Log("[HDR] monitor %d '%s'%s: HDR %s", d, SDL_GetDisplayName(ids[d]), ids[d] == mine ? " (the window's)" : "",
+                SDL_GetBooleanProperty(p, SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false) ? "on" : "off");
+      }
+      SDL_free(ids);
+      SDL_Log("[HDR] switch %s, renderer driver hint '%s'", Features::hdrOutput ? "on" : "off",
+              SDL_GetHint(SDL_HINT_RENDER_DRIVER) ? SDL_GetHint(SDL_HINT_RENDER_DRIVER) : "");
+    }
+    g_mainWindow = this->window;
+    // ours: the monitor it's put back on (placeSaved, after this) - the one
+    // it opens on otherwise
+    SDL_DisplayID hdrDisplay = SDL_GetDisplayForWindow(this->window);
+    {
+      const int sx = Settings::getInt("UI", "lastWindowX", INT32_MIN), sy = Settings::getInt("UI", "lastWindowY", INT32_MIN);
+      const SDL_Point at{sx + 40, sy + 40};
+      if (sx != INT32_MIN && sy != INT32_MIN)
+        if (const SDL_DisplayID d = SDL_GetDisplayForPoint(&at))
+          hdrDisplay = d;
+    }
     if (Features::hdrOutput &&
-        SDL_GetBooleanProperty(SDL_GetDisplayProperties(SDL_GetDisplayForWindow(this->window)), SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false)) {
+        SDL_GetBooleanProperty(SDL_GetDisplayProperties(hdrDisplay), SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false)) {
       SDL_PropertiesID props = SDL_CreateProperties();
       SDL_SetPointerProperty(props, SDL_PROP_RENDERER_CREATE_WINDOW_POINTER, this->window);
       SDL_SetNumberProperty(props, SDL_PROP_RENDERER_CREATE_OUTPUT_COLORSPACE_NUMBER, SDL_COLORSPACE_HDR10);
@@ -214,6 +240,20 @@ void keep(SDL_Window *w) {
   Settings::setInt("UI", "lastWindowY", y);
 }
 } // namespace
+
+// ours: the HDR output switch as it stands, in words for Game Options
+std::string Window::hdrNote() {
+  if (g_hdrWindow)
+    return "Now: on - the game is sending HDR10.";
+  if (!g_mainWindow)
+    return "";
+  const bool monitor = SDL_GetBooleanProperty(SDL_GetDisplayProperties(SDL_GetDisplayForWindow(g_mainWindow)),
+                                              SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false);
+  if (!monitor)
+    return "Now: Windows' HDR is off for this monitor (Windows Settings > System > Display > Use HDR), so the "
+           "picture is an ordinary one.";
+  return Features::hdrOutput ? "Now: an ordinary picture - restart the game to send HDR." : "";
+}
 
 SDL_Rect Window::usableArea(SDL_Window *w) {
   SDL_DisplayID d = w ? SDL_GetDisplayForWindow(w) : 0;

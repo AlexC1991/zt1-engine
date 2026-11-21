@@ -1051,8 +1051,15 @@ void UiGameScreen::showStaffPlaque(const std::string &file) {
     image->setImage(Utils::string_to_lower(str("cplaqueimagename")));
   // (its own line breaks kept, each line wrapped to the box at word breaks
   // - measured: the scientist's "...specialize" ends a line short)
-  if (UiText *text = dynamic_cast<UiText *>(z->getElementById(40003)))
+  // (its MainText scrolls by the layout's own bar, scrollbar=40004: the
+  // text kept inside its dy, as the original)
+  if (UiText *text = dynamic_cast<UiText *>(z->getElementById(40003))) {
+    if (!text->scrollLinked())
+      if (UiScrollBar *bar = dynamic_cast<UiScrollBar *>(z->getElementById(40004)))
+        text->linkScrollBar(bar);
     text->setMessage(langText(str("cgeneralinfotextname")));
+    text->setScrollPosition(0);
+  }
   delete ai;
   this->setPanelOpen(33, true);
 }
@@ -1172,8 +1179,15 @@ void UiGameScreen::showAdoptPlaque(const std::string &file) {
     }
   image(25051, info(num("chabitat")));
   image(25053, Utils::string_to_lower(str("cpreficon")));
-  if (UiText *text = dynamic_cast<UiText *>(z->getElementById(25003)))
+  // (its MainText scrolls by the layout's own bar, scrollbar=25004: the
+  // text kept inside its dy, as the original)
+  if (UiText *text = dynamic_cast<UiText *>(z->getElementById(25003))) {
+    if (!text->scrollLinked())
+      if (UiScrollBar *bar = dynamic_cast<UiScrollBar *>(z->getElementById(25004)))
+        text->linkScrollBar(bar);
     text->setMessage(langText(str("cgeneralinfotextname")));
+    text->setScrollPosition(0);
+  }
   if (UiButton *carer = dynamic_cast<UiButton *>(z->getElementById(25011))) {
     const int k = num("ckeeper");
     const int index = k == 9551 ? 1 : k == 9552 ? 2 : 0;
@@ -2608,6 +2622,19 @@ void UiGameScreen::placePanels(SDL_Renderer *renderer, SDL_Rect *screen) {
   // (the paint tab and colour picker sit on Building Information: part of it)
   auto partOf = [](int id) { return id == 302 || id == 37; };
   std::vector<SDL_Rect> placed, bars;
+  // (ours: a list at the bottom right - x=right, y=-366 - and an
+  // information window at its altx / alty above it are the original's own
+  // stack, 0x4ef99b: they may touch or overlap a few pixels and neither is
+  // moved aside for the other)
+  auto kindOf = [](const Entry *p) {
+    IniReader *i = p->layout ? p->layout->getIniReader() : nullptr;
+    if (!i)
+      return 0;
+    if (i->get("layoutinfo", "x") == "right" && i->get("layoutinfo", "y") == "-366")
+      return 1;
+    return i->get("layoutinfo", "alty").empty() ? 0 : 2;
+  };
+  std::vector<int> placedKind;
   // (a window moved aside keeps off the toolbar and the bottom bar too:
   // main.lyt's root images)
   for (int id = 1032; id <= 1039; id++)
@@ -2623,12 +2650,16 @@ void UiGameScreen::placePanels(SDL_Renderer *renderer, SDL_Rect *screen) {
       r.x = std::clamp(e->moveX, screen->x - r.w + 60, screen->x + screen->w - 60);
       r.y = std::clamp(e->moveY, screen->y, screen->y + screen->h - 24);
     } else if (Features::smartStack && !partOf(e->id) && r.w > 0 && r.h > 0) {
+      const int kind = kindOf(e);
       auto clear = [&](const SDL_Rect &c, bool ofBars) {
         if (c.x < screen->x || c.y < screen->y || c.x + c.w > screen->x + screen->w || c.y + c.h > screen->y + screen->h)
           return false;
-        for (const SDL_Rect &q : placed)
-          if (SDL_HasRectIntersection(&c, &q))
+        for (size_t i = 0; i < placed.size(); i++) {
+          if (kind + placedKind[i] == 3)
+            continue;
+          if (SDL_HasRectIntersection(&c, &placed[i]))
             return false;
+        }
         if (ofBars)
           for (const SDL_Rect &q : bars)
             if (SDL_HasRectIntersection(&c, &q))
@@ -2654,8 +2685,10 @@ void UiGameScreen::placePanels(SDL_Renderer *renderer, SDL_Rect *screen) {
       }
     }
     e->rect = r;
-    if (!partOf(e->id))
+    if (!partOf(e->id)) {
       placed.push_back(r);
+      placedKind.push_back(kindOf(e));
+    }
   }
 }
 
@@ -2802,7 +2835,7 @@ void UiGameScreen::setDateTime(const std::string &calendar, const std::string &t
   if (time.empty()) this->dateTimeWell = {};
   if (auto *date = dynamic_cast<UiText *>(this->hud->getElementById(1030))) {
     date->setText(calendar);
-    date->setHidden((!time.empty() || Features::fastForward) && this->dateTimeText != nullptr);
+    date->setHidden((!time.empty() || Features::fastForward || Features::celebrations) && this->dateTimeText != nullptr);
   }
   const std::string label = time.empty() ? calendar : calendar + "   " + time;
   if (this->dateTimeText && this->dateTimeText->getText() != label) this->dateTimeText->setMessage(label);
@@ -2813,8 +2846,11 @@ void UiGameScreen::setDateTime(const std::string &calendar, const std::string &t
 // the recessed edges. Only the middle stretches, leaving the round control alone.
 void UiGameScreen::drawDateTime(SDL_Renderer *renderer) {
   this->dateTimeWell = {};
+  this->dateTimeTextRect = {};
   this->speedRect = {};
-  if ((this->dateTime.empty() && !Features::fastForward) || !this->dateTimeText) return;
+  // (celebrations' dated text, "17 Feb, Year 1", is wider than the native
+  // Date box, so it takes the extended well too)
+  if ((this->dateTime.empty() && !Features::fastForward && !Features::celebrations) || !this->dateTimeText) return;
   auto *money = dynamic_cast<UiText *>(this->hud->getElementById(1016));
   auto *moneyBackground = this->hud->getElementById(1037);
   auto drawOriginalMoney = [&] {
@@ -2863,12 +2899,22 @@ void UiGameScreen::drawDateTime(SDL_Renderer *renderer) {
             SDL_Color{255, 255, 255, 255}, ini->getInt(nativeDate->getName(), "fontsize")))
       this->resource_manager->getTextSize(text, &calendarWidth, &calendarHeight);
   const int border = ini->getInt(nativeDate->getName(), "border", 0);
-  const int leading = std::max(0, (originalWidth - 2 * border - calendarWidth) / 2);
-  SDL_Rect well{back.x + left, back.y + source.y,
-                std::max(originalWidth, labelWidth + leading + 2 * border + trailingPadding), source.h};
   // addition: the approved smaller attached speed face adds 20 native pixels.
   // The well starts underneath its rim; only its straight middle stretches.
   constexpr int speedWidth = 20;
+  int leading = std::max(0, (originalWidth - 2 * border - calendarWidth) / 2);
+  // ours: the well starts under the round button's rim, so a calendar wider
+  // than the native box (celebrations' day) still starts clear of the button
+  // and of the speed face beside it
+  const SDL_Rect button = shown->getLastRect();
+  if (button.w > 0) {
+    constexpr int buttonGap = 3;
+    const int buttonRight = button.x + button.w + (Features::fastForward ? speedWidth : 0);
+    const int wellLeft = back.x + left + (Features::fastForward ? speedWidth : 0);
+    leading = std::max(leading, buttonRight + buttonGap - wellLeft - border);
+  }
+  SDL_Rect well{back.x + left, back.y + source.y,
+                std::max(originalWidth, labelWidth + leading + 2 * border + trailingPadding), source.h};
   if (Features::fastForward) well.x += speedWidth;
   this->dateTimeWell = well;
 
@@ -2979,6 +3025,7 @@ void UiGameScreen::drawDateTime(SDL_Renderer *renderer) {
   this->dateTimeIni->set("date", "dx", std::to_string(well.w - leading));
   SDL_Rect textBox{well.x,back.y + textTop,well.w,well.h};
   this->dateTimeText->draw(renderer,&textBox);
+  this->dateTimeTextRect = {textBox.x + leading + border, textBox.y, labelWidth, labelHeight};
   if (moneyWell.w > 0 && !money->isHidden()) {
     const std::string section = money->getName();
     const std::string x = ini->get(section,"x"), dx = ini->get(section,"dx"), justify = ini->get(section,"justify");
@@ -5297,29 +5344,6 @@ void UiGameScreen::openHelp(int topic) {
   this->showHelpTopic(topic >= 0 ? topic : this->helpLast);
 }
 
-// (the help texts are Windows-1252; the font takes UTF-8)
-static std::string windows1252ToUtf8(const std::string &in) {
-  static const unsigned short high[32] = {0x20AC, 0x81,   0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
-                                          0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D,   0x017D, 0x8F,
-                                          0x90,   0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
-                                          0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D,   0x017E, 0x0178};
-  std::string out;
-  for (unsigned char c : in) {
-    unsigned cp = c < 0x80 || c >= 0xA0 ? c : high[c - 0x80];
-    if (cp < 0x80) {
-      out += static_cast<char>(cp);
-    } else if (cp < 0x800) {
-      out += static_cast<char>(0xC0 | (cp >> 6));
-      out += static_cast<char>(0x80 | (cp & 0x3F));
-    } else {
-      out += static_cast<char>(0xE0 | (cp >> 12));
-      out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-      out += static_cast<char>(0x80 | (cp & 0x3F));
-    }
-  }
-  return out;
-}
-
 void UiGameScreen::showHelpTopic(int row) {
   UiLayout *z = this->helpPanel;
   if (!z || row < 0 || row >= (int)this->helpTopics.size())
@@ -5339,7 +5363,7 @@ void UiGameScreen::showHelpTopic(int row) {
   if (UiText *title = dynamic_cast<UiText *>(z->getElementById(28002)))
     title->setText(t.title);
   if (UiText *body = dynamic_cast<UiText *>(z->getElementById(28005)))
-    this->helpRaw = windows1252ToUtf8(text);
+    this->helpRaw = text; // (UTF-8 already: langText)
   // (wrapped to the box when it's next drawn, wrapHelp)
   this->helpWrapPending = true;
 }

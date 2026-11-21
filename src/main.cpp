@@ -13,6 +13,8 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <deque>
+#include <set>
 
 #include "Animation.hpp"
 #include "ArtScaler.hpp"
@@ -5976,10 +5978,159 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     if(timings)std::fclose(timings);
     return result;
   }
+  // ours: ZT_FLYER_SHOTS=1: the map's birds sent across and pictured where
+  // they are, for looking at their height over the ground
+  if (std::getenv("ZT_FLYER_SHOTS")) {
+    Ambient &amb = world->getAmbient();
+    amb.clear();
+    for (int k = 0; k < 6; k++)
+      amb.spawn(world->getMap(), -1);
+    static bool noKeys[SDL_SCANCODE_COUNT] = {};
+    setGamePaused(false);
+    for (int s = 0; s < 40; s++)
+      world->update(noKeys, 0.5f, 0.5f);
+    setGamePaused(true);
+    for (int i = 0; i < std::min(amb.count(), 4); i++) {
+      int kind; float x, y, vx, vy;
+      amb.flyer(i, kind, x, y, vx, vy);
+      world->centreOn(x, y);
+      SDL_Log("[Flyers] %d kind %d at %.1f,%.1f", i, kind, x, y);
+      capture(("flyer-" + std::to_string(i)).c_str());
+      // (and with the day/night cycle's sun shadows, mid-afternoon)
+      const bool wasLight = Features::dayNightLighting;
+      const double wasPreview = world->getLighting().previewHour;
+      Features::dayNightLighting = true;
+      world->getLighting().previewHour = 15.0;
+      capture(("flyer-" + std::to_string(i) + "-lit").c_str());
+      world->getLighting().previewHour = wasPreview;
+      Features::dayNightLighting = wasLight;
+    }
+    if (timings) std::fclose(timings);
+    return 0;
+  }
+  // ours: ZT_AUDIT_WORLD=1 (the real map): benches, picnic tables, play
+  // equipment, stands, a restroom and the lake's shacks put by the path
+  // from the entrance, guests let in with needs, the zoo run and each spot
+  // pictured as it goes - for looking at what guests do there
+  if (std::getenv("ZT_AUDIT_WORLD")) {
+    static bool noKeys[SDL_SCANCODE_COUNT] = {};
+    // (the entrance is found on the zoo's first update)
+    setGamePaused(false);
+    for (int s = 0; s < 5; s++)
+      world->update(noKeys, 0.1f, 0.1f);
+    WorldMap &map = world->getMap();
+    Guests &gs = world->getGuests();
+    int ex = -1, ey = -1;
+    gs.entrance(ex, ey);
+    std::vector<std::pair<int, int>> paths;
+    if (ex >= 0) {
+      std::set<std::pair<int, int>> seen{{ex, ey}};
+      std::deque<std::pair<int, int>> open{{ex, ey}};
+      while (!open.empty() && paths.size() < 400) {
+        auto [x, y] = open.front();
+        open.pop_front();
+        paths.push_back({x, y});
+        for (auto [dx, dy] : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}})
+          if (map.isPath(x + dx, y + dy) && seen.insert({x + dx, y + dy}).second)
+            open.push_back({x + dx, y + dy});
+      }
+    }
+    auto doorOnPath = [&](const PlacedObjects::Object &o) {
+      auto doors = gs.doorTiles(o);
+      if (doors.empty())
+        return true;
+      for (auto [dx, dy] : doors)
+        if (map.isPath(dx, dy))
+          return true;
+      return false;
+    };
+    auto waterBy = [&](int x, int y) {
+      for (int dy = -2; dy <= 2; dy++)
+        for (int dx = -2; dx <= 2; dx++)
+          if (const MapTile *t = map.getTile(x + dx, y + dy); t && (t->terrainType == 9 || t->terrainType == 10))
+            return true;
+      return false;
+    };
+    std::vector<std::pair<std::string, std::pair<float, float>>> placed;
+    auto put = [&](const std::string &file, bool byWater, size_t from) {
+      world->setObjectTool(file, 0, 0);
+      for (size_t i = from; i < paths.size(); i++)
+        for (int r = 1; r <= 2; r++)
+          for (auto [dx, dy] : {std::pair{r, 0}, {-r, 0}, {0, r}, {0, -r}}) {
+            const int tx = paths[i].first + dx, ty = paths[i].second + dy;
+            if (map.isPath(tx, ty) || (byWater && !waterBy(tx, ty)))
+              continue;
+            for (float off : {0.5f, 1.0f})
+              for (int facing : {4, 0, 2, 6}) {
+                if (world->objectFit(file, tx + off, ty + off, facing) != Fences::Fit::Ok ||
+                    !world->objectsMutable().add(file, tx + off, ty + off, facing))
+                  continue;
+                if (doorOnPath(world->getObjects().objects().back())) {
+                  world->reindex();
+                  world->setObjectTool("", 0, 0);
+                  placed.push_back({file, {tx + off, ty + off}});
+                  SDL_Log("[Audit] %s at %.1f,%.1f facing %d", file.c_str(), tx + off, ty + off, facing);
+                  return true;
+                }
+                world->objectsMutable().remove(static_cast<int>(world->getObjects().objects().size()) - 1);
+              }
+          }
+      world->setObjectTool("", 0, 0);
+      SDL_Log("[Audit] no spot for %s", file.c_str());
+      return false;
+    };
+    const std::vector<std::string> things = {
+        "scenery/other/bench.ai",         "scenery/other/picnic.ai",     "scenery/other/sbench.ai",
+        "scenery/building/swing.ai",      "scenery/building/dslide.ai",  "scenery/building/bounce.ai",
+        "scenery/building/aqbounce.ai",   "scenery/building/bgrstnd.ai", "scenery/building/drkstnd.ai",
+        "scenery/building/bathroom.ai",   "scenery/building/dinoputt.ai", "scenery/other/picnic2.ai",
+        "scenery/other/aqbench.ai"};
+    for (size_t k = 0; k < things.size(); k++)
+      put(things[k], false, std::min(paths.size() ? paths.size() - 1 : 0, 6 + k * 4));
+    for (const char *shack : {"scenery/building/boatshak.ai", "scenery/building/chroom.ai", "scenery/building/dolshack.ai"})
+      put(shack, true, 0);
+    // guests with needs, children among them
+    for (int k = 0; k < 70; k++)
+      gs.admit(0);
+    int n = 0;
+    for (const Guests::Guest &g : gs.guests()) {
+      Guests::Guest &m = const_cast<Guests::Guest &>(g);
+      m.tired = (n % 3 == 0) ? 85 : 20;
+      m.hunger = (n % 4 == 1) ? 85 : 10;
+      m.thirst = (n % 5 == 2) ? 85 : 10;
+      m.bathroom = (n % 7 == 3) ? 90 : 0;
+      n++;
+    }
+    for (int round = 0; round < 6; round++) {
+      for (int s = 0; s < 400; s++)
+        world->update(noKeys, 0.1f, 0.1f);
+      for (size_t i = 0; i < placed.size(); i++) {
+        world->centreOn(placed[i].second.first, placed[i].second.second);
+        std::string name = placed[i].first.substr(placed[i].first.find_last_of('/') + 1);
+        name = name.substr(0, name.size() - 3);
+        capture(("audit-" + name + "-" + std::to_string(round)).c_str());
+      }
+      int using_ = 0, water = 0, walking = 0;
+      for (const Guests::Guest &g : gs.guests()) {
+        using_ += g.state == Guests::State::Using;
+        water += g.state == Guests::State::Water;
+        walking += g.state == Guests::State::Walking;
+      }
+      SDL_Log("[Audit] round %d: %zu guests, %d using, %d on water, %d walking", round, gs.guests().size(), using_,
+              water, walking);
+    }
+    setGamePaused(true);
+    if (timings) std::fclose(timings);
+    return 0;
+  }
   if (std::getenv("ZT_HUD_CLOCK_CHECKS")) {
     SDL_HideWindow(SDL_GetRenderWindow(renderer));
     extern int runHudClockChecks(World &,UiGameScreen &,ResourceManager *,SDL_Renderer *,const std::string &,
                                 bool &,const std::function<void(const char*)> &,const std::function<void(bool)> &);
+    // ours: 17 January, so the celebrations date is at its widest (a
+    // two-digit day)
+    for (int d = 0; d < 16; d++)
+      g_sim.update(ZooSim::kSecondsPerDay);
     const int result = runHudClockChecks(*world,*g_hud,rm,renderer,outDir,g_widescreen,capture,
                                         [&](bool paused) { setGamePaused(paused); });
     if (timings) std::fclose(timings);
@@ -9193,6 +9344,9 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
         }
       }
       fn.setLife(worn, 3.0f);
+      // (ours: the view back on the fence - the Exhibit List checks above
+      // left it on their tanks)
+      world->centreOn(worn.x + 0.5f, worn.y + 0.5f);
       capture("fence_worn");
       bool fixing = false;
       for (int i = 0; i < 1200 && fn.worn(worn); i++) {

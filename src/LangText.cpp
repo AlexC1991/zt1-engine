@@ -13,6 +13,31 @@
 #include <windows.h>
 #endif
 
+// ours: the DLLs' texts are Windows-1252 (an apostrophe is 0x92); the
+// font takes UTF-8 - turned once here, for every caller (plaques, help,
+// scenario popups and stories)
+std::string windows1252ToUtf8(const std::string &in) {
+  static const unsigned short high[32] = {0x20AC, 0x81,   0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+                                          0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D,   0x017D, 0x8F,
+                                          0x90,   0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+                                          0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D,   0x017E, 0x0178};
+  std::string out;
+  for (unsigned char c : in) {
+    unsigned cp = c < 0x80 || c >= 0xA0 ? c : high[c - 0x80];
+    if (cp < 0x80) {
+      out += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+      out += static_cast<char>(0xC0 | (cp >> 6));
+      out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+      out += static_cast<char>(0xE0 | (cp >> 12));
+      out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+      out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+  }
+  return out;
+}
+
 std::string langText(const std::string &name) {
   static std::map<std::string, std::string> cache;
   auto it = cache.find(name);
@@ -50,6 +75,7 @@ std::string langText(const std::string &name) {
       break;
   }
 #endif
+  text = windows1252ToUtf8(text);
   cache[name] = text;
   return text;
 }

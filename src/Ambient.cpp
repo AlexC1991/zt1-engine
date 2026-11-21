@@ -16,7 +16,8 @@ namespace {
 // of the world's clock +0x204): a unit's place is in 64ths of a tile; a flyer
 // goes cSpeed of them a second along each axis it moves on - straight 40 and
 // 50 a second, on a diagonal 40 or 50 on both axes, not slowed to the
-// diagonal; its height (+0x11c) stays 0, its art drawing it in the sky
+// diagonal; its height (+0x11c) stays 0 (drawn high all the same:
+// Ambient::kFlightLevels)
 constexpr float kUnitsPerTile = 64.0f;
 } // namespace
 
@@ -360,7 +361,7 @@ void Ambient::drawFlyers(SDL_Renderer *renderer, const WorldRenderer &view,
     uint32_t ms = k.idle->frameTimeMs() ? k.idle->frameTimeMs() : 100;
     int frame = static_cast<int>(f.age * 1000.0f / ms);
     float sx, sy, d;
-    view.worldToScreenF(f.x, f.y, this->groundAt(map, f.x, f.y), sx, sy, d);
+    view.worldToScreenF(f.x, f.y, this->groundAt(map, f.x, f.y) + kFlightLevels, sx, sy, d);
     k.idle->drawAnchored(renderer, sx, sy, this->facing(view, f), nullptr, frame);
   }
 }

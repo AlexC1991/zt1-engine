@@ -35,6 +35,9 @@ public:
     static void setFullscreen(SDL_Window *w, bool full);
     // The part of the window's own monitor a window may use (taskbar left out)
     static SDL_Rect usableArea(SDL_Window *w);
+    // ours: what the HDR output switch does now, for Game Options (on, or
+    // why not: Windows' HDR off for the monitor, or a restart needed)
+    static std::string hdrNote();
 private:
     SDL_Cursor * default_cursor = nullptr;
 };

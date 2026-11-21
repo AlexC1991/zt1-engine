@@ -49276,6 +49276,11 @@
    "by": "Claude",
    "on": "2026-11-21",
    "what": "Named 0x44ca8c habitatRemakeAfterSplit"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-21",
+   "what": "Note at 0x4fc160: Places the flyer at height 0 (z [esp+0x24] stays 0). measured 2026-11-21 (running original, Basic Grass, a bluejay with its shadow over three frames at half zoom): the bird is drawn 138-147 px above its shadow at 64x32 tiles, about 9 height levels; the lift is in the drawing (not found yet), not the unit's +0x11c"
   }
  ],
  "notes": {
@@ -54761,8 +54766,8 @@
   },
   "0x4fc160": {
    "by": "Claude",
-   "on": "2026-11-17",
-   "text": "Corrected 2026-11-17: 0x412ac4 returns the type's GXLLEAnimSet (from the resource manager [0x638044], 0x401fdd: map node +0x1c); its +0x10..+0x14 list has one 0x1c-byte entry per view its .ani lists (GXLLEAnimSet::attempt 0x40b967 sizes it to [animation] animation=). The biplane's animals/biplane/m/idle/idle.ani (the only copy) lists NE, SE, SW, NW - 4 - so the stock biplane always comes straight in; the bird family's list 5 (measured: the bluejay type +0xd0 -> idle.ani). Engine: Ambient::spawn (Animation::viewCount) (Claude)"
+   "on": "2026-11-21",
+   "text": "Places the flyer at height 0 (z [esp+0x24] stays 0). measured 2026-11-21 (running original, Basic Grass, a bluejay with its shadow over three frames at half zoom): the bird is drawn 138-147 px above its shadow at 64x32 tiles, about 9 height levels; the lift is in the drawing (not found yet), not the unit's +0x11c"
   },
   "0x4fc358": {
    "by": "Claude",

@@ -57,6 +57,9 @@ public:
   int gameSpeed() const { return this->selectedSpeed; }
   std::function<void(int)> onGameSpeed;
   SDL_Rect speedButtonRect() const;
+  // ours: where the extended date well and its text were last drawn (checks)
+  SDL_Rect getDateTimeWell() const { return this->dateTimeWell; }
+  SDL_Rect getDateTimeTextRect() const { return this->dateTimeTextRect; }
 
   // Searches the HUD, then the panels
   UiElement *getElementById(int id);
@@ -417,6 +420,7 @@ private:
   std::unique_ptr<UiText> dateTimeText;
   std::string dateTime;
   SDL_Rect dateTimeWell = {};
+  SDL_Rect dateTimeTextRect = {};
   int selectedSpeed = 1;
   bool speedDown = false;
   Uint32 speedPressUntil = 0; // (a click shown pressed in for a moment, however quick)

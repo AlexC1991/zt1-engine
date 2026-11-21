@@ -144,6 +144,19 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
     bool digits=gap!=std::string::npos && gap>=1 && gap<=2;
     for(size_t i=0;digits && i<gap;++i)digits=dated[i]>='0' && dated[i]<='9';
     check(digits && dated.substr(gap+1)==calendar,"celebrations on: the date is the day, then the original's month and year");
+    // the longer dated text with the clock, the speed control and both
+    const bool wasSpeedControl=Features::fastForward;
+    for(const auto [time,speed,name] : {std::tuple{false,false,"clock-celebrations-date"},std::tuple{true,false,"clock-celebrations-time"},
+          std::tuple{false,true,"clock-celebrations-speed"},std::tuple{true,true,"clock-celebrations-both"}}) {
+      Features::showGameTime=time;Features::fastForward=speed;lighting.previewHour=7.1;
+      capture(name);
+      const SDL_Rect well=hud.getDateTimeWell(),text=hud.getDateTimeTextRect();
+      const SDL_Rect control=Features::fastForward?hud.speedButtonRect():box(world.isPaused()?1072:1071);
+      log<<"DATED "<<name<<" well "<<well.x<<' '<<well.w<<" text "<<text.x<<' '<<text.w<<" button "<<control.x<<' '<<control.w<<'\n';
+      check(well.w>0 && text.w>0 && text.x>=control.x+control.w && text.x+text.w<=well.x+well.w,
+            std::string("celebrations: the dated label sits inside its well, clear of the round button (")+name+")");
+    }
+    Features::showGameTime=false;Features::fastForward=wasSpeedControl;lighting.previewHour=-1;
     Features::celebrations=false;capture("clock-celebrations-off");
     check(label()==calendar,"celebrations off: the original's date, no day");
     Features::celebrations=wasCelebrations;
@@ -166,6 +179,13 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
         std::tuple{1600,1200,2.0f,true,"clock-double-ui"},std::tuple{1280,720,1.0f,false,"clock-centred"}}) {
     SDL_SetWindowSize(window,width,height);RenderSettings::uiScaleSetting=scale;widescreen=wide;
     capture(name);check(label()==calendar+"   18:30",std::string("clock at ")+name);
+    // the celebrations' dated label at the same size
+    const bool wasCelebrations=Features::celebrations;Features::celebrations=true;
+    capture((std::string(name)+"-dated").c_str());
+    const SDL_Rect well=hud.getDateTimeWell(),text=hud.getDateTimeTextRect(),control=box(1072);
+    check(text.w>0 && text.x>=control.x+control.w && text.x+text.w<=well.x+well.w,
+          std::string("celebrations: the dated label clear of the button at ")+name);
+    Features::celebrations=wasCelebrations;
   }
   // Native pixel crops for direct review against the original bar, without
   // rescaling or mockup artwork hiding the edge/baseline differences.

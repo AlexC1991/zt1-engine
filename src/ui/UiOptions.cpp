@@ -856,6 +856,13 @@ int UiOptions::updateChecks(SDL_Renderer *renderer, ResourceManager *rm, const s
         check(ini->getInt(mods->getName(), "y") == (inGame ? 312 : 278), "Mods keeps its existing slot");
       }
       check(title && title->getText() == kPageNames[page], "page title");
+      if (page == kDisplay) {
+        // (the HDR row says what it's doing now, and why not when it isn't)
+        const std::string &hdr = options.about[pageId(kDisplay, kHdr)];
+        log << "HDR row: " << hdr << '\n';
+        check(!Window::hdrNote().empty() && hdr.find(Window::hdrNote()) != std::string::npos,
+              "HDR output row says what it does now");
+      }
       auto *updateState = tabs->getElementById(pageId(kUpdates, kUpdateStatus));
       check(updateState && updateState->isHidden() == (page != kUpdates), "update status only on Updates");
       const int row = updatesRow();
@@ -1648,7 +1655,7 @@ void UiOptions::wire() {
   describe({pageId(kDisplay, kHdr), pageId(kDisplay, kHdr + 1)},
            "With Windows' HDR on for this monitor, the game sends an HDR10 picture itself (Direct3D 11), as modern games "
            "do: the same colours, white at Windows' SDR content brightness, and Windows' Auto HDR leaves it alone. "
-           "Off: an ordinary picture. Used from the next time the game starts.");
+           "Off: an ordinary picture. Used from the next time the game starts. " + Window::hdrNote());
   onOff(kDisplay, kFps, "Show the frame rate (F3)", g_showDiagnostics, [](bool on) { g_showDiagnostics = on; });
   describe({pageId(kDisplay, kFps), pageId(kDisplay, kFps + 1)},
            "Frames a second, memory and the renderer in the corner of the screen.");

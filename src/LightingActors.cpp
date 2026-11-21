@@ -133,8 +133,8 @@ void DayNightLighting::collectActors(World &world) {
   for(const auto &f:ambient.flyers) {
     const auto &k=ambient.kinds[f.kind];auto *a=k.idle;if(!a)continue;
     const int frame=int(f.age*1000/std::max(1u,a->frameTimeMs()));
-    if(k.key=="santa")if(const auto *asset=LightingAssets::find("santa"))actorEmission(a,frame,{f.x,f.y,ambient.groundAt(map,f.x,f.y)+6.0f},f.vx,f.vy,(uint64_t(1)<<55)+size_t(&f-ambient.flyers.data()),asset->id);
-    add(a,frame,{f.x,f.y,ambient.groundAt(map,f.x,f.y)+6.0f},f.vx,f.vy,.6f,.6f,(uint64_t(1)<<55)+size_t(&f-ambient.flyers.data()),view.screenSide(f.vx,f.vy));
+    if(k.key=="santa")if(const auto *asset=LightingAssets::find("santa"))actorEmission(a,frame,{f.x,f.y,ambient.groundAt(map,f.x,f.y)+Ambient::kFlightLevels},f.vx,f.vy,(uint64_t(1)<<55)+size_t(&f-ambient.flyers.data()),asset->id);
+    add(a,frame,{f.x,f.y,ambient.groundAt(map,f.x,f.y)+Ambient::kFlightLevels},f.vx,f.vy,.6f,.6f,(uint64_t(1)<<55)+size_t(&f-ambient.flyers.data()),view.screenSide(f.vx,f.vy));
   }
   for(size_t i=0;i<world.objectsMutable().objects().size();++i){const auto &o=world.objectsMutable().objects()[i];const int material=LightingAssets::fluorescenceProfile(PlacedObjects::fileOf(o));if(!material)continue;
     const float ground=LightingAssets::terrainHeight(map,o.x,o.y),z=world.objectsMutable().tankHeight?world.objectsMutable().tankHeight(o,ground):ground;

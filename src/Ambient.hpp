@@ -24,6 +24,14 @@ class WorldRenderer;
 class Ambient {
   friend class DayNightLighting; // addition: same flying poses/altitude for optional sun shadows.
 public:
+  // measured (2026-11-21, the running original, Basic Grass, a bluejay
+  // flying across with its shadow): the bird is drawn 138-147 px above its
+  // shadow at 64x32 tiles (both followed over three frames), its shadow on
+  // the ground where it is - 9 of the map's height levels (16 px each). Its
+  // unit height (+0x11c) stays 0 (zoo.exe 0x4fc160), so the lift is in the
+  // drawing, not its place. ours: over raised ground it keeps the lift
+  // above that tile (not measured over hills)
+  static constexpr float kFlightLevels = 9.0f;
   void load(ResourceManager *rm);
   // A new zoo or a zoo loaded (zoo.exe 0x4c6a3e: the sleigh's and the
   // biplane's sounds stopped, their once-a-day marks cleared)
