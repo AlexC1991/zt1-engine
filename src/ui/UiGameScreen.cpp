@@ -72,7 +72,8 @@ static std::string extrasLabel(const std::string &name) {
       // (as the Options window names them, shortened to the panel's 100 px)
       {"tankgroundback", "Tank ground back"}, {"nofenceonpath", "No path fences"},
       {"modfilter", "Mods buy filter"},  {"custommaps", "Custom maps"},
-      {"suitabilityadvice", "Exhibit advice"}, {"tankclip", "Tank edge clip"}};
+      {"suitabilityadvice", "Exhibit advice"}, {"tankclip", "Tank edge clip"},
+      {"celebrations", "Celebrations"}};
   auto it = labels.find(name);
   return it == labels.end() ? name : it->second;
 }
@@ -4134,8 +4135,10 @@ void UiGameScreen::setupExhibits() {
         return;
       // (zoo.exe tankDrainClick 0x611487 -> tankDrainCheck 0x6064ed:
       // animals in it, 10551 and nothing done)
-      if (const Fences::Exhibit *ex = this->fences->exhibit(this->shownExhibit); ex && ex->animals > 0) {
-        this->showMessage(this->resource_manager->getString(10551));
+      // (and only with a gate to the tank, 0x410349: without, nothing is said)
+      if (const int refusal = this->fences->drainRefusal(this->shownExhibit)) {
+        if (refusal == 1)
+          this->showMessage(this->resource_manager->getString(10551));
         return;
       }
       this->fences->drainExhibit(this->shownExhibit);

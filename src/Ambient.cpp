@@ -179,6 +179,27 @@ void Ambient::ended(Flyer &f) {
   f.channel = -1;
 }
 
+// One flyer of a kind (a cNameID) sent at once, with its own sound if it has
+// one (0x4f7ebe's send, below; addition: also the themed celebrations'
+// flyovers, Celebrations.hpp). false: none sent
+bool Ambient::sendFlyer(const WorldMap &map, int nameId, const char *own, int atten) {
+  const int kind = this->kindOf(nameId);
+  if (kind < 0)
+    return false;
+  const int at = this->spawn(map, kind);
+  if (at < 0)
+    return false;
+  if (!own)
+    return true;
+  Flyer &f = this->flyers[at];
+  f.own = own;
+  f.ownAtten = atten;
+  float dx = 0, dy = 0;
+  if (this->viewOffset && this->viewOffset(f.x, f.y, dx, dy))
+    f.ownChannel = Sound::get().loopAt(f.own, dx, dy, f.ownAtten);
+  return true;
+}
+
 // zoo.exe 0x4f7ebe, run for each guest that comes in at the gate (0x4f6e3c,
 // after the admission's paid): on 25 December (0x4f5f7a: that day and
 // month) Santa (5083), once that day (0x63e256, cleared on any other day);
@@ -190,20 +211,7 @@ void Ambient::ended(Flyer &f) {
 // 0x441797: not at all over 6000 off), then following it (0x435282, from
 // the world's update; updatePosition 0x44153b: stopped for good over 9000)
 void Ambient::guestArrived(const WorldMap &map) {
-  auto send = [&](int nameId, const char *own, int atten) {
-    const int kind = this->kindOf(nameId);
-    if (kind < 0)
-      return;
-    const int at = this->spawn(map, kind);
-    if (at < 0 || !own)
-      return;
-    Flyer &f = this->flyers[at];
-    f.own = own;
-    f.ownAtten = atten;
-    float dx = 0, dy = 0;
-    if (this->viewOffset && this->viewOffset(f.x, f.y, dx, dy))
-      f.ownChannel = Sound::get().loopAt(f.own, dx, dy, f.ownAtten);
-  };
+  auto send = [&](int nameId, const char *own, int atten) { this->sendFlyer(map, nameId, own, atten); };
   if (this->month == 11 && this->day == 25) {
     if (!this->santaSent) {
       this->santaSent = true;

@@ -239,6 +239,12 @@ public:
     // the tile middle its chase flies to (Job13's route, 0x422238); -1 none
     float heliToX = -1, heliToY = -1;
     int rotorChannel = -1;
+    // The rotor loop's fade (zoo.exe 0x5067f0, +0x2a8 and +0x2a4): the count of ms 0 to 4000 it
+    // is run down while the helicopter flies and up when it doesn't, and its extra
+    // attenuation x 0.75 hundredths of a decibel (3000 at 4000); a ramp on, the loop stopped
+    // when the count tops 4000
+    float rotorSpin = 0;
+    bool rotorRamp = false, rotorFlying = false;
     double baseAnimTime = 0;
     bool female = false;
     int hair = 0, skin = 0;
@@ -348,11 +354,13 @@ public:
   std::pair<int, int> baseFoot(int type, int facing) const;
   static std::pair<float, float> baseTurn(int facing, float dx, float dy);
   int padFacingOf(const Member &m) const;
-  Fences::Fit canPlaceMember(float x, float y, const WorldMap &map, const Fences &fences) const;
+  Fences::Fit canPlaceMember(float x, float y, const WorldMap &map, const Fences &fences, int access = -1) const;
   int hire(int type, float x, float y, const WorldMap &map, const Fences &fences, int facing = 0);
   void fire(int id);
   // Picked up (Move Staff Member) and put down again
   void moveTo(int id, float x, float y);
+  // A staff member just put down (hired, or set down again): a keeper inside an exhibit begins its duties there
+  void placed(int id, const WorldMap &map, Fences &fences);
 
   void update(float seconds, const WorldMap &map, Fences &fences);
   // A walker's speed, tiles a second: fleeing, running or walking
@@ -537,13 +545,14 @@ private:
   Guests *guests = nullptr;
   Shows *shows = nullptr;
   PlacedObjects *objects = nullptr;
-  ViewingAreas viewing;
+  mutable ViewingAreas viewing; // (mutable: its fence-type cache, asked from const steps)
   double recycling = 0;
   void dungRecycled(float x, float y);
   bool tourWork(Member &m, const WorldMap &map, Fences &fences);
   void gatherFollowers(Member &m);
   bool catchWork(Member &m, const WorldMap &map, const Fences &fences);
   void helicopterStep(Member &m, float seconds, const WorldMap &map, const Fences &fences);
+  void startRotor(Member &m, const Type &t);
   void releaseCatch(Member &m);
   // What an exhibit's animals eat: the chow its keeper puts down, and
   // whether it's carnchow (feedc, else feedh: zoo.exe 0x5084b3)

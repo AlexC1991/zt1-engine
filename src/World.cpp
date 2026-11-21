@@ -1,4 +1,5 @@
 #include "World.hpp"
+#include "Celebrations.hpp"
 #include "SaveGame.hpp"
 #include "EngineScripts.hpp"
 #include "LabTrace.hpp"
@@ -510,6 +511,22 @@ bool World::loadFreeform(const std::string &path) {
         return this->resourceManager->getString(this->guests.types()[g.type].nameId);
     return {};
   };
+  // zoo.exe tankDrainCheck 0x6064ed -> 0x60656e: the first thing in the tank's
+  // contents (0x4599a0: its tiles' things, not the passing water effects)
+  // that is an animal, or whose type has cOnlyUnderwater (slot 0xc8), stops
+  // it being drained (10551). ours: an animal standing on one of its tiles
+  // (a crate or one being carried isn't); an amphibious animal in the water
+  // counts, though ours files it under the land it's joined to
+  fences.drainBlocker = [this](int exhibit) {
+    const Fences::Exhibit *ex = this->fences.exhibit(exhibit);
+    if (!ex)
+      return false;
+    for (const Animals::Member &m : this->animals.members())
+      if (m.id != this->animals.carried && !m.boxed &&
+          ex->tiles.count({static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y))}) > 0)
+        return true;
+    return false;
+  };
   // zoo.exe 0x5af226 over tankContents 0x4599a0 (the tank's tiles' things,
   // not the passing water effects): the deepest one's depth, class slot
   // 0xe8 - an object's or food's cDepth (0x5af392, type +0x68), an
@@ -810,6 +827,7 @@ void World::update(const bool *state, float deltaTime, float inputSeconds) {
     entityManager.update(deltaTime);
     fences.update(deltaTime);
     ambient.update(deltaTime, worldMap);
+    Celebrations::tickFireworks(deltaTime); // (addition: the zoo's birthday fireworks)
     // Where everything is: what stands (now and then), who's about (now)
     reindexIn -= deltaTime;
     if (reindexIn <= 0)
@@ -926,6 +944,25 @@ void World::update(const bool *state, float deltaTime, float inputSeconds) {
         if (Fences::Exhibit *e = fences.exhibit(ex.id))
           e->builtAt = guests.clock;
     guests.updateSounds(deltaTime);
+    // (zoo.exe habitatUpdate 0x4357c6 -> viewingAreaCrowdSound 0x4358f2: each
+    // exhibit viewing area with guests at it tries a crowd voice, from the
+    // area's first viewing tile - the voices' shared timer, so one more try a
+    // second for each - #315)
+    // (ours: the areas made again and their guests counted twice a second -
+    // the original counts when a guest steps on or off a viewing tile, 0x447957)
+    this->viewingSoundClock += deltaTime;
+    if (this->viewingSoundClock >= 0.5f && guests.sounds && !guests.guests().empty()) {
+      this->viewingSoundClock = 0;
+      this->staff.viewingAreas().refresh(worldMap, fences);
+      this->staff.viewingAreas().countGuests(guests);
+    }
+    if (this->animals.viewOffset && guests.sounds)
+      for (const ViewingAreas::Area &a : this->staff.viewingAreas().areas())
+        if (a.guests > 0 && !a.viewing.empty())
+          guests.crowdVoice(deltaTime, 100, [&](float &dx, float &dy) {
+            return this->animals.viewOffset(static_cast<float>(a.viewing.front().first) + 0.5f,
+                                            static_cast<float>(a.viewing.front().second) + 0.5f, dx, dy);
+          });
     this->updateBuildingSounds(deltaTime);
     items.update(deltaTime, fences);
     placedObjects.tick(deltaTime);
@@ -1405,6 +1442,9 @@ void World::draw(SDL_Renderer *renderer) {
     lighting.composite(renderer, worldRenderer, worldMap, view);
     lighting.drawEmission(renderer,worldRenderer,view);
   }
+  // addition (Features::celebrations): the zoo's birthday fireworks, over the
+  // lit world so they glow at night, under the HUD
+  Celebrations::drawFireworks(renderer, view);
   RenderSettings::worldZoomedIn = false;
   RenderSettings::relightWorld=false;
   RenderSettings::fluorescence={};
@@ -4452,6 +4492,10 @@ void World::gatherBulldozeRect() {
 // each with its money back - but the walls that would let an exhibit's
 // animals out, which wait on the original's question (string 157): yes,
 // they go too; no, they stay (watched in the original, 2026-11-06)
+// (zoo.exe bulldozerRectSweep 0x50bd6d: each tile of the rectangle on the map
+// and in the zoo - the game's +0x442 byte, set, lets it outside, which ours
+// has no switch for - has its fence pieces bulldozed through bulldozeThing
+// 0x508f36 and its things sold)
 World::ToolResult World::bulldozeRectRelease() {
   ToolResult r;
   auto item = [](const std::string &file) -> const CatalogItem * {
@@ -4644,7 +4688,7 @@ World::ToolResult World::bulldozeClick(int x, int y) {
         return r;
       }
       // Between two exhibits: "Are you sure you want to merge %s with %s?"
-      // (string 156); the one this side keeps its name
+      // (string 156, zoo.exe fenceMergeAsk 0x50a8d8); the one this side keeps its name
       if (habitat && ex >= 0 && other >= 0 && ex != other) {
         this->pendingFence = e;
         std::string s = this->resourceManager->getString(156);
@@ -4757,6 +4801,7 @@ World::ToolResult World::mouseDown(int x, int y) {
       this->staff.moveTo(id, -1000, -1000); // (not in its own way)
       if (this->staff.canPlaceType(m->type, mx, my, this->worldMap, this->fences) == Fences::Fit::Ok) {
         this->staff.moveTo(id, mx, my);
+        this->staff.placed(id, this->worldMap, this->fences);
         r.staff = id; // (its panel open again: zoo.exe 0x4d923c -> 0x5b0f93)
       } else {
         this->staff.carried = id; // can't go there: still held
@@ -4952,6 +4997,7 @@ World::ToolResult World::mouseDown(int x, int y) {
             {"x", wx}, {"y", wy});
     Sound::get().play(id >= 0 ? "sounds/place" : "sounds/noplace");
     if (id >= 0) {
+      this->staff.placed(id, this->worldMap, this->fences);
       r.wage = this->staff.types()[this->staffTool].salary;
       r.staff = id;
       UndoStep u{UndoStep::Kind::Staff};

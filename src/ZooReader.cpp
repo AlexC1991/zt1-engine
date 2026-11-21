@@ -1052,6 +1052,9 @@ bool zooBodyOut(ZooOut &w,const ZooReader::ZooObject &o,uint32_t v,int32_t guest
 }
 } // namespace
 
+// (zoo.exe gameMgrSave 0x47acc5 writes the cash, the settings - gameMgrSaveSettings
+// 0x47ad4e: the books and the admission - and the date, the order the reader
+// above takes them in; ours rebuilds the original's part over a template)
 bool ZooReader::writeOriginal(std::vector<uint8_t> &out,std::string &error) const {
   out.clear();
   auto fail=[&](const char *why){error=why;return false;};

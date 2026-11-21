@@ -304,6 +304,7 @@ void Animals::loadTypes(ResourceManager *rm) {
     t.noMateChange = num("cnomatechange", -19);
     t.offspring = std::max(1, num("coffspring", 1));
     t.babyToAdult = num("cbabytoadult", 0);
+    t.climbsCliffs = num("cclimbscliffs", 0) == 1;
     t.smallPoo = num("csmallzoodoo", 0) != 0;
     t.buildingUseChance = num("cbuildingusechance", 0);
     t.maxEnergy = std::max(1, num("cmaxenergy", 100));
@@ -623,8 +624,15 @@ void Animals::rehome(const WorldMap &map, const Fences &fences) {
     const Type &type=this->typeList[m.type];
     if (e && e->tank && !type.underwater)
       ex = -1;
+    // (zoo.exe unitHabitatNow 0x4161da -> unitSettleHabitat 0x416185 ->
+    // habitatPickForAnimal 0x4161f5: an amphibious animal in a tank takes the
+    // best rated (habitatBestRated 0x498a05) of the land joined to it, an
+    // animal in a show tank that of the tanks joined by portal. Ours: the
+    // land with the most shore edges, the common single land; the portal
+    // case and several lands aren't rated - #316; its gate tile, 0x411b92,
+    // isn't kept)
     if(type.underwater && !type.onlyUnderwater)
-      ex=fences.habitatRoot(ex,map);
+      ex=joinedHabitatFor(ex,m.type,map,fences);
     // A crate put down in an exhibit lets its animal out (every
     // cBoxedCheck, 2 ticks: about two seconds)
     if (m.boxed && ex >= 0) {
@@ -682,7 +690,8 @@ void Animals::rehome(const WorldMap &map, const Fences &fences) {
 // the number + 30000 (0x49d066), the female wording where a language has
 // one. Every animal message goes through it: postUnitMessage 0x49d18e
 // (10028 not happy, 10029 very sick, 10030 no food, 10031 its exhibit,
-// 10032 given birth, 15000 / 15001 ill, 10322 hatched), 0x4807c2 (10010
+// 10032 given birth, 15000 / 15001 ill, 10322 hatched; unitPostMessage55
+// 0x435cdb is the slot-0xc post with its unit and 0x55), 0x4807c2 (10010
 // taken away, 10242 old age) and escapeAlert 0x58cbf4 (10007).
 // ours: where the + 30000 text isn't in the game's language files (40322)
 // the original's buffer is left unfilled; the number's own text instead
@@ -701,7 +710,12 @@ std::string Animals::unitText(const Member &m, int textId) const {
 
 // Getting out of its exhibit (zoo.exe 0x446088, 0x43e363): a fence on
 // its boundary it can climb, jump or break through; it walks to it and
-// over, a basher (or a jumper with any strength) breaking it as it goes
+// over, a basher (or a jumper with any strength) breaking it as it goes.
+// measured (2026-11-21, ZT_ESCAPE_ZOO in the running original: a zebra 1.5
+// tiles from one gap and 8.5 from another; 8 of them, 3 left by the near
+// gap, 5 by the far one): it does not go for the nearest way out; it takes
+// one of the open ones at random (animalFindEscapeFence 0x446088, one random
+// boundary piece through habitatPickEscapeTile 0x448cb7)
 bool Animals::breakOut(Member &m, const WorldMap &map, const Fences &fences) {
   const Type &t = this->typeList[m.type];
   // (any animal walks out through a broken piece: passable() has it)
@@ -710,9 +724,13 @@ bool Animals::breakOut(Member &m, const WorldMap &map, const Fences &fences) {
   const Fences::Exhibit *ex = fences.exhibit(m.exhibit);
   if (!ex || ex->tank)
     return false;
-  float best = 1e9f;
   Fences::Edge way{false, -1, -1};
   std::pair<int, int> inTile, outTile;
+  struct Way {
+    Fences::Edge e;
+    std::pair<int, int> in, out;
+  };
+  std::vector<Way> ways;
   for (auto [x, y] : ex->tiles) {
     const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
     for (auto &dd : d) {
@@ -724,14 +742,14 @@ bool Animals::breakOut(Member &m, const WorldMap &map, const Fences &fences) {
       const Type::Age age = t.forAge(m.baby);
       if (!fences.passable(e, age.climber, age.jumper, age.bash, t.crush))
         continue;
-      float dist = std::hypot(x + 0.5f - m.x, y + 0.5f - m.y);
-      if (dist < best) {
-        best = dist;
-        way = e;
-        inTile = {x, y};
-        outTile = {nx, ny};
-      }
+      ways.push_back({e, {x, y}, {nx, ny}});
     }
+  }
+  if (!ways.empty()) {
+    const Way &w = ways[std::uniform_int_distribution<size_t>(0, ways.size() - 1)(this->rng)];
+    way = w.e;
+    inTile = w.in;
+    outTile = w.out;
   }
   if (way.x < 0 || !walkTo(m, inTile.first + 0.5f, inTile.second + 0.5f, map, fences))
     return false;
@@ -1279,8 +1297,13 @@ bool Animals::standable(int x, int y, const Type &t, int exhibit, const WorldMap
   return true;
 }
 
-// From a tile to its neighbour: no fence between, no cliff
-bool Animals::canStep(int x, int y, int nx, int ny, const WorldMap &map, const Fences &fences) const {
+// From a tile to its neighbour: no fence between, no cliff - but an animal
+// with cClimbsCliffs 1 (zoo.exe 0x414a26, the animal's slot 0x15c: type +0x3b0
+// 1) goes over any land edge whose two tiles' heights (+0x3c, MapTile::height)
+// differ by no more than 1, whatever its cliff bits say; the others by the
+// edge's cliff bits (0x414728: code over 1 is a cliff - on the real maps only
+// edges with a drop have one, so ours takes the corners agreeing)
+bool Animals::canStep(int x, int y, int nx, int ny, const WorldMap &map, const Fences &fences, bool climbsCliffs) const {
   Fences::Edge e = nx != x ? Fences::Edge{false, std::max(x, nx), y}
                            : Fences::Edge{true, x, std::max(y, ny)};
   if (fences.at(e) && !fences.broken(e))
@@ -1288,6 +1311,8 @@ bool Animals::canStep(int x, int y, int nx, int ny, const WorldMap &map, const F
   const MapTile *a = map.getTile(x, y), *b = map.getTile(nx, ny);
   if (!a || !b)
     return false;
+  if (climbsCliffs && !isWater(map, x, y) && !isWater(map, nx, ny) && std::abs(a->height - b->height) <= 1)
+    return true;
   int a0, a1, b0, b1;
   if (nx > x) {
     a0 = a->cornerHeight[CORNER_X1Y0]; a1 = a->cornerHeight[CORNER_X1Y1];
@@ -1583,7 +1608,7 @@ int Animals::adopt(int type, bool female, float x, float y, const WorldMap &map,
   m.x = x;
   m.y = y;
   m.exhibit = fences.exhibitAt(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
-  if(t.underwater && !t.onlyUnderwater)m.exhibit=fences.habitatRoot(m.exhibit,map);
+  if(t.underwater && !t.onlyUnderwater)m.exhibit=joinedHabitatFor(m.exhibit,type,map,fences);
   m.waterMode=t.swims && (isWater(map,static_cast<int>(x),static_cast<int>(y)) ||
                          (this->tankAt && this->tankAt(x,y)>=0));
   if (this->tankAt && this->tankAt(x, y) >= 0)
@@ -1781,6 +1806,22 @@ bool Animals::requestSet(Member &m, const std::string &name) {
 // emptied and made replaceable (+0xe8 = 1): the bEat its meal kept asking for,
 // or a bSleep or bSick asked for before the meal. "Stopped Eating". The set
 // it's in plays on to its end
+// zoo.exe animalGrowUp 0x438663 (animalUpdate 0x437620, every tick of one not
+// crated or an egg): its countdown (+0x32c, cBabyToAdult) out, a young type
+// (its name starts 'y') becomes its grown type of the same sex (type slot 0x14
+// lookup, slot 0x10) and the animal is cleared and stopped - slot 0x110(0, 0),
+// slot 0x198(1, 1, 1) ZTAnimal::stop 0x427664: +0x3a8 asleep cleared, then
+// ZTUnit's stop - and its +0x3ac takes the grown type's cTestFenceChance.
+// ours: one type with a baby flag, so only the stop is done here
+void Animals::growUp(Member &m) {
+  m.baby = false;
+  m.sleeping = false;
+  m.stack.clear();
+  m.path.clear();
+  m.pathAt = 0;
+  m.stepping = false;
+}
+
 void Animals::stopEating(Member &m) {
   m.eating = false;
   m.foodItem = -1;
@@ -2809,7 +2850,7 @@ bool Animals::walkTo(Member &m, float gx, float gy, const WorldMap &map, const F
                              : Fences::Edge{true, x, std::max(y, ny)};
     int pool=-1,land=-1;
     if(t.underwater && !t.onlyUnderwater && t.swims && fences.shoreAccess(e,map,pool,land))return true;
-    if (canStep(x, y, nx, ny, map, fences)) return true;
+    if (canStep(x, y, nx, ny, map, fences, t.climbsCliffs)) return true;
     if (m.showTank < 0) return false;
     int show = -1, home = -1;
     return fences.showPortal(e, show, home) && (show == m.showTank || home == m.showTank);
@@ -2842,7 +2883,7 @@ bool Animals::testRoute(int id, int gx, int gy, const WorldMap &map, const Fence
   const Type &t = this->typeList[m->type];
   int sx = static_cast<int>(std::floor(m->x)), sy = static_cast<int>(std::floor(m->y));
   auto pass = [&](int x, int y) { return (x == sx && y == sy) || standable(x, y, t, m->exhibit, map, fences); };
-  auto step = [&](int x, int y, int nx, int ny) { return canStep(x, y, nx, ny, map, fences); };
+  auto step = [&](int x, int y, int nx, int ny) { return canStep(x, y, nx, ny, map, fences, t.climbsCliffs); };
   return Pathfinder::find(map.getWidth(), map.getHeight(), sx, sy, gx, gy, pass, step, out, 4000);
 }
 
@@ -2932,7 +2973,7 @@ bool Animals::walkSomewhere(Member &m, const WorldMap &map, const Fences &fences
     const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
     for (int i = rnd(4); i < 4; i++) {
       const int nx = sx + d[i][0], ny = sy + d[i][1];
-      if (passable(nx, ny) && canStep(sx, sy, nx, ny, map, fences) &&
+      if (passable(nx, ny) && canStep(sx, sy, nx, ny, map, fences, t.climbsCliffs) &&
           walkTo(m, nx + in(this->rng), ny + in(this->rng), map, fences))
         return true;
     }
@@ -4194,6 +4235,9 @@ const Animals::ObjectInfo &Animals::infoOf(const std::string &file) const {
   return this->objectInfo[file] = o;
 }
 
+// (zoo.exe habitatMgrRatePass 0x45348c, from worldAfterLoad: every habitat rated
+// through animalRateExhibit, which redoes a stale one only; ours rates an
+// exhibit when it is marked, and the fence state icons when drawn)
 void Animals::markDirty(int exhibit) {
   int root=exhibit;
   if(exhibit>=0 && mapRef && fencesRef)root=fencesRef->habitatRoot(exhibit,*mapRef);
@@ -4203,7 +4247,89 @@ void Animals::markDirty(int exhibit) {
       e.dirty = true;
 }
 
+// (zoo.exe habitatBestRated 0x498a05: a land candidate scores 0.3 terrain +
+// 0.2 objects + 0.1 x (trees + rocks + elevation) from the habitat's own
+// record for the kind - measured 2026-11-21: 28.05 and -471.95 for two lands
+// joined to a pool, the walrus given the first. Ours rates the land alone,
+// the kind counted there though it stands in the pool; the evaluation kept
+// for the land is put back)
+float Animals::landScore(int land, int kind, const WorldMap &map, const Fences &fences) {
+  const bool had = this->evaluations.count(land) > 0;
+  const Evaluation keep = had ? this->evaluations[land] : Evaluation{};
+  const auto rngKeep = this->rng;
+  this->evalExtraKind = kind;
+  this->evalAlone = true;
+  this->evaluate(land, map, fences);
+  this->evalExtraKind = -1;
+  this->evalAlone = false;
+  float score = -1e9f;
+  if (const auto it = this->evaluations[land].kinds.find(kind); it != this->evaluations[land].kinds.end()) {
+    const Rating &r = it->second;
+    score = 0.3f * r.terrain + 0.2f * r.objects + 0.1f * (r.trees + r.rocks + r.elevation);
+  }
+  if (had)
+    this->evaluations[land] = keep;
+  else
+    this->evaluations.erase(land);
+  this->rng = rngKeep;
+  return score;
+}
+
+// zoo.exe habitatPickForAnimal 0x4161f5 (amphibious animal in a tank; see
+// habitatBestRated 0x498a05 above): the best rated joined land, a candidate
+// replacing the best only when strictly higher, the first always taken; no
+// joined land, the tank itself. Ours: the lands in the order they were made
+int Animals::joinedHabitatFor(int exhibit, int type, const WorldMap &map, const Fences &fences) {
+  const Fences::Exhibit *ex = fences.exhibit(exhibit);
+  if (!ex || !ex->tank)
+    return exhibit;
+  const std::vector<int> lands = fences.joinedLands(exhibit, map);
+  if (lands.empty())
+    return exhibit;
+  if (lands.size() == 1)
+    return lands.front();
+  int best = lands.front();
+  float bestScore = this->landScore(best, type, map, fences);
+  for (size_t k = 1; k < lands.size(); ++k) {
+    const float s = this->landScore(lands[k], type, map, fences);
+    if (s > bestScore) {
+      best = lands[k];
+      bestScore = s;
+    }
+  }
+  return best;
+}
+
+// (zoo.exe animalRateExhibit 0x444827 with habitatJoinedObjectsForAmphibians
+// 0x507645, habitatJoinedShelterToyList 0x507150: a land joined to a tank rates
+// its amphibious animals with the tank's tiles and objects too, the other
+// animals on its own tiles alone - measured 2026-11-21: the zebra on a land
+// with a pool joined, kelp in the pool: terrain 0, objects 0; the walrus's
+// record took the kelp. Ours: the land rated twice, the amphibious kinds taken
+// from the merged pass, the rest from the land alone)
 void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
+  const Fences::Exhibit *ex = fences.exhibit(exhibit);
+  if (this->evalAlone || !ex || ex->tank || fences.habitatGroup(exhibit, map).size() <= 1) {
+    this->evaluateOne(exhibit, map, fences);
+    return;
+  }
+  this->evaluateOne(exhibit, map, fences); // joined: the amphibious kinds
+  std::map<int, Rating> joined = this->evaluations[exhibit].kinds;
+  const auto rngKeep = this->rng;
+  const float timer = this->evaluations[exhibit].timerMs;
+  this->evalAlone = true;
+  this->evaluateOne(exhibit, map, fences); // alone: the others
+  this->evalAlone = false;
+  this->rng = rngKeep;
+  Evaluation &ev = this->evaluations[exhibit];
+  ev.timerMs = timer;
+  for (const auto &[kind, r] : joined)
+    if (kind >= 0 && kind < static_cast<int>(this->typeList.size()) && this->typeList[kind].underwater &&
+        !this->typeList[kind].onlyUnderwater)
+      ev.kinds[kind] = r;
+}
+
+void Animals::evaluateOne(int exhibit, const WorldMap &map, const Fences &fences) {
   ZT_FN("", "Rate an exhibit for the animals in it");
   ZT_WHO("exhibit", exhibit);
   Evaluation &ev = this->evaluations[exhibit];
@@ -4214,7 +4340,7 @@ void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
   if (!ex || ex->tiles.empty())
     return;
   Fences::Exhibit joined=*ex;
-  if(!ex->tank) {
+  if(!ex->tank && !this->evalAlone) {
     for(int id:fences.habitatGroup(exhibit,map))if(const auto *part=fences.exhibit(id))
       joined.tiles.insert(part->tiles.begin(),part->tiles.end());
     ex=&joined;
@@ -4274,6 +4400,8 @@ void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
       if (std::find(kinds.begin(), kinds.end(), m.type) == kinds.end())
         kinds.push_back(m.type);
     }
+  if (this->evalExtraKind >= 0 && std::find(kinds.begin(), kinds.end(), this->evalExtraKind) == kinds.end())
+    kinds.push_back(this->evalExtraKind);
   auto value = [&](const Type &t, const ObjectInfo &o) {
     auto at = [&](int key) {
       auto it = t.suitable.find(key);
@@ -4378,7 +4506,10 @@ void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
     }
     r.terrain = std::min(r.terrain, 100.0f);
     // Objects
-    r.objects = std::min(objectSum / (100.0f * std::max(1.0f, N * 0.025f)), 100.0f);
+    // (measured 2026-11-21: a land's objects score with a pool joined divides by
+    // the land's own tiles, not the joined group's - a bear's -69.3 with an ice
+    // cave on a 296-tile land, 360 with the pool; the other scores use the group)
+    r.objects = std::min(objectSum / (100.0f * std::max(1.0f, ev.tiles * 0.025f)), 100.0f);
     if (r.objects < 0)
       r.objects *= 50;
     // Trees, rocks, hills
@@ -4422,6 +4553,9 @@ void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
         pen *= r.unusedToys - 2;
     }
     r.toys = std::min(100 - pen, 100.0f);
+    // (zoo.exe 0x415dd7 sums the record's parts through its getters: terrain
+    // 0x4160ec x0.3, objects 0x415a41 x0.2, trees 0x415ada, rocks 0x415b73,
+    // elevation 0x415c0c, shelters 0x415ca5, toys 0x415d3e, each x0.1)
     r.score = 0.3f * r.terrain + 0.2f * r.objects +
               0.1f * (r.trees + r.rocks + r.elevation + r.shelters + r.toys);
     // A tank (zoo.exe 0x444827 from 0x445e17; summed at 0x415e69): no
@@ -4458,6 +4592,8 @@ void Animals::evaluate(int exhibit, const WorldMap &map, const Fences &fences) {
       r.noLand = t.underwater && !t.onlyUnderwater && fences.habitatRoot(exhibit,map)==exhibit;
       if (r.noLand)
         r.elevation = 100.0f;
+      // (0x415dd7's tank sum: depth 0x49380b x0.15, cleanliness 0x4938a4
+      // x0.15, salinity 0x49393d x0.1, then the six parts above x0.1 each)
       r.score = 0.15f * r.depth + 0.15f * r.clean + 0.1f * r.salinity +
                 0.1f * (r.objects + r.trees + r.rocks + r.elevation + r.shelters + r.toys) - (r.noLand ? 50.0f : 0.0f);
       ZT_STEP("0x415e69", "A tank's rating", {"species", t.key}, {"water level", level}, {"cDepthMin", t.depthMin},
@@ -4495,6 +4631,71 @@ const Animals::Rating *Animals::rating(const Member &m, const WorldMap &map, con
   auto it = ev.kinds.find(m.type);
   return it == ev.kinds.end() ? nullptr : &it->second;
 }
+
+// Small zoo.exe animal slots read and not modelled here (ours: no counterpart
+// needed, or what they keep isn't read by anything we draw or run):
+// animalUpdateWithTimers 0x436f11 (after ZTAmbientAnimal::update, the 8-byte
+// records at +0x260 age by the tick and go at 1250 ms - what fills them is
+// not found); animalSetMoveModeByTile 0x436815 (+0x1bc 3 on a water tile, 2
+// on land - ours keeps waterMode from the tile); animalMarkTileWhileManEater
+// 0x436f32 (animalEatsMan 0x4138f0: its tile's +0x85 gets 8 - no reader
+// found; ours finds the predator by distance, Guests::findPredator);
+// animalPathNotDone 0x43754f; unitIsAtTile 0x43a24b; animalSetVisible
+// 0x43f0d5 (+0x13f; the panel's 'Move Animal' button, moveAnimalButtonUpdate
+// 0x43f0c5); exhibitVirtualWater 0x44699a (animalRateExhibit's +0x4c / +0x48,
+// the water that would lift an amphibious animal's terrain 9 / 10 share to
+// what it wants - measured: a hippo alone in a land exhibit rates as ours does
+// with 0, 10 and 30 per cent water, so it adds none there; ZT_AMPHIB_ZOO);
+// habitatFreeTiles 0x4e74dc (an exhibit's tiles with nothing on them, reached
+// from animalCheckReproduction 0x43103b's side with 0x4e7dde - what the
+// original does with them there is not read; a lead, ours places a birth
+// without testing for free tiles); animalRouteToGoal 0x42fffa (the shared
+// pathfinder set up for the unit's tile and goal, run, its route kept - ours:
+// Pathfinder.cpp, not compared with it); read, not compared with ours:
+// habitatCollectSpecies 0x498f05 (the rating's kinds, each species once -
+// ours: Rating's kinds), habitatAnimalList 0x446436 (a habitat's animals and
+// the joined ones'), habitatRandomTileInFront 0x497ad1 (animalTryEscape's
+// random tile in its facing, else areaRandomViewingTile 0x44149f),
+// unitTileEdgeAllowed 0x414728 (the step between two tiles: the edge's bits,
+// or a tank's wall height against the corners - ours: canStep; animalEdgeAllowed
+// 0x414a26 is the animal's own, ported in canStep) and
+// unitMoveCostByDir 0x4145da (the step's cost by direction, not read through);
+// habitatFindAnimalByName 0x430c41 (animalChooseMate's mate by its name -
+// ours: by id); habitatPickEscapeTile 0x448cb7 (animalFindEscapeFence picks one
+// random boundary tile per cycle and routes every animal to it - ours: the
+// nearest passable edge, breakOut above; issue 323); habitatSicklyAnimals
+// 0x4704c5 (keeperPickAnimalToHeal's list of its habitat's sickly animals)
+// habitatJoinedShelterToyList 0x507150 and habitatJoinedObjectsForAmphibians
+// 0x507645 (animalRateExhibit's joined-habitat part: the shelters and toys of a
+// land joined to a tank count for the tank's animals, and the objects of a pool
+// joined to the rated land count for its amphibious ones - not modelled here;
+// #316)
+// animalTouchFenceOnEnter 0x436840 (animalEntersTile's fence part: the piece it
+// crosses gets its art refreshed, fenceRefreshArt 0x4268da - art only, ours
+// draws the fences from their life) and animalCrossFenceAct 0x613a60 (the
+// jump, climb or bash at a fence, a bash-strength animal breaking it - ours:
+// m.crossing / m.breaks in breakOut and the tick)
+// animalBreakFenceCrossed 0x6137fe (fenceBreak on the pieces on both sides of the
+// edge crossed - ours: the one edge's piece, Fences::breakPiece) and
+// animalSetFlag3a3 0x4409f8 (+0x3a3 and the list at 0x638fb0, read in outline)
+// habitatPickFreeTile 0x4e73e8 (animalCheckReproduction puts a newborn on a random
+// free tile of its exhibit, up to 10 tries - ours: beside the mother, issue 328);
+// animalWillPerformTrick 0x5a70c1 / animalSkipTrickHappiness 0x5a7096 /
+// animalSkipTrickChance 0x5a70f4 (the skipped trick roll, ours in Shows.cpp);
+// animalKeepsMoving 0x437426, unitWalkAboutSlot 0x602a77, animalAddedToWorld
+// 0x449c94 (Animals::adopt), animalRemovedFromLists 0x4fe296, unitTargetAnimal
+// 0x4409e5, animalPostEscapedEvent 0x42fa42, animalMoveAnimByTile 0x436eec,
+// animalSwimAnimNames 0x4a5105, animalGoToNearestBuildingOfKind 0x613512,
+// animalFindNearestOfKind 0x5a7202, animalTargetBuildingStep 0x5adb0a,
+// animalFindNearestOfKindAtGate 0x5a7168, animalStartIdleWait 0x5ae68b,
+// unitTankEdgeCheck 0x4935aa, unitPlayMoveAnim 0x4a9e00, unitMoveBySpeedSlot138
+// 0x4a9cc1, unitMoveBySpeedSlot13c 0x412d75, animalPickLandTile 0x42fd73 /
+// animalPickWaterTile 0x4a3807 / animalPickTankTile 0x50881b (the collectors'
+// random picks), animalFenceBetweenTiles 0x436954, postGiftWishMessage 0x5a69a1,
+// habitatBirthMessage 0x4589eb (a second poster of 10032 in the rating: ours
+// posts on the mother), animalDirtTile 0x613c0c / tileIsGrassLike 0x613bde
+// (cDirtChance wears grass to dirt under an unhappy animal: no stock .ai sets
+// it, so dead in the game's data - not modelled)
 
 // zoo.exe animalExhibitRating 0x411afd: its habitat's score for it
 // (exhibitSuitabilityScores 0x415dd7(this, 1)), floored at 0 (0x630d5c) and
@@ -4865,6 +5066,13 @@ void Animals::healthTick(Member &m) {
             {"next", m.nextSet});
   }
   // (an egg: none - 0x42373d goes to 0x423797 for +0x395)
+  // zoo.exe animalCountSickNeighbours 0x4235f1: the sick ones of its habitat
+  // and its joined habitats (habitatSickCount 0x440d0e(h, 1) - the count
+  // kept at the last rating, +0xa0), taken down to the habitat's animals
+  // (animalHabitatAnimalCount 0x440cf6, habitatAnimalCount 0x412167) when
+  // above it, less itself when sick; any left. ours: counted now, not at
+  // the last rating; joined habitats (+0x8) not modelled, as for the angry
+  // ones below
   if (!m.egg) {
     bool othersSick = false;
     for (const Member &o : this->list)
@@ -4941,6 +5149,9 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
     }
     ZT_STEP("0x4378df", "Habitat check (every 20)", {"suitability", s}, {"cHabitatPreference", t.habitatPreference},
             {"cPctHabitat", t.pctHabitat}, {"verdict", verdict}, {"pending", was, m.pending});
+    // (zoo.exe animalCheckExhibitLike 0x438c47: animalCompatScore 0x438bd4 -
+    // habitatCompatOfSpecies 0x438d7b's record +0x4c, truncated - clamped to
+    // -500..150, a tenth of it)
     if (const Rating *r = this->rating(m, map, fences)) {
       float before = m.pending;
       m.pending += std::trunc(std::clamp(std::trunc(r->compat), -500.0f, 150.0f) / 10.0f);
@@ -4964,6 +5175,9 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
       m.pending += t.numberMinChange;
     else if (crowdedBySpecies(t, kindAdults, tiles))
       m.pending += t.numberMaxChange;
+    // (zoo.exe animalTilesPerAdult 0x438b39: its joined habitats' tiles over
+    // their adults, all kinds - habitatAdultCount 0x438e14 - truncated, under
+    // cAnimalDensity; with no adults it gives cAnimalDensity itself)
     if (adults > 0 && tiles / adults < t.animalDensity)
       m.pending += t.allCrowdedChange;
     ZT_STEP("0x4378df", "Company (every 30)", {"its kind here", kind}, {"cNumberMin", t.numberMin},
@@ -5123,7 +5337,7 @@ void Animals::tick(Member &m, const WorldMap &map, const Fences &fences) {
   // Old age and babies (0x4385e5), every 20 ticks
   m.ready = std::min(m.ready + 1, std::max(1, t.reproductionInterval));
   if (m.baby && t.babyToAdult > 0 && ++m.grow >= t.babyToAdult)
-    m.baby = false;
+    growUp(m);
   if (--m.reproductionCheck < 0) {
     m.reproductionCheck = 19;
     m.life -= 20;
@@ -5381,7 +5595,8 @@ bool Animals::mateLost(Member &m) {
   return true;
 }
 
-// zoo.exe 0x430a19: its mate; with none (or lost), one picked at random in
+// zoo.exe 0x430a19 animalChooseMate (animalHasMate 0x430bc4: it found one): its
+// mate; with none (or lost), one picked at random in
 // its exhibit - grown, of its kind, the other sex, without a mate, and not
 // its mother, father or young - and the two paired
 Animals::Member *Animals::findMate(Member &m) {
@@ -5899,6 +6114,8 @@ std::vector<int> Animals::smileHabitats(int exhibit, Change change, const WorldM
 // rating, 0x4d92db) cleared and refilled for each habitat in turn - so after
 // a tank's joined habitats only the last one's is kept (ours: in exhibit id
 // order; the original's set is by address)
+// (zoo.exe habitatSnapshotForChange 0x50a5db: before a thing changes, the
+// habitat at its tile marked stale and its smile snapshot taken, 0x4d8a4d)
 void Animals::snapshot(int exhibit, const WorldMap &map, const Fences &fences, Change change) {
   if (exhibit < 0)
     return;
@@ -5917,6 +6134,8 @@ void Animals::face(int exhibit, int kind, bool smile) {
       m.faces.push_back({smile, 0.0f});
 }
 
+// (zoo.exe habitatReactToChange 0x50a4de: after it, the same habitat compared
+// with the snapshot, 0x4d89b2, and its joined tree for an animal or unit)
 void Animals::react(int exhibit, Change change, const std::string &file, int animalType, bool removed,
                     const WorldMap &map, const Fences &fences) {
   if(exhibit<0)return;

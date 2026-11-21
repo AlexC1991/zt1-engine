@@ -570,6 +570,8 @@ void Guests::labSet(int id, const std::string &field, float v) {
     }
 }
 
+// (a guest leaving the zoo is taken off the guest lists by zoo.exe 0x42789a: its
+// building told, then guestBuy's tail 0x4277c9)
 void Guests::labLeave(int id) {
   for (Guest &g : this->list)
     if (g.id == id) {
@@ -579,19 +581,30 @@ void Guests::labLeave(int id) {
 }
 
 // A guest's walking speed by its tiredness (zoo.exe 0x42250a, its class slot
-// 0x1c0: Original::guestWalkRate), by the units' movement rule (0x435c42)
+// 0x1c0: Original::guestWalkRate), by the units' movement rule (0x435c42).
+// A guest's +0x204 is rand % 11 when it is made (0x4f6082: rate = given +
+// that - 5, so arrivals walk at 28 to 38 before tiredness; #318, measured);
+// ours takes it from the guest's id
 float Guests::walkSpeed(const Guest &g) const {
-  return Original::unitTilesPerSecond(Original::guestWalkRate(static_cast<int>(g.tired)));
+  return Original::unitTilesPerSecond(
+      Original::guestWalkRate(static_cast<int>(g.tired), Original::guestSpeedVariant(g.id)));
 }
 
 bool Guests::walkTo(Guest &g, int tx, int ty, float speed, bool emergency, int inside) {
   int sx = static_cast<int>(std::floor(g.x)), sy = static_cast<int>(std::floor(g.y));
+  // The route finder's tile cost for a guest (zoo.exe 0x43a8fb, class slot
+  // 0x194's override of 0x60c9a4): a path tile 1; off the paths +0x230 when
+  // its own tile or its goal is not a path, else blocked (task 0x71 and 0x75
+  // excepted); water blocked unless it may swim (0x43a9e1: slots 0x264, 0x270).
+  // ours: the open ground for a start or a goal off the paths, or running
+  // (#319; goals ours picks are mostly path tiles - none seen off them in the
+  // running original's guests, whose +0x158 stayed empty walking about)
   // Running from a predator (zoo.exe chooseTask's task 0x75 sets +0x230 to
   // cNonPathCostEmergency, else cNonPathCost; the route finder asks it back
   // through ZTUnit::pathCost 0x60c9a4, class slot 0x194): open ground as well as the paths, a step off
   // them costing cNonPathCostEmergency. ours: left on open ground after
   // running, back the same way, a step off the paths costing cNonPathCost
-  const bool open = emergency || !walkable(sx, sy);
+  const bool open = emergency || !walkable(sx, sy) || !walkable(tx, ty);
   const float offCost = static_cast<float>(emergency ? this->nonPathCostEmergency : this->nonPathCost);
   // (#288: a guest in an exhibit - ZTGuest's passable 0x428f76 takes its
   // habitat's tiles and zoo ground - walks over it and out by its gate;
@@ -897,6 +910,8 @@ bool Guests::positionShowSeat(Guest &g,const PlacedObjects::Object &stand,int se
   return true;
 }
 
+// (zoo.exe 0x43a819: the unit standing at a building of any need kind - food,
+// drink, restroom, gift, trash, seat - or a grandstand)
 // The nearest building for a need it can walk to (in cSearchRadius tiles;
 // not full): off to its door (a path tile beside it). only: that building
 // alone, its room not looked at (zoo.exe guestPickAttraction 0x4282e1 sends
@@ -1041,6 +1056,25 @@ bool Guests::seekBuilding(Guest &g, const std::string &need, int radius, bool cr
     // building - thoughtAdd(0x2803, building). ours: its own name, else its
     // kind's cNameID text)
     this->seekFull = full;
+    // (the hunger, thirst, restroom and souvenir checks, when the nearest
+    // building of the kind can't be had for any reason (0x4290f3 fails:
+    // 0x4fba3a, 0x4fba81, 0x4fbab5, 0x43c0e6): a building of that kind at
+    // random from all of them (0x4fb995: rand % how many) - "%s is too
+    // crowded." (0x2803) of it, even if it stands out of reach - and only
+    // with none in the zoo, the "no <kind>" thought)
+    if (only < 0 && (need == "food" || need == "drink" || need == "bathroom" || need == "gift")) {
+      std::vector<size_t> ofKind;
+      for (size_t i = 0; i < objs.size(); i++)
+        if (!objs[i].fence && infoOf(PlacedObjects::fileOf(objs[i])).satisfies.count(need))
+          ofKind.push_back(i);
+      if (!ofKind.empty()) {
+        this->seekFull = true;
+        const size_t pick = ofKind[static_cast<size_t>(std::uniform_int_distribution<int>(0, static_cast<int>(ofKind.size()) - 1)(this->rng))];
+        if (crowdedThought)
+          think(g, 10243, buildingName(objs[pick])); // "%s is too crowded."
+        return false;
+      }
+    }
     if (full && crowdedThought)
       think(g, 10243, fullAt >= 0 ? buildingName(objs[static_cast<size_t>(fullAt)]) : std::string()); // "%s is too crowded."
     return false;
@@ -3004,7 +3038,10 @@ void Guests::decide(Guest &g) {
   // 0x4a6889): to the gate; afraid (+0x33a), "I'm leaving the zoo.  Animals
   // are running free!" (10247) and running there (bRunFromPredator, the
   // emergency off-path cost - "Leaving Zoo - Saw Escaped Animal"); attacked
-  // (+0x33b), running there too, the thought only when afraid (0x4a67eb)
+  // (+0x33b), running there too, the thought only when afraid (0x4a67eb).
+  // chooseTask makes task 0x71 at priority 1 (0x4a6a37) for a guest that
+  // wants to leave (0x43a7e9: +0x339 set, not scared +0x24c / +0x25c, its task
+  // not 0x71, 0x75, 0x7f or 0x68-0x6a, not on the water: ours is this branch)
   if (g.leaving) {
     g.guide = -1; g.tourHeard = false;
     ZT_STEP("0x4a6889", "Leaving: off to the gate", {"happiness", g.happiness}, {"afraid", g.sawEscape ? "yes" : "no"},
@@ -3211,7 +3248,15 @@ bool Guests::testFence(Guest &g) {
     return false;
   int tx = static_cast<int>(std::floor(g.x)), ty = static_cast<int>(std::floor(g.y));
   static const int dirs[4][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}}; // N E S W (zoo.exe 0, 2, 4, 6)
+  // Only the sides of the half of its tile it stands in (zoo.exe 0x425e30,
+  // 0x42ee42: its quarter of the tile by 32 of the 64 units - a side is passed
+  // over when the guest is in the other half), the first that has a live
+  // electric fence (0x42ec8b, 0x4a44a0)
+  const float inX = g.x - static_cast<float>(tx), inY = g.y - static_cast<float>(ty);
   for (const auto &d : dirs) {
+    const bool inHalf = d[1] < 0 ? inY <= 0.5f : d[0] > 0 ? inX > 0.5f : d[1] > 0 ? inY > 0.5f : inX <= 0.5f;
+    if (!inHalf)
+      continue;
     Fences::Edge e = d[0] ? Fences::Edge{false, d[0] > 0 ? tx + 1 : tx, ty}
                           : Fences::Edge{true, tx, d[1] > 0 ? ty + 1 : ty};
     if (!this->fences->liveElectric(e))
@@ -3532,7 +3577,8 @@ int Guests::sceneryWeight(const Guest &g) const {
       continue;
     sum += b.estheticWeight;
   }
-  // (zoo.exe 0x428039: the sum / 100, at least 1 when there's any)
+  // (zoo.exe 0x428039: the sum / 100, at least 1 when there's any; the
+  // scenery's own sum 0x42956e is this loop over the objects)
   return sum > 0 ? std::max(1, sum / 100) : 0;
 }
 
@@ -3896,6 +3942,15 @@ void Guests::tick(Guest &g) {
         g.leaving = false;
         g.predator = near->id;
         g.sawResetCheck = type.sawReset - 1;
+        // A rampaging animal (ZTAnimal +0x3b0) ends the show of the grandstand
+        // it was off to or in (zoo.exe 0x50d264, 0x48e054: 0x50d152 - its
+        // class slot 0x2e8's building is a grandstand - then rubbleStopShow
+        // 0x6127b8: the show's 0x612d20, its guests put out)
+        if (near->rampaging && g.building >= 0 && this->showStop && this->objects &&
+            static_cast<size_t>(g.building) < this->objects->objects().size()) {
+          ZT_STEP("0x48e054", "A rampaging animal seen at a grandstand: the show is over", {"animal", near->name});
+          this->showStop(this->objects->objects()[static_cast<size_t>(g.building)].id);
+        }
         if (inExhibit)
           think(g, kOutOfExhibit);
         else
@@ -4016,7 +4071,10 @@ void Guests::tick(Guest &g) {
       g.dHappy += static_cast<float>(type.angryTrash);
     }
     // Rubbish in hand: a bin within cSearchRadius (guestFindTrashCan
-    // 0x59d5d3: the nearest 'trash' building, then guestGoToBuilding), else
+    // 0x59d5d3: the nearest 'trash' building, then guestGoToBuilding; a guest
+    // finishing a task at a seat or a bin is sent on to the next by 0x5ad820 -
+    // its goal's cell tested by 0x618e3d / 0x618eb3, task 0x66 at priority 4 -
+    // ours: seekBuilding, not compared), else
     // dropped as litter (guestDropLitter 0x52da40; not on the water - ours:
     // kept till back on land), the task over (+0x33e set - ours: not, as
     // the tick clears it below before the next)
@@ -4651,7 +4709,10 @@ void Guests::update(float seconds, int zooRating, double admission) {
 // exit points at random (ours: placed at its exitpos - each stock slot has
 // one), checkArrived 0x42a84f, atTarget 0x42dddf -> guestBuy 0x42d858): true
 // when it has gone on at once (out on its water ride, off to eat what it
-// bought)
+// bought). The exit point's test (zoo.exe 0x42ab29: on the map, zoo land, its
+// water as the slot's exitonwater says; 0x42b350 takes the first point that
+// passes, 0x42aad5 for a slot; 0x4a75bb puts the guest there) - ours: placed at
+// the slot's exitpos without the test (not compared)
 bool Guests::outNow(Guest &g) {
   // Out again: what the building did, and what they bought
   const auto &objs = this->objects->objects();
@@ -4817,6 +4878,10 @@ void Guests::addToIndex(WorldIndex &index) const {
 // camera (10 to 49 guests every second, 50 to 99 one try in 30, more one
 // in 15)
 // ----------------------------------------------------------------------------
+// (zoo.exe 0x4352dd, ZTGameMgr::update's crowd sounds: the bed below, and its
+// two crowd groups put at the listener 0x43f35f plus rand%300-rand%300,
+// rand%400-rand%400, each played through 0x43f445 -> 0x43f4d5 -> the voice
+// tick 0x43f513)
 void Guests::updateSounds(float seconds) {
   if (!this->sounds)
     return;
@@ -4845,13 +4910,39 @@ void Guests::updateSounds(float seconds) {
     this->bedChannel = level >= 0 ? Sound::get().loop(beds[level], 1500) : -1;
     this->bedLevel = level;
   }
+  // (crowdsnd.cfg, zoo.exe 0x43f513: no voices under 10 guests - the "none"
+  // group's chance 0)
+  this->crowdVoice(seconds, n < 10 ? 0 : 100, [this](float &dx, float &dy) {
+      // (a random point round the middle of the view, nearer more likely)
+      std::uniform_int_distribution<int> r400(0, 399), r300(0, 299);
+      dx = static_cast<float>(r400(this->rng) - r400(this->rng));
+      dy = static_cast<float>(r300(this->rng) - r300(this->rng));
+      return true;
+    });
+}
+
+// zoo.exe crowdVoicesTick 0x43f513 (and 0x43585c): the time added to the
+// group's timer; once it is over 1000 ms it drops by 1000 until it is at most
+// that, and then one try in the group's chance (100: crowdsnd.cfg's medium
+// and big groups list the same sounds as small, so the game's cache gives
+// them small's group, timer and chance) plays one of its sounds, picked by
+// its prob. That timer is shared: every call adds to it, the zoo's crowd
+// (from 10 guests) and each exhibit viewing area with guests at it
+// (viewingAreaCrowdSound 0x4358f2, at its first viewing tile) - so the more
+// areas with guests, the more tries a second (measured in the running
+// original, tour.zoo, 2026-11-19: one area with guests and 22 in the zoo, the
+// shared timer went up two ticks' worth a tick). where gives the sound's
+// place (the view's offset), false for out of reach
+void Guests::crowdVoice(float seconds, int chance, const std::function<bool(float &, float &)> &where) {
+  if (!this->sounds)
+    return;
+  // (ours: a second's worth of time is a try each, so a long step makes
+  // several; the original makes one a call. The zoo's call always adds
+  // here, though under 10 guests the original's goes to the "none" group's
+  // own timer)
   this->chatterClock += seconds;
   while (this->chatterClock >= 1.0f) {
     this->chatterClock -= 1.0f;
-    // (crowdsnd.cfg, zoo.exe 0x43f513: no voices under 10 guests; from 10, a
-    // 1 in 100 chance a second - its medium and big groups list the same
-    // sounds, so the game's cache gives them small's chance)
-    int chance = n < 10 ? 0 : 100;
     if (chance == 0 || std::uniform_int_distribution<int>(0, chance - 1)(this->rng) != 0)
       continue;
     static const std::pair<const char *, int> voices[5] = {
@@ -4859,11 +4950,9 @@ void Guests::updateSounds(float seconds) {
     int roll = std::uniform_int_distribution<int>(0, 99)(this->rng);
     for (auto [file, prob] : voices)
       if ((roll -= prob) < 0) {
-        // (a random point round the middle of the view, nearer more likely)
-        std::uniform_int_distribution<int> r400(0, 399), r300(0, 299);
-        float dx = static_cast<float>(r400(this->rng) - r400(this->rng));
-        float dy = static_cast<float>(r300(this->rng) - r300(this->rng));
-        Sound::get().playAt(file, dx, dy);
+        float dx = 0, dy = 0;
+        if (where(dx, dy))
+          Sound::get().playAt(file, dx, dy);
         break;
       }
   }

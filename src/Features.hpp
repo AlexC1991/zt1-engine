@@ -39,6 +39,12 @@ inline bool smartStack = true;   // windows that would cover one another are pla
 inline bool dragWindows = true;  // every window can be dragged by its title and keeps its place (off: only those the original lets you drag)
 inline bool suitabilityAdvice = true; // recommendations name what an unhappy animal's exhibit lacks (off: as the original, which can say "well suited")
 inline bool tankClip = true;     // a tank animal's art is cut off at the water's edge (off: as the original, its body drawn on over the wall)
+// addition: themed celebrations through the year (Celebrations.hpp) - the
+// date shows its day, news a few days ahead, flyovers and guest colours on
+// New Year, Valentine's Day, the zoo's birthday, Halloween and Christmas
+// weeks. Look and sound only: the calendar, goals, books and rating are
+// untouched. Off: the original's date and nothing else (#314)
+inline bool celebrations = false;
 // A cheat, switched in the Mod Menu or Game Options > Mods (the
 // same switch): spending's still on the books, but the cash never goes down
 // and anything can be bought (ZooSim::unlimited). Saved as Extras
@@ -86,6 +92,7 @@ inline std::vector<Switch> &all() {
       {"dragwindows", "every window can be dragged by its title bar and stays where you leave it, next time too (off: only the windows the original lets you drag - Zoo Status, Recommendations, plaques, messages - and only until the game closes)", &dragWindows},
       {"suitabilityadvice", "while an animal's exhibit is less suitable than its kind wants, its Zookeeper Recommendations name each part costing it - native objects, foliage, rocks, hills, terrain - and never say the exhibit is well suited (off: as the original, which names only parts far off and can call an exhibit that angers an animal well suited)", &suitabilityAdvice},
       {"tankclip", "a tank animal is drawn only as far as the water goes: its art is cut off at the glass, so a big fish turning by a wall no longer shows its head and tail over it, out across the ground (off: its whole sprite, as the original drew it)", &tankClip},
+      {"celebrations", "themed celebrations through the year, for looks and sound only: the date shows its day (25 Dec, Year 1), news a few days ahead, a biplane over New Year and the zoo's birthday, witches through Halloween week and guests and buildings in the Halloween colours on 31 October, Santa through Christmas week, guests in pink on Valentine's Day; the calendar, goals, books and rating are not changed (off: the original's date and its own 15 September, 31 October and 25 December events only)", &celebrations},
       {"infinitemoney", "a cheat: buy anything whatever your cash - spending still shows in the zoo's finances, but your cash never goes down, and research, conservation and marketing are always paid for (off: the zoo's money, as the original)", &infiniteMoney},
       {"optionswindow", "Game Options opens as a window with every setting - graphics, sound, controls, gameplay - and the main menu has it too (off: the original's side panel, and no main menu entry)", &optionsWindow},
   };

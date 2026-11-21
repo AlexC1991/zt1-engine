@@ -373,6 +373,10 @@ void PlacedObjects::tick(float seconds) {
   }
 }
 
+// (zoo.exe objectRemovedFromWorld 0x4fe778: a building's, food's or filter's
+// removal - the kind lists told, its footprint tiles cleared, the registries
+// unlinked, Zoo Status redone; ours drops it from the list and the tiles'
+// index)
 void PlacedObjects::remove(int index) {
   if (index < 0 || index >= static_cast<int>(this->list.size()))
     return;

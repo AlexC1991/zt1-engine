@@ -394,6 +394,16 @@ public:
   // The first thing in a tank that can't be under water, by its kind's name
   // ("" none) - zoo.exe 0x459e09; the world fills it in
   std::function<std::string(int exhibit)> fillBlocker;
+  // Whether a tank holds an animal on its tiles, which stops it being
+  // drained (zoo.exe tankDrainCheck 0x6064ed -> 0x60656e); the world fills it in
+  std::function<bool(int exhibit)> drainBlocker;
+  // Whether a tank has a gate (zoo.exe habitatGateTile 0x410349, the habitat's
+  // +0x8c still in it): a gate piece in one of its walls
+  bool tankHasGate(int tank) const;
+  // A drain asked for (tankDrainCheck 0x6064ed): 0 nothing in the way, 1 an
+  // animal in it and a gate - 10551 is shown, 2 an animal in it and no gate -
+  // nothing is shown or done
+  int drainRefusal(int tank) const;
   // Tanks refused their water: what was in each (for 10550, "The %s must be
   // removed from the tank before it can be filled with water.")
   std::vector<std::string> takeFillRefusals() { return std::move(this->fillRefusals); }
@@ -444,6 +454,9 @@ public:
   // A low tank shore inside a fenced land exhibit, at the water's level.
   bool shoreAccess(const Edge &e, const WorldMap &map, int &tank, int &land) const;
   int habitatRoot(int exhibit, const WorldMap &map) const;
+  // The lands joined to a tank (zoo.exe's +0x8 set: the lands beside it while
+  // its wall is level with the ground), ascending by id - the order they were made
+  std::vector<int> joinedLands(int tank, const WorldMap &map) const;
   std::set<int> habitatGroup(int exhibit, const WorldMap &map) const;
 
   // Tanks fill over time, their water gets dirty, filters clean it; fences

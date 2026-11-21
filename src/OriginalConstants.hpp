@@ -92,6 +92,9 @@ inline int monthsSince(double fromDay, double today) {
 // ZTTankFilter::update 0x497e0f: its months in operation counted again every
 // 3000 ms (+0x18c, reset to 0xbb8 when it runs out)
 inline constexpr float filterMonthCheckSeconds = 3.0f;
+// (zoo.exe gameDateDefaultTicks 0x4c2bb9 is a settings default of 1 January
+// 2000 as a FILETIME, which of its date fields wasn't worked out; a new zoo's
+// date is 1 January 2001, gameMgrNewZooDefaults 0x58f39c)
 // A FILETIME (100 ns since 1601) for January 1 2001, the zoo calendar's
 // day 0 (400 years, 146097 days, after 1601), and a day in FILETIME units
 // (0x40674d's divisor above): ours: how a day count becomes the original's
@@ -356,8 +359,22 @@ inline constexpr int aiWalkRandomGuest = 9;
 // kind's own cSlowRate - and they walked a median 0.233 tiles a second
 inline constexpr int guestRateGiven = 33, guestRateLess = 5;
 inline constexpr double guestTiredFactor = 1.1, guestRestedFactor = 0.9;
-inline int guestWalkRate(int tiredness) {
-  const int rate = guestRateGiven - guestRateLess;
+// A guest is made with +0x204 = rand % 11 (0x4f6082, class slot 0x108, called
+// by the unit factory 0x412669) and its rate is given + that - 5. measured
+// (Play original, 2026-11-19, the every-item zoo left running: 58 guests, 32
+// of them arrivals): +0x204 from 0 to 10 in the arrivals (the generated ones
+// 0), and the rate 28 + it (x0.9 once rested, tiredness 19 or less: variant 9
+// at tiredness 6 gave 33, variant 2 at 9 gave 27). ours: the number is a
+// stable spread of the guest's id (a new saved field would change the save)
+inline int guestSpeedVariant(int guestId) {
+  unsigned h = static_cast<unsigned>(guestId) * 2654435761u;
+  h ^= h >> 15;
+  h *= 2246822519u;
+  h ^= h >> 13;
+  return static_cast<int>(h % 11u);
+}
+inline int guestWalkRate(int tiredness, int variant = 0) {
+  const int rate = guestRateGiven + variant - guestRateLess;
   if (tiredness >= 75)
     return static_cast<int>(rate * guestTiredFactor);
   if (tiredness <= 19)

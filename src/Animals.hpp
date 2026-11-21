@@ -46,6 +46,8 @@ class Animals {
   friend std::string runParityChecks(class World &, ResourceManager *);
   friend std::string runPanelMessageChecks(class World &, ResourceManager *, int &, int &);
   friend class Shows; // Shared marine-show tasks use the normal routes and animation queues.
+  friend std::string buildEscapeZoo(class World &, class ZooSim &, class UiGameScreen &, const std::string &, const std::string &); // (ZT_ESCAPE_ZOO's way-out trials)
+  friend std::string buildLandJoinZoo(class World &, class ZooSim &, class UiGameScreen &, const std::string &, const std::string &); // (ZT_LANDJOIN_ZOO's best rated pick)
   friend std::string runShowPolishChecks(class World &, ResourceManager *, bool);
 public:
   // Shared with the Lab checker: unsupported steps cannot be mistaken for handled ones.
@@ -241,6 +243,9 @@ public:
     int timeDeath = 5001, deathChance = 100;
     int reproductionChance = 0, reproductionInterval = 0, happyReproduceThreshold = 100,
         offspring = 1, babyToAdult = 0;
+    // cClimbsCliffs 1 (zoo.exe type +0x3b0): steps over a drop of 1 on land
+    // (0x414a26) - the cats, bears, wolves, apes and wild goats
+    bool climbsCliffs = false;
     // cMatingType (1: it waits before taking another mate, and minds losing
     // one) and cNoMateChange (zoo.exe setDefaults 0x4b659e: -19)
     int matingType = 0, noMateChange = -19;
@@ -860,6 +865,17 @@ private:
   void lookAtSpecies(int exhibit);
   const Rating *rating(const Member &m, const WorldMap &map, const Fences &fences);
   void evaluate(int exhibit, const WorldMap &map, const Fences &fences);
+  void evaluateOne(int exhibit, const WorldMap &map, const Fences &fences);
+  // zoo.exe habitatPickForAnimal 0x4161f5 / habitatBestRated 0x498a05: the
+  // habitat an amphibious animal in a tank counts as being in - the best rated
+  // of the lands joined to the tank for its kind (the first on a tie)
+  int joinedHabitatFor(int exhibit, int type, const WorldMap &map, const Fences &fences);
+  // A land's score for a kind (0.3 terrain + 0.2 objects + 0.1 trees, rocks and
+  // elevation), the land rated alone as the original's records are, the kind
+  // there or not
+  float landScore(int land, int kind, const WorldMap &map, const Fences &fences);
+  int evalExtraKind = -1;
+  bool evalAlone = false;
   // How many share its exhibit: its own kind (young too), its kind's
   // adults, all adults
   void company(const Member &m, int &kind, int &kindAdults, int &adults) const;
@@ -925,7 +941,7 @@ private:
   float groundAt(const WorldMap &map, float x, float y) const;
   bool standable(int x, int y, const Type &t, int exhibit, const WorldMap &map,
                  const Fences &fences) const;
-  bool canStep(int x, int y, int nx, int ny, const WorldMap &map, const Fences &fences) const;
+  bool canStep(int x, int y, int nx, int ny, const WorldMap &map, const Fences &fences, bool climbsCliffs = false) const;
   const std::vector<Step> *set(const Member &m, const std::string &name) const;
   bool mayPerform(const Member &m) const;
   void pushSet(Member &m, const std::string &name);
@@ -934,6 +950,8 @@ private:
   bool requestSet(Member &m, const std::string &name);
   // Stops eating (zoo.exe animalStopEating 0x4fd86e)
   void stopEating(Member &m);
+  // A baby growing up (zoo.exe animalGrowUp 0x438663): it stops what it was doing
+  void growUp(Member &m);
   // The tiredness check's body (zoo.exe 0x4384ba, past its countdown)
   void tirednessCheck(Member &m);
   void chooseBehaviour(Member &m);

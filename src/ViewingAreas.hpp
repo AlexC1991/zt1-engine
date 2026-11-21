@@ -34,6 +34,8 @@ public:
   };
 
   void setResources(ResourceManager *rm) { this->rm = rm; }
+  // A fence type with a [HabitatFence] section (zoo.exe ZTFenceType +0x192)
+  bool habitatFence(const Fences &fences, int type);
   // The scenery that can stand in an area's sight line (0x4f2d44: the
   // tiles' quarter slots)
   void setObjects(const PlacedObjects *objects) { this->objects = objects; }
@@ -76,7 +78,6 @@ private:
   // tanks' glass - so a change is looked at again)
   size_t sightKey = 0;
 
-  bool habitatFence(const Fences &fences, int type);
   bool fenceOnSide(const Fences &fences, int x, int y, int dir);
   void build(const WorldMap &map, const Fences &fences, int exhibit);
   void add(const WorldMap &map, const Fences &fences, int exhibit, int x, int y);

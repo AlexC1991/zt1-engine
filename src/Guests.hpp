@@ -390,7 +390,8 @@ public:
   std::function<int(int guide)> guideBonusOf;    // its cTourGuideBonus
   std::function<int(int exhibit)> tourBonusAt;   // a guide on the exhibit's viewing tiles
   // An exhibit's viewing areas (zoo.exe: the habitat's +0x34 list - World's
-  // ViewingAreas), in the order they were made: each one's viewing tiles,
+  // ViewingAreas; a guest's record of one, 0x423043: its exhibit and the gate
+  // tile), in the order they were made: each one's viewing tiles,
   // the exhibit tiles it sees and the guests standing on its viewing tiles
   struct ViewArea {
     std::vector<std::pair<int, int>> viewing, seen;
@@ -503,6 +504,8 @@ public:
   Animation *listIcon(const Guest &g) const;
   // Crowd sounds: the bed by how many there are, chatter now and then
   void updateSounds(float seconds);
+  // A crowd voice's try (the shared timer: the zoo's crowd and each exhibit viewing area with guests)
+  void crowdVoice(float seconds, int chance, const std::function<bool(float &, float &)> &where);
   bool sounds = true;
 
   int hovered = -1, selected = -1;
@@ -722,6 +725,10 @@ private:
   // A show to go to, at chooseTask's place (zoo.exe 0x440eb7 -> 0x440f0c):
   // set by Shows::init; true when the guest is off to a grandstand
   std::function<bool(Guest &)> showPick;
+  // A grandstand's show stopped by a guest seeing a rampaging animal there
+  // (zoo.exe 0x48e054 -> rubbleStopShow 0x6127b8), by the object's id; set by
+  // Shows::init
+  std::function<void(int)> showStop;
   // A guest's walk about (zoo.exe unitWalkAbout 0x43d948, its passable
   // test ZTGuest's class slot 0x168): false when no route was made
   bool walkAbout(Guest &g);

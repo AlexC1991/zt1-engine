@@ -445,6 +445,7 @@ private:
     // bird calls (worldsnd.cfg)
     int ambienceChannel = -1;
     float birdClock = 0;
+    float viewingSoundClock = 0; // (the viewing areas' guests counted for their crowd voices)
     struct BirdCall {
       std::string file;
       int prob = 0;

@@ -288,7 +288,8 @@ void Fences::loadTypes(ResourceManager *rm) {
     t.broke[2] = artOf("f", "broke30n");
     // A fence with no worn or broken art (the white picket fence: plain
     // [Animations], idle only) never wears in the original: zoo.exe picks
-    // a worn or broken fence's art by its life (0x416ee8) and, without it,
+    // a worn or broken fence's art by its life (0x416ee8 fenceSetArtByLife,
+    // from fenceRefreshArt 0x4268da; its animation object 0x4268b7) and, without it,
     // crashes loading the zoo. Real saves only ever have such fences at
     // full life.
     if (!t.det[0] && !t.broke[0])
@@ -798,6 +799,9 @@ int Fences::exhibitAt(int x, int y) const {
   return -1;
 }
 
+// (zoo.exe habitatsMatchAcross 0x45ce9a, 0x45cf03, 0x45cf65: whether a tile and
+// its neighbour lie in the same habitat - ours compares exhibitAt of the two
+// sides of an edge)
 int Fences::exhibitOf(const Edge &e) const {
   // The tiles either side of it
   int a = e.alongX ? this->exhibitAt(e.x, e.y - 1) : this->exhibitAt(e.x - 1, e.y);
@@ -987,6 +991,9 @@ int Fences::tankOf(const Edge &e) const {
 
 static std::vector<Fences::Edge> boundaryOf(const Fences::Exhibit &ex);
 
+// (zoo.exe fenceRemovedFromWorld 0x4ffd6e: the piece's side in its tile cleared
+// (tileClearFenceSlot 0x4f165b) and the habitats either side reshaped
+// (exhibitsReshape 0x50c3d8) - ours drops the piece and rebuilds the exhibits)
 void Fences::remove(const Edge &e, WorldMap &map, bool wholeTank) {
   sharedPortalCache.clear();
   auto it = this->edges.find(e);
@@ -1086,7 +1093,9 @@ std::vector<int> Fences::updateExhibits(WorldMap &map, int day, int month, int y
   // Exhibits whose ground is no longer shut off as it was are gone
   std::vector<int> created;
   std::vector<bool> taken(regions.size(), false);
-  // Exhibits reshaped (zoo.exe 0x50c3d8, 0x58a009): one split by a new
+  // Exhibits reshaped (zoo.exe 0x50c3d8, 0x58a009; its helpers habitatMakeTank
+  // 0x4877bf, habitatReshapeTank 0x48712c, habitatMakeLand 0x6044a5,
+  // habitatSetGateFromFences 0x60477c, habitatRemakeAfterSplit 0x44ca8c): one split by a new
   // fence keeps itself (name, gate, keepers) on the side with its gate;
   // two joined by taking out the wall between: the one whose gate was in
   // that wall goes, else the one nested inside the other (reached only
@@ -1748,6 +1757,8 @@ void Fences::adjustWall(int id, int step) {
   // cut to the new height + waterOffset at once - 0x5af39e -> 0x5acfe1)
   const int units = waterUnits(*ex);
   ex->wallSub = std::max(ex->wallSub + step, this->minWallHeight(id));
+  // (zoo.exe tankWallsApplyHeight 0x459ab2 then sets each wall piece to it;
+  // ours: the pieces take the exhibit's height)
   setWaterUnits(*ex, units);
   // (silent, as the original: no sound for the walls, filling or draining)
 }
@@ -1842,10 +1853,12 @@ void Fences::update(float seconds) {
         ex.level = std::min(target, ex.level + seconds * 1000.0f / static_cast<float>(Original::updateMs));
     }
     // Waves now and then, while the water's clean (murkyWaterPurity 60)
+    // (zoo.exe tankWavesAge 0x4962fb: each wave's age plus the tick's ms,
+    // gone when over [0x6390b4] = 4000)
     for (Exhibit::Wave &w : ex.waves)
       w.age += seconds * 1000.0f;
     ex.waves.erase(std::remove_if(ex.waves.begin(), ex.waves.end(),
-                                  [](const Exhibit::Wave &w) { return w.age >= 4000.0f; }),
+                                  [](const Exhibit::Wave &w) { return w.age > 4000.0f; }),
                    ex.waves.end());
     if (ex.water > 0 && ex.purity >= 60 && !ex.tiles.empty()) {
       ex.waveIn -= seconds * 1000.0f;
@@ -1899,6 +1912,9 @@ void Fences::update(float seconds) {
     Exhibit *ex = this->exhibit(f.tank);
     if (f.health <= 0 || !ex || !ex->tank || ex->water <= 0.0f)
       continue; // broken, or nothing to clean
+    // (zoo.exe filterClean 0x49be17: the cleaning pass every cDelay; health
+    // above the type's cDecayedHealth (+0x16c) adds cClean (+0x17c), else
+    // cDecayedClean (+0x180), through tankAddPurity 0x49bd60)
     f.filterClock += seconds;
     while (f.filterClock >= k.filterDelay) {
       f.filterClock -= k.filterDelay;
@@ -2158,6 +2174,10 @@ void Fences::newMonth() {
   }
 }
 
+// (zoo.exe filterRemovedFromWorld 0x50558c: the tank's link to it cleared when it
+// is this filter's, its linked objects (0x498270) and bubbles (0x4fb151) let go;
+// filterServesTank 0x49805c and filterLinkValid 0x498026 test the link - ours
+// keeps no link, a tank finds its filters by their tank id)
 void Fences::removeFilter(int index) {
   if (index >= 0 && index < static_cast<int>(this->filterList.size()))
     this->filterList.erase(this->filterList.begin() + index);
@@ -2453,6 +2473,23 @@ int Fences::waterSubtiles(const Exhibit &ex) const {
     return 0;
   float level = ex.level > -1e8f ? ex.level : ex.floorHeight + ex.water * (ex.wallTop() - kWaterOffset - ex.floorHeight);
   return std::max(0, static_cast<int>(std::lround((level - ex.floorHeight) * 2.0f)));
+}
+
+bool Fences::tankHasGate(int tank) const {
+  for (const auto &kv : this->edges)
+    if (kv.second.gate && (kv.second.tank == tank || kv.second.tank2 == tank))
+      return true;
+  return false;
+}
+
+// zoo.exe tankDrainCheck 0x6064ed: with a unit that stops it (0x60656e), the
+// message 10551 only if the tank has a gate (habitatGateTile 0x410349), else
+// nothing at all - and the tank isn't drained either way
+int Fences::drainRefusal(int tank) const {
+  const Exhibit *ex = this->exhibit(tank);
+  if (!ex || !(ex->animals > 0 || (this->drainBlocker && this->drainBlocker(tank))))
+    return 0;
+  return this->tankHasGate(tank) ? 1 : 2;
 }
 
 bool Fences::byTankLadder(const Exhibit &ex, int x, int y) const {

@@ -30,6 +30,9 @@ public:
   // Looped (the world's ambience): its channel, or -1
   int loop(const std::string &path, int atten = 0);
   void stop(int channel);
+  // A playing channel's loudness set again: its attenuation in hundredths of a decibel (as
+  // start's, before the master's), no distance
+  void level(int channel, int atten);
   // A playing loop heard from somewhere else now (screen pixels from the
   // middle of the view, as playAt); false: out of earshot (stopped)
   bool place(int channel, float dxPixels, float dyPixels, int atten);

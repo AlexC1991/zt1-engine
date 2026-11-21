@@ -134,6 +134,20 @@ int runHudClockChecks(World &world,UiGameScreen &hud,ResourceManager *rm,SDL_Ren
   check(label()==calendar && restoredDate.x==originalDate.x && restoredDate.y==originalDate.y &&
         restoredDate.w==originalDate.w && restoredDate.h==originalDate.h,"switching off restores original calendar and geometry");
   check(money.x==originalMoney.x && money.w==originalMoney.w,"money remains in its original position");
+  // addition (Features::celebrations, #314): the date shows its day ("25 Dec,
+  // Year 1"), the month's own text and the year as the original has them;
+  // off, the original's date exactly
+  {
+    const bool wasCelebrations=Features::celebrations;
+    Features::celebrations=true;capture("clock-celebrations");
+    const std::string dated=label();const size_t gap=dated.find(' ');
+    bool digits=gap!=std::string::npos && gap>=1 && gap<=2;
+    for(size_t i=0;digits && i<gap;++i)digits=dated[i]>='0' && dated[i]<='9';
+    check(digits && dated.substr(gap+1)==calendar,"celebrations on: the date is the day, then the original's month and year");
+    Features::celebrations=false;capture("clock-celebrations-off");
+    check(label()==calendar,"celebrations off: the original's date, no day");
+    Features::celebrations=wasCelebrations;
+  }
   SDL_Rect originalStrip{};SDL_GetRectUnion(&originalPlay,&originalDate,&originalStrip);
   auto pixels = [&](const std::string &file) {
     uint64_t hash=1469598103934665603ull;SDL_Surface *source=IMG_Load(file.c_str());

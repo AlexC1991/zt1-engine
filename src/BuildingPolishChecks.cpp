@@ -100,18 +100,28 @@ std::string runBuildingPolishChecks(World &world, ResourceManager *rm, bool demo
     check("scientist contains the darted dinosaur",animals.member(animal) && animals.member(animal)->boxed);
     // A reload immediately after the dart safely parks the craft. Run a
     // second uninterrupted mission to verify its entire return animation.
+    bool rotorFadeIn=false,rotorFull=false,rotorFadeOut=false;
     if(savedContainment) {
       adult(dinoType,38.5f,28.5f);
       for(int n=0;n<1600;++n) {
         staff.update(0.05f,map,fences);
-        if(const auto *h=staff.member(heli))stages.insert(h->heliStage);
+        if(const auto *h=staff.member(heli)) {
+          stages.insert(h->heliStage);
+          if(h->rotorChannel>=0&&h->rotorFlying&&h->rotorSpin>3500.0f&&h->rotorSpin<4000.0f)rotorFadeIn=true;
+          if(h->rotorChannel>=0&&h->rotorFlying&&h->rotorSpin==0.0f)rotorFull=true;
+          if(h->rotorChannel>=0&&!h->rotorFlying&&h->rotorSpin>0.0f&&h->heliStage==Staff::HeliStage::Parked)rotorFadeOut=true;
+        }
       }
     }
     check("helicopter returns, descends, spins down and parks",
           stages.count(Staff::HeliStage::Return) && stages.count(Staff::HeliStage::Descend) &&
           stages.count(Staff::HeliStage::SpinDown) && staff.member(heli)->heliStage==Staff::HeliStage::Parked);
     check("base anchor stays fixed throughout mission",baseFixed);
+    // (the loop fades out over 4 seconds after the landing, then stops: 0x5067f0)
+    for(int n=0;n<100;++n)staff.update(0.05f,map,fences);
     check("rotor loop stops on landing",staff.member(heli)->rotorChannel<0);
+    check("the rotor loop fades in over 4 seconds from 30 dB down at take-off and fades out after landing (0x5067f0: +0x2a8 4000 to 0 and back)",
+          rotorFadeIn&&rotorFull&&rotorFadeOut);
     bool allArt=true;
     for(const char *name:{"idle","warmup","level","fly","fire"})allArt&=staff.art(*staff.member(heli),name)!=nullptr;
     check("every flight animation has original artwork",allArt);

@@ -84,7 +84,9 @@ void Original::loadEconomy(ResourceManager *rm, const std::string &scenario) {
     num("cAdmissionMultiple", e.admissionMultiple);
     num("cItemCheap", e.itemCheap);
     // (guestArrivalCheck's: loadConfig 0x591a1f copies cAdultAdmission only
-    // when it has five; the chances one by one)
+    // when it has five; the chances one by one. zoo.exe gameMgrLoadChecks
+    // 0x4bbef5 reads [checks] rating, message and newguest, and the
+    // admission list through 0x591a5a)
     if (const auto list = ini->getList("characteristics", "cAdultAdmission"); list.size() == 5)
       for (size_t k = 0; k < 5; k++)
         e.adultAdmission[k] = static_cast<float>(std::atof(list[k].c_str()));
@@ -141,6 +143,9 @@ int ZooSim::weekday() const {
   return static_cast<int>((1 + this->dayCount) % 7);
 }
 
+// (zoo.exe gameMgrNewZooDefaults 0x58f39c: a new zoo's cash cleared, its
+// settings defaulted, the date set to 1 January 2001 - the HUD's "Year 1" -
+// and the rating terms redone; ours is given its cash and rating)
 void ZooSim::start(double cash, double rating) {
   importedAnnual.clear(); importedTotals.clear();
   this->months.clear();

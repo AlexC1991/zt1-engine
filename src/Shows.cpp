@@ -43,6 +43,10 @@ void Shows::init(World *w, ResourceManager *resources) {
   // zoo.exe 0x440f0c: zoo.ini [AI] maxDistToGoToShow, read once (default 150)
   maxDistToGoToShow=::Settings::getInt("AI","maxDistToGoToShow",Original::maxDistToGoToShow);
   if(world)world->guests.showPick=[this](Guests::Guest &g){return pickShow(g);};
+  if(world)world->guests.showStop=[this](int object){
+    const int tank=standShow(object);
+    if(tank>=0&&show(tank))cancel(tank,"");
+  };
   if (!rm) return;
   if (IniReader *ini=rm->getIniReader("shows.cfg")) {
     // zoo.exe 0x5167ca and 0x51f59b: the game's values, including mod overrides.
@@ -965,7 +969,8 @@ bool Shows::standOpen(int object) const {
   return s && (s->phase==Phase::Gathering || s->phase==Phase::Performing);
 }
 
-// zoo.exe 0x440f0c (chooseTask 0x43a6e4 at 0x440eb7): every show grandstand
+// zoo.exe 0x440f0c (chooseTask 0x43a6e4 at 0x440eb7, a habitat's first stand of
+// a show 0x5a2b61): every show grandstand
 // whose +0x19c is over 0 (standOpen), its Manhattan tiles from the guest's
 // tile plus rand() % 15 (drawn for each); the smallest, unless its show's
 // tank is on the guest's visited list (0x5a2bcd); none when that's over

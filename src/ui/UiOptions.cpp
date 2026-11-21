@@ -315,7 +315,8 @@ std::string extraName(const std::string &name) {
       {"dragwindows", "Drag any window"},       {"infocloseslists", "Windows close lists"},
       {"tankgroundback", "Tank ground restored"}, {"nofenceonpath", "No fences on paths"},
       {"modfilter", "Mods buy filter"},          {"custommaps", "Custom maps"},
-      {"tankclip", "Tank edge clipping"},       {"suitabilityadvice", "Full exhibit advice"},       {"infinitemoney", "Cheat: infinite money"}};
+      {"tankclip", "Tank edge clipping"},       {"suitabilityadvice", "Full exhibit advice"},       {"celebrations", "Themed celebrations"},
+      {"infinitemoney", "Cheat: infinite money"}};
   auto it = names.find(name);
   return it == names.end() ? name : it->second;
 }

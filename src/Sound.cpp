@@ -121,6 +121,14 @@ int Sound::loopAt(const std::string &path, float dx, float dy, int atten) {
   return this->start(this->chunk(path), atten + away, pan, -1);
 }
 
+void Sound::level(int channel, int atten) {
+  if (channel < 0)
+    return;
+  const int total = std::max(1, this->master + atten);
+  const float gain = total > kInaudible ? 0.0f : std::pow(10.0f, -total / 2000.0f);
+  Audio::volume(channel, std::clamp(static_cast<int>(std::lround(gain * Audio::kMaxVolume)), 0, Audio::kMaxVolume));
+}
+
 void Sound::stop(int channel) {
   if (channel >= 0)
     Audio::halt(channel);

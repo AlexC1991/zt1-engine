@@ -44,6 +44,9 @@ public:
     this->month = month;
   }
   void update(float seconds, const WorldMap &map);
+  // One flyer of a kind sent at once, its own sound (the sleigh's, the
+  // biplane's) if it has one; false: none sent
+  bool sendFlyer(const WorldMap &map, int nameId, const char *own, int atten);
   // A guest come in at the gate (zoo.exe 0x4f6e3c -> 0x4f7ebe): the special
   // days' flyers
   void guestArrived(const WorldMap &map);

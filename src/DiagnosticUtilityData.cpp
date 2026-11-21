@@ -218,3 +218,13 @@ void DiagnosticUtilityData::logToFile() {
         outfile.close();
     }
 }
+
+// ours: the process's working set in MB, for the soak check (ZT_SOAK in main.cpp)
+double processWorkingSetMb() {
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+        return static_cast<double>(pmc.WorkingSetSize) / (1024.0 * 1024.0);
+#endif
+    return 0.0;
+}

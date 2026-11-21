@@ -30,6 +30,7 @@
 #include "InputManager.hpp"
 #include "LoadScreen.hpp"
 #include "RenameCheats.hpp"
+#include "Celebrations.hpp"
 #include "Research.hpp"
 #include "ResourceManager.hpp"
 #include "ScenarioManager.hpp"
@@ -56,6 +57,7 @@
 #include "Pathfinder.hpp"
 #include <random>
 #include <sstream>
+#include <iomanip>
 #include <queue>
 #include "ZooSim.hpp"
 #include "ZooReader.hpp"
@@ -598,7 +600,10 @@ static void updateHudDate(ResourceManager *rm) {
   if (Features::gameTimeShown() && g_world)
     time = DayNightLighting::formatTime(Features::dayNightLighting
         ? g_world->getLighting().displayedHour() : DayNightLighting::hourAt(g_world->getClock()));
-  g_hud->setDateTime(rm->getString(22101 + g_sim.month()) + ", Year " + std::to_string(g_sim.year()), time);
+  // addition (Features::celebrations): the day too, "25 Dec, Year 1" (off:
+  // the original's "Dec, Year 1")
+  const std::string day = Features::celebrations ? std::to_string(g_sim.dayOfMonth()) + " " : "";
+  g_hud->setDateTime(day + rm->getString(22101 + g_sim.month()) + ", Year " + std::to_string(g_sim.year()), time);
 }
 static void updateHudClock(ResourceManager *rm) {
   if (!g_hud)
@@ -999,7 +1004,8 @@ static void handleToolResult(const World::ToolResult &r, ResourceManager *rm) {
       const Fences::Exhibit *ex = g_world->getFences().exhibit(id);
       if (!ex)
         continue;
-      // "Exhibit 1", "Tank 2": the count of every exhibit made
+      // "Exhibit 1", "Tank 2": the count of every exhibit made (zoo.exe
+      // habitatDefaultName 0x44df34; the name asked, habitatNameAsk 0x44e43e)
       std::string initial = rm->getString(ex->tank ? 6209 : 6208) + " " + std::to_string(id);
       g_hud->askName(rm->getString(158), initial, [id](const std::string &name) {
         std::string n = name;
@@ -1201,6 +1207,8 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
     }
     for (const Shows::Message &m : g_world->getShows().takeMessages())
       g_hud->postMessage(m.text, m.kind, m.animal >= 0 ? UiGameScreen::Subject::Animal : UiGameScreen::Subject::None, m.animal);
+    // (the books' rows: Concessions 0x42df22, Admission income 0x4f7da4,
+    // Admissions - a count - 0x4f7e2f, Donations 0x42ebbe)
     if (double sold = gs.takeConcessions(); sold > 0) {
       g_sim.earn(ZooSim::Concessions, sold);
       updateHudClock(rm);
@@ -1664,6 +1672,9 @@ static void worldInputs(SDL_Renderer *renderer, ResourceManager *rm,
                          g_world->getFences().selectFilter(file));
   g_world->setBulldozer(g_hud->bulldozerOn());
   g_world->setDate(g_sim.dayOfMonth(), g_sim.month(), g_sim.year());
+  // addition (Features::celebrations): the day's news, flyovers and colours
+  Celebrations::update(*g_world, g_sim.dayOfMonth(), g_sim.month(), g_sim.year(),
+                       [](const std::string &line) { g_hud->postMessage(line, 0); });
 
   for (const Input &in : raw) {
     if (in.type != InputType::POSITIONED)
@@ -3804,6 +3815,7 @@ static void startGoals(ResourceManager *rm, const std::string &mapPath, bool res
     Ambient &amb = g_world->getAmbient();
     amb.snowmanOn = amb.treeOn = amb.pumpkinOn = amb.yellowDone = false;
     amb.santaSent = amb.biplaneSent = false;
+    Celebrations::reset();
     {
       // (the real date, GetLocalTime 0x412c22: 31 October of the PC's clock)
       const std::time_t now = std::time(nullptr);
@@ -5236,6 +5248,215 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     SDL_RenderPresent(renderer);
     note(name);
   };
+  // ZT_SOAK=<game years> (with ZT_FLAT_LAB=1 on a blank freeform map such as
+  // sm_aqua; ZT_SOAK_NIGHT=1: day/night on; ZT_SOAK_DT=<seconds a step>,
+  // default 1/30): ours - a zoo with land and show-tank animals, staff,
+  // guests and buildings played at the fastest speed's rate for that many
+  // game years, as the game's loop plays it (the world, the books, the
+  // income and the HUD's counts). Once a game month: the working set, the
+  // books, the counts, units that stood still all month and guests that
+  // never left, written to <out>/soak.txt. FAIL lines are findings.
+  if (const char *soakYears = std::getenv("ZT_SOAK")) {
+    std::ofstream log(outDir + "/soak.txt");
+    static const bool noKeys[SDL_SCANCODE_COUNT] = {};
+    const int years = std::max(1, std::atoi(soakYears));
+    const bool night = std::getenv("ZT_SOAK_NIGHT") != nullptr;
+    const float dt = std::getenv("ZT_SOAK_DT") ? static_cast<float>(std::atof(std::getenv("ZT_SOAK_DT"))) : 1.0f / 30.0f;
+    Features::dayNightLighting = night;
+    int findings = 0;
+    auto finding = [&](const std::string &what) {
+      findings++;
+      log << "FAIL " << what << "\n";
+      log.flush();
+    };
+    extern std::string prepareMarineSoak(World &, ResourceManager *);
+    Fences &sf = world->getFences();
+    Animals &sa = world->getAnimals();
+    Staff &ss = world->getStaff();
+    WorldMap &smap = world->getMap();
+    sf.setEditing(true); // (fixture construction, outside the zoo's ownership checks)
+    for (auto &b : Research::get().branches())
+      for (auto &c : b.categories)
+        for (auto &p : c.programs)
+          if (p.effect == 6)
+            p.done = true;
+    g_sim.setCash(1000000);
+    world->setPaused(false);
+    for (int f = 0; f < 3; f++)
+      world->update(noKeys, 1.0f / 60.0f);
+    log << prepareMarineSoak(*world, rm) << "\n";
+    // a land exhibit: chain-link, four zebras and a keeper (ZT_SOAK_LAND=1: the
+    // fence laid piece by piece doesn't make an exhibit the animals live in yet,
+    // so the land animals are tested by the tour instead, ZT_TOUR_SAVE)
+    if (std::getenv("ZT_SOAK_LAND")) {
+      // (a 14 x 14 place wholly inside the zoo, clear of the tanks' ground)
+      int x = -1, y = -1;
+      const int w = 14, h = 14, type = sf.typeIndex("chainlnk");
+      for (int sy = 3; sy < smap.getHeight() - h - 3 && x < 0; sy++)
+        for (int sx = 3; sx < smap.getWidth() - w - 3 && x < 0; sx++) {
+          if (sx + w + 2 > 18 && sx - 1 < 66 && sy + h + 2 > 18 && sy - 1 < 52)
+            continue;
+          bool clear = true;
+          for (int yy = sy - 2; yy <= sy + h + 2 && clear; yy++)
+            for (int xx = sx - 2; xx <= sx + w + 2 && clear; xx++)
+              clear = sf.insideZoo(xx, yy);
+          if (clear) {
+            x = sx;
+            y = sy;
+          }
+        }
+      log << "land exhibit site " << x << "," << y << "\n";
+      for (int yy = y - 1; yy <= y + h; ++yy)
+        for (int xx = x - 1; xx <= x + w; ++xx)
+          smap.setPath(xx, yy, "");
+      for (int k = 0; k < w; ++k) {
+        sf.place({true, x + k, y}, type, 3000, smap);
+        sf.place({true, x + k, y + h}, type, 3001, smap);
+      }
+      for (int k = 0; k < h; ++k) {
+        sf.place({false, x, y + k}, type, 3002, smap);
+        sf.place({false, x + w, y + k}, type, 3003, smap);
+      }
+      for (int id : sf.updateExhibits(smap, 1, 0, 1))
+        sf.finishExhibit(id, "Soak savannah", smap);
+      for (int yy = y; yy < y + h; ++yy)
+        for (int xx = x; xx < x + w; ++xx)
+          smap.setPath(xx, yy, "");
+      const int zebra = sa.typeOfFile("animals/zebra.ai");
+      for (int k = 0; k < 4; ++k)
+        sa.adopt(zebra, k % 2, x + 3.5f + k * 2, y + 7.5f, smap, sf, true);
+      const int keeper = ss.hire(ss.typeOfFile("staff/keeper.ai"), x - 1.5f, y + 7.5f, smap, sf);
+      const int landExhibit = sf.exhibitAt(x, y);
+      if (keeper >= 0 && landExhibit >= 0)
+        ss.assign(keeper, landExhibit, sf);
+      log << "land exhibit " << landExhibit << ", keeper " << keeper << "\n";
+    }
+    sf.setEditing(false);
+    world->reindex();
+    log << "setup: " << sa.members().size() << " animals, " << ss.members().size() << " staff, "
+        << world->getObjects().objects().size() << " objects, day/night " << (night ? "on" : "off") << ", step " << dt
+        << " s\n";
+    log.flush();
+    extern double processWorkingSetMb();
+    auto workingSet = [] { return processWorkingSetMb(); };
+    const int startMonth = g_sim.year() * 12 + g_sim.month();
+    int lastMonth = startMonth - 1;
+    struct Pos {
+      float x, y;
+    };
+    std::map<int, Pos> staffAt, animalAt;
+    std::map<int, int> guestFirst; // guest id -> the month first seen
+    double firstMb = 0, lastMb = 0;
+    const Uint64 t0 = SDL_GetPerformanceCounter();
+    long steps = 0;
+    while (g_sim.year() * 12 + g_sim.month() < startMonth + years * 12) {
+      g_world->objectsMutable().today = g_sim.today();
+      g_world->getFences().today = g_sim.today();
+      world->update(noKeys, dt, dt);
+      g_sim.update(dt);
+      worldInputs(renderer, rm, std::vector<Input>());
+      steps++;
+      if (g_hud->hasDialog()) {
+        // (a message or question the game brought up, answered)
+        Input in{};
+        in.type = InputType::BUTTON;
+        in.event = InputEvent::KEY_DOWN;
+        in.key = SDLK_RETURN;
+        std::vector<Input> inputs = {in};
+        g_hud->handleInputs(inputs);
+      }
+      if (steps % 300 == 0)
+        g_rateNow = true;
+      const int month = g_sim.year() * 12 + g_sim.month();
+      if (month == lastMonth)
+        continue;
+      lastMonth = month;
+      // a month's end: look
+      world->centreOn(30, 30);
+      world->setView(gameViewRect(renderer), getUiTransform(renderer).scale);
+      world->draw(renderer);
+      SDL_RenderPresent(renderer);
+      const double mb = workingSet();
+      if (firstMb == 0)
+        firstMb = mb;
+      lastMb = mb;
+      int stillStaff = 0, stillAnimals = 0, oldGuests = 0, loose = 0;
+      std::map<int, Pos> nowStaff, nowAnimals;
+      for (const Staff::Member &m : ss.members()) {
+        nowStaff[m.id] = {m.x, m.y};
+        auto p = staffAt.find(m.id);
+        if (p != staffAt.end() && p->second.x == m.x && p->second.y == m.y)
+          stillStaff++;
+      }
+      float worstHunger = 0;
+      for (const Animals::Member &m : sa.members()) {
+        nowAnimals[m.id] = {m.x, m.y};
+        auto p = animalAt.find(m.id);
+        if (p != animalAt.end() && p->second.x == m.x && p->second.y == m.y)
+          stillAnimals++;
+        loose += m.escaped ? 1 : 0;
+        worstHunger = std::max(worstHunger, m.hunger);
+      }
+      for (const Guests::Guest &g : world->getGuests().guests()) {
+        auto f = guestFirst.emplace(g.id, month).first;
+        if (month - f->second >= 4)
+          oldGuests++;
+      }
+      char line[400];
+      std::snprintf(line, sizeof line,
+                    "y%d m%02d  %.0f MB  cash %.0f  rating %.0f  guests %zu  animals %zu (worst hunger %.0f, %d loose)  staff %zu  "
+                    "still: staff %d animals %d  guests over 4 months %d  [%.0f s]\n",
+                    g_sim.year(), g_sim.month() + 1, mb, g_sim.cash(), g_sim.rating(), world->getGuests().guests().size(),
+                    sa.members().size(), worstHunger, loose, ss.members().size(), stillStaff, stillAnimals, oldGuests,
+                    (SDL_GetPerformanceCounter() - t0) / static_cast<double>(SDL_GetPerformanceFrequency()));
+      log << line;
+      // (who: the starving, the ones that never moved, the guests that stayed)
+      {
+        int shown = 0;
+        for (const Animals::Member &m : sa.members()) {
+          auto p = animalAt.find(m.id);
+          const bool still = p != animalAt.end() && p->second.x == m.x && p->second.y == m.y;
+          if ((m.hunger >= 95 || still || m.health < 50) && shown++ < 8)
+            log << "    animal " << m.name << " (" << sa.types()[m.type].key << ") exhibit " << m.exhibit << " hunger " << std::lround(m.hunger)
+                << " health " << std::lround(m.health) << " anim " << m.anim << (still ? " STILL" : "") << (m.boxed ? " boxed" : "") << " at "
+                << std::lround(m.x) << "," << std::lround(m.y) << "\n";
+        }
+        for (const Staff::Member &m : ss.members()) {
+          auto p = staffAt.find(m.id);
+          if (p != staffAt.end() && p->second.x == m.x && p->second.y == m.y)
+            log << "    staff " << m.name << " (" << ss.types()[m.type].key << ") job " << static_cast<int>(m.job) << " anim " << m.anim << " STILL at "
+                << std::lround(m.x) << "," << std::lround(m.y) << "\n";
+        }
+        for (const Guests::Guest &g : world->getGuests().guests())
+          if (month - guestFirst[g.id] >= 4)
+            log << "    guest " << g.id << " state " << static_cast<int>(g.state) << " anim " << g.anim << " target " << g.target << " at "
+                << std::lround(g.x) << "," << std::lround(g.y) << " first seen month " << guestFirst[g.id] - startMonth << " leaving " << g.leaving << " path " << g.pathAt << "/" << g.path.size()
+                << " to " << (g.path.empty() ? -1 : std::lround(g.path.back().first)) << "," << (g.path.empty() ? -1 : std::lround(g.path.back().second))
+                << " speed " << g.speed << " playFor " << g.playFor << " happiness " << std::lround(g.happiness) << " hunger " << std::lround(g.hunger)
+                << " thirst " << std::lround(g.thirst) << " bathroom " << std::lround(g.bathroom) << " tired " << std::lround(g.tired) << "\n";
+      }
+      staffAt = nowStaff;
+      animalAt = nowAnimals;
+      log.flush();
+      if (month - startMonth >= 2 && stillStaff > 0 && stillStaff == static_cast<int>(ss.members().size()))
+        finding("every staff member stood still for a month at y" + std::to_string(g_sim.year()) + " m" +
+                std::to_string(g_sim.month() + 1));
+      if (oldGuests > 0)
+        finding(std::to_string(oldGuests) + " guests inside for over 4 months at y" + std::to_string(g_sim.year()) + " m" +
+                std::to_string(g_sim.month() + 1));
+      if (loose > 0)
+        finding(std::to_string(loose) + " animals loose at y" + std::to_string(g_sim.year()) + " m" +
+                std::to_string(g_sim.month() + 1));
+    }
+    if (lastMb > firstMb * 1.5 + 100)
+      finding("working set grew from " + std::to_string(static_cast<int>(firstMb)) + " to " +
+              std::to_string(static_cast<int>(lastMb)) + " MB");
+    log << "DONE " << years << " game years, " << steps << " steps, " << findings << " findings\n";
+    log.close();
+    if (timings)
+      std::fclose(timings);
+    return findings ? 1 : 0;
+  }
   // ZT_FREEFORM_TOUR=1: every freeform map in turn, started as the freeform
   // menu starts one, looked at, and a tiny zoo made on it with the player's
   // own tools - a chain-link exhibit (named), a path to it from the
@@ -5653,6 +5874,76 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             need(z && z->exhibit == exhibitId && !z->escaped, "after a minute the zebra is still in its exhibit");
           }
           info << ", after a minute " << world->getGuests().guests().size() << " guests";
+          // ours: ZT_TOUR_SAVE=<game months>: the tiny zoo played that many
+          // game months (the books and the date moving), saved as a shared
+          // .zoo and loaded back; the counts, the money, the date and the
+          // books must come back as they were, and it must play on another
+          // month. <out>/<map>.zoo is kept for ZT_TOUR_KEEP=<stem,stem>, else
+          // removed.
+          if (const char *roundMonths = std::getenv("ZT_TOUR_SAVE")) {
+            struct Snap {
+              size_t animals = 0, staff = 0, guests = 0, objects = 0, exhibits = 0, history = 0;
+              double cash = 0, rating = 0, monthTotal = 0;
+              int year = 0, month = 0, day = 0;
+            };
+            auto snap = [&] {
+              Snap s;
+              s.animals = g_world->getAnimals().members().size();
+              s.staff = g_world->getStaff().members().size();
+              s.guests = g_world->getGuests().guests().size();
+              s.objects = g_world->getObjects().objects().size();
+              s.exhibits = g_world->getFences().exhibits().size();
+              s.history = g_sim.history().size();
+              s.cash = g_sim.cash();
+              s.rating = g_sim.rating();
+              s.monthTotal = g_sim.history().empty() ? 0 : g_sim.history().back().total();
+              s.year = g_sim.year();
+              s.month = g_sim.month();
+              s.day = g_sim.dayOfMonth();
+              return s;
+            };
+            auto play = [&](int months) {
+              const int steps = months * 3600;
+              for (int k = 0; k < steps; k++) {
+                g_world->update(noKeys, 0.1f, 0.1f);
+                g_sim.update(0.1f);
+                worldInputs(renderer, rm, std::vector<Input>());
+                if (k % 100 == 0)
+                  settle();
+              }
+            };
+            play(std::max(1, std::atoi(roundMonths)));
+            const Snap before = snap();
+            const std::string zooFile = outDir + "/" + stem + ".zoo";
+            const bool saved = gameSave(zooFile);
+            const bool loaded = need(saved, "the zoo saves") && need(gameLoad(rm, zooFile), "the saved zoo loads back");
+            if (loaded) {
+              world = g_world;
+              settle();
+              const Snap after = snap();
+              need(before.animals == after.animals, "animals after the round trip: " + std::to_string(before.animals) + " -> " + std::to_string(after.animals));
+              need(before.staff == after.staff, "staff after the round trip: " + std::to_string(before.staff) + " -> " + std::to_string(after.staff));
+              need(before.guests == after.guests, "guests after the round trip: " + std::to_string(before.guests) + " -> " + std::to_string(after.guests));
+              need(before.objects == after.objects, "objects after the round trip: " + std::to_string(before.objects) + " -> " + std::to_string(after.objects));
+              need(before.exhibits == after.exhibits, "exhibits after the round trip: " + std::to_string(before.exhibits) + " -> " + std::to_string(after.exhibits));
+              need(before.history == after.history, "months on the books after the round trip: " + std::to_string(before.history) + " -> " + std::to_string(after.history));
+              need(std::fabs(before.cash - after.cash) < 0.01, "cash after the round trip: " + std::to_string(before.cash) + " -> " + std::to_string(after.cash));
+              need(std::fabs(before.monthTotal - after.monthTotal) < 0.01, "this month's books after the round trip: " + std::to_string(before.monthTotal) + " -> " + std::to_string(after.monthTotal));
+              need(before.year == after.year && before.month == after.month && before.day == after.day,
+                   "the date after the round trip: " + std::to_string(before.day) + "/" + std::to_string(before.month + 1) + "/" + std::to_string(before.year) +
+                       " -> " + std::to_string(after.day) + "/" + std::to_string(after.month + 1) + "/" + std::to_string(after.year));
+              info << ", saved and loaded back (" << after.animals << " animals, " << after.staff << " staff, " << after.guests << " guests, cash "
+                   << std::lround(after.cash) << ", rating " << std::lround(before.rating) << " -> " << std::lround(after.rating) << ")";
+              play(1);
+              info << ", played on a month (" << g_world->getGuests().guests().size() << " guests)";
+            }
+            bool keep = false;
+            if (const char *k = std::getenv("ZT_TOUR_KEEP"))
+              keep = (std::string(",") + k + ",").find("," + stem + ",") != std::string::npos;
+            std::error_code ec;
+            if (!keep)
+              std::filesystem::remove(zooFile, ec);
+          }
           show(bx + n / 2.0f, by + n / 2.0f);
         }
       }
@@ -5700,6 +5991,105 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
   // (src/ShowAllChecks.cpp)
   // ZT_FINANCE_CHECKS=1: funding paid only when affordable, purchases
   // refused without the money (src/FinanceChecks.cpp)
+  // ZT_CELEBRATION_CHECKS=1 (with ZT_FLAT_LAB=1): the themed celebrations
+  // (Features::celebrations; src/CelebrationChecks.cpp), its report in
+  // <out>/celebration-checks.txt. Its year: a saved zoo played a year with
+  // the switch off, then on, the books, rating, goals and guests compared
+  if (std::getenv("ZT_CELEBRATION_CHECKS")) {
+    extern int runCelebrationChecks(World &, UiGameScreen &, ZooSim &, ResourceManager *, const std::string &,
+                                    const std::function<std::string(bool)> &);
+    const std::string baseline = outDir + "/celebration-baseline.zoo";
+    {
+      Guests &seed = world->getGuests();
+      seed.clear();
+      seed.setEntrance(25, 26);
+      for (int k = 0; k < 6; k++)
+        seed.admit(k % 4);
+      world->objectsMutable().add("scenery/building/aqgftshp.ai", 14.0f, 58.0f, 0); // (a colour-replaced building)
+    }
+    const bool saved = gameSave(baseline);
+    auto year = [&](bool on) -> std::string {
+      if (!saved || !gameLoad(rm, baseline))
+        return "";
+      world = g_world;
+      Features::celebrations = on;
+      Celebrations::reset();
+      setGamePaused(false);
+      std::srand(7);
+      static bool noKeys[SDL_SCANCODE_COUNT] = {};
+      const float dt = 0.5f;
+      unsigned long long trace = 1469598103934665603ull; // (the zoo's state every minute, folded together)
+      int maxGuests = 0, maxBuildings = 0;
+      for (int step = 0; step < static_cast<int>(365 * ZooSim::kSecondsPerDay / dt); step++) {
+        g_world->objectsMutable().today = g_sim.today();
+        g_world->getFences().today = g_sim.today();
+        g_world->update(noKeys, dt, dt);
+        g_sim.update(dt);
+        g_goals.update(dt);
+        g_world->setDate(g_sim.dayOfMonth(), g_sim.month(), g_sim.year());
+        Celebrations::update(*g_world, g_sim.dayOfMonth(), g_sim.month(), g_sim.year(),
+                             [](const std::string &line) { g_hud->postMessage(line, 0); });
+        maxGuests = std::max(maxGuests, Celebrations::recolouredGuests());
+        maxBuildings = std::max(maxBuildings, Celebrations::recolouredBuildings());
+        if (step % 120 == 0) {
+          std::ostringstream now;
+          double happy = 0;
+          for (const Guests::Guest &g : g_world->getGuests().mutableGuests())
+            happy += g.happiness + g.hunger + g.thirst;
+          now << std::fixed << std::setprecision(3) << g_sim.cash() << ' ' << g_sim.rating() << ' ' << happy << ' '
+              << g_world->getGuests().mutableGuests().size();
+          trace = (trace ^ std::hash<std::string>{}(now.str())) * 1099511628211ull;
+        }
+      }
+      std::ostringstream digest;
+      digest << std::fixed << std::setprecision(2) << g_sim.cash() << " rating " << g_sim.rating() << " date "
+             << g_sim.dayOfMonth() << "/" << g_sim.month() << "/" << g_sim.year() << " guests "
+             << g_world->getGuests().mutableGuests().size() << " animals " << g_world->getAnimals().members().size()
+             << " books";
+      for (const ZooSim::Month &m : g_sim.history()) {
+        digest << " [" << m.month << "/" << m.year << " " << m.total() << " " << m.rating << " " << m.guests << "]";
+      }
+      digest << " goals";
+      for (const Goals::Goal &goal : g_goals.all())
+        digest << " " << goal.name << ":" << goal.state;
+      digest << " trace " << trace << " buildings";
+      for (const PlacedObjects::Object &o : g_world->getObjects().objects())
+        if (o.subClass == "building") {
+          digest << " [";
+          for (int c : o.colours)
+            digest << c << ",";
+          digest << "]";
+        }
+      // (after the '#': what the celebrations did, not compared)
+      digest << "#flyers sent " << g_world->getAmbient().sent() << " most guests recoloured " << maxGuests
+             << " most buildings recoloured " << maxBuildings;
+      return digest.str();
+    };
+    setGamePaused(true);
+    // (a picture of the zoo's birthday fireworks, by day and by night: look only)
+    {
+      const bool wasCel = Features::celebrations, wasLight = Features::dayNightLighting;
+      Features::celebrations = true;
+      Celebrations::reset();
+      Celebrations::update(*world, 1, 0, 2, nullptr);
+      Celebrations::tickFireworks(0.9f);
+      capture("celebration-fireworks-day");
+      Features::dayNightLighting = true;
+      const double wasPreview = world->getLighting().previewHour;
+      world->getLighting().previewHour = 21.0;
+      Celebrations::tickFireworks(0.4f);
+      capture("celebration-fireworks-night");
+      world->getLighting().previewHour = wasPreview;
+      Features::dayNightLighting = wasLight;
+      Features::celebrations = wasCel;
+      Celebrations::reset();
+      world->getAmbient().clear();
+    }
+    const int result = runCelebrationChecks(*world, *g_hud, g_sim, rm, outDir, year);
+    Features::celebrations = false;
+    if (timings) std::fclose(timings);
+    return result;
+  }
   // ZT_ACTIVITY_CHECKS=1: the Lab's "activitycheck" fixture (tank clipping,
   // marine activity), its report in <out>/activity-checks.txt
   if (std::getenv("ZT_ACTIVITY_CHECKS")) {
@@ -6153,6 +6543,32 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     SDL_Log("[AccessZoo] %s", r.c_str());
     if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
   }
+  // ours: ZT_LANDJOIN_ZOO=<file.zoo>: a pool between two lands with a walrus
+  // in it, for measuring which land the original gives it (#316)
+  if (const char *landJoinZoo = std::getenv("ZT_LANDJOIN_ZOO")) {
+    extern std::string buildLandJoinZoo(World &, ZooSim &, UiGameScreen &, const std::string &, const std::string &);
+    const std::string r = buildLandJoinZoo(*world, g_sim, *g_hud, g_currentMapPath, landJoinZoo);
+    SDL_Log("[LandJoinZoo] %s", r.c_str());
+    if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
+  }
+  if (const char *amphibZoo = std::getenv("ZT_AMPHIB_ZOO")) {
+    extern std::string buildAmphibZoo(World &, ZooSim &, UiGameScreen &, const std::string &, const std::string &);
+    const std::string r = buildAmphibZoo(*world, g_sim, *g_hud, g_currentMapPath, amphibZoo);
+    SDL_Log("[AmphibZoo] %s", r.c_str());
+    if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
+  }
+  if (const char *escapeZoo = std::getenv("ZT_ESCAPE_ZOO")) {
+    extern std::string buildEscapeZoo(World &, ZooSim &, UiGameScreen &, const std::string &, const std::string &);
+    const std::string r = buildEscapeZoo(*world, g_sim, *g_hud, g_currentMapPath, escapeZoo);
+    SDL_Log("[EscapeZoo] %s", r.c_str());
+    if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
+  }
+  if (const char *cliffZoo = std::getenv("ZT_CLIFF_ZOO")) {
+    extern std::string buildCliffZoo(World &, ZooSim &, UiGameScreen &, const std::string &, const std::string &);
+    const std::string r = buildCliffZoo(*world, g_sim, *g_hud, g_currentMapPath, cliffZoo);
+    SDL_Log("[CliffZoo] %s", r.c_str());
+    if(timings)std::fclose(timings);return r.rfind("ok", 0) == 0 ? 0 : 1;
+  }
   if (std::getenv("ZT_EVERYTHING_ZOO")) {
     int result=runEverythingZoo(*world,*g_hud,g_sim,rm,outDir,g_currentMapPath);
     if(timings)std::fclose(timings);return result;
@@ -6292,6 +6708,10 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     if (!ok)
       return 1;
     world->getAnimals().takeMessages();
+    // ours: ZT_VIEW_RESAVE=<file>: the loaded zoo saved again (the original's
+    // load of a zoo this engine wrote from one of its own)
+    if (const char *again = std::getenv("ZT_VIEW_RESAVE"))
+      note((std::string("resaved ") + again + (gameSave(again) ? " ok" : " FAILED")).c_str());
     g_hud->showPanel(0, "");
     // (its goals: each one's state as saved, the cash, and then the goals
     // checked once - what a player's zoo would do next)

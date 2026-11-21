@@ -503,7 +503,11 @@ void Staff::noticeWork(const WorldMap &map, const Fences &fences) {
 }
 
 // ours (checks): the list emptied and the zoo's work posted again, as a
-// load does (0x5b11a2, then worldAfterLoad's reposts)
+// load does (0x5b11a2, then worldAfterLoad's reposts; workListDropOffGround
+// 0x5941f2 then drops what lies off the zoo's land or in tank water - ours
+// posts none of that. workSweep 0x5942af also empties each maintenance
+// worker's two lists every 25 s, which cClearInvalidListInterval's 10 s
+// has done already)
 void Staff::rebuildWorkList(const WorldMap &map, const Fences &fences) {
   for (Member &m : this->list)
     m.workEntry = -1;
@@ -657,8 +661,8 @@ void Staff::resumeWork(Member &m) {
   }
   const Type &t = this->typeList[m.type];
   const bool flying = m.heliStage != HeliStage::Parked && m.heliStage != HeliStage::SpinUp;
-  if (t.kind == Kind::Helicopter && flying && !t.rotorSound.empty() && m.rotorChannel < 0)
-    m.rotorChannel = Sound::get().loop(t.rotorSound, t.rotorAtten);
+  if (t.kind == Kind::Helicopter && flying && !t.rotorSound.empty())
+    startRotor(m, t);
 }
 
 // A tour guide's followers after a load (zoo.exe ZTTourGuide::load 0x59b3a1
@@ -848,9 +852,14 @@ bool Staff::canStep(int x, int y, int nx, int ny, const WorldMap &map, const Fen
                     int access) const {
   Fences::Edge e = nx != x ? Fences::Edge{false, std::max(x, nx), y}
                            : Fences::Edge{true, x, std::max(y, ny)};
-  // Fences stop them; an exhibit's gate lets in its keeper on a visit
+  // Fences stop them; an exhibit's gate lets in its keeper on a visit. Not a
+  // fence that holds nothing in (zoo.exe 0x440524, ZTKeeper / ZTHelicopter class
+  // slot 0x158: a piece whose type has no [HabitatFence] - ZTFenceType +0x191,
+  // set by 0x4bbd89 - the white picket, hedges, ropes, the low theme walls - is
+  // crossed, the cost bit 8 of 0x41465a; a habitat fence is crossed only broken
+  // or at a gate). ours: a broken piece is gone, a gate keeps its own rule
   if (const Fences::Piece *p = fences.at(e))
-    if (!(p->gate && access >= 0 && fences.exhibitOf(e) == access))
+    if (!(p->gate && access >= 0 && fences.exhibitOf(e) == access) && (p->tank >= 0 || this->viewing.habitatFence(fences, p->type)))
       return false;
   return cornersMeet(x, y, nx, ny, map);
 }
@@ -947,13 +956,22 @@ Fences::Fit Staff::canPlaceType(int type, float x, float y, const WorldMap &map,
         return Fences::Fit::InTheWay;
     return Fences::Fit::Ok;
   }
+  // A zookeeper may be put down inside a land exhibit (read live 2026-11-21 in the original: the
+  // Hire Staff cursor green over a paddock's grass, the keeper placed on a paddock tile, its habitat's
+  // +0x2c 0 - the tile test 0x4146d4 asks for zoo land and no water, not for ground outside exhibits)
+  if (type >= 0 && type < static_cast<int>(this->typeList.size()) && this->typeList[type].kind == Kind::Keeper) {
+    const int ex = fences.exhibitAt(static_cast<int>(std::floor(x)), static_cast<int>(std::floor(y)));
+    if (const Fences::Exhibit *e = ex >= 0 ? fences.exhibit(ex) : nullptr)
+      if (!e->tank)
+        return this->canPlaceMember(x, y, map, fences, ex);
+  }
   return this->canPlaceMember(x, y, map, fences);
 }
 
 Fences::Fit Staff::canPlaceMember(float x, float y, const WorldMap &map,
-                                  const Fences &fences) const {
+                                  const Fences &fences, int access) const {
   int tx = static_cast<int>(std::floor(x)), ty = static_cast<int>(std::floor(y));
-  if (!walkable(tx, ty, map, fences))
+  if (!walkable(tx, ty, map, fences, access))
     return Fences::Fit::Outside;
   // Not on top of another
   for (const Member &m : this->list)
@@ -984,7 +1002,14 @@ bool Staff::findPath(Member &m, int gx, int gy, const WorldMap &map, const Fence
   };
   // (staffpaths off: every tile alike, as the original)
   auto onPathTile = [&](int x, int y) { return !Features::staffPaths || map.isPath(x, y); };
-  auto cost = [&](int x, int y) { return onPathTile(x, y) ? 1.0f : kOffPath; };
+  // (staffpaths off, the original's tile cost - ZTKeeper 0x423b28, ZTMaintenanceWorker 0x439c80, class
+  // slot 0x164: a path tile 1, other ground 2 (1 for a temporary router, +0x2a8); on, the addition's
+  // kOffPath times a path tile)
+  auto cost = [&](int x, int y) {
+    if (Features::staffPaths)
+      return onPathTile(x, y) ? 1.0f : kOffPath;
+    return map.isPath(x, y) ? 1.0f : 2.0f;
+  };
   int sx = static_cast<int>(std::floor(m.x)), sy = static_cast<int>(std::floor(m.y));
   std::vector<std::pair<int, int>> tiles;
   if (!Pathfinder::find(map.getWidth(), map.getHeight(), sx, sy, gx, gy, pass, step, tiles, 40000,
@@ -1240,6 +1265,9 @@ void Staff::addToIndex(WorldIndex &index) const {
 // passable for it (class slot 0x168: ZTStaff 0x423ac2 - nothing standing on
 // the tile is zoo ground (0x4146d4 -> 0x40fb8d: +0x83 & 0x40), no water; a
 // tour guide's 0x61b639, on a path, keeps to paths - and so do the others,
+// (each class's own tile test, class slot 0x168: the keeper's 0x423bc6 with 0x4404d9,
+// the tour guide's edge test 0x58cf4e; tile cost, class slot 0x194: the keeper's 0x423b28, the
+// maintenance worker's 0x439c80, the tour guide's 0x58cfd6 - not compared),
 // measured, below) picked at random and routed to; no route, its four
 // neighbours from a random one on, not wrapping round (tileNeighbours4
 // 0x4171a1), the first passable within the step-cost limit (0x41456c); none,
@@ -2206,7 +2234,7 @@ bool Staff::keeperWork(Member &m, const WorldMap &map, Fences &fences, int finis
   return false;
 }
 
-// zoo.exe 0x4e85e8 (staffPathTrouble, from Task65_KeeperGoToHabitat
+// zoo.exe 0x4e85e8 (staffPathTrouble, its text built at 0x4e877d, from Task65_KeeperGoToHabitat
 // 0x423f57 when the keeper has no way to the habitat's gate): the gate
 // tested (0x4e8537) - fenced on both sides (1), something on either of its
 // tiles (3) or past the staff's route distance (4) - "The entrance to %s is
@@ -2651,7 +2679,8 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
     // a keeper at its duties there (0x4a89cb: +0x132) and more than one
     // (+0xf0 over 1) - "Aborted going to habitat", the job ended (slot 0x174)
     // ours: looked at by the gate, where the original's keeper is just
-    // inside it
+    // inside it. (The keeper's own check, slot 0x4e76bb: in a habitat with a
+    // keeper at work and +0xf0 under 2 it takes task 0x6e - not compared)
     int inDuties = 0, headed = 0;
     keepersAt(m.visit, m.id, fences, inDuties, headed);
     if (inDuties > 1) {
@@ -2674,7 +2703,8 @@ void Staff::visitStep(Member &m, const WorldMap &map, Fences &fences) {
       done();
     return;
   case 1: // just inside: food, if it's low - to a free tile within 3 of
-    // it, at random (zoo.exe 0x4e7a7d: nothing on it, not the gate's own
+    // it, at random (zoo.exe 0x4e7a7d, its search 0x48ac91 over the free tiles
+    // of 0x4e7dde, the random one 0x4e7364: nothing on it, not the gate's own
     // tile, not one on its list of tiles it found no way to, +0x27c), else
     // the nearest free one. Job1_GoDropFood (0x4993b9) takes that one spot:
     // no way to it, and the tile goes on the list ("Couldn't reach place to
@@ -3003,7 +3033,7 @@ bool Staff::tourWork(Member &m, const WorldMap &map, Fences &fences) {
   // some of it (0x43aac6); none, no trip. Then, 50/50 (0x58b0a3), one of them
   // at random (0x428741) or the one whose viewing tile, one picked at random
   // in each, is nearest the guide (0x58b46e: squared tiles, the first on a
-  // tie)
+  // tie; the exhibit it talks about at a tile, 0x61b68a, is not compared)
   this->viewing.refresh(map, fences);
   this->viewing.countGuests(*this->guests);
   const auto &areas = this->viewing.areas();
@@ -3058,7 +3088,6 @@ bool Staff::tourWork(Member &m, const WorldMap &map, Fences &fences) {
   m.dutyId = kGoingToExhibit;
   const Fences::Exhibit *ex = fences.exhibit(pick);
   m.dutyArg = ex ? ex->name : "";
-  m.crowdClock = static_cast<float>(std::uniform_int_distribution<int>(0, this->typeList[m.type].crowdCheck - 1)(this->rng));
   this->gatherFollowers(m);
   return true;
 }
@@ -3337,6 +3366,10 @@ int Staff::hire(int type, float x, float y, const WorldMap &map, const Fences &f
   m.type = type;
   if (t.kind == Kind::Helicopter)
     m.baseFacing = facing & 7;
+  // A tour guide's crowd-check count, drawn once at setup (zoo.exe 0x59b2cf, ZTTourGuide's
+  // setup: +0x29c = rand % cCrowdCheck) and run down every tick from then on (0x58ceb9)
+  if (t.kind == Kind::Guide)
+    m.crowdClock = static_cast<float>(std::uniform_int_distribution<int>(0, t.crowdCheck - 1)(this->rng));
   m.female = t.sexes[1] && (!t.sexes[0] || std::uniform_int_distribution<int>(0, 1)(this->rng) == 1);
   if (!t.hair.empty())
     m.hair = std::uniform_int_distribution<int>(0, static_cast<int>(t.hair.size()) - 1)(this->rng);
@@ -3370,11 +3403,58 @@ int Staff::hire(int type, float x, float y, const WorldMap &map, const Fences &f
   return m.id;
 }
 
+// A staff member just put down (zoo.exe placeObject 0x4d9088 -> class slot 0xc8: ZTStaff's 0x4e766a empties
+// its lists of tiles with no way; a keeper's 0x4e76bb, with the habitat it stands in an exhibit - +0x2c clear -
+// and no keeper at its duties there (+0x132) or fewer than two (+0xf0), takes Task6e_DutiesInHabitat at
+// priority 0: the keeper begins its duties there). ours: the visit begun just inside the exhibit, by its gate
+void Staff::placed(int id, const WorldMap &map, Fences &fences) {
+  Member *m = member(id);
+  if (!m || m->type < 0 || m->type >= static_cast<int>(this->typeList.size()))
+    return;
+  m->invalid.clear();
+  m->invalidClear = 0;
+  if (this->typeList[m->type].kind != Kind::Keeper)
+    return;
+  const int ex = fences.exhibitAt(static_cast<int>(std::floor(m->x)), static_cast<int>(std::floor(m->y)));
+  const Fences::Exhibit *e = ex >= 0 ? fences.exhibit(ex) : nullptr;
+  if (!e || e->tank || mayServe(*m, *e) != 0)
+    return;
+  int inDuties = 0, headed = 0;
+  keepersAt(ex, m->id, fences, inDuties, headed);
+  if (inDuties > 0)
+    return;
+  for (const auto &kv : fences.pieces()) {
+    if (!kv.second.gate || fences.exhibitOf(kv.first) != ex)
+      continue;
+    const Fences::Edge &g = kv.first;
+    const int ax = g.alongX ? g.x : g.x - 1, ay = g.alongX ? g.y - 1 : g.y;
+    const bool aIn = fences.exhibitAt(ax, ay) == ex;
+    const int ox = aIn ? g.x : ax, oy = aIn ? g.y : ay, ix = aIn ? ax : g.x, iy = aIn ? ay : g.y;
+    m->outX = ox + 0.5f;
+    m->outY = oy + 0.5f;
+    m->inX = ix + 0.5f;
+    m->inY = iy + 0.5f;
+    m->job = Job::Visit;
+    m->visit = ex;
+    m->access = ex;
+    m->phase = 1;
+    m->path.clear();
+    m->pathAt = 0;
+    m->unreachable.clear();
+    m->dutyId = kGoingTo;
+    m->dutyArg = e->name;
+    ZT_STEP("0x4e76bb", "Put down inside an exhibit: its duties there begin", {"exhibit", e->name});
+    if (this->animals)
+      this->animals->keeperArrives(ex);
+    return;
+  }
+}
+
 // zoo.exe keeperRemoved 0x458759 (ZTKeeper slot 0x78, not a shutdown):
 // the show the specialist works (+0x254, the show tank's habitat id,
 // 0x41ebfd) loses it (0x5a9c96) and stops (showStopEvent 0x612d20); then
 // the habitat's told (staffNotifyHabitat 0x4a879f) and the base removal
-// 0x4586f6
+// 0x4586f6 (its body, 0x4586b9)
 void Staff::fire(int id) {
   if (auto *m = member(id)) { releaseCatch(*m); Sound::get().stop(m->rotorChannel); }
   // A maintenance worker taken away lets its work list entry go, left on
@@ -3417,6 +3497,11 @@ void Staff::moveTo(int id, float x, float y) {
     m->water = 0;
     m->z = 0;
     m->climbing = m->sweeping = false;
+    // (put down: its lists of tiles it found no way to emptied - zoo.exe class slot 0xc8, ZTStaff's
+    // 0x4e766a, run by ZTKeeper's 0x4e76bb as it is placed; that one also starts Task6e_DutiesInHabitat
+    // for a keeper put down inside an exhibit - ours doesn't place staff inside exhibits: #324)
+    m->invalid.clear();
+    m->invalidClear = 0;
   }
 }
 
@@ -3476,7 +3561,8 @@ int Staff::findThreat(const Member &m, const Fences &fences) const {
 // (atTarget 0x431834 does nothing for staff) the task's over; still having
 // seen it, the chooser runs again.
 // The tour guide's chooser (0x58ce7e) does the same, but first lets its
-// whole group go (0x58b362 at 100: every guest following it, +0x2e4, leaves
+// whole group go (0x58b362 at 100, from a guide set off 0x58952b - and its goal
+// cleared with them, 0x61b9a8: every guest following it, +0x2e4, leaves
 // the tour) and ends its trip (+0x2a0).
 // The status line on task 0x75: setting a task zeroes the job (taskStateSet
 // 0x41322b -> 0x413304: state +0x18, the unit's +0x174), and with job 0 on
@@ -3544,7 +3630,10 @@ bool Staff::flee(Member &m, const WorldMap &map, Fences &fences) {
   return false;
 }
 
-// ours: lets go of the animal it was after
+// ours: lets go of the animal it was after (the helicopter's own: let go of what
+// it holds 0x4a0894, 0x482cf1 on a stop, the animal's taken-by-it flag cleared
+// 0x50d3e0; its setup 0x4e5656, the target building 0x482d12, the rate cap
+// 0x5067be, the landing spot 0x613072, the move 0x61a117 - skimmed, not compared)
 void Staff::releaseCatch(Member &m) {
   if (auto *a = animals ? animals->member(m.jobAnimal) : nullptr)
     if (a->claimedBy == m.id) a->claimedBy = -1;
@@ -3575,6 +3664,19 @@ void Staff::releaseCatch(Member &m) {
 // Its moves are a walker's (moveAccumulate 0x435c42: max(1, rate x 67 / 1000)
 // steps an update, 64 to a tile, 16 to a height level) at its sets' fFly
 // rates. The base never moves with the aircraft.
+// The rotor loop on (zoo.exe heliSetFlying 0x506990(1) -> heliStartLoopSound 0x48d645): cLoopSoundName looped
+// from 3000 (30 dB) of extra attenuation, the count at 4000 - unless the loop is playing already (+0x2a0),
+// when only the direction turns back to flying
+void Staff::startRotor(Member &m, const Type &t) {
+  if (m.rotorChannel < 0) {
+    m.rotorChannel = Sound::get().loop(t.rotorSound, t.rotorAtten + 3000);
+    m.rotorSpin = 4000;
+  }
+  m.rotorFlying = true;
+  m.rotorRamp = m.rotorChannel >= 0;
+}
+
+// (the helicopter's update 0x5067d5 runs the rotor spin 0x5067f0 - in update; its set chooser 0x506894, its set-down at the base's slot 0x5066ff)
 void Staff::helicopterStep(Member &m, float seconds, const WorldMap &map, const Fences &fences) {
   const Type &t = typeList[m.type];
   if (m.heliStage == HeliStage::Parked) {
@@ -3701,7 +3803,7 @@ void Staff::helicopterStep(Member &m, float seconds, const WorldMap &map, const 
     // (heliSetFlying 0x506990(1) -> zoo.exe 0x48d645: cLoopSoundName looped,
     // unless it's playing already, +0x2a0)
     if (m.animTime >= animSeconds(m, "warmup")) {
-      if (!t.rotorSound.empty() && m.rotorChannel < 0) m.rotorChannel = Sound::get().loop(t.rotorSound, t.rotorAtten);
+      if (!t.rotorSound.empty()) startRotor(m, t);
       stage(HeliStage::Ascend, "level", 10318);
     }
     break;
@@ -3757,7 +3859,7 @@ void Staff::helicopterStep(Member &m, float seconds, const WorldMap &map, const 
     break;
   case HeliStage::SpinDown:
     if (m.animTime >= animSeconds(m, "warmup")) {
-      Sound::get().stop(m.rotorChannel); m.rotorChannel = -1;
+      m.rotorFlying = false; m.rotorRamp = true; // (the loop fades out over 4 seconds, then stops: heliSetFlying 0x506990(0))
       stage(HeliStage::Parked, "idle", kWaitingAtBase);
       m.dutyArg.clear();
       SDL_Log("[DRT] %s landed at its unchanged base", m.name.c_str());
@@ -3794,6 +3896,32 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
   for (Member &m : this->list) {
     ZT_WHO("staff", m.id);
     const Type &t = this->typeList[m.type];
+    // The rotor loop's fade (ZTHelicopter's update 0x5067d5 -> 0x5067f0): its count down while it
+    // flies, up when it doesn't, held to 0..4000 ms; the loop's extra attenuation the count x 0.00025
+    // x 3000 hundredths of a decibel (read live 2026-11-21: 3000 at 4000, +0x14 1200 the type's);
+    // at 0 flying the fade is done; at 4000 not flying the loop stops
+    if (t.kind == Kind::Helicopter && m.rotorChannel >= 0 && m.rotorRamp) {
+      m.rotorSpin = std::clamp(m.rotorSpin + (m.rotorFlying ? -1.0f : 1.0f) * seconds * 1000.0f, 0.0f, 4000.0f);
+      Sound::get().level(m.rotorChannel, t.rotorAtten + static_cast<int>(m.rotorSpin * 0.00025f * 3000.0f));
+      if (m.rotorFlying && m.rotorSpin <= 0.0f)
+        m.rotorRamp = false;
+      else if (!m.rotorFlying && m.rotorSpin >= 4000.0f) {
+        Sound::get().stop(m.rotorChannel);
+        m.rotorChannel = -1;
+        m.rotorRamp = false;
+      }
+    }
+    // A tour guide's crowd-check count (ZTTourGuide::tick 0x58ceb9: +0x29c down one a
+    // tick whatever it is doing, at 0 reset to cCrowdCheck - 1 - a look for followers
+    // while it leads or speaks)
+    bool crowdLook = false;
+    if (t.kind == Kind::Guide) {
+      m.crowdClock -= seconds;
+      if (m.crowdClock <= 0) {
+        m.crowdClock += static_cast<float>(t.crowdCheck);
+        crowdLook = true;
+      }
+    }
     // Exhibits that are gone (opened up, bulldozed) come off its list. A
     // keeper's (zookeeper, scientist, marine specialist - the ZTKeeper class)
     // also come off once they're down to under 2 tiles: ZTKeeper::tick
@@ -4001,11 +4129,8 @@ void Staff::update(float seconds, const WorldMap &map, Fences &fences) {
     // A tour guide: a look for followers every cCrowdCheck ticks (on the way
     // and while talking); the talk (speak, looped - see where it starts)
     if (m.job == Job::Tour) {
-      m.crowdClock -= seconds;
-      if (m.crowdClock <= 0 && (m.pathAt < m.path.size() || m.speaking)) {
-        m.crowdClock += static_cast<float>(t.crowdCheck);
+      if (crowdLook && (m.pathAt < m.path.size() || m.speaking))
         this->gatherFollowers(m);
-      }
       if (m.speaking) {
         m.speakLeft -= seconds;
         const char *talk = "speak";

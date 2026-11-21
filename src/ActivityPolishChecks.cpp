@@ -20,6 +20,7 @@
 #include "SpriteDatabase.hpp"
 #include "Sound.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <set>
@@ -1114,6 +1115,37 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     // cCrowdHappinessChange, and the way away by the original's signs
     // (0x421d9c: +0x36c up, +0x370 down - 7); its next walk goes that way or
     // next to it (0x43e363 -> 0x42f6a9, 0x43e511) and forgets it
+    {
+      // (cClimbsCliffs 1 steps over a drop of 1 on land, the others don't - zoo.exe 0x414a26; a drop of 2 stops everyone)
+      {
+        const int x0=4,y0=4;
+        MapTile *ta=map.getTileMutable(x0,y0),*tb=map.getTileMutable(x0+1,y0);
+        if(ta&&tb) {
+          const MapTile sa=*ta,sb=*tb;
+          const auto level=[&](MapTile *t,int h){t->height=h;for(int c=0;c<4;++c)t->cornerHeight[c]=h;t->terrainType=0;};
+          level(ta,0);level(tb,1);
+          const bool one=!a.canStep(x0,y0,x0+1,y0,map,f,false)&&a.canStep(x0,y0,x0+1,y0,map,f,true);
+          level(tb,2);
+          const bool two=!a.canStep(x0,y0,x0+1,y0,map,f,false)&&!a.canStep(x0,y0,x0+1,y0,map,f,true);
+          level(tb,1);tb->terrainType=9;
+          const bool wet=!a.canStep(x0,y0,x0+1,y0,map,f,true);
+          *ta=sa;*tb=sb;
+          check("a step up of 1 on land: only a cliff climber goes over it; of 2, none; onto water, none (0x414a26) ["+std::to_string(one)+std::to_string(two)+std::to_string(wet)+"]",one&&two&&wet);
+        }
+      }
+      // (a baby growing up stops what it was doing - zoo.exe animalGrowUp 0x438663: slot 0x198 stop, +0x3a8 cleared)
+      const int zb=a.typeOfFile("animals/zebra.ai");
+      if(zb>=0) {
+        a.clear();
+        const int gid=a.adopt(zb,false,30.5f,32.5f,map,f,true);
+        if(Animals::Member *g=a.member(gid)) {
+          g->baby=true;g->sleeping=true;g->stepping=true;g->pathAt=1;
+          a.growUp(*g);
+          check("a baby growing up is grown, awake and stopped (animalGrowUp 0x438663)",
+                !g->baby && !g->sleeping && !g->stepping && g->stack.empty());
+        }
+      }
+    }
     const int zebra=a.typeOfFile("animals/zebra.ai");
     check("zebra type available for the guest crowd",zebra>=0);
     if(zebra>=0) {
@@ -1826,6 +1858,21 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     }
   }
   {
+    // A tank with an animal standing on its tiles can't be drained (zoo.exe
+    // tankDrainCheck 0x6064ed -> 0x60656e over tankContents 0x4599a0)
+    const int zebra=a.typeOfFile("animals/zebra.ai");
+    if(zebra>=0&&f.drainBlocker) {
+      a.clear();
+      const int id=a.adopt(zebra,false,30.5f,32.5f,map,f,true);
+      Animals::Member *z=a.member(id);
+      const int tank=z?z->exhibit:-1;
+      const bool with=z&&f.drainBlocker(tank);
+      a.clear();
+      const bool without=tank>=0&&!f.drainBlocker(tank);
+      check("a tank with an animal on its tiles is held from draining, one without isn't (0x60656e)",with&&without);
+    } else check("drain blocker fixture",false);
+  }
+  {
     // Dung (zoo.exe 0x438a79, 0x4378df, 0x4a8f89): the meter is looked at
     // before this check's cDirtyIncrement goes on, kept to cMaxDirty; full
     // on land, a pile and back to 0 (then the increment); on water nothing,
@@ -1883,6 +1930,24 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
       } else check("zebra on land for the dung fixture",false);
       a.clear();
     }
+  }
+  {
+    // The crowd voices' shared timer (zoo.exe crowdVoicesTick 0x43f513; #315):
+    // one try a second (1 in 100) for each call a tick, so an exhibit viewing
+    // area with guests (viewingAreaCrowdSound 0x4358f2) doubles the tries
+    const bool keepSounds=g.sounds;g.sounds=true;
+    auto plays=[&](int calls) {
+      int n=0;
+      for(int tick=0;tick<60000;++tick)
+        for(int c=0;c<calls;++c)
+          g.crowdVoice(0.067f,100,[&](float &,float &){++n;return false;});
+      return n;
+    };
+    const int one=plays(1),two=plays(2);
+    g.sounds=keepSounds;
+    out<<"CROWD VOICES one call "<<one<<" two calls "<<two<<"\n";
+    check("crowd voices: every call adds to one shared timer, a try each second of it (1 in 100): two calls a tick give about twice the voices (0x43f513)",
+          one>20&&two>one*3/2&&two<one*3);
   }
   {
     // The flyers (zoo.exe 0x435adf, 0x4fc160, 0x4f7ebe; #202): only the
@@ -3010,6 +3075,186 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
     }
     while(objects.objects().size()>n0)objects.remove(static_cast<int>(objects.objects().size())-1);
   }
+  // A guest tests a live electric fence only on the half of its tile it
+  // stands in (r17; zoo.exe guestTestFence 0x425af4 -> 0x425e30, 0x42ee42:
+  // the sides 0, 2, 4, 6 each passed over when the guest is in the other
+  // half, by 32 of the tile's 64 units)
+  {
+    g.clear();g.setEntrance(25,26);g.admit(0);
+    int man=-1;for(size_t i=0;i<g.typeList.size();++i)if(g.typeList[i].key=="man"&&g.typeList[i].anims.count("fencezap"))man=static_cast<int>(i);
+    const int electric=f.typeIndex("dzchn");
+    if(!g.list.empty()&&man>=0&&electric>=0) {
+      auto &guest=g.list.front();guest.type=man;guest.hidden=false;guest.state=Guests::State::Walking;guest.target=-1;
+      const int was=g.typeList[man].testFenceChance;g.typeList[man].testFenceChance=100;
+      const Fences::Edge north{true,40,30},south{true,40,31};
+      f.place(north,electric,0,map);
+      guest.x=40.8f;guest.y=30.8f;const bool southHalfSeesNorth=g.testFence(guest);
+      guest.state=Guests::State::Walking;guest.x=40.2f;guest.y=30.2f;const bool northHalfSeesNorth=g.testFence(guest);
+      f.remove(north,map);
+      f.place(south,electric,0,map);
+      guest.state=Guests::State::Walking;guest.x=40.2f;guest.y=30.2f;const bool northHalfSeesSouth=g.testFence(guest);
+      guest.state=Guests::State::Walking;guest.x=40.8f;guest.y=30.8f;const bool southHalfSeesSouth=g.testFence(guest);
+      f.remove(south,map);
+      g.typeList[man].testFenceChance=was;
+      out<<"FENCEHALF south half N "<<southHalfSeesNorth<<", north half N "<<northHalfSeesNorth<<", north half S "<<northHalfSeesSouth
+         <<", south half S "<<southHalfSeesSouth<<"\n";
+      check("a guest tests the electric fence on its own half of the tile only (0x425e30, 0x42ee42)",
+            !southHalfSeesNorth&&northHalfSeesNorth&&!northHalfSeesSouth&&southHalfSeesSouth);
+    }
+    g.clear();
+  }
+  // A staff member crosses a fence that holds nothing in (r17; zoo.exe 0x440524, ZTKeeper
+  // class slot 0x158: a type with no [HabitatFence], ZTFenceType +0x191 - the white picket),
+  // but not a habitat fence (chain-link); a guest crosses neither (0x43a85a)
+  {
+    st.clear();g.clear();
+    const int picket=f.typeIndex("wpicket"),chain=f.typeIndex("chainlnk");
+    if(picket>=0&&chain>=0) {
+      const Fences::Edge pe{false,50,40},ce{false,52,40};
+      f.place(pe,picket,0,map);f.place(ce,chain,0,map);
+      const bool overPicket=st.canStep(49,40,50,40,map,f,-1),overChain=st.canStep(51,40,52,40,map,f,-1);
+      const bool openStep=st.canStep(46,40,47,40,map,f,-1);
+      f.remove(pe,map);f.remove(ce,map);
+      out<<"STAFFEDGE picket "<<overPicket<<", chain-link "<<overChain<<", open "<<openStep<<"\n";
+      check("staff cross a picket fence but not a chain-link one (0x440524: +0x191, no [HabitatFence])",overPicket&&!overChain&&openStep);
+    }
+    st.clear();
+  }
+  // With staff paths off a keeper's route costs as the original's (r17; zoo.exe ZTKeeper's 0x423b28, class slot
+  // 0x164: a path tile 1, other ground 2): round a bend of path that is 14 tiles against 8 over the grass
+  // (16), it keeps to the path
+  {
+    st.clear();
+    const int keeper=st.typeOfFile("staff/keeper.ai");
+    if(keeper>=0) {
+      std::vector<std::pair<int,int>> laid;
+      for(int x=36;x<=44;++x)if(!map.isPath(x,30)){map.setPath(x,30,"path");laid.push_back({x,30});}
+      for(int y=31;y<=36;++y)if(!map.isPath(44,y)){map.setPath(44,y,"path");laid.push_back({44,y});}
+      world.reindex();
+      const int k=st.hire(keeper,36.5f,30.5f,map,f);
+      const bool was=Features::staffPaths;Features::staffPaths=false;
+      bool found=false,allPath=false;size_t tiles=0;
+      if(Staff::Member *m=st.member(k)) {
+        found=st.findPath(*m,44,36,map,f,44.5f,36.5f);
+        allPath=found;tiles=m->routeTiles.size();
+        for(const auto &t:m->routeTiles)allPath=allPath&&map.isPath(t.first,t.second);
+      }
+      Features::staffPaths=was;
+      out<<"STAFFCOST found "<<found<<", tiles "<<tiles<<", all on the path "<<allPath<<"\n";
+      check("with staff paths off a keeper still takes the path round a bend, costing 1 against 2 (0x423b28)",found&&allPath&&tiles>=14);
+      for(auto [x,y]:laid)map.setPath(x,y,"");
+      world.reindex();
+    }
+    st.clear();
+  }
+  // The helicopter's rotor loop fades with a count (r17; zoo.exe 0x5067f0, read live 2026-11-21: +0x2a8 runs 0 to
+  // 4000 ms, the loop's extra attenuation +0x18 is it x 0.75 - 3000 at 4000): down while it flies, up when it
+  // doesn't, the loop stopped at 4000
+  {
+    st.clear();
+    const int heliType=st.typeOfFile("staff/helicopt.ai");
+    int hk=-1;
+    for(float hy:{24.0f,20.0f,16.0f,12.0f,40.0f,44.0f})for(float hx:{30.5f,20.5f,40.5f,14.5f,46.5f})if(hk<0&&heliType>=0)hk=st.hire(heliType,hx,hy,map,f);
+    if(Staff::Member *m=hk>=0?st.member(hk):nullptr) {
+      m->rotorChannel=5;m->rotorSpin=4000;m->rotorFlying=true;m->rotorRamp=true;
+      st.update(1.0f,map,f);m=st.member(hk);const float one=m?m->rotorSpin:-1;
+      st.update(3.5f,map,f);m=st.member(hk);const float done=m?m->rotorSpin:-1;const bool ramp=m&&m->rotorRamp;
+      m->rotorFlying=false;m->rotorRamp=true;
+      st.update(2.0f,map,f);m=st.member(hk);const float up=m?m->rotorSpin:-1;const int ch=m?m->rotorChannel:-9;
+      st.update(2.5f,map,f);m=st.member(hk);
+      out<<"ROTORFADE after 1 s "<<one<<", after 4.5 s "<<done<<" ramp "<<ramp<<", landing 2 s "<<up<<" channel "<<ch<<", then channel "<<(m?m->rotorChannel:-9)<<"\n";
+      check("the rotor loop's count runs 4000 to 0 in 4 seconds flying and back up landing, the loop stopped at 4000 (0x5067f0)",
+            std::abs(one-3000.0f)<5&&done==0.0f&&!ramp&&std::abs(up-2000.0f)<5&&ch==5&&m&&m->rotorChannel<0);
+    }
+    st.clear();
+  }
+  // A staff member put down again has its tiles-with-no-way list emptied (r17; zoo.exe class slot 0xc8,
+  // 0x4e766a under ZTKeeper's 0x4e76bb, run as a keeper is placed)
+  {
+    st.clear();
+    const int keeper=st.typeOfFile("staff/keeper.ai");
+    if(keeper>=0) {
+      const int k=st.hire(keeper,27.5f,26.5f,map,f);
+      if(Staff::Member *m=st.member(k)) {
+        m->invalid.push_back({1,1});m->invalid.push_back({2,2});m->invalidClear=3.0f;
+        st.moveTo(k,28.5f,26.5f);
+        m=st.member(k);
+        check("a keeper put down again forgets the tiles it found no way to (0x4e766a, slot 0xc8)",m&&m->invalid.empty()&&m->invalidClear==0.0f);
+      }
+    }
+    st.clear();
+  }
+  // A tour guide's crowd-check count (r17; zoo.exe ZTTourGuide's setup 0x59b2cf: +0x29c = rand %
+  // cCrowdCheck, once; its tick 0x58ceb9 runs it down every tick whatever the guide is doing and
+  // at 0 sets it to cCrowdCheck - 1)
+  {
+    st.clear();
+    const int guide=st.typeOfFile("staff/tour.ai");
+    if(guide>=0) {
+      const int C=st.types()[guide].crowdCheck;
+      bool inRange=true;int seen=0;
+      for(int n=0;n<40;++n){const int k=st.hire(guide,15.5f+static_cast<float>(n),30.5f,map,f);if(const Staff::Member *m=st.member(k)){inRange=inRange&&m->crowdClock>=0&&m->crowdClock<=C-1;++seen;}}
+      const int k=st.hire(guide,27.5f,26.5f,map,f);
+      Staff::Member *m=st.member(k);
+      if(m) {
+        m->job=Staff::Job::None;m->crowdClock=1.0f;
+        st.update(0.5f,map,f);m=st.member(k);const float half=m?m->crowdClock:-99;
+        st.update(1.0f,map,f);m=st.member(k);const float wrapped=m?m->crowdClock:-99;
+        out<<"GUIDECLOCK hired "<<seen<<" in range "<<inRange<<", half "<<half<<", wrapped "<<wrapped<<"\n";
+        check("a tour guide's crowd count starts at rand % cCrowdCheck and runs down while idle, then restarts (0x59b2cf, 0x58ceb9)",
+              seen>0&&inRange&&std::abs(half-0.5f)<0.2f&&std::abs(wrapped-(0.5f-1.0f+static_cast<float>(C)))<0.3f);
+      }
+    }
+    st.clear();
+  }
+  // A guest's route cost (r17, #319; zoo.exe guestTileCost 0x43a8fb): both its tile and
+  // its goal on paths - a non-path tile is blocked, so it keeps to the paths round a bend;
+  // its goal off the paths, the open ground at cNonPathCost (more than a path tile: it
+  // still takes the paths as far as they go)
+  {
+    g.clear();g.setEntrance(25,26);g.admit(0);
+    std::vector<std::pair<int,int>> laid;
+    if(!g.list.empty()) {
+      for(int x=36;x<=44;++x)if(!map.isPath(x,30)){map.setPath(x,30,"path");laid.push_back({x,30});}
+      for(int y=31;y<=36;++y)if(!map.isPath(44,y)){map.setPath(44,y,"path");laid.push_back({44,y});}
+      world.reindex();
+      auto &guest=g.list.front();
+      guest.x=36.5f;guest.y=30.5f;guest.state=Guests::State::Walking;guest.path.clear();guest.pathAt=0;
+      const bool bend=g.walkTo(guest,44,36,g.typeList[guest.type].speed);
+      bool onPaths=bend&&!guest.path.empty();
+      for(const auto &p:guest.path)onPaths=onPaths&&map.isPath(static_cast<int>(std::floor(p.first)),static_cast<int>(std::floor(p.second)));
+      guest.x=40.5f;guest.y=30.5f;guest.path.clear();guest.pathAt=0;
+      const bool offGoal=g.walkTo(guest,40,34,g.typeList[guest.type].speed);
+      guest.path.clear();guest.pathAt=0;guest.x=36.5f;guest.y=30.5f;
+      const bool blockedOff=!map.isPath(40,34)&&offGoal;
+      out<<"ROUTECOST bend "<<bend<<" on paths "<<onPaths<<", goal off the paths "<<offGoal<<"\n";
+      check("a guest with its tile and goal on paths keeps to them round a bend (0x43a8fb)",bend&&onPaths);
+      check("a guest whose goal is off the paths gets a route over the open ground (0x43a8fb: cNonPathCost)",blockedOff);
+      for(auto [x,y]:laid)map.setPath(x,y,"");
+    }
+    g.clear();
+  }
+  // A hungry guest with no food within reach is told a food building at random
+  // is "too crowded" (r17; zoo.exe 0x4fba3a -> 0x4fb995 picks one of all the
+  // zoo's food buildings, 0x58c86a thoughtAdd 0x2803) - the "no food" thought
+  // only with none at all
+  {
+    g.clear();g.setEntrance(25,26);g.admit(0);
+    const size_t n0=objects.objects().size();
+    if(!g.list.empty()&&objects.add("scenery/building/bgrstnd.ai",60.0f,60.5f,0)) {
+      auto &guest=g.list.front();guest.x=30.5f;guest.y=30.5f;guest.building=-1;guest.lastThought=0;
+      const bool found=g.seekBuilding(guest,"food",2);
+      const int thought=guest.lastThought;
+      out<<"FARFOOD found "<<found<<", seekFull "<<g.seekFull<<", thought "<<thought<<"\n";
+      check("food out of reach: a random food building named too crowded, not 'no food' (0x4fb995)",
+            !found&&g.seekFull&&thought==10243);
+      while(objects.objects().size()>n0)objects.remove(static_cast<int>(objects.objects().size())-1);
+      guest.lastThought=0;
+      const bool foundNone=g.seekBuilding(guest,"food",2);
+      check("no food building at all: nothing named too crowded (0x4fba3a)",!foundNone&&!g.seekFull&&guest.lastThought!=10243);
+    }
+    g.clear();
+  }
   // A bench (#205; zoo.exe Task68 0x42cd39 -> 0x5ad535): no cHideUser, no
   // cUserStaysOutside - the guest takes the free slot whose entrance is
   // nearest (0x42c02b), sits at its slotpos facing the bench's turn plus the
@@ -3457,7 +3702,43 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
   const int shore=rectangle(42,25,20,18,f.typeIndex("chainlnk"),"Walrus shore");
   const int pool=rectangle(48,30,8,8,f.typeIndex("atltank"),"Walrus pool");
   auto *water=f.exhibit(pool);if(water)water->water=1;
-  check("sunken pool shares its enclosing land habitat",water && f.habitatRoot(pool,map)==shore);
+  // (joined only while its wall is level with the ground - the wall height 4,
+  // one step down from a new tank's 5: measured in the original, 2026-11-21)
+  const bool raisedAlone=water && f.habitatRoot(pool,map)==pool;
+  if(water&&f.canAdjustWall(pool,-1))f.adjustWall(pool,-1);
+  check("a new pool (wall 5) isn't joined to the land round it; lowered to the ground (wall 4) it shares its land habitat (measured)",
+        raisedAlone && water && f.habitatRoot(pool,map)==shore);
+  {
+    // The drain refusal (zoo.exe tankDrainCheck 0x6064ed): an animal in the
+    // tank - 10551 only when the tank has a gate (0x410349), nothing said
+    // without one. The shore, a land exhibit, has no tank walls to hold
+    // one, so it stands for a tank without; a tank of its own made for the
+    // purpose has one at once, and is taken down again
+    const int otter=a.typeOfFile("animals/walrus.ai");
+    const int swimmer=otter>=0?a.adopt(otter,false,51.5f,33.5f,map,f,true):-1;
+    if(auto *e=f.exhibit(pool))e->animals=1;
+    const bool poolNoGate=!f.tankHasGate(shore);
+    if(auto *e=f.exhibit(shore))e->animals=1;
+    const int silent=f.drainRefusal(shore);
+    if(auto *e=f.exhibit(shore))e->animals=0;
+    int gx=-1,gy=-1;
+    for(int y=3;y<map.getHeight()-10&&gx<0;++y)for(int x=3;x<map.getWidth()-10&&gx<0;++x) {
+      bool free=true;
+      for(int yy=y-1;yy<=y+7&&free;++yy)for(int xx=x-1;xx<=x+7&&free;++xx)free=f.exhibitAt(xx,yy)<0&&f.insideZoo(xx,yy);
+      if(free){gx=x;gy=y;}
+    }
+    const int lone=gx>=0?rectangle(gx,gy,6,6,f.typeIndex("atltank"),"Drain gate tank"):-1;
+    if(auto *e=f.exhibit(lone))e->animals=1;
+    const bool loneGate=lone>=0&&f.tankHasGate(lone);
+    const int spoken=lone>=0?f.drainRefusal(lone):-1;
+    for(const auto &kv:f.pieces())if(lone>=0&&kv.second.tank==lone){Fences::Edge first=kv.first;f.remove(first,map,true);break;}
+    a.clear();world.reindex();
+    if(auto *e=f.exhibit(pool))e->animals=0;
+    const int empty=f.drainRefusal(pool);
+    out<<"DRAIN GATE pool no gate "<<poolNoGate<<" silent "<<silent<<" lone "<<lone<<" gate "<<loneGate<<" spoken "<<spoken<<" empty "<<empty<<" swimmer "<<swimmer<<"\n";
+    check("a tank with an animal in it and no gate: the drain is refused with nothing said (2); with a gate, 10551 (1); empty, no refusal (0) (0x6064ed)",
+          swimmer>=0&&poolNoGate&&silent==2&&loneGate&&spoken==1&&empty==0);
+  }
   world.reindex();
   const int walrusType=a.typeOfFile("animals/walrus.ai");
   const int walrus=a.adopt(walrusType,false,46.5f,34.5f,map,f);
@@ -4587,6 +4868,20 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
           check(std::string("#285: the helicopter keeps its flight and its base's facing across a ")+extension+" save (0x46b1dd)",
                 ok&&bh.heliStage==Staff::HeliStage::Return&&bh.heliX==sh.heliX&&bh.heliY==sh.heliY&&bh.heliZ==sh.heliZ&&
                 bh.anim=="fly"&&bh.dutyId==10319&&bh.baseFacing==2&&bh.x==sh.x&&bh.y==sh.y);
+          if(std::string(extension)==".zoo"&&ok) {
+            // measured: the original writes a DRT base under "helicopter" for
+            // both its class and its subclass, with no type name (#322)
+            std::ifstream in(file,std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+            AssetBuffer buffer;buffer.data=bytes.data();buffer.size=bytes.size();
+            ZooReader decoded;bool named=false,found=false;
+            if(decoded.load(buffer))
+              for(const auto &o:decoded.getObjects())
+                if(o.className=="helicopter"){found=true;named=o.subClass=="helicopter"&&o.typeName.empty();}
+            buffer.data=nullptr;buffer.size=0;
+            out<<"HELICOPTER NAMES found "<<found<<" as the original's "<<named<<"\n";
+            check("a DRT base is written under the original's names (class and subclass \"helicopter\", no type name), as the original does (#322)",found&&named);
+          }
           std::error_code ec;std::filesystem::remove(file,ec);
         }
         SaveGame::goals=priorGoals;
@@ -4617,6 +4912,16 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         ok=ok&&Original::guestWalkRate(10)==25&&Original::guestWalkRate(50)==28&&Original::guestWalkRate(80)==30&&
            unitTilesPerSecond(25)==unitTilesPerSecond(28)&&std::abs(unitTilesPerSecond(30)-2000.0f/67/64)<1e-5f;
         check("guests walk at rate 25/28/30 by tiredness, 1/64 a tile an update unless tired (0x42250a, 0x435c42; measured)",ok);
+        // The byte made with each guest (0x4f6082: +0x204 = rand % 11; #318): the rate
+        // 33 + it - 5, x0.9 rested (measured on arrivals: variant 9 at tiredness 6 gave
+        // 33, variant 2 at 9 gave 27, variant 0 at 24 gave 28)
+        std::array<int,11> seen{};
+        bool inRange=true;
+        for(int id=1;id<=400;++id){const int v=Original::guestSpeedVariant(id);inRange=inRange&&v>=0&&v<=10;if(v>=0&&v<=10)++seen[static_cast<size_t>(v)];}
+        bool all=true;for(int n:seen)all=all&&n>=15;
+        check("each guest's walking byte is 0 to 10 and the rate is given + it - 5 (0x4f6082, 0x42250a; measured)",
+              inRange&&all&&Original::guestWalkRate(6,9)==33&&Original::guestWalkRate(9,2)==27&&Original::guestWalkRate(24,0)==28&&
+              Original::guestWalkRate(50,10)==38);
       }
       check("staff walk whole steps an update: cSlowRate 33 at 0.466 tiles a second, 34 no faster, 66 at 0.933, "
             "under 15 one step (0x435c42)",
@@ -4710,6 +5015,25 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
               plain=="-M-"&&trained=="MMM");
       }
       if(w>=0)st.fire(w);
+    }
+    // A zookeeper put down inside a land exhibit (read live 2026-11-21 in the original: the Hire Staff cursor green
+    // over a paddock's grass, the keeper placed on its tile, habitat +0x2c 0) begins its duties there when no keeper is
+    // at work in it (0x4e76bb: class slot 0xc8 of the placing tool 0x4d9088 - Task6e_DutiesInHabitat at priority 0)
+    {
+      const int kt=st.typeOfFile("staff/keeper.ai");
+      const Fences::Exhibit *le=f.exhibit(land);
+      if(kt>=0&&le&&!le->tiles.empty()&&z>=0) {
+        float px=-1,py=-1;
+        for(auto [x,y]:le->tiles){px=x+0.5f;py=y+0.5f;break;}
+        const bool fits=st.canPlaceType(kt,px,py,map,f)==Fences::Fit::Ok;
+        const int kk=fits?st.hire(kt,px,py,map,f):-1;
+        if(kk>=0)st.placed(kk,map,f);
+        const Staff::Member *mm=kk>=0?st.member(kk):nullptr;
+        out<<"STAFF keeper put down in an exhibit: fits "<<fits<<", job "<<(mm?static_cast<int>(mm->job):-1)<<", visit "<<(mm?mm->visit:-9)<<" (land "<<land<<")"<<"\n";
+        check("a zookeeper can be put down inside a land exhibit and begins its duties there (0x4e76bb, 0x4146d4)",
+              fits&&mm&&mm->job==Staff::Job::Visit&&mm->visit==land&&mm->access==land);
+        if(kk>=0)st.fire(kk);
+      }
     }
     // A keeper's visit with work it has no way to (Job5_GoCleanDirt 0x412629,
     // Job3_GoHealAnimal 0x508b3c): the dung pile stays, its tile on the
@@ -5508,6 +5832,21 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
               guest.state==Guests::State::Fleeing&&!guest.leaving&&guest.sawEscape&&guest.sawPredator&&
               guest.predator==id&&guest.dHappy==g.typeList[guest.type].escapedChange&&guest.lastThought==10245);
         check("it runs away from it",!guest.path.empty()&&guest.path.back().first<guest.x+0.5f);
+        // A rampaging animal (ZTAnimal +0x3b0) seen by a guest off to or at a
+        // grandstand ends that show (0x50d264, 0x48e054 -> rubbleStopShow 0x6127b8)
+        {
+          const size_t n1=objects.objects().size();
+          if(objects.add("scenery/other/bench.ai",26.5f,26.5f,0)) {
+            int stopped=-1;g.showStop=[&](int object){stopped=object;};
+            cat->rampaging=false;guest.building=static_cast<int>(n1);at(25.5f);const int calm=stopped;
+            cat->rampaging=true;guest.building=static_cast<int>(n1);at(25.5f);
+            out<<"RAMPAGESTOP calm "<<calm<<", rampaging "<<stopped<<"\n";
+            check("a rampaging animal seen by a guest at a building stops that stand's show; a loose calm one doesn't (0x48e054)",
+                  calm==-1&&stopped==objects.objects()[n1].id);
+            cat->rampaging=false;g.showStop=nullptr;
+            while(objects.objects().size()>n1)objects.remove(static_cast<int>(objects.objects().size())-1);
+          }
+        }
         cat->escaped=false;cat->x=30.5f;cat->y=32.5f;
         guest.state=Guests::State::Walking;guest.path.clear();guest.sawResetCheck=0;guest.chaseCheck=99;g.tick(guest);
         check("none loose: calm again at its cSawAnimalReset",!guest.sawEscape);
@@ -6886,9 +7225,12 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
         RenameCheats::staffRenamed(world,kp,"Test Keeper");
         RenameCheats::staffRenamed(world,kp,"Test Keeper");
         const bool once=given==250&&gifts==1&&RenameCheats::usedNames().count("Test Keeper");
+        // (the second guest's own colours, to see them kept: a guest's natural
+        // picks can be 1, 1 as well, so the test can't just look for those)
+        int ownColours[4];for(int k=0;k<4;++k)ownColours[k]=g.list[1].colours[k];
         RenameCheats::guestRenamed(world,0,"Test Guest");RenameCheats::guestRenamed(world,1,"Not A Guest");
         const bool coloured=g.list[0].colours[0]==4&&g.list[0].colours[1]==5&&g.list[0].colours[2]==6&&given==250&&gifts==2;
-        const bool wrong=g.list[1].colours[0]!=1||g.list[1].colours[1]!=1;
+        bool wrong=true;for(int k=0;k<4;++k)wrong=wrong&&g.list[1].colours[k]==ownColours[k];
         out<<"RENAME TABLE once "<<once<<" coloured "<<coloured<<" wrong type kept "<<wrong<<" given "<<given<<" in "<<gifts<<"\n";
         check("the name table: a keeper's bonus once only, a guest's colour picks (and a $0 bonus), the wrong type nothing (0x449560, 0x6089e8, 0x60875c, 0x641860)",
               once&&coloured&&wrong);
@@ -7339,6 +7681,182 @@ std::string buildAccessZoo(World &world, ZooSim &sim, UiGameScreen &hud, const s
   world.reindex();
   if(!SaveGame::save(file,world,sim,hud,mapPath))return "save failed: "+SaveGame::lastError();
   return "ok "+r.str()+"entrance "+std::to_string(ex)+","+std::to_string(ey);
+}
+
+// ours: ZT_AMPHIB_ZOO=<file.zoo> - one animal alone in each land exhibit, with
+// 0, 10 and 30 of its 100 tiles fresh water (a hippo, which is cUnderwater, and
+// a zebra for comparison), to load in the original and read each one's
+// Exhibit Suitability against ours (#317). measured: in the running original
+// (2026-11-21, the animal panel's suitability bar, 114 px wide: 53, 57, 63 and
+// 54 px) they read 46.5, 50.0, 55.3 and 47.4 per cent - ours, which rounds up,
+// must be within 1 of each (the original adds no water for an amphibious
+// animal in a land exhibit, as 0x44699a's extras had suggested it might)
+std::string buildAmphibZoo(World &world, ZooSim &sim, UiGameScreen &hud, const std::string &mapPath,
+                           const std::string &file) {
+  auto &map=world.getMap(); auto &f=world.getFences(); auto &g=world.getGuests(); auto &a=world.getAnimals();
+  int ex=-1,ey=-1;
+  if(!g.entrance(ex,ey))world.update(SDL_GetKeyboardState(nullptr),0.01f);
+  if(!g.entrance(ex,ey))return "no entrance";
+  const int AW=24,AH=24;
+  int best=-1,bx=0,by=0;
+  for(int oy=ey-40;oy<=ey+40;++oy)for(int ox=ex-40;ox<=ex+40;++ox) {
+    const int d=std::abs(ox-ex)+std::abs(oy-1-ey);
+    if(d<4 || (best>=0 && d>=best))continue;
+    bool ok=true;
+    for(int y=oy-2;y<oy+AH&&ok;++y)for(int x=ox-2;x<ox+AW&&ok;++x)ok=world.canLayPath(x,y);
+    if(ok){best=d;bx=ox;by=oy;}
+  }
+  if(best<0)return "no room near the entrance";
+  const int type=f.typeIndex("chainlnk");
+  int drag=900;
+  std::ostringstream r;
+  struct Pen{const char *name,*animal;int water;};
+  const Pen pens[]={{"Hippo dry","animals/hippo.ai",0},{"Hippo 10","animals/hippo.ai",10},{"Hippo 30","animals/hippo.ai",30},
+                    {"Zebra dry","animals/zebra.ai",0}};
+  const float measured[]={46.5f,50.0f,55.3f,47.4f};
+  int n=0,bad=0;
+  for(const Pen &p:pens) {
+    const int x=bx+(n%2)*12,y=by+(n/2)*12,w=10,h=10;++n;
+    for(int k=0;k<w;++k){f.place({true,x+k,y},type,drag,map);f.place({true,x+k,y+h},type,drag+1,map);}
+    for(int k=0;k<h;++k){f.place({false,x,y+k},type,drag+2,map);f.place({false,x+w,y+k},type,drag+3,map);}
+    drag+=4;
+    for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,p.name,map);
+    const int id=f.exhibitAt(x+w/2,y+h/2);
+    if(auto *e=f.exhibit(id))e->name=p.name;
+    // (the water: whole rows from the bottom up, 10 tiles a row)
+    int left=p.water;
+    for(int yy=y+h-1;yy>=y&&left>0;--yy)for(int xx=x;xx<x+w&&left>0;++xx,--left)map.getTileMutable(xx,yy)->terrainType=9;
+    const Fences::Edge gate{true,x+w/2,y};
+    f.moveGate(gate);
+    const int t=a.typeOfFile(p.animal);
+    const int aid=a.adopt(t,false,x+w/2+0.5f,y+h/2+0.5f,map,f,true);
+    const int ours=a.suitability(aid,map,f);
+    if(std::fabs(ours-measured[n-1])>1.0f){++bad;r<<"MISMATCH ";}
+    r<<p.name<<" #"<<id<<" at "<<x<<","<<y<<" animal "<<aid<<" suitability "<<ours<<" (original "<<measured[n-1]<<")";
+    if(t>=0)r<<" (cUnderwater "<<a.types()[t].underwater<<", water wanted "<<a.types()[t].compatTerrain[9]<<")";
+    r<<"; ";
+  }
+  for(int x=bx-1;x<=bx+AW;++x)map.setPath(x,by-1,"path");
+  world.reindex();
+  if(!SaveGame::save(file,world,sim,hud,mapPath))return "save failed: "+SaveGame::lastError();
+  return std::string(bad?"FAIL ":"ok ")+r.str();
+}
+
+// ours: ZT_ESCAPE_ZOO=<file.zoo> - four 10x10 exhibits with a zebra in each and
+// broken fence pieces on the west side (A, 5 from the middle) and / or the east
+// side (B), to load in the original and see which boundary piece its escape
+// search (animalFindEscapeFence 0x446088) goes for (#323)
+std::string buildEscapeZoo(World &world, ZooSim &sim, UiGameScreen &hud, const std::string &mapPath,
+                           const std::string &file) {
+  auto &map=world.getMap(); auto &f=world.getFences(); auto &g=world.getGuests(); auto &a=world.getAnimals();
+  int ex=-1,ey=-1;
+  if(!g.entrance(ex,ey))world.update(SDL_GetKeyboardState(nullptr),0.01f);
+  if(!g.entrance(ex,ey))return "no entrance";
+  const int AW=24,AH=24;
+  int best=-1,bx=0,by=0;
+  for(int oy=ey-40;oy<=ey+40;++oy)for(int ox=ex-40;ox<=ex+40;++ox) {
+    const int d=std::abs(ox-ex)+std::abs(oy-1-ey);
+    if(d<4 || (best>=0 && d>=best))continue;
+    bool ok=true;
+    for(int y=oy-2;y<oy+AH&&ok;++y)for(int x=ox-2;x<ox+AW&&ok;++x)ok=world.canLayPath(x,y);
+    if(ok){best=d;bx=ox;by=oy;}
+  }
+  if(best<0)return "no room near the entrance";
+  const int type=f.typeIndex("chainlnk");
+  int drag=900;
+  std::ostringstream r;
+  struct Pen{const char *name;bool west,east;float ax;};
+  // (the animal 1.5 in from A and 8.5 from B in every pen: the nearest way out is always A)
+  int bad=0;
+  const Pen pens[]={{"A and B 1",true,true,1.5f},{"A and B 2",true,true,1.5f},
+                    {"A and B 3",true,true,1.5f},{"A and B 4",true,true,1.5f}};
+  int n=0;
+  for(const Pen &p:pens) {
+    const int x=bx+(n%2)*12,y=by+(n/2)*12,w=10,h=10;++n;
+    for(int k=0;k<w;++k){f.place({true,x+k,y},type,drag,map);f.place({true,x+k,y+h},type,drag+1,map);}
+    for(int k=0;k<h;++k){f.place({false,x,y+k},type,drag+2,map);f.place({false,x+w,y+k},type,drag+3,map);}
+    drag+=4;
+    for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,p.name,map);
+    const int id=f.exhibitAt(x+w/2,y+h/2);
+    if(auto *e=f.exhibit(id))e->name=p.name;
+    f.moveGate({true,x+w/2,y});
+    if(p.west)f.breakPiece({false,x,y+5});
+    if(p.east)f.breakPiece({false,x+w,y+5});
+    const int t=a.typeOfFile("animals/zebra.ai");
+    const int aid=a.adopt(t,false,x+p.ax,y+5.5f,map,f,true);
+    r<<p.name<<" #"<<id<<" at "<<x<<","<<y<<" A "<<x<<","<<y+5<<" B "<<x+w<<","<<y+5<<" animal "<<aid;
+    // (ours: 40 tries of its way out from 1.5 tiles off A - the original
+    // took either gap, 3 of 8 the near one; the nearest every time was wrong)
+    if(n==1) {
+      int viaA=0,viaB=0;
+      for(int k=0;k<40;++k) {
+        Animals::Member tmp=*a.member(aid);tmp.path.clear();tmp.stack.clear();tmp.crossing={false,-1,-1};
+        if(a.breakOut(tmp,map,f)) {if(tmp.crossing.x==x)++viaA;else if(tmp.crossing.x==x+w)++viaB;}
+      }
+      r<<" way out in 40 tries: A "<<viaA<<", B "<<viaB;
+      if(!viaA || !viaB)++bad;
+    }
+    r<<"; ";
+  }
+  for(int x=bx-1;x<=bx+AW;++x)map.setPath(x,by-1,"path");
+  world.reindex();
+  if(!SaveGame::save(file,world,sim,hud,mapPath))return "save failed: "+SaveGame::lastError();
+  return std::string(bad?"FAIL ":"ok ")+r.str();
+}
+
+// ours: ZT_CLIFF_ZOO=<file.zoo> - four 10x10 exhibits, each with a one-level
+// cliff down the middle (the east half a level higher, its edge bits 3) and one
+// animal on the low side beside it: two lions (cClimbsCliffs 1) and two zebras,
+// to load in the original and see which of them cross (zoo.exe 0x414a26).
+// measured (2026-11-21, 330 s in the running original, the low side 2 tiles
+// wide): both lions went up the cliff (to x 24.0 and 42.0, the step at 23 and
+// 35), the zebras never left the low side (x 22.5 and 34.5 at most)
+std::string buildCliffZoo(World &world, ZooSim &sim, UiGameScreen &hud, const std::string &mapPath,
+                          const std::string &file) {
+  auto &map=world.getMap(); auto &f=world.getFences(); auto &g=world.getGuests(); auto &a=world.getAnimals();
+  int ex=-1,ey=-1;
+  if(!g.entrance(ex,ey))world.update(SDL_GetKeyboardState(nullptr),0.01f);
+  if(!g.entrance(ex,ey))return "no entrance";
+  const int AW=24,AH=24;
+  int best=-1,bx=0,by=0;
+  for(int oy=ey-40;oy<=ey+40;++oy)for(int ox=ex-40;ox<=ex+40;++ox) {
+    const int d=std::abs(ox-ex)+std::abs(oy-1-ey);
+    if(d<4 || (best>=0 && d>=best))continue;
+    bool ok=true;
+    for(int y=oy-2;y<oy+AH&&ok;++y)for(int x=ox-2;x<ox+AW&&ok;++x)ok=world.canLayPath(x,y);
+    if(ok){best=d;bx=ox;by=oy;}
+  }
+  if(best<0)return "no room near the entrance";
+  const int type=f.typeIndex("chainlnk");
+  int drag=900;
+  std::ostringstream r;
+  const char *animals[]={"animals/lion.ai","animals/lion.ai","animals/zebra.ai","animals/zebra.ai"};
+  int n=0;
+  for(const char *an:animals) {
+    const int x=bx+(n%2)*12,y=by+(n/2)*12,w=10,h=10;++n;
+    // (the cliff first: the east half up a level, flat, with cliff bits on the edge between)
+    for(int yy=y;yy<y+h;++yy)for(int xx=x;xx<x+w;++xx) {
+      MapTile *t=map.getTileMutable(xx,yy);if(!t)continue;
+      const int level=xx>=x+2?1:0;t->height=level;for(int c=0;c<4;++c)t->cornerHeight[c]=level;t->terrainType=0;t->edgeBits=0;
+    }
+    for(int yy=y;yy<y+h;++yy) {
+      if(MapTile *l=map.getTileMutable(x+1,yy))l->edgeBits|=(3<<4);
+      if(MapTile *rr=map.getTileMutable(x+2,yy))rr->edgeBits|=(3<<0)|(3<<6);
+    }
+    for(int k=0;k<w;++k){f.place({true,x+k,y},type,drag,map);f.place({true,x+k,y+h},type,drag+1,map);}
+    for(int k=0;k<h;++k){f.place({false,x,y+k},type,drag+2,map);f.place({false,x+w,y+k},type,drag+3,map);}
+    drag+=4;
+    for(int id:f.updateExhibits(map,1,0,1))f.finishExhibit(id,an,map);
+    const int id=f.exhibitAt(x+w/2,y+h/2);
+    f.moveGate({true,x+w/2,y});
+    const int t=a.typeOfFile(an);
+    const int aid=a.adopt(t,false,x+1.5f,y+5.5f,map,f,true);
+    r<<an<<" #"<<id<<" at "<<x<<","<<y<<" animal "<<aid<<" climbs "<<(t>=0&&a.types()[t].climbsCliffs)<<"; ";
+  }
+  for(int x=bx-1;x<=bx+AW;++x)map.setPath(x,by-1,"path");
+  world.reindex();
+  if(!SaveGame::save(file,world,sim,hud,mapPath))return "save failed: "+SaveGame::lastError();
+  return "ok "+r.str();
 }
 
 // ours: the tour guides of a loaded zoo followed while it runs (seconds, 30

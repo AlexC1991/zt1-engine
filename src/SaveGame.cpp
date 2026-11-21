@@ -18,6 +18,7 @@
 
 #include "OriginalConstants.hpp"
 #include "RenameCheats.hpp"
+#include "Celebrations.hpp"
 #include "Research.hpp"
 #include "World.hpp"
 #include "ZooSim.hpp"
@@ -265,7 +266,9 @@ void SaveGame::setLastFile(const std::string &path) { Settings::set("user", "las
 
 // ----------------------------------------------------------------------------
 // The original game's own saved zoos (.zoo, read by ZooReader in zoo.exe's
-// order: loadZoo 0x453000, worldLoad 0x452e13)
+// order: loadZoo 0x453000, worldLoad 0x452e13; its habitat records,
+// worldLoadHabitats 0x5939fb, set a tank's wall height, water, fill state and
+// murk - here the exhibits' state is set directly)
 // ----------------------------------------------------------------------------
 bool SaveGame::isOriginal(const std::string &path) {
   std::vector<char> bytes;
@@ -742,6 +745,13 @@ bool SaveGame::loadOriginalWorld(World &world) {
                        o.className != "staff" && o.className != "helicopter"))
       continue;
     int type = st.typeOfFile("staff/" + o.subClass + ".ai");
+    // measured: the original saves a DRT base's subclass as "helicopter" (the
+    // type its helicopt.ai names), not as the file's name, so a zoo saved by
+    // the original with one was refused ("Missing content: helicopter.ai")
+    if (type < 0 && o.className == "helicopter")
+      for (size_t k = 0; k < st.types().size() && type < 0; k++)
+        if (st.types()[k].kind == Staff::Kind::Helicopter)
+          type = static_cast<int>(k);
     int id = type >= 0 ? st.hire(type, o.x / 64.0f, o.y / 64.0f, map, f) : -1;
     if (id < 0 && type >= 0) {
       // An original save may catch a specialist halfway up a ladder, or a
@@ -1890,6 +1900,7 @@ bool SaveGame::getWorld(void *in, World &world, uint32_t version) {
 bool SaveGame::save(const std::string &path, World &world, ZooSim &sim, UiGameScreen &hud,
                     const std::string &mapPath) {
   saveFailure.clear();
+  Celebrations::SaveGuard celebrationColours(world); // (addition: no celebration's colour is kept)
   Out o;
   o.raw(kMagic);
   o.raw(kVersion);
@@ -3003,7 +3014,7 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
     if(!originalAsset(type.file))continue;
     std::string cls=type.kind==Staff::Kind::Maint?"maint":type.kind==Staff::Kind::Guide?"tour":
                     type.kind==Staff::Kind::Helicopter?"helicopter":"keeper";
-    auto o=source(cls,m.id);o.id=identity(m.id,!o.payload.empty());o.subClass=type.key;o.typeName=m.female?"f":"m";o.name=m.name;
+    auto o=source(cls,m.id);o.id=identity(m.id,!o.payload.empty());o.subClass=type.kind==Staff::Kind::Helicopter?"helicopter":type.key;o.typeName=type.kind==Staff::Kind::Helicopter?"":m.female?"f":"m";o.name=m.name;
     const bool wet=m.tank>=0 || m.water!=0 || m.climbing;
     const float x=wet?m.outX:m.x,y=wet?m.outY:m.y;position(o,x,y,ground(x,y));o.direction=direction(m.fx,m.fy);
     o.colours={uint8_t(m.hair),uint8_t(m.skin)};o.hasStaff=true;o.movementMode=2;
@@ -3304,6 +3315,7 @@ bool SaveGame::encodeOriginal(World &world,ZooSim &sim,UiGameScreen &hud,
 bool SaveGame::saveOriginal(const std::string &path,World &world,ZooSim &sim,
                             UiGameScreen &hud,std::string &error) {
   std::vector<uint8_t> bytes;
+  Celebrations::SaveGuard celebrationColours(world); // (addition: no celebration's colour is kept)
   if(!encodeOriginal(world,sim,hud,bytes,error))return false;
   const std::filesystem::path target(path),temporary=target.string()+".writing";
   FILE *file=std::fopen(temporary.string().c_str(),"wb");
@@ -3528,6 +3540,7 @@ std::string SaveGame::checkOriginalWriter(World &world, const std::string &path,
 // [start] design=, and World::loadFreeform puts it over the map (the
 // "custommaps" switch, Features.hpp)
 bool SaveGame::saveMap(const std::string &path, World &world, const std::string &over) {
+  Celebrations::SaveGuard celebrationColours(world); // (addition: no celebration's colour is kept)
   Out o;
   o.raw(kMapMagic);
   o.raw(kVersion);
