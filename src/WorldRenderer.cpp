@@ -788,6 +788,14 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
 
   // Zoomed in past 1x, map art comes from its upscaled textures
   const bool hires = RenderSettings::worldZoomedIn;
+  // The original's cliff pieces (drawWall), lit as drawn; at the original's
+  // height unit only (16 px a unit at 64 px tiles), not in the debug views
+  // (ours: a check. ZT_CLIFFS_PLAIN=1: the plain textured faces instead, to
+  // compare pictures with a build before them, cliffs aside)
+  static const bool plainCliffs = std::getenv("ZT_CLIFFS_PLAIN") != nullptr;
+  SDL_Texture *const fringe = shadingMode == 0 && !plainCliffs && std::fabs(unitPx - halfW * 0.5f) < 0.01f
+                                  ? spriteDB.getFringeAtlas(renderer)
+                                  : nullptr;
 
   constexpr float kTexelNudge = 1.0f / 64.0f; // (paint's, below)
   struct TexInfo {
@@ -925,6 +933,48 @@ void WorldRenderer::renderTerrain(SDL_Renderer *renderer, const WorldMap &map,
         int db = std::max(0, hb - std::min(hb, nb));
         if (da == 0 && db == 0)
           return;
+        // measured (SpriteDatabase::getFringeAtlas): the original's face is
+        // fringe.cfg's pieces, one a height unit, each band's piece by its
+        // shape - whole, or a triangle where the top or the bottom slopes a
+        // unit along the edge - placed on the edge's left end at the band's
+        // top (the piece's frame 16 px above it for a face toward the lower
+        // right; "1011" sits a unit down its frame)
+        if (fringe) {
+          const bool right = face == 0;
+          const SDL_FPoint L = right ? b : a;
+          const int HL = right ? hb : ha, HR = right ? ha : hb;
+          const int BL = std::min(HL, right ? nb : na), BR = std::min(HR, right ? na : nb);
+          if (std::abs(HL - HR) <= 1 && std::abs(BL - BR) <= 1) {
+            const float s = halfW / 32.0f, inv = 1.0f / SpriteDatabase::kFringeSlots;
+            const SDL_Color white{255, 255, 255, 255};
+            for (int band = std::max(HL, HR); band > std::min(BL, BR); band--) {
+              const bool coverL = HL >= band && BL <= band - 1, coverR = HR >= band && BR <= band - 1;
+              const char *shape = nullptr;
+              float down = 0.0f;
+              if (coverL && coverR)
+                shape = "0011";
+              else if (HL == band - 1 && HR == band && BL <= band - 1 && BR <= band - 1)
+                shape = "0001";
+              else if (HL == band && HR == band - 1 && BL <= band - 1 && BR <= band - 1)
+                shape = "0010";
+              else if (HL >= band && HR >= band && BL <= band - 1 && BR == band)
+                shape = "0110";
+              else if (HL >= band && HR >= band && BL == band && BR <= band - 1)
+                shape = "1011", down = -16.0f;
+              const int slot = shape ? SpriteDatabase::fringeSlot(right, shape) : -1;
+              if (slot < 0)
+                continue;
+              const float fx = L.x, fy = L.y + (HL - band) * unitPx + ((right ? -16.0f : 0.0f) + down) * s;
+              const float u0 = slot * inv, u1 = (slot + 1) * inv;
+              ZT_Vertex q0 = {{fx, fy}, white, {u0, 0.0f}}, q1 = {{fx + 32.0f * s, fy}, white, {u1, 0.0f}};
+              ZT_Vertex q2 = {{fx + 32.0f * s, fy + 64.0f * s}, white, {u1, 1.0f}};
+              ZT_Vertex q3 = {{fx, fy + 64.0f * s}, white, {u0, 1.0f}};
+              addToBucket(0, 0, fringe, q0, q1, q2);
+              addToBucket(0, 0, fringe, q0, q2, q3);
+            }
+            return;
+          }
+        }
         SDL_Color c = shade(wallBase, shadingMode == 1 ? 1.0f : light);
         SDL_Texture *texture = wallTex.texture;
         if (shadingMode == 2) {

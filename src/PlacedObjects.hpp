@@ -236,6 +236,12 @@ public:
   int colourOf(const Object &o, int part);
   // Its catalogue file (scenery/<subclass>/<type>.ai)
   static std::string fileOf(const Object &o) { return "scenery/" + o.subClass + "/" + o.typeName + o.ext; }
+  // ours: the type's file where fileOf's isn't one - the zoo's entrance is
+  // saved as building/fgate, its file scenery/other/fgate.ai (zoo.exe finds a
+  // type by its name, not a path). Read for its footprint, a 6 x 2 one: as
+  // one tile, a stand and a restroom were placed over the gate, and the
+  // original left both out when it loaded the zoo (Lab Play original, 11-22)
+  static std::string typeFile(ResourceManager *rm, const std::string &file);
   void resolveExt(Object &o) const;
 
 private:

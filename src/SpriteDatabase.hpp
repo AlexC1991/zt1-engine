@@ -60,6 +60,18 @@ public:
     // terrain/tiletex*.cfg, default 1; concrete and asphalt are 0)
     bool terrainBlends(int terrainId) const;
 
+    // The original's cliff faces: fringe.cfg's pictures (fringe/l*.bmp, the
+    // faces toward the lower left; r*.bmp, toward the lower right), each a
+    // 32 x 64 piece of one height unit's band, side by side in one picture
+    // (kFringeSlots of them) so the faces keep their back-to-front order in
+    // one batch. Their key colour is clear. nullptr when the game has none.
+    static constexpr int kFringeSlots = 10;
+    SDL_Texture* getFringeAtlas(SDL_Renderer* renderer);
+    // The slot of a piece in it: the face (false: toward the lower left) and
+    // its band's shape, "0011" (whole), "0001", "0010", "0110" or "1011";
+    // -1 for any other
+    static int fringeSlot(bool towardRight, const char* shape);
+
     // Clear all cached sprites
     void clear();
 
@@ -93,6 +105,9 @@ private:
     std::unordered_map<int, SDL_Texture*> terrainTextures;
     std::unordered_map<int, SDL_Texture*> terrainTexturesHi;
     SDL_Renderer* textureRenderer = nullptr;
+    SDL_Texture* fringeAtlas = nullptr;
+    SDL_Renderer* fringeRenderer = nullptr;
+    bool fringeTried = false;
     uint32_t epoch = 0;
     std::unordered_map<std::string, Sprite> pathSprites;
     std::unordered_map<std::string, std::string> pathArtFolders;

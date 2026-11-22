@@ -6123,6 +6123,74 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     if (timings) std::fclose(timings);
     return 0;
   }
+  // ours: ZT_MAUL_SAVE=<file.zoo> (the real map): guests let in and walking
+  // the paths, every member of staff let go, and a black bear put loose by
+  // the busiest path - saved shared, for the original to play (a loose
+  // predator mauling a guest, compared with ours)
+  if (const char *maulSave = std::getenv("ZT_MAUL_SAVE")) {
+    static bool noKeys[SDL_SCANCODE_COUNT] = {};
+    setGamePaused(false);
+    for (int s = 0; s < 5; s++)
+      world->update(noKeys, 0.1f, 0.1f);
+    Guests &gs = world->getGuests();
+    for (int k = 0; k < 60; k++)
+      gs.admit(0);
+    auto inZoo = [&gs] {
+      int n = 0;
+      for (const Guests::Guest &g : gs.guests())
+        n += g.x > -999;
+      return n;
+    };
+    SDL_Log("[Maul] %d guests let in", inZoo());
+    for (int s = 0; s < 300; s++)
+      world->update(noKeys, 0.1f, 0.1f);
+    SDL_Log("[Maul] %d guests after 30 s", inZoo());
+    std::vector<int> staffIds;
+    for (const Staff::Member &m : world->getStaff().members())
+      staffIds.push_back(m.id);
+    for (int id : staffIds)
+      world->getStaff().fire(id);
+    WorldMap &map = world->getMap();
+    Fences &fz = world->getFences();
+    int bx = -1, by = -1, most = 0;
+    for (const Guests::Guest &g : gs.guests()) {
+      if (g.x < -999)
+        continue;
+      const int gx = static_cast<int>(std::floor(g.x)), gy = static_cast<int>(std::floor(g.y));
+      for (auto [dx, dy] : {std::pair{2, 0}, {-2, 0}, {0, 2}, {0, -2}}) {
+        const int tx = gx + dx, ty = gy + dy;
+        if (map.isPath(tx, ty) || !fz.insideZoo(tx, ty) || fz.exhibitAt(tx, ty) >= 0)
+          continue;
+        int near = 0;
+        for (const Guests::Guest &o : gs.guests())
+          near += o.x > -999 && std::hypot(o.x - (tx + 0.5f), o.y - (ty + 0.5f)) < 4.0f;
+        if (near > most) {
+          most = near;
+          bx = tx;
+          by = ty;
+        }
+      }
+    }
+    Animals &an = world->getAnimals();
+    const int bearType = an.typeOfFile("animals/blackbr.ai");
+    // (put down outside any exhibit: as a loose one is, not as a player
+    // places one)
+    const int bear = bx >= 0 && bearType >= 0 ? an.adopt(bearType, false, bx + 0.5f, by + 0.5f, map, fz, true) : -1;
+    for (int s = 0; s < 3; s++)
+      world->update(noKeys, 0.1f, 0.1f);
+    if (Animals::Member *b = an.member(bear))
+      world->centreOn(b->x, b->y);
+    int walking = 0;
+    for (const Guests::Guest &g : gs.guests())
+      walking += g.x > -999;
+    SDL_Log("[Maul] bear %d at %d,%d with %d guests near, %d guests in the zoo, %zu staff let go; saved %s: %d", bear, bx,
+            by, most, walking, staffIds.size(), maulSave,
+            static_cast<int>(g_hud && SaveGame::save(maulSave, *world, g_sim, *g_hud, g_currentMapPath)));
+    capture("maul_save");
+    setGamePaused(true);
+    if (timings) std::fclose(timings);
+    return 0;
+  }
   if (std::getenv("ZT_HUD_CLOCK_CHECKS")) {
     SDL_HideWindow(SDL_GetRenderWindow(renderer));
     extern int runHudClockChecks(World &,UiGameScreen &,ResourceManager *,SDL_Renderer *,const std::string &,
@@ -7872,6 +7940,34 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           world->reindex();
         }
       }
+      // ours: a check. ZT_TANK_LAB_SLOPE: the patch a ridge instead, up a
+      // unit a tile eastwards to the shared wall and down again (#274: each
+      // tank on a slope, its floor from its tiles' average or its highest
+      // corner), with a path tile at each corner outside the tanks to find
+      // them by in the original
+      if (std::getenv("ZT_TANK_LAB_SLOPE") && lx >= 0) {
+        WorldMap &map = world->getMap();
+        const int h = map.getTile(lx, ly)->cornerHeight[0];
+        auto ridge = [&](int vx) { return h + std::max(0, std::min(vx - lx, lx + 8 - vx)); };
+        for (int y = ly - 1; y <= ly + 5; y++)
+          for (int x = lx - 1; x <= lx + 9; x++)
+            if (MapTile *t = map.getTileMutable(x, y)) {
+              t->height = ridge(x);
+              t->cornerHeight[CORNER_X0Y0] = t->cornerHeight[CORNER_X0Y1] = ridge(x);
+              t->cornerHeight[CORNER_X1Y0] = t->cornerHeight[CORNER_X1Y1] = ridge(x + 1);
+            }
+        for (auto [px, py] : {std::pair{lx - 1, ly - 1}, {lx + 8, ly - 1}, {lx - 1, ly + 4}, {lx + 8, ly + 4}})
+          map.setPath(px, py, "path");
+        map.touch();
+        world->reindex();
+      }
+      // ZT_TANK_LAB_BARE=<file.zoo>: the ground saved before the tanks are
+      // laid, shared, for the original to build its own tanks on
+      if (const char *bare = std::getenv("ZT_TANK_LAB_BARE"); bare && g_hud && lx >= 0) {
+        world->centreOn(lx + 4.0f, ly + 2.0f);
+        SDL_Log("[TankLab] bare ground saved %s: %d", bare,
+                static_cast<int>(SaveGame::save(bare, *world, g_sim, *g_hud, g_currentMapPath)));
+      }
       SDL_Log("[TankLab] spot %d,%d: %s, %s", lx, ly, ka.c_str(), kb.c_str());
       // ours: a check. ZT_TANK_LAB_COLUMN=<units>: a tile diagonally in front
       // of the tanks' nearest corner raised that many units (a rock column
@@ -7985,13 +8081,26 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
       if (lx >= 0) {
         lay(ka.c_str(), {{lx, ly}, {lx + 4, ly}, {lx + 4, ly + 4}, {lx, ly + 4}, {lx, ly}});
         enter();
-        if (std::getenv("ZT_TANK_LAB_GAP"))
+        // (ZT_TANK_LAB_ONE: the first tank alone)
+        if (std::getenv("ZT_TANK_LAB_ONE"))
+          ;
+        else if (std::getenv("ZT_TANK_LAB_GAP"))
           lay(kb.c_str(), {{lx + 5, ly}, {lx + 9, ly}, {lx + 9, ly + 4}, {lx + 5, ly + 4}, {lx + 5, ly}});
         else
           lay(kb.c_str(), {{lx + 4, ly}, {lx + 8, ly}, {lx + 8, ly + 4}, {lx + 4, ly + 4}});
         enter();
         for (int i = 0; i < 40; i++)
           world->getFences().update(1.0f);
+        for (const Fences::Exhibit &x : fences.exhibits())
+          if (x.tank) {
+            std::string hs;
+            for (int y = ly; y < ly + 4; y++)
+              for (int tx = lx; tx < lx + 8; tx++)
+                if (x.tiles.count({tx, y}) && y == ly + 1)
+                  hs += " " + std::to_string(world->getMap().getTile(tx, y)->height);
+            SDL_Log("[TankLab] made: tank %d floor %d ground %d top %.2f; row %d tile heights%s", x.id, x.floorHeight,
+                    x.groundHeight, x.wallTop(), ly + 1, hs.c_str());
+          }
         // ZT_TANK_LAB_RAISE=<units>: the walls up so the tank stands ABOVE its
         // ground (what a player builds), instead of sunk down into a hole where
         // the walls are drawn over the grass and nothing below the rim shows.
@@ -11467,6 +11576,28 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
           }
       world->setObjectTool("", 0, 0);
       check("a spot for a hot dog stand by the path, its door on it", sx >= 0);
+      // (not over the zoo's entrance: its footprint, 6 x 2 half tiles, read
+      // from scenery/other/fgate.ai though it's saved as building/fgate - as
+      // one tile, a stand went on the gate and the original dropped it)
+      for (const PlacedObjects::Object &g : world->getObjects().objects())
+        if (g.typeName == "fgate" && sx >= 0) {
+          const PlacedObjects::Object &st = world->getObjects().objects().back();
+          int gx = 0, gy = 0;
+          if (IniReader *ai = rm->getIniReader(PlacedObjects::typeFile(rm, PlacedObjects::fileOf(g)))) {
+            gx = ai->getInt("characteristics/integers", "cfootprintx", 0);
+            gy = ai->getInt("characteristics/integers", "cfootprinty", 0);
+            delete ai;
+          }
+          if ((g.facing & 6) == 2 || (g.facing & 6) == 6)
+            std::swap(gx, gy);
+          const bool over = std::fabs(st.x - g.x) < gx / 4.0f + 0.5f - 0.01f && std::fabs(st.y - g.y) < gy / 4.0f + 0.5f - 0.01f;
+          char at[96];
+          std::snprintf(at, sizeof at, " half tiles at %.1f,%.1f; the stand at %.1f,%.1f, in the zoo %d)", g.x, g.y, st.x, st.y,
+                        static_cast<int>(world->getFences().insideZoo(static_cast<int>(std::floor(st.x)),
+                                                                     static_cast<int>(std::floor(st.y)))));
+          check(("the stand clear of the zoo gate (gate " + std::to_string(gx) + " x " + std::to_string(gy) + at).c_str(),
+                gx * gy == 12 && !over);
+        }
       if (sx >= 0) {
         for (const Guests::Guest &g : gs.guests())
           const_cast<Guests::Guest &>(g).hunger = 80;
@@ -12941,6 +13072,13 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
                   gg.chaseCheck = 0;
                   break;
                 }
+            // ours: a check. ZT_BEAR_SAVE=<file.zoo>: the zoo saved now - the
+            // bear out, a man beside it - for the original to play on
+            if (const char *save = std::getenv("ZT_BEAR_SAVE"); save && g_hud) {
+              world->centreOn(b->x, b->y);
+              SDL_Log("[Bear] saved %s at %.1f,%.1f: %d", save, b->x, b->y,
+                      static_cast<int>(SaveGame::save(save, *world, g_sim, *g_hud, g_currentMapPath)));
+            }
           }
           broke = broke || fnc.broken(low);
           for (const Guests::Guest &g : gs.guests()) {

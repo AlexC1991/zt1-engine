@@ -3486,6 +3486,12 @@ void Animals::update(float seconds, double simSeconds, const WorldMap &map, cons
         m.pathAt = 0;
         m.stack.clear();
         play(m, "stand", Member::Mode::Loop, 3600.0f);
+        // measured: not drawn from the catch - the guest's mauling art
+        // (guests/man/blackbrm and the like) has the predator in it, and the
+        // original shows that one bear alone until the guest's
+        // fShowPredator; drawn as well, ours showed two (Lab Play original,
+        // a loose black bear among guests, frame by frame, 11-22)
+        m.hidden = true;
         if (this->caughtPrey)
           this->caughtPrey(guest, m);
         continue;

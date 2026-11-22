@@ -531,6 +531,13 @@ void PlacedObjects::drawInTank(SDL_Renderer *renderer, const WorldRenderer &view
   }
 }
 
+std::string PlacedObjects::typeFile(ResourceManager *rm, const std::string &file) {
+  if (!rm || rm->hasResource(file) || file.rfind("scenery/", 0) != 0)
+    return file;
+  const std::string other = "scenery/other/" + file.substr(file.find_last_of('/') + 1);
+  return rm->hasResource(other) ? other : file;
+}
+
 std::pair<int, int> PlacedObjects::footprintOf(const Object &o) {
   std::string file = fileOf(o);
   auto it = this->footprints.find(file);
@@ -538,7 +545,7 @@ std::pair<int, int> PlacedObjects::footprintOf(const Object &o) {
     return it->second;
   std::pair<int, int> fp{0, 0};
   if (this->rm)
-    if (IniReader *ai = this->rm->getIniReader(file)) {
+    if (IniReader *ai = this->rm->getIniReader(typeFile(this->rm, file))) {
       fp.first = ai->getInt("characteristics/integers", "cfootprintx", 0);
       fp.second = ai->getInt("characteristics/integers", "cfootprinty", 0);
       delete ai;

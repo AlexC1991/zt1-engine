@@ -3176,7 +3176,7 @@ std::pair<int, int> World::footprintOf(const std::string &file) {
   if (it != this->footprints.end())
     return it->second;
   std::pair<int, int> fp{0, 0};
-  if (IniReader *ai = this->resourceManager->getIniReader(file)) {
+  if (IniReader *ai = this->resourceManager->getIniReader(PlacedObjects::typeFile(this->resourceManager, file))) {
     fp.first = ai->getInt("characteristics/integers", "cfootprintx", 0);
     fp.second = ai->getInt("characteristics/integers", "cfootprinty", 0);
     delete ai;

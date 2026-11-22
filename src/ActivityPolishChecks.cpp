@@ -1716,9 +1716,10 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
   {
     // #272: a man caught by a loose predator runs its bCaughtBy set
     // (guests.ai: fPlayWithSound(lionm, soft_growl), fHidePredator(),
-    // fPlay(getupall), fShowPredator()): the predator held and drawn while
-    // the mauling plays, hidden by fHidePredator (0x50e816), shown and let
-    // go by fShowPredator (0x50e6fa -> 0x431af4); no "has been eaten"
+    // fPlay(getupall), fShowPredator()): the predator held, and not drawn
+    // from the catch (measured: the mauling's art has it in it, the original
+    // shows that one alone), still hidden by fHidePredator (0x50e816), shown
+    // and let go by fShowPredator (0x50e6fa -> 0x431af4); no "has been eaten"
     // message (0x50e648: a staff victim's only); a man-eater's (cIsManEater,
     // the T. rex) man eaten at its fShowPredator
     const auto &lionSet=g.caughtSets["bcaughtbylionm"];
@@ -1783,8 +1784,8 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
        <<", no message "<<byLion.noMessage<<", hidden for getupall "<<byLion.hiddenForGetup<<", let go "<<byLion.letGo
        <<", eaten "<<byLion.eaten<<", leaving "<<byLion.leaving<<"; T. rex: caught "<<byRex.caught<<" ("<<byRex.maulAnim
        <<"), hidden for getupall "<<byRex.hiddenForGetup<<", let go "<<byRex.letGo<<", eaten "<<byRex.eaten<<"\n";
-    check("#272: a lion's man mauled (lionm, no message), the lion hidden by fHidePredator for getupall, shown and let go by fShowPredator; he lives and leaves (0x50e816, 0x50e6fa, 0x431af4)",
-          byLion.caught&&byLion.maulAnim=="lionm"&&byLion.shownWhileMauled&&byLion.noMessage&&byLion.hiddenForGetup&&
+    check("#272: a lion's man mauled (lionm, no message), the lion not drawn beside its mauling art, hidden for getupall, shown and let go by fShowPredator; he lives and leaves (0x50e816, 0x50e6fa, 0x431af4)",
+          byLion.caught&&byLion.maulAnim=="lionm"&&!byLion.shownWhileMauled&&byLion.noMessage&&byLion.hiddenForGetup&&
           byLion.letGo&&!byLion.eaten&&byLion.leaving);
     check("#272: a T. rex's man (cIsManEater) is eaten at fShowPredator, the T. rex let go (0x50e648)",
           byRex.caught&&byRex.maulAnim=="trexm"&&byRex.hiddenForGetup&&byRex.letGo&&byRex.eaten);

@@ -205,6 +205,85 @@ SpriteDatabase::getPathSprite(SDL_Renderer *renderer, const std::string &type,
   return hires ? getPathSprite(renderer, type, frame, true) : pathSprites[key];
 }
 
+int SpriteDatabase::fringeSlot(bool towardRight, const char *shape) {
+  static const char *const shapes[5] = {"0011", "0001", "0010", "0110", "1011"};
+  for (int i = 0; i < 5; i++)
+    if (std::string(shape) == shapes[i])
+      return (towardRight ? 5 : 0) + i;
+  return -1;
+}
+
+// measured: zoo.exe draws its cliff faces from fringe.cfg's pictures - each
+// of the ten found pixel for pixel (mean difference under 4 of 255) in its
+// own picture of a map's cliffs in the Lab (11-22), where the terrain
+// textures (ccrete.tga among them) made solid colours changed none of them
+SDL_Texture *SpriteDatabase::getFringeAtlas(SDL_Renderer *renderer) {
+  if (!renderer || !resourceManager)
+    return nullptr;
+  if (renderer != fringeRenderer) {
+    if (fringeAtlas)
+      SDL_DestroyTexture(fringeAtlas);
+    fringeAtlas = nullptr;
+    fringeTried = false;
+    fringeRenderer = renderer;
+  }
+  if (fringeTried)
+    return fringeAtlas;
+  fringeTried = true;
+  IniReader *cfg = resourceManager->hasResource("fringe.cfg") ? resourceManager->getIniReader("fringe.cfg") : nullptr;
+  if (!cfg)
+    return nullptr;
+  SDL_Surface *atlas = SDL_CreateSurface(32 * kFringeSlots, 64, SDL_PIXELFORMAT_RGBA32);
+  SDL_FillSurfaceRect(atlas, nullptr, 0);
+  int placed = 0;
+  for (int section : {1, 2, 3, 4, 5, 11, 12, 13, 14, 15}) {
+    const std::string image = cfg->get(std::to_string(section), "image");
+    // (fringe/l0011.bmp: l the face toward the lower left, then its shape)
+    const size_t slash = image.find_last_of('/');
+    const std::string name = slash == std::string::npos ? image : image.substr(slash + 1);
+    const int slot = name.size() >= 5 ? fringeSlot(name[0] == 'r', name.substr(1, 4).c_str()) : -1;
+    int size = 0;
+    void *bytes = slot >= 0 ? resourceManager->getFileBytes(image, &size) : nullptr;
+    SDL_Surface *bmp = bytes ? SDL_LoadBMP_IO(SDL_IOFromConstMem(bytes, size_t(size)), true) : nullptr;
+    SDL_Surface *rgba = bmp ? SDL_ConvertSurface(bmp, SDL_PIXELFORMAT_RGBA32) : nullptr;
+    if (rgba && rgba->w == 32 && rgba->h == 64) {
+      // (the key colour, 255,0,128: not drawn)
+      for (int y = 0; y < 64; y++) {
+        Uint8 *row = static_cast<Uint8 *>(rgba->pixels) + y * rgba->pitch;
+        for (int x = 0; x < 32; x++) {
+          Uint8 *px = row + x * 4;
+          const bool key = px[0] > 247 && px[1] < 8 && px[2] > 120 && px[2] < 136;
+          px[3] = key ? 0 : 255;
+          if (key)
+            px[0] = px[1] = px[2] = 0;
+        }
+      }
+      SDL_Rect to{slot * 32, 0, 32, 64};
+      SDL_SetSurfaceBlendMode(rgba, SDL_BLENDMODE_NONE);
+      SDL_BlitSurface(rgba, nullptr, atlas, &to);
+      placed++;
+    }
+    if (rgba)
+      SDL_DestroySurface(rgba);
+    if (bmp)
+      SDL_DestroySurface(bmp);
+    if (bytes)
+      free(bytes);
+  }
+  delete cfg;
+  if (placed == kFringeSlots) {
+    fringeAtlas = SDL_CreateTextureFromSurface(renderer, atlas);
+    if (fringeAtlas) {
+      SDL_SetTextureBlendMode(fringeAtlas, SDL_BLENDMODE_BLEND);
+      SDL_SetTextureScaleMode(fringeAtlas, SDL_SCALEMODE_NEAREST);
+    }
+  } else {
+    SDL_Log("[SpriteDatabase] fringe.cfg: %d of %d cliff pieces", placed, kFringeSlots);
+  }
+  SDL_DestroySurface(atlas);
+  return fringeAtlas;
+}
+
 void SpriteDatabase::clear() {
   terrainSprites.clear();
   terrainTexturePaths.clear();
@@ -215,6 +294,11 @@ void SpriteDatabase::clear() {
   destroyAll(terrainTextures);
   destroyAll(terrainTexturesHi);
   textureRenderer = nullptr;
+  if (fringeAtlas)
+    SDL_DestroyTexture(fringeAtlas);
+  fringeAtlas = nullptr;
+  fringeRenderer = nullptr;
+  fringeTried = false;
   ++epoch;
   SDL_Log("[SpriteDatabase] Cache cleared");
 }

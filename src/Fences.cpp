@@ -2354,6 +2354,9 @@ struct TankSide {
   int ix = 0, iy = 0, dx = 0, dy = 0;
   bool front = false;
   int outside = 0;
+  // (the ground at each end: at the edge's (x, y), and its other end - on a
+  // slope they differ, and the ground line between them slopes)
+  int outsideA = 0, outsideB = 0;
 };
 } // namespace
 
@@ -2370,8 +2373,15 @@ static bool tankSide(const Fences::Exhibit &ex, const Fences::Edge &e, const Wor
   s.dy = oy - s.iy;
   CompassDirection side = view.screenSide(static_cast<float>(s.dx), static_cast<float>(s.dy));
   s.front = side == CompassDirection::SW || side == CompassDirection::SE;
-  s.outside = ex.floorHeight;
+  s.outside = s.outsideA = s.outsideB = ex.floorHeight;
   if (const MapTile *t = map.getTile(ox, oy)) {
+    // (each end's corner: the vertex (x, y) and the one along the edge)
+    auto cornerAt = [&](int vx, int vy) {
+      static const int index[4] = {CORNER_X0Y0, CORNER_X1Y0, CORNER_X0Y1, CORNER_X1Y1};
+      return static_cast<int>(t->cornerHeight[index[(vx > ox ? 1 : 0) + (vy > oy ? 2 : 0)]]);
+    };
+    s.outsideA = cornerAt(e.x, e.y);
+    s.outsideB = e.alongX ? cornerAt(e.x + 1, e.y) : cornerAt(e.x, e.y + 1);
     // The outside tile's corners along the edge
     int c0, c1;
     if (s.dx > 0) {
@@ -2680,8 +2690,13 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
         // The ground line along its outside: what's under it isn't seen (as
         // the original: the ground in front hides the wall, the posts too)
         float g0x, g0y, g1x, g1y, gd;
-        view.worldToScreenF(static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(ts.outside), g0x, g0y, gd);
-        view.worldToScreenF(static_cast<float>(bx), static_cast<float>(by), static_cast<float>(ts.outside), g1x, g1y, gd);
+        // (each end at its own ground: on a slope the line slopes with it -
+        // measured: the original hides a front wall under ground rising
+        // along it from the end where it starts to rise; at the lower end's
+        // height for both, ours drew the wall's top and glass over the
+        // slope, Lab Play original 11-22)
+        view.worldToScreenF(static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(ts.outsideA), g0x, g0y, gd);
+        view.worldToScreenF(static_cast<float>(bx), static_cast<float>(by), static_cast<float>(ts.outsideB), g1x, g1y, gd);
         if (g0x > g1x) {
           std::swap(g0x, g1x);
           std::swap(g0y, g1y);
@@ -2750,7 +2765,10 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           }
           if (T >= hi)
             return;
-          const float step = 4.0f; // (the line moves 2 px in 4: cut within a pixel)
+          // (the line moves 2 px in 4 along a level wall: cut within a pixel;
+          // ground rising along it moves it a pixel in each, cut in pixels)
+          const float steep = std::fabs(g1y - g0y) / std::max(0.001f, g1x - g0x);
+          const float step = steep > 0.6f ? 1.0f : 4.0f;
           for (float x = std::floor(L); x < R; x += step) {
             Drawable strip = d;
             strip.clip = true;
@@ -2825,7 +2843,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           }
           // (on a front wall down by the ground: the ground in front hides
           // it, only what's over the ground shows - the handles' tips)
-          if (ts.front && (top < ts.outside + 1.0f || underTop(plat)))
+          if (ts.front && (top < std::max(ts.outsideA, ts.outsideB) + 1.0f || underTop(plat)))
             pushCut(plat);
           else
             out.push_back(plat);
@@ -2863,7 +2881,9 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
           // outside, or its pieces down to the floor hung under the tank as a
           // red column; a back wall is seen down to the floor, through the
           // water - cut there, a sunken glass tank's showed its top rail only)
-          if ((tp.height >= ts.outside + 0.01f && !underTop(d)) || (tinted && !ts.front)) {
+          // (whole only when over the ground at both ends: on a slope, the higher
+          // end's ground still hides part of it)
+          if ((tp.height >= std::max(ts.outsideA, ts.outsideB) + 0.01f && !underTop(d)) || (tinted && !ts.front)) {
             out.push_back(d);
             continue;
           }
@@ -2987,6 +3007,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
     float ax, ay, bx, by;
     bool front;
     int outside;
+    int outsideA, outsideB; // (the ground at (ax, ay) and at (bx, by))
   };
   // ours: the tank's sprites are shared by its strips, each strip keeping
   // the ones that reach into it by index; each sprite's box is asked once
@@ -3157,7 +3178,7 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       backDepth = std::min(backDepth, depth);
       rims.push_back({static_cast<float>(e.x), static_cast<float>(e.y),
                       e.alongX ? e.x + 1.0f : static_cast<float>(e.x),
-                      e.alongX ? static_cast<float>(e.y) : e.y + 1.0f, ts.front, ts.outside});
+                      e.alongX ? static_cast<float>(e.y) : e.y + 1.0f, ts.front, ts.outside, ts.outsideA, ts.outsideB});
       CompassDirection side = tankSide(view, ts);
       std::vector<TankPiece> pieces;
       this->tankPieces(e, p, ex, view, ts.front, pieces);
@@ -3687,8 +3708,8 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
       float x0 = 1e30f, x1 = -1e30f;
       if (m.front) {
         float y, d;
-        view.worldToScreenF(m.ax, m.ay, static_cast<float>(m.outside), x0, y, d);
-        view.worldToScreenF(m.bx, m.by, static_cast<float>(m.outside), x1, y, d);
+        view.worldToScreenF(m.ax, m.ay, static_cast<float>(m.outsideA), x0, y, d);
+        view.worldToScreenF(m.bx, m.by, static_cast<float>(m.outsideB), x1, y, d);
         if (x0 > x1)
           std::swap(x0, x1);
       }
@@ -3797,8 +3818,8 @@ void Fences::collect(const WorldRenderer &view, const WorldMap &map,
         if (!m.front)
           continue;
         float x0, y0, x1, y1, d;
-        vp->worldToScreenF(m.ax, m.ay, static_cast<float>(m.outside), x0, y0, d);
-        vp->worldToScreenF(m.bx, m.by, static_cast<float>(m.outside), x1, y1, d);
+        vp->worldToScreenF(m.ax, m.ay, static_cast<float>(m.outsideA), x0, y0, d);
+        vp->worldToScreenF(m.bx, m.by, static_cast<float>(m.outsideB), x1, y1, d);
         if (rimTops->empty()) {
           SDL_RenderLine(r, x0, y0, x1, y1);
           continue;
