@@ -213,6 +213,9 @@ public:
     int viewCheck = 0, leaveCheck = 0, hungerCheck = 0, thirstCheck = 0, bathroomCheck = 0,
         energyCheck = 0, chaseCheck = 0;
     bool leaving = false, sawEscape = false;
+    // (measured: the original walks a guest it loaded from a saved zoo at
+    // the base pace, its +0x204 0 - only arrivals get their own; not saved)
+    bool basePace = false;
     // A building it's going to or in (an index into the placed objects),
     // for which need ("food", "drink", "bathroom", "energy", "trash")
     int building = -1;

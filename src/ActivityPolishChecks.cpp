@@ -3597,7 +3597,12 @@ std::string runParityChecks(World &world, ResourceManager *rm) {
             world.reindex();
             q.state=Guests::State::Walking;q.building=-1;q.need.clear();q.eatStep=-1;q.leaving=false;
             q.inventory[0]=held->itemId;
+            // (from where its walk about began: the walk is random and can end
+            // on the bench's own spot, the bench then put down on it)
+            q.x=sx0+0.5f;q.y=sy0+0.5f;q.path.clear();q.pathAt=0;
+            const float gx0=q.x,gy0=q.y;
             g.goEat(q);
+            out<<"EAT bench from "<<gx0<<","<<gy0<<" ("<<std::hypot(26.5f-gx0,27.5f-gy0)<<" tiles), building "<<q.building<<" need '"<<q.need<<"' eatStep "<<q.eatStep<<"\n";
             const bool going=q.building==bench&&q.need=="eat"&&q.eatStep<0&&q.inventory[0]==held->itemId;
             // (held food: no looking for more however hungry, 0x43bbb5)
             bool ate=false,hungryLook=false;

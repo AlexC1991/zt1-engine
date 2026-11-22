@@ -4342,6 +4342,17 @@ void Animals::evaluateOne(int exhibit, const WorldMap &map, const Fences &fences
   ev.dirty = false;
   ev.timerMs = static_cast<float>(std::uniform_int_distribution<int>(0, 199)(this->rng));
   ev.kinds.clear();
+  // (hab+0xe8, 0x444827: the animals' happiness summed, over their count -
+  // an int division, as the original's; measured: the Lab's Play original,
+  // a test zoo's six habitats, +0xe8 against their animals' +0x2a8 read the
+  // same moment, 11-22: zebras 10, 0, 0 -> 3, lions 5, 7 -> 6, -100s -> -100)
+  {
+    int sum = 0, n = 0;
+    for (const Member &m : this->list)
+      if (m.exhibit == exhibit)
+        sum += static_cast<int>(std::lround(m.happiness)), n++;
+    ev.happiness = n ? sum / n : 0;
+  }
   const Fences::Exhibit *ex = fences.exhibit(exhibit);
   if (!ex || ex->tiles.empty())
     return;
@@ -4715,6 +4726,18 @@ int Animals::suitability(int id, const WorldMap &map, const Fences &fences) {
 
 int Animals::exhibitSuitability(int exhibit) const {
   return std::max(0, this->exhibitSuitability(exhibit, nullptr));
+}
+
+// zoo.exe habitatValueE8 0x42336d: a stale habitat (+0x2d) rated again
+// (0x444827), then its +0xe8
+int Animals::exhibitHappiness(int exhibit) const {
+  auto ev = this->evaluations.find(exhibit);
+  if ((ev == this->evaluations.end() || ev->second.dirty) && this->mapRef && this->fencesRef) {
+    // (the rating kept is a cache of the exhibit: brought up to date)
+    const_cast<Animals *>(this)->evaluate(exhibit, *this->mapRef, *this->fencesRef);
+    ev = this->evaluations.find(exhibit);
+  }
+  return ev == this->evaluations.end() ? 0 : ev->second.happiness;
 }
 
 int Animals::exhibitSuitability(int exhibit, const std::function<bool(const Member &)> &keep) const {

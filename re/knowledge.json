@@ -49281,6 +49281,16 @@
    "by": "Claude",
    "on": "2026-11-21",
    "what": "Note at 0x4fc160: Places the flyer at height 0 (z [esp+0x24] stays 0). measured 2026-11-21 (running original, Basic Grass, a bluejay with its shadow over three frames at half zoom): the bird is drawn 138-147 px above its shadow at 64x32 tiles, about 9 height levels; the lift is in the drawing (not found yet), not the unit's +0x11c"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-22",
+   "what": "Note at 0x444827: Correction (11-22): hab+0xe8 is the animals' average HAPPINESS, not a species rating: each kind's record (map keyed by animal +0x1ec) gets +0x14 count++, +0x18 += animal +0x2a8 (happiness), +0x1c += animal +0x2b8 (C lines 294-296); +0xe8 = sum of the kinds' +0x18 / +0x94 (lines 387-394). Measured live: zebras 10,0,0 -> 3, lions 5,7 -> 6, all -100 -> -100. Guests' viewing, gawk time and donation read it. Ported: Animals::exhibitHappiness"
+  },
+  {
+   "by": "Claude",
+   "on": "2026-11-22",
+   "what": "Note at 0x423354: Correction (11-22): returns hab+0xe8 = the habitat's animals' average happiness (see 0x444827), not suitability; read raw, -100..100"
   }
  ],
  "notes": {
@@ -51089,6 +51099,11 @@
    "on": "2026-11-16",
    "text": "Task70's whileGoing: while the current behaviour (+0x54) is bGawk, nothing; bMimic/bMimic2 (and a 'bTapWall' compare that never matches - bTapTank is what plays) return too; otherwise mimic 0x425a15, else test the fence 0x425af4 (which ends the task: slot 0x48(1)), else tap a tank 0x425a85, else bGawk again. The task's time (slot 0x40, the gawk time) is checked by checkArrived 0x42321a. Ported: Guests::viewNext"
   },
+  "0x423354": {
+   "by": "Claude",
+   "on": "2026-11-22",
+   "text": "Correction (11-22): returns hab+0xe8 = the habitat's animals' average happiness (see 0x444827), not suitability; read raw, -100..100"
+  },
   "0x42341c": {
    "by": "Claude",
    "on": "2026-11-19",
@@ -52076,8 +52091,8 @@
   },
   "0x444827": {
    "by": "Claude",
-   "on": "2026-11-15",
-   "text": "Writes habitat +0xe8 (0x444aec): the sum over its animals (+0x94 of them) of a per-species value (a map keyed by animal +0x1ec, the species; node +0x18) / their count - the average species rating. guestViewingTick 0x43afde's bands, the gawk time 0x42e793 and the donation 0x42ea14 all read it (0x423354)."
+   "on": "2026-11-22",
+   "text": "Correction (11-22): hab+0xe8 is the animals' average HAPPINESS, not a species rating: each kind's record (map keyed by animal +0x1ec) gets +0x14 count++, +0x18 += animal +0x2a8 (happiness), +0x1c += animal +0x2b8 (C lines 294-296); +0xe8 = sum of the kinds' +0x18 / +0x94 (lines 387-394). Measured live: zebras 10,0,0 -> 3, lions 5,7 -> 6, all -100 -> -100. Guests' viewing, gawk time and donation read it. Ported: Animals::exhibitHappiness"
   },
   "0x4460bc": {
    "by": "Claude",

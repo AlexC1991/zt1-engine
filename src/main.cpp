@@ -6191,6 +6191,39 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
     if (timings) std::fclose(timings);
     return 0;
   }
+  // ours: ZT_LIVE_SCENE=<script>: a test zoo built from a script, run,
+  // pictured and saved shared, to play the same scene in the original
+  // (src/LiveScene.cpp)
+  if (const char *scene = std::getenv("ZT_LIVE_SCENE")) {
+    extern int runLiveScene(World &, ZooSim &, const std::string &, const std::function<void(const char *)> &,
+                            const std::function<bool(const std::string &)> &, const std::function<void(float)> &);
+    // (ZT_LIVE_LOAD=<file>: a saved zoo loaded first, to run on from it as
+    // the original does from the same file)
+    if (const char *load = std::getenv("ZT_LIVE_LOAD")) {
+      const bool ok = gameLoad(rm, load);
+      world = g_world;
+      note((std::string("loaded save ") + load + (ok ? " ok" : " FAILED")).c_str());
+      if (!ok)
+        return 1;
+    }
+    setGamePaused(false);
+    static bool sceneKeys[SDL_SCANCODE_COUNT] = {};
+    const int result = runLiveScene(
+        *world, g_sim, scene, capture,
+        [&](const std::string &file) { return g_hud && SaveGame::save(file, *world, g_sim, *g_hud, g_currentMapPath); },
+        [&](float dt) {
+          // (as the game's own frame: the world, the books and calendar, and
+          // the money and news passed on)
+          world->objectsMutable().today = g_sim.today();
+          world->getFences().today = g_sim.today();
+          world->update(sceneKeys, dt, dt);
+          g_sim.update(dt);
+          worldInputs(renderer, rm, std::vector<Input>());
+        });
+    setGamePaused(true);
+    if (timings) std::fclose(timings);
+    return result;
+  }
   if (std::getenv("ZT_HUD_CLOCK_CHECKS")) {
     SDL_HideWindow(SDL_GetRenderWindow(renderer));
     extern int runHudClockChecks(World &,UiGameScreen &,ResourceManager *,SDL_Renderer *,const std::string &,
@@ -11745,11 +11778,15 @@ static int runPanelShots(SDL_Renderer *renderer, ResourceManager *rm,
             capture("exhibit_thoughts");
             check(("Exhibit/Show List open on exhibit " + std::to_string(pen)).c_str(), g_hud->isPanelOpen(30));
             if (const Fences::Exhibit *ex = world->getFences().exhibit(pen)) {
-              char line[160];
-              snprintf(line, sizeof line, "exhibit books: viewed %.0f s, donations $%.2f, popularity %d, fence %d",
-                       ex->viewed, ex->donationsTotal, ex->popularity(gs.clock), world->getFences().condition(pen));
+              // (a donation is by the animals' average happiness, hab+0xe8:
+              // none from an exhibit of unhappy animals - zoo.exe 0x42ea14)
+              const int mood = world->getAnimals().exhibitHappiness(pen);
+              char line[200];
+              snprintf(line, sizeof line,
+                       "exhibit books: viewed %.0f s, donations $%.2f, popularity %d, fence %d, animals' happiness %d",
+                       ex->viewed, ex->donationsTotal, ex->popularity(gs.clock), world->getFences().condition(pen), mood);
               check(line, world->getFences().condition(pen) == 0 &&
-                              (ex->viewed <= 0 || ex->donationsTotal > 0 || world->getAnimals().exhibitSuitability(pen) <= 0));
+                              (ex->viewed <= 0 || ex->donationsTotal > 0 || mood <= 0));
             }
             g_hud->showPanel(0, "");
           }

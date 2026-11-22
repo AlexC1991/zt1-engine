@@ -649,6 +649,10 @@ public:
   // The same over only the animals keep accepts; -1 when there are none
   // (zoo.exe 0x41da81, goal rule 6: one family's or era's animals)
   int exhibitSuitability(int exhibit, const std::function<bool(const Member &)> &keep) const;
+  // The habitat's value guests judge it by (zoo.exe habitatValueE8
+  // 0x42336d: hab+0xe8, a stale habitat rated again first): its animals'
+  // average happiness, -100..100, as of its last rating; 0 when none
+  int exhibitHappiness(int exhibit) const;
   // Happiness as the panel shows it (0-100)
   static int shownHappiness(const Member &m) {
     return static_cast<int>((std::lround(m.happiness) + 100) * 100 / 200);
@@ -856,6 +860,10 @@ private:
     float speciesMs = 0; // zoo.exe tankTick 0x4357c6's second timer (+0x88)
     bool dirty = true;
     int tiles = 0, dung = -1;
+    // zoo.exe hab+0xe8 (0x444827, C lines 294-295 and 387-394): each kind's
+    // record sums its animals' happiness (animal +0x2a8), the sums over the
+    // animal count (+0x94) - their average happiness when last rated
+    int happiness = 0;
     std::map<int, Rating> kinds; // per animal type
   };
   std::map<int, Evaluation> evaluations;

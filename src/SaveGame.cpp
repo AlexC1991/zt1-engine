@@ -836,6 +836,7 @@ bool SaveGame::loadOriginalWorld(World &world) {
       continue;
     }
     Guests::Guest g;
+    g.basePace = true;
     g.id = static_cast<int>(o.id);
     g.type = type;
     g.name = o.name.empty() ? "Guest " + std::to_string(g.id) : o.name;
@@ -2491,6 +2492,7 @@ bool SaveGame::load(const std::string &path, World &world, ZooSim &sim, UiGameSc
   gs.list.clear();
   for (uint32_t n = i.count(); n > 0 && !i.bad; n--) {
     Guests::Guest g;
+    g.basePace = true;
     i.get(g.id);
     i.get(g.type);
     i.get(g.colours);

@@ -587,7 +587,7 @@ void Guests::labLeave(int id) {
 // ours takes it from the guest's id
 float Guests::walkSpeed(const Guest &g) const {
   return Original::unitTilesPerSecond(
-      Original::guestWalkRate(static_cast<int>(g.tired), Original::guestSpeedVariant(g.id)));
+      Original::guestWalkRate(static_cast<int>(g.tired), g.basePace ? 0 : Original::guestSpeedVariant(g.id)));
 }
 
 bool Guests::walkTo(Guest &g, int tx, int ty, float speed, bool emergency, int inside) {
@@ -1517,8 +1517,13 @@ bool Guests::walkAbout(Guest &g) {
   const int rx = rnd(Original::aiWalkRandomGuest) + 1 + Original::aiWalkBase;
   const int ry = rnd(Original::aiWalkRandomGuest) + 1 + Original::aiWalkBase;
   const bool onPath = walkable(sx, sy);
+  // (zoo.exe 0x428f76's first test, tileIsZooLand 0x40fb8d(0): only zoo
+  // land - measured: in the original new guests walk in from the gate; ours,
+  // without it, strolled out along the path beyond the gate and back,
+  // Lab Play original 11-22)
+  auto zooLand = [&](int x, int y) { return this->fences->insideZoo(x, y); };
   auto passable = [&](int x, int y) {
-    if (x < 0 || y < 0 || x >= W || y >= H)
+    if (x < 0 || y < 0 || x >= W || y >= H || !zooLand(x, y))
       return false;
     if (onPath)
       return walkable(x, y);
@@ -1561,7 +1566,7 @@ bool Guests::walkAbout(Guest &g) {
     std::vector<std::pair<int, int>> paths;
     for (int dx = -px; dx <= px; dx++)
       for (int dy = -py; dy <= py; dy++)
-        if ((dx == px || dx == -px || dy == py || dy == -py) && walkable(sx + dx, sy + dy))
+        if ((dx == px || dx == -px || dy == py || dy == -py) && walkable(sx + dx, sy + dy) && zooLand(sx + dx, sy + dy))
           paths.push_back({sx + dx, sy + dy});
     ZT_STEP("0x428cc9", "Walk about: first a path tile on a ring round it", {"half width", px}, {"half height", py},
             {"tiles", static_cast<int>(paths.size())});
@@ -2690,16 +2695,15 @@ int Guests::pickAnimal(int exhibit, int lo, int hi) {
   return found;
 }
 
-// zoo.exe 0x42e793: how long a guest watches - by its exhibit's average
-// suitability (habitat +0xe8, 0x423354: 0x444827 averages its animals'
-// species' ratings) its type's cGawkTime: up to -60 the first (its lower
-// limit, type +0x1ec, is never reached: suitability isn't under 0), to 20
+// zoo.exe 0x42e793: how long a guest watches - by its exhibit's animals'
+// average happiness (habitat +0xe8, 0x423354: 0x444827 sums its animals'
+// +0x2a8 over their count) its type's cGawkTime: up to -60 the first, to 20
 // the second, to 60, to 80, to 100, each with 0-5 more at random (else
 // 10-13); then cGawkAttrTime by the exhibit's attractiveness (+0xf8): under
 // 20, 50, 90, 150, 200, or more
 int Guests::gawkSeconds(const Guest &g) {
   const Type &t = this->typeList[g.type];
-  const int h = this->animals->exhibitSuitability(g.target);
+  const int h = this->animals->exhibitHappiness(g.target);
   std::uniform_int_distribution<int> r6(0, 5);
   int secs = std::uniform_int_distribution<int>(0, 3)(this->rng) + 10;
   if (h <= -60)
@@ -3504,7 +3508,8 @@ void Guests::viewNext(Guest &g) {
 // 0x42ea14): the game time since it began (+0x298) onto the exhibit's
 // viewing time (+0x128), then a donation: its viewing area sees an animal,
 // none of them sick, not crowded (0x425f6a under 50): cAdmissionMultiple x
-// the time (100 ns units) x (its area's habitat's suitability + its area's
+// the time (100 ns units) x (its area's habitat's +0xe8, its animals'
+// average happiness, + its area's
 // tour guide bonus, +0x58: 0x426236) x 0.01, $10 at most; its area let go
 // (+0x328 -1); its needs looked at next tick (+0x33e)
 void Guests::viewDone(Guest &g) {
@@ -3512,7 +3517,7 @@ void Guests::viewDone(Guest &g) {
   this->exhibitBooks[g.target].viewed += watched;
   int n = 0;
   bool sick = false;
-  int suit = this->animals->exhibitSuitability(g.target), guide = 0;
+  int suit = this->animals->exhibitHappiness(g.target), guide = 0;
   ViewArea area;
   if (this->viewAreas || this->areaInSlot) {
     Sight sight;
@@ -3522,7 +3527,7 @@ void Guests::viewDone(Guest &g) {
     }
     if (viewArea(g, area)) {
       if (area.exhibit >= 0)
-        suit = this->animals->exhibitSuitability(area.exhibit);
+        suit = this->animals->exhibitHappiness(area.exhibit);
       guide = this->areaInSlot ? area.guideBonus : this->tourBonusAt ? this->tourBonusAt(g.target) : 0;
     }
   } else {
@@ -3697,15 +3702,18 @@ void Guests::gawkScenery(Guest &g) {
 // ----------------------------------------------------------------------------
 // The status tick
 // ----------------------------------------------------------------------------
-// zoo.exe guestViewingTick 0x43afde: every cViewingAreaCheck while
-// watching, what it thinks of what it sees - from its viewing area, found
-// again each time (+0x328 cleared, 0x43b92e: a random way first; none:
-// nothing), only when the area sees an animal; the exhibit judged is the
-// area's (0x423354: its habitat's +0xe8):
+// zoo.exe guestViewingTick 0x43afde: every cViewingAreaCheck, what it
+// thinks of what it sees - from its viewing area, found again each time
+// (+0x328 cleared, 0x43b92e: a random way first; none: nothing), only when
+// the area sees an animal; the exhibit judged is the area's (0x423354: its
+// habitat's +0xe8). Watching or not: the original asks nothing of its task
+// (its C, lines 29-37: the countdown, then 0x43b92e) - a guest walking by
+// an exhibit's viewing area judges it too:
 // - sick ones seen: cSickAnimalChange; more than one, "There seems to be a
 //   lot of sick animals in this exhibit." (10096); and "%s seems to be
 //   sick." (10545) of one of the exhibit's animals at random
-// - by the exhibit's average suitability (0x423354, habitat +0xe8): 81 up
+// - by the exhibit's animals' average happiness (0x423354, habitat +0xe8,
+//   0x444827: their +0x2a8 summed over their count): 81 up
 //   cHappyAnimalChange1, 61-80 cHappyAnimalChange2, -60-60
 //   cAngryAnimalChange1, -80 to -61 cAngryAnimalChange2, under
 //   cAngryAnimalChange3 - each with its thought (10098, 10281, 10282 or
@@ -3718,7 +3726,9 @@ void Guests::gawkScenery(Guest &g) {
 //   cCrowdedViewingChange and "I can't see %s.  It's too crowded." (10102)
 //   of any of its animals
 void Guests::viewing(Guest &g) {
-  if (g.state != State::Gawking || g.target < 0)
+  // (ours, with no viewing slots - a check zoo without a World: the area of
+  // the exhibit it's watching, as before)
+  if (!this->areaInSlot && (g.state != State::Gawking || g.target < 0))
     return;
   ZT_FN("0x43afde", "What it thinks of what it's watching");
   Sight sight;
@@ -3741,7 +3751,7 @@ void Guests::viewing(Guest &g) {
       think(g, 10096);
     about(10545, -100, 100);
   }
-  const int h = this->animals->exhibitSuitability(exhibit);
+  const int h = this->animals->exhibitHappiness(exhibit);
   if (h >= 81) {
     g.dHappy += static_cast<float>(t.happyAnimal1);
     about(kOverjoyed, 81, 100);
